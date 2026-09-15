@@ -977,6 +977,19 @@ syncthing-errors = coisas que não conseguiu
 syncthing-shared-with = compartilhada com
 syncthing-actions = o que dá para fazer
 syncthing-rescan = ler o disco agora
+# THE REST OF THE HINT LINE'S WORDS. Eight of this view's ten keys had only
+# a `cmd-` label, and the line reads the SHORT form: the screen said
+# `[syncthing-down] · [syncthing-up] · …`, the missing-key marker, in both
+# doors of `LEADER s s`. Found by `every-hint-key-explains-itself`, which
+# walks every id of every table.
+syncthing-up = subir
+syncthing-down = descer
+syncthing-less = anterior
+syncthing-more = próximo
+syncthing-enter = abrir
+syncthing-pause = pausar
+syncthing-add = acrescentar
+syncthing-forget = remover
 syncthing-override = mandar esta cópia
 syncthing-revert = desfazer mudanças locais
 syncthing-forget-folder = parar de compartilhar
@@ -1563,9 +1576,9 @@ files-playlist-next = próxima faixa
 files-no-sound = esta máquina não tem som para tocá-lo — a imagem segue sem ele
 files-film-stuck = nada saiu dele por { $seconds } s — foi parado
 files-film-seek = ir para { $at } de { $total }
-files-theatre-on = dar a região inteira à prévia
-files-theatre-off = devolver o espaço à listagem
-files-theatre-nothing = nada está tocando, então não há região para dar
+files-theatre-on = a prévia está com a região inteira
+files-theatre-off = a listagem está com o espaço de volta
+files-theatre-nothing = nada está selecionado, então não há o que expandir
 files-no-root-helper = trocar o dono precisa do sistema instalado — a unidade ronoctua-files-root nao esta aqui
 files-yes = sim, aplicar
 files-no = não, deixar como está
@@ -1626,7 +1639,7 @@ files-play = tocar ou pausar
 files-rewind = voltar
 files-forward = avançar
 files-sound = som
-files-theatre = a região inteira
+files-theatre = expandir a prévia
 # As da peça. `files-turn-left` é a direção da MÃO e não um eixo — veja o
 # `View::spin`, que é onde essa convenção está escrita.
 files-turn-left = girar à esquerda
@@ -1789,6 +1802,12 @@ files-column-modified = modificado
 
 # O que cada campo diz ao ponteiro. Campo que acende e não explica promete uma
 # ação e não descreve nenhuma.
+# THE WHOLE NAME, and only the name.
+#
+# The line stands in for a column that had to cut, so it says what the column
+# would have said and nothing else: a sentence around it would push the end of
+# a long name back off the edge, which is the thing this exists to undo.
+files-explain-name = { $name }
 files-explain-owner = { $who } é o dono; clicar troca
 files-explain-group = o grupo é { $who }; clicar troca
 files-explain-size = { $bytes } bytes exatos
@@ -3391,6 +3410,12 @@ cmd-locale-place = Acrescentar um lugar ao relance
 cmd-locale-where = Dizer onde fica um lugar
 locale-less = anterior
 locale-more = próximo
+# THE TWO LETTERS, and they had no short text at all: the hint line read
+# `[locale-place]` and `[locale-where]` on screen, which is the missing-key
+# marker doing duty as a word. `cmd-locale-place` has been there all along —
+# it is the LONG form, and the line reads the short one.
+locale-place = acrescentar lugar
+locale-where = onde fica
 world-temperature-f = { $degrees } °F
 
 # =====================================================================
@@ -3614,3 +3639,111 @@ atuin-word-subl = sublime
 atuin-word-vim-insert = vim, inserção
 atuin-word-vim-normal = vim, normal
 atuin-word-workspace = este projeto
+
+# ---------------------------------------------------------------------------
+# WHAT A SHORTCUT DOES, IN FULL — the line under the hint.
+#
+# The hint line teaches forty keys in three words each, which is all a line
+# holds. Resting the pointer on one of them opens a second line underneath with
+# the whole sentence, and this is where those sentences live.
+#
+# TWO NAMESPACES, AND THE OTHER ONE IS `cmd-`. A key that is a command of the
+# registry already has its long form there — that is what which-key and the
+# manual read, and a hundred of these ids have one. What is left are the keys
+# that belong to a VIEW and to no registry: the file manager's, the transfer
+# panel's, and one of the notification manager's. Writing `cmd-files-preview`
+# would say that id is a registered command, which is exactly what `cmd-` means.
+#
+# `every-hint-key-explains-itself` refuses an id with neither and an id with
+# both — two sentences for one key is two places to keep in step.
+#
+# THE FILE MANAGER'S LISTING.
+about-files-up = Move o cursor uma linha para cima, na seção que estiver com o teclado.
+about-files-down = Move o cursor uma linha para baixo, na seção que estiver com o teclado.
+about-files-first = Leva o cursor para a primeira linha da listagem.
+about-files-last = Leva o cursor para a última linha da listagem.
+about-files-parent = Sai desta pasta para a que a contém.
+about-files-enter = Abre o que está sob o cursor: entra na pasta, ou abre o arquivo no programa que o lê.
+about-files-menu = Abre a lista de tudo o que se pode fazer com o que está sob o cursor, cada linha mostrando a tecla que a executa.
+about-files-mark = Marca a linha sob o cursor, ou tira a marca dela — o que está marcado é sobre o que a próxima ação age.
+about-files-mark-all = Marca de uma vez todas as entradas desta pasta.
+about-files-unmark-all = Tira a marca de todas as entradas desta pasta.
+about-files-hidden = Mostra ou esconde as entradas cujo nome começa com um ponto.
+about-files-columns = Mostra ou esconde as permissões, o dono e o grupo em cada linha da listagem.
+about-files-sort = Muda por qual campo a listagem é ordenada: o nome, o tamanho, a data ou o tipo.
+about-files-sort-reverse = Inverte a ordem, do último para o primeiro.
+about-files-measure = Soma o que uma pasta guarda em disco, percorrendo-a.
+about-files-pane-next = Dá o teclado à próxima seção — a listagem, a barra lateral, a prévia e as informações, em anel.
+about-files-pane-previous = Dá o teclado à seção anterior a esta.
+# THE TWO COLUMNS ON THE RIGHT, and the sidebar on the left.
+about-files-preview = Mostra ou esconde a coluna de prévia — a imagem, o filme, o texto ou a forma que o arquivo sob o cursor guarda.
+about-files-facts = Mostra ou esconde a coluna de informações sobre o arquivo sob o cursor: o tamanho, as datas, o tipo e o que o próprio arquivo carrega.
+about-files-facts-scroll = Vira para a próxima página da coluna de informações, e volta ao topo ao chegar ao fim.
+about-files-sidebar = Mostra ou esconde a coluna de lugares — as suas dez pastas, e os discos que estiverem conectados.
+about-files-eject = Desmonta o disco removível desta linha, para que ele possa ser retirado com segurança.
+about-files-unpin = Tira este lugar da barra lateral. Um que a distro traz volta oculto; um seu, some.
+# THE PREVIEW: the text, the film and the shape.
+about-files-preview-scroll = Vira para a próxima página da prévia, e volta ao topo ao chegar ao fim.
+about-files-preview-left = Desliza o texto da prévia para o lado, em direção ao começo das linhas longas.
+about-files-preview-right = Desliza o texto da prévia para o lado, em direção ao fim das linhas longas.
+about-files-theatre = Dá à prévia a região inteira, e devolve a região. Sem nada selecionado não há prévia para expandir.
+about-files-play = Toca o que a prévia está mostrando, ou pausa onde está.
+about-files-rewind = Volta um trecho no que está tocando.
+about-files-forward = Avança um trecho no que está tocando.
+about-files-sound = Dá som ao filme, ou tira. Um filme sem trilha não tem som para dar.
+about-files-playlist-previous = Mostra a entrada anterior a esta na lista de reprodução.
+about-files-playlist-next = Mostra a próxima entrada desta lista de reprodução.
+about-files-turn-left = Gira a forma para a esquerda, em torno do eixo vertical.
+about-files-turn-right = Gira a forma para a direita, em torno do eixo vertical.
+about-files-turn-up = Inclina a forma para longe de você, para vê-la por baixo.
+about-files-turn-down = Inclina a forma em sua direção, para vê-la por cima.
+about-files-zoom-in = Aproxima a forma.
+about-files-zoom-out = Afasta a forma.
+about-files-reframe = Devolve a forma ao centro, no tamanho em que começou.
+# THE TRANSFER QUEUE.
+about-transfers-up = Move o cursor uma linha para cima na fila.
+about-transfers-down = Move o cursor uma linha para baixo na fila.
+about-transfers-pause = Segura esta transferência onde está, ou deixa que ela siga.
+about-transfers-cancel = Desiste desta transferência. O que já foi escrito é apagado.
+about-transfers-forget = Tira esta linha da lista. O arquivo que ela escreveu fica onde está.
+about-transfers-sweep = Tira da lista, de uma vez, todas as linhas que já acabaram.
+# THE NOTIFICATION MANAGER, where one row means something else.
+about-notif-edit = Abre este filtro seu para ser reescrito: o nome, as condições e o que ele faz.
+
+# =====================================================================
+# THE LINE THAT OUTLIVES THE FOOTER — when the interface itself falls
+# =====================================================================
+#
+# The owner moved the pointer across the hint line and everything closed. He
+# named two defects and only one of them was the crash: *"o outro é o erro de
+# que a ronoctua-distro não sabe lidar com isso, ou seja, acaba deixando o
+# usuário sem interface"*. These are the words of the answer to the second one.
+#
+# It is a second layer-shell row raised by systemd's `OnFailure=`, and it is not
+# a second chrome (invariant 14): it is the footer's own row drawn by another
+# process, alive exactly while there is no chrome at all.
+lifeline-fell = A interface fechou sozinha.
+lifeline-fell-and-came-back = A interface fechou sozinha e voltou.
+# THE UNIT'S OWN WORDS, and they are DATA — what the machine said, the way a
+# filename is. `{ $why }` is systemd's `Result=`: `core-dump`, `signal`,
+# `oom-kill`, `exit-code`.
+lifeline-why = { $unit } · { $why }
+# AND THE UNIT ALONE, when systemd has nothing to say about it — a
+# transient unit is gone by the time the line asks. A dot between one
+# thing and nothing separates nothing.
+lifeline-unit = { $unit }
+lifeline-logs = ver os logs
+lifeline-restart = reiniciar a interface
+lifeline-ai = perguntar a uma IA
+lifeline-close = fechar
+lifeline-logs-opened = o journal está aberto num terminal
+lifeline-restarting = pedi ao systemd para subir de novo
+lifeline-would-not-start = o systemd não subiu; os logs dizem por quê
+lifeline-no-journalctl = o journal não abriu; o journalctl não está nesta máquina
+# DRAWN, AND REFUSING. The owner asked for the option to exist and for its
+# implementation to wait, so it says which of the two it is.
+lifeline-ai-not-yet = essa ainda não existe — está aqui para ter onde nascer
+# THE NESTED LOOP HAS NO UNIT. `nix/footer-single.nix` starts the footer as an
+# ordinary background child, so there is nothing for systemd to restart — and
+# saying so beats answering about a unit it has never heard of.
+lifeline-not-a-unit = aqui não há unidade do systemd; o laço aninhado sobe o rodapé à mão

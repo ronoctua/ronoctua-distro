@@ -62,6 +62,27 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   (`$XDG_RUNTIME_DIR/ronoctua-<display>.sock`); só então a superfície expande e pede exclusividade.
   `ronoctua-shell command <id>` roda qualquer id — é por onde entram os QUATRO binds SEM leader.
 - **`Ctrl+Alt+Del` é o RESGATE** (7 toques em 2 s ainda forçam): janela flutuante, ou VT 8 sem niri.
+- **Rodapé morto tem uma LINHA que sobrevive a ele** (`ronoctua-shell lifeline <unidade>`): uma
+  SEGUNDA layer-shell, no lugar do rodapé, com o que aconteceu e quatro opções — ver os logs (abre o
+  journal no console de resgate), reiniciar, IA (desenhada e RECUSANDO, ainda não existe) e fechar.
+  Não é uma segunda chrome (inv. 14) e é decisão do dono: é a linha do RODAPÉ desenhada por outro
+  processo, viva exatamente enquanto não há chrome nenhuma. **Quem detecta é o `OnFailure=`**, que
+  custa ZERO com tudo bem — nada de thread, relógio ou pergunta; e foi MEDIDO, porque a documentação
+  diz que ele só dispara no estado `failed` e uma unidade com `Restart=` sem teto nunca chega lá: com
+  duas unidades transientes ele disparou em toda falha, três de três. **O brain fica de fora** — ele
+  não desenha, e isso está escrito no contrato dele. No laço aninhado não há unidade, então o
+  `footer-single.nix` vigia o PID e levanta a mesma linha; ele distingue queda de recarga por um
+  arquivo `.onpurpose`, senão a linha nasceria a cada save. E isso importa porque **com o rodapé
+  morto os QUATRO binds de emergência estão mortos junto**: os quatro escrevem no socket dele.
+- **A aritmética do rodapé não pergunta ao conteúdo do rodapé.** `Footer::metric` é o fundo: ele
+  transforma largura, altura e a PRIMEIRA LINHA da região num frame, e essa primeira linha é o
+  `first_of_expansion`. Nada que o `metric` alcance pode perguntar o que a região CONTÉM — e a shell
+  já morreu DUAS vezes por isso, as duas de stack overflow sem diagnóstico nenhum além do
+  `process::abort`. A segunda foi `first_of_expansion → explain_rows → grid_full → expansion_len →
+  screen_columns → metric`, e bastava o ponteiro parar sobre uma tecla da dica. O que a região tem a
+  dizer sobre si é LEMBRADO onde foi medido (`region_can_spare_a_row`, escrito no `grid`), nunca
+  perguntado de dentro da soma. Cobra o `the-footer-does-not-ask-itself`, que também recusa qualquer
+  ciclo novo entre os métodos do `Footer` — as cinco recursões que existem são declaradas.
 - **Todo comando é `kebab-case`, e a chave é `cmd-<id>`**; o registro recusa divergirem. As 141 ações
   do niri entram como `niri-<nome>`, GERADAS, alcançáveis por nome (`LEADER :`, e SÓ ele — o `x`
   paralelo saiu a pedido do dono; duas teclas para uma coisa gastam duas linhas da lista, que é o
@@ -72,6 +93,13 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   buffer são a mesma coisa (inv. 4), e o rótulo dizia só metade. **O teclado tem UM
   lugar** (`nix/keyboard-xkb.nix`); o xkb **não recusa** layout inexistente — cai no `us` mudo, e
   quem impede é `keyboard-layout-exists`.
+- **TODA dica se explica sob o ponteiro** (`chrome::hint_marks` → `hint_sentence`): uma linha
+  ABAIXO dos atalhos, nas onze portas, viva só enquanto há hover (escolha do dono). A frase é
+  `cmd-<id>` para comando do registro e `about-<id>` para tecla de vista, nunca as duas
+  (`every-hint-key-explains-itself`, que achou 10 ids desenhando `[syncthing-down]` na TELA). **A
+  linha sai da REGIÃO e nunca da altura do rodapé**: o rodapé é ancorado embaixo, então uma linha
+  acrescentada sob o minibuffer o levanta de baixo do ponteiro — o hover acaba, a linha some, e
+  roda. É o laço que o `Fold::held` descreve, com o ponteiro no mesmo lugar da corrente.
 - **Três navegadores, um léxico** (`m i n`, `m i u`, `m i l`). Só o da Lucide personaliza; a prévia é o SVG COPIADO, e a marca sai da MESMA `affordance` que a tecla lê.
 - **São TREZE vistas, e a precedência vive só em `Footer::view()`** — nenhuma é menu (inv. 14), e
   **TODA porta pergunta a ele**: o ramo de teclas, o `expansion()` e o `region_is_free` das onze
@@ -93,7 +121,12 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   (`chrome::divider_lit`; título e barra acesa foram recusados — e a régua que a FAIXA não tem é
   desenhada, senão a prévia ficaria sem marca), e a listagem guarda faixa quieta ao perder o foco. **A gaveta mede a altura UMA VEZ, ao abrir**
   (`fold::settle`): altura que segue o conteúdo é altura que o ponteiro move, e isso é um laço de
-  layout. O chevron fica com a última célula da linha 0; a barra pega da linha 1 para baixo. **`..` é o primeiro renque** — nunca
+  layout. O chevron fica com a última célula da linha 0; a barra pega da linha 1 para baixo.
+  **O nome que não cabe é alcançável por TRÊS caminhos**: o ponteiro o põe inteiro no minibuffer
+  (`Field::explain`, e só quando foi cortado), o cursor chegando nele o ECOA por 3 s (`Step::Say`,
+  o mesmo `ECHO_SECONDS` das duas portas), e ele ANDA de lado uma célula por vez (`slide.rs`, 1 s
+  parado em cada ponta, 200 ms por célula, e volta de uma vez — escolha do dono). O relógio é
+  ARMADO e só existe enquanto um nome anda. **`..` é o primeiro renque** — nunca
   oculta, nunca marcável, e toda célula dela responde a saída. Permissão
   PERGUNTA nos DOIS caminhos. **Rótulo de `Choice` é TEXTO, não chave**; texto abre no `emacsclient`.
   **Prévia e infos nascem LIGADAS** (`C-v`/`C-i` ainda escondem) e por isso a região sobe ao teto

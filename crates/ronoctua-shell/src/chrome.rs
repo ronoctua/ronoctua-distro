@@ -336,6 +336,15 @@ pub enum Register {
     /// A key notation whose meaning is the focused section's, and which
     /// therefore changes under the reader without the reader pressing anything.
     Alternate,
+    /// A key notation that exists ONLY because of what is under the cursor.
+    ///
+    /// A film's rewind, a shape's zoom, a playlist's next track: keys that are
+    /// on the line now and will not be on it a row later. They were taught
+    /// unconditionally and the owner asked for both halves — that they appear
+    /// only in their context, *and* that they read differently from the keys
+    /// that are always there. A reader who has learnt the fixed ones should be
+    /// able to tell at a glance which of these is a passing guest.
+    Contextual,
     /// The words around a key.
     Prose,
     /// The mark between one shortcut and the next.
@@ -349,6 +358,7 @@ impl Register {
         match self {
             Self::Key => tokens::color::TEXT_SUBTLE_STRONG,
             Self::Alternate => tokens::color::TEXT_SUBTLE_ALTERNATE,
+            Self::Contextual => tokens::color::TEXT_SUBTLE_CONTEXTUAL,
             Self::Prose => tokens::color::TEXT_SUBTLE_DEFAULT,
             Self::Separator => tokens::color::TEXT_SUBTLE_FAINT,
         }
@@ -367,8 +377,18 @@ impl Register {
 pub struct Piece {
     /// The run, exactly as it reads.
     pub text: String,
-    /// Which of the four registers it is drawn in.
+    /// Which of the five registers it is drawn in.
     pub register: Register,
+    /// WHICH SHORTCUT this run belongs to, when it belongs to one.
+    ///
+    /// The key's notation and the words that say what it does carry the same
+    /// id; the dot between two shortcuts carries none, and neither does a line
+    /// that is not a hint at all. It is what lets the pointer name the
+    /// shortcut it is resting on — see [`hint_marks`] — and it travels on the
+    /// PIECE rather than beside the line because the line gets WRAPPED
+    /// (`crate::fold::wrap_pieces`), and a table of ranges measured before the
+    /// wrap would name the wrong key on every row but the first.
+    pub id: Option<&'static str>,
 }
 
 impl Piece {
@@ -378,6 +398,7 @@ impl Piece {
         Self {
             text: text.into(),
             register: Register::Prose,
+            id: None,
         }
     }
 
@@ -391,7 +412,34 @@ impl Piece {
             } else {
                 Register::Key
             },
+            id: None,
         }
+    }
+
+    /// A key notation in a register the caller has already decided.
+    ///
+    /// [`Piece::key`] answers the two-way question — fixed, or following the
+    /// focused section — which is all there was when it was written. A key that
+    /// exists only in a context is a THIRD answer, and a `bool` cannot carry
+    /// three.
+    #[must_use]
+    pub fn key_in(text: impl Into<String>, register: Register) -> Self {
+        Self {
+            text: text.into(),
+            register,
+            id: None,
+        }
+    }
+
+    /// The same run, saying which shortcut it is part of.
+    ///
+    /// Only the two halves of an entry take one — the notation and its words.
+    /// A separator belongs to no shortcut, and neither does prose that is not
+    /// a hint.
+    #[must_use]
+    pub fn about(mut self, id: &'static str) -> Self {
+        self.id = Some(id);
+        self
     }
 
     /// The mark between one shortcut and the next, with its air on both sides.
@@ -408,6 +456,7 @@ impl Piece {
         Self {
             text: format!(" {} ", tokens::mark::SEPARATOR),
             register: Register::Separator,
+            id: None,
         }
     }
 }
@@ -427,7 +476,7 @@ impl Piece {
 /// because the line is one line; the long form is `cmd-<id>`, which the
 /// manual and which-key read.
 #[must_use]
-pub fn hint_of(table: &[(&str, &str)], texts: &ronoctua_i18n::Texts) -> Vec<Piece> {
+pub fn hint_of(table: &[(&'static str, &'static str)], texts: &ronoctua_i18n::Texts) -> Vec<Piece> {
     hint_of_with(table, |_| None, texts)
 }
 
@@ -450,13 +499,33 @@ pub fn hint_of(table: &[(&str, &str)], texts: &ronoctua_i18n::Texts) -> Vec<Piec
 /// the line for good, including a later row of the table that spelt the same
 /// id correctly.
 pub fn hint_of_with(
-    table: &[(&str, &str)],
+    table: &[(&'static str, &'static str)],
+    means: impl Fn(&str) -> Option<&'static str>,
+    texts: &ronoctua_i18n::Texts,
+) -> Vec<Piece> {
+    let marked: Vec<(&'static str, &'static str, bool)> =
+        table.iter().map(|(n, id)| (*n, *id, false)).collect();
+    hint_of_marked(&marked, means, texts)
+}
+
+/// The same line, where some of the keys exist only in the CONTEXT showing.
+///
+/// The third column says so, and those keys are drawn in
+/// [`Register::Contextual`]: a film's rewind is on the line while a film is
+/// under the cursor and gone a row later, and a reader who has learnt the
+/// fixed keys should be able to tell which of these is a passing guest.
+///
+/// A view that gates its table by a `Where` filters the rows away first and
+/// marks what survives; a view with no contexts passes `false` throughout,
+/// which is what [`hint_of_with`] does for it.
+pub fn hint_of_marked(
+    table: &[(&'static str, &'static str, bool)],
     means: impl Fn(&str) -> Option<&'static str>,
     texts: &ronoctua_i18n::Texts,
 ) -> Vec<Piece> {
     let mut out = Vec::with_capacity(table.len() * 3);
     let mut said: Vec<&str> = Vec::with_capacity(table.len());
-    for (notation, id) in table {
+    for (notation, id, contextual) in table {
         if said.contains(id) {
             continue;
         }
@@ -479,12 +548,35 @@ pub fn hint_of_with(
             Some(other) => (other, true),
             None => (*id, false),
         };
-        out.push(Piece::key(key_text(&t), alternate));
+        // WHICH ID THE POINTER WILL BE TOLD ABOUT, and it is `says` and not the
+        // table's own. A key whose meaning follows the focused section says
+        // what it does NOW: resting on `S-<left>` over a film has to explain
+        // rewinding, not the parent directory that the same row of the table
+        // spells when nothing is playing. What a `means` can answer is part of
+        // what `every-hint-key-explains-itself` covers, so the resolved id has
+        // a sentence for the same reason the table's own does.
+        let about = says;
+        // ALTERNATE WINS OVER CONTEXTUAL, and a key is never both in this
+        // tree: the four that follow the focused section are always on the
+        // line, and what changes is what they mean.
+        out.push(
+            Piece::key_in(
+                key_text(&t),
+                if alternate {
+                    Register::Alternate
+                } else if *contextual {
+                    Register::Contextual
+                } else {
+                    Register::Key
+                },
+            )
+            .about(about),
+        );
         // THE SPACE BETWEEN THE KEY AND ITS WORDS BELONGS TO THE WORDS, for
         // the reason `fold::wrap_pieces` gives about the other seam: a key
         // piece has to be exactly the notation, because that is what the
         // colour is about.
-        out.push(Piece::prose(format!(" {}", texts.t(says))));
+        out.push(Piece::prose(format!(" {}", texts.t(says))).about(about));
     }
     out
 }
@@ -795,6 +887,204 @@ pub fn hint_spans(
     line: u16,
     room: u16,
 ) -> Vec<ronoctua_render::Span> {
+    laid(pieces, column, room)
+        .into_iter()
+        .map(|r| ronoctua_render::Span {
+            size,
+            text: r.text,
+            column: r.at,
+            line,
+            color: r.register.color(),
+            edge: false,
+            foot: false,
+        })
+        .collect()
+}
+
+/// WHERE A SHORTCUT WAS DRAWN, so the pointer can name the one it is on.
+///
+/// One per run of the line that belongs to a shortcut — the notation and the
+/// words that say what it does, which is the whole of what a person would
+/// point at. The dot between two of them belongs to neither and is not here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mark {
+    /// Which line of the surface it was drawn on.
+    pub line: u16,
+    /// The first cell it occupies.
+    pub at: u16,
+    /// How many cells it occupies.
+    pub cells: u16,
+    /// The shortcut's id.
+    pub id: &'static str,
+}
+
+impl Mark {
+    /// Does this run cover that cell?
+    #[must_use]
+    pub const fn covers(&self, line: u16, cell: u16) -> bool {
+        self.line == line && cell >= self.at && cell < self.at + self.cells
+    }
+}
+
+/// The same line, as the marks the pointer asks about.
+///
+/// # Why it is not a second arithmetic
+///
+/// Because it is the SAME one: [`laid`] places the runs, and this and
+/// [`hint_spans`] are two readings of its answer. Written twice — once to draw
+/// and once to hit-test — the two would drift the first time an elision moved,
+/// and the symptom would be a line explaining the key next to the one under
+/// the pointer, which is worse than explaining nothing.
+#[must_use]
+pub fn hint_marks(pieces: &[Piece], column: u16, line: u16, room: u16) -> Vec<Mark> {
+    laid(pieces, column, room)
+        .into_iter()
+        .filter_map(|r| {
+            Some(Mark {
+                line,
+                at: r.at,
+                cells: ronoctua_render::layout::width(&r.text),
+                id: r.id?,
+            })
+        })
+        .filter(|m| m.cells > 0)
+        .collect()
+}
+
+/// The long sentence for a shortcut, for the line under the pointer.
+///
+/// # Two namespaces, and why there are two
+///
+/// `cmd-<id>` is the long form of a COMMAND — what which-key and the manual
+/// read, and what a hundred of these ids already have because they are in the
+/// registry. The rest are a view's own keys: `files-preview`, `notif-read`,
+/// `transfers-pause`. Giving those a `cmd-` key would say they are registered
+/// commands, which is exactly the thing `cmd-<id>` means; they take `about-`
+/// instead. One id never has both — `every-hint-key-explains-itself` refuses
+/// that, because two sentences for one key is two places to keep in step.
+///
+/// `None` when neither exists. The line then shows nothing rather than the
+/// `[about-x]` marker, which is a note for a screenshot and not a sentence.
+#[must_use]
+pub fn hint_sentence(id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    let command = format!("cmd-{id}");
+    if texts.has(&command) {
+        return Some(texts.t(&command));
+    }
+    let about = format!("about-{id}");
+    texts.has(&about).then(|| texts.t(&about))
+}
+
+/// A WINDOW'S HINT LINE, and the shortcut the pointer is resting on it.
+///
+/// # Why the ten doors share a struct and the footer does not
+///
+/// Because the ten are one shape — a hint on line 0 and a list under it — and
+/// the thing being kept is three lines of state each: what was drawn, what the
+/// pointer is on, and whether that costs the list a row. Ten copies of that is
+/// ten places for the answer to drift, which is what this whole module exists
+/// to stop.
+///
+/// The footer keeps its own (`Footer::hint_placed`, `Footer::hint_said`)
+/// because there the row is not free: it comes out of the region and never off
+/// the footer's height, for a reason written in full on `Footer::explain_rows`.
+/// A window is not anchored to the bottom of the screen and simply shows one
+/// row fewer of its list.
+#[derive(Debug, Default, Clone)]
+pub struct Hinted {
+    /// The hint, as the LAST FRAME laid it out.
+    placed: Vec<Mark>,
+    /// The sentence about the shortcut under the pointer, while there is one.
+    said: Option<String>,
+}
+
+impl Hinted {
+    /// Records where the hint's shortcuts were drawn.
+    ///
+    /// Called with the SAME arguments as [`hint_spans`], beside it, so the
+    /// marks and the ink are one placement — see [`hint_marks`].
+    pub fn drew(&mut self, pieces: &[Piece], column: u16, line: u16, room: u16) {
+        self.took(hint_marks(pieces, column, line, room));
+    }
+
+    /// The same, for a door that draws the line over SEVERAL rows and so
+    /// collects the marks itself — the file manager's window, whose hint line
+    /// opens into a drawer.
+    pub fn took(&mut self, marks: Vec<Mark>) {
+        self.placed = marks;
+    }
+
+    /// The line is showing something else this frame, so there is no shortcut
+    /// on it to point at.
+    ///
+    /// This forgets WHERE, and not WHAT: the sentence is taken away by
+    /// whoever decided the line was not a hint, and it is taken away BEFORE
+    /// the list is measured. Cleared here instead, the row the explanation
+    /// costs would have been counted and then not drawn, and the list would
+    /// come up one row short for a frame.
+    pub fn drew_nothing(&mut self) {
+        self.placed.clear();
+    }
+
+    /// Which shortcut the pointer is resting on, at a window's own pixels.
+    #[must_use]
+    pub fn under(&self, x: f64, y: f64) -> Option<&'static str> {
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let cell_px = f64::from(cell_width());
+        if line_height <= 0.0 || cell_px <= 0.0 || x < 0.0 || y < 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let line = (y / line_height) as u16;
+        let cell = u16::try_from((x / cell_px) as u64).ok()?;
+        self.placed
+            .iter()
+            .find(|m| m.covers(line, cell))
+            .map(|m| m.id)
+    }
+
+    /// Puts the sentence on the line, and says whether that changed anything.
+    ///
+    /// The answer is what decides a repaint: a `Motion` arrives per pixel, and
+    /// moving along one key's own words changes nothing at all.
+    pub fn say(&mut self, said: Option<String>) -> bool {
+        if said == self.said {
+            return false;
+        }
+        self.said = said;
+        true
+    }
+
+    /// How many lines it takes: one while a shortcut is under the pointer,
+    /// none otherwise.
+    ///
+    /// The owner chose this over a row that stands empty at rest — *"só existe
+    /// enquanto há hover"*.
+    #[must_use]
+    pub fn rows(&self) -> u16 {
+        u16::from(self.said.is_some())
+    }
+
+    /// The sentence, when there is one.
+    #[must_use]
+    pub fn said(&self) -> Option<&str> {
+        self.said.as_deref()
+    }
+}
+
+/// One run of a hint line, placed.
+struct Laid {
+    at: u16,
+    text: String,
+    register: Register,
+    id: Option<&'static str>,
+}
+
+/// Places every run of the line, cutting the one that overruns.
+///
+/// The one walk both the painter and the pointer read. `room` is how many
+/// cells the line may occupy starting at `column`.
+fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
     let mut out = Vec::with_capacity(pieces.len());
     let mut at = column;
     let mut left = room;
@@ -806,8 +1096,10 @@ pub fn hint_spans(
         // modifier — see `split_at_the_modifier`. Prose is one run: a sentence
         // is what the shaper is FOR.
         let runs: Vec<&str> = match p.register {
-            Register::Key | Register::Alternate => split_at_the_modifier(&p.text)
-                .map_or_else(|| vec![p.text.as_str()], |(a, b)| vec![a, b]),
+            Register::Key | Register::Alternate | Register::Contextual => {
+                split_at_the_modifier(&p.text)
+                    .map_or_else(|| vec![p.text.as_str()], |(a, b)| vec![a, b])
+            }
             Register::Prose | Register::Separator => vec![p.text.as_str()],
         };
         for run in runs {
@@ -828,14 +1120,11 @@ pub fn hint_spans(
                 ronoctua_render::layout::elide_end(run, left)
             };
             let drawn = ronoctua_render::layout::width(&text);
-            out.push(ronoctua_render::Span {
-                size,
+            out.push(Laid {
+                at,
                 text,
-                column: at,
-                line,
-                color: p.register.color(),
-                edge: false,
-                foot: false,
+                register: p.register,
+                id: p.id,
             });
             at = at.saturating_add(drawn);
             left = left.saturating_sub(drawn);
@@ -1492,9 +1781,9 @@ mod meter_tests {
 mod tests {
     use super::{
         BAR_CELLS, FIELDS_LEAD, Frame, INSET, Piece, Register, SHELF_PAD, SHELF_ROOM, cell_width,
-        content_left_px, field_pair, hint_spans, key_text, list_bar, list_offset_at, list_scroll,
-        on_the_band, on_the_list_bar, shelf_bar, shelf_box, shelf_ground, split_at_the_modifier,
-        value_column,
+        content_left_px, field_pair, hint_marks, hint_of, hint_sentence, hint_spans, key_text,
+        list_bar, list_offset_at, list_scroll, on_the_band, on_the_list_bar, shelf_bar, shelf_box,
+        shelf_ground, split_at_the_modifier, value_column,
     };
     use ronoctua_tokens as tokens;
 
@@ -1504,6 +1793,69 @@ mod tests {
         } else {
             Piece::prose(text)
         }
+    }
+
+    /// EVERY CELL A SHORTCUT WAS DRAWN IN NAMES THAT SHORTCUT — the key and
+    /// the words beside it, which is the whole of what a person points at.
+    ///
+    /// And the marks are read off the SAME walk the spans are, so a mark can
+    /// only be wrong where the drawing is wrong too.
+    #[test]
+    fn a_mark_covers_the_key_and_the_words_that_say_what_it_does() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        let table: &[(&'static str, &'static str)] =
+            &[("C-v", "files-preview"), ("C-i", "files-facts")];
+        let pieces = hint_of(table, &texts);
+        let spans = hint_spans(&pieces, ronoctua_render::Size::Grid, 2, 0, 200);
+        let marks = hint_marks(&pieces, 2, 0, 200);
+        assert!(!marks.is_empty(), "a hint of two keys marks nothing");
+        // THE INK AND THE MARKS COVER THE SAME CELLS. Every span that came out
+        // of a piece with an id has a mark over it — the separator's does not,
+        // and that is the only run of the line that belongs to no shortcut.
+        for m in &marks {
+            assert!(m.cells > 0);
+        }
+        // THE CELL DECIDES, and it decides the right one of the two.
+        let first = marks
+            .iter()
+            .find(|m| m.id == "files-preview")
+            .expect("the first key is marked");
+        let second = marks
+            .iter()
+            .find(|m| m.id == "files-facts")
+            .expect("the second key is marked");
+        assert!(first.at < second.at, "the marks follow the drawing order");
+        assert!(marks.iter().any(|m| m.covers(0, first.at)));
+        assert!(!marks.iter().any(|m| m.covers(1, first.at)), "another line");
+        // AND NOTHING IS MARKED PAST THE INK.
+        let ends = spans
+            .iter()
+            .map(|s| s.column + ronoctua_render::layout::width(&s.text))
+            .max()
+            .unwrap_or(0);
+        for m in &marks {
+            assert!(m.at + m.cells <= ends, "a mark past the last drawn cell");
+        }
+    }
+
+    /// A KEY THAT IS A COMMAND READS ITS `cmd-`; ONE THAT IS A VIEW'S READS
+    /// ITS `about-`. Neither is ever the missing-key marker.
+    #[test]
+    fn every_shortcut_of_a_table_has_a_sentence_of_its_own() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        // One of each namespace, so a rename on either side is caught here and
+        // not only in the check that walks all sixteen tables.
+        for id in ["notif-read", "files-preview", "transfers-pause"] {
+            let said = hint_sentence(id, &texts).expect("a shortcut with no sentence");
+            assert!(!said.is_empty());
+            assert!(
+                !said.starts_with('['),
+                "{id} resolved to the missing-key marker: {said}"
+            );
+        }
+        // AND A KEY NOBODY DECLARED SAYS NOTHING, rather than showing the
+        // marker on the line under the hint.
+        assert!(hint_sentence("no-such-shortcut-at-all", &texts).is_none());
     }
 
     #[test]

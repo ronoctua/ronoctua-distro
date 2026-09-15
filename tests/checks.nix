@@ -4668,6 +4668,146 @@ let
   #
   # So the three lists have to agree: what the table claims, what the parser
   # dispatches, and what the two languages can say about it.
+  # EVERY DOCUMENT FORMAT THIS TREE CLAIMS HAS A READER, AND IS ASKED FIRST.
+  #
+  # The owner asked for the documents in his own folder — *"implementar o
+  # suporte para eles talvez não seja tão difícil"* — and the reason it was not
+  # is that most of them are one format: `.docx`, `.odt`, `.odp`, `.ods`,
+  # `.xlsx`, `.pptx` and `.epub` are every one of them a zip of XML.
+  #
+  # # The three ways this can go quietly wrong
+  #
+  # ONE. A type matched on and not declared, or declared and not matched on.
+  # `kind_of` answers by SUBCLASS, so what it claims cannot be read off it; the
+  # list beside it is what a person reads, and the two have to agree in both
+  # directions. `playlist::TYPES` makes the same argument one format along.
+  #
+  # TWO. The generic type asked FIRST. Every office format IS an
+  # `application/zip` by the freedesktop database's reckoning, so a `kind_of`
+  # that asked the generic question before the specific ones would answer "an
+  # archive" for a Word document and the panel would list
+  # `[Content_Types].xml` where the words should be. The check reads the ORDER.
+  #
+  # THREE. The document asked AFTER the text. `text/rtf` descends from
+  # `text/plain`, so the text reader claims it — that is exactly how the panel
+  # came to draw `{\rtf1\ansi\deff0{\fonttbl…`. Asking the document first is
+  # what makes the `.rtf` a document, and it is one call site.
+  document-formats-are-total = mkCheck "document-formats-are-total" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    src = pathlib.Path("${../crates/ronoctua-inspect/src}")
+    module = (src / "document.rs").read_text()
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
+    bad = []
+
+    # --- ONE. The list and the function claim the same set -----------------
+    declared = re.search(r"pub const TYPES: \[&str; \d+\] = \[(.*?)\];", module, re.S)
+    if declared is None:
+        bad.append("document.rs no longer declares TYPES")
+        claimed = []
+    else:
+        # A TYPE AND NOT A WORD: the list carries comments, and a quoted
+        # phrase in one of them is not a claim. Every MIME type has a slash.
+        claimed = [t for t in re.findall(r'"([^"]+)"', declared.group(1)) if "/" in t]
+    arm = re.search(r"pub fn kind_of\(mime: &str\) -> Option<Kind> \{(.*?)\n\}", module, re.S)
+    if arm is None:
+        bad.append("document.rs no longer dispatches on the type")
+        matched = []
+    else:
+        matched = re.findall(r'is\("([^"]+)"\)', arm.group(1))
+    if set(matched) - set(claimed):
+        bad.append("matched on but not declared: " + ", ".join(sorted(set(matched) - set(claimed))))
+    if set(claimed) - set(matched):
+        bad.append("declared but never matched on: " + ", ".join(sorted(set(claimed) - set(matched))))
+
+    # --- TWO. The container is asked LAST, and asked ONCE ------------------
+    #
+    # ONCE is half the rule and it is the half a sabotage found: an EARLY
+    # `is("application/zip")` leaves the fall-through at the end, so a check
+    # that only looked at the last position went green over a `kind_of` that
+    # answered "an archive" for every office format there is.
+    zips = [n for n, t in enumerate(matched) if t == "application/zip"]
+    if len(zips) > 1:
+        bad.append(
+            f"`application/zip` is asked {len(zips)} times, at positions "
+            f"{[n + 1 for n in zips]}; every office format descends from it, so the "
+            "first of them decides and the specific rows below are unreachable"
+        )
+    elif matched and matched[-1] != "application/zip":
+        bad.append(
+            "`application/zip` is asked at position "
+            f"{matched.index('application/zip') + 1} of {len(matched)}; every office "
+            "format descends from it, so anything after it is unreachable"
+        )
+
+    # --- Every Kind is reachable, and every Kind is READ --------------------
+    #
+    # OUT OF THE ENUM'S OWN BLOCK, and not off the whole file: a sweep of the
+    # module's indented identifiers finds `Ok(`, `Err(` and `Some(` and reports
+    # three variants that do not exist.
+    block = re.search(r"pub enum Kind \{(.*?)\n\}", module, re.S)
+    if block is None:
+        bad.append("document.rs no longer declares `enum Kind`")
+        kinds = set()
+    else:
+        kinds = {
+            m.group(1)
+            for m in re.finditer(r"^    ([A-Z]\w*)(?:\(|,)", block.group(1), re.M)
+        }
+    if len(kinds) < 5:
+        bad.append(f"only {len(kinds)} kinds found; the sweep is not reading the enum")
+    for k in sorted(kinds):
+        if not arm or f"Kind::{k}" not in arm.group(1):
+            bad.append(f"Kind::{k} is declared and `kind_of` never answers it")
+    read = re.search(r"fn read_it\(path: &Path, kind: Kind\) -> .*?\n\}", module, re.S)
+    if read is None:
+        bad.append("document.rs no longer has read_it")
+    else:
+        for k in sorted(kinds):
+            if f"Kind::{k}" not in read.group(0):
+                bad.append(f"Kind::{k} reaches read_it and read_it does not name it")
+        if re.search(r"^\s+_ =>", read.group(0), re.M):
+            bad.append(
+                "read_it has a catch-all arm; a Kind added tomorrow would fall "
+                "into somebody else's reader with nothing saying so"
+            )
+
+    # --- THREE. The document is asked before the text ----------------------
+    doc_at = shell.find("ronoctua_inspect::document::of(")
+    txt_at = shell.find("ronoctua_inspect::text::of(")
+    if doc_at < 0:
+        bad.append("the shell never asks `document::of` — no document has a preview")
+    elif txt_at >= 0 and doc_at > txt_at:
+        bad.append(
+            "the shell asks `text::of` before `document::of`; `text/rtf` descends "
+            "from `text/plain`, so an .rtf would be drawn as its own markup again"
+        )
+
+    # --- The three programs are named in all three Nix files ---------------
+    ROOT = pathlib.Path("${self}")
+    variables = sorted(set(re.findall(r'"(RONOCTUA_(?:CATDOC|XLS2CSV|CATPPT))"', (src / "tools.rs").read_text())))
+    if len(variables) != 3:
+        bad.append(f"tools.rs names {len(variables)} of the three OLE variables")
+    for where in ("nix/modules/media.nix", "nix/rust.nix", "nix/dev.nix"):
+        said = (ROOT / where).read_text()
+        for v in variables:
+            if v not in said:
+                bad.append(f"{where} does not set {v} — the reader would refuse with `missing`")
+
+    if bad:
+        print("ERROR: a document format that is claimed and not served.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for b in bad:
+            print("       " + b, file=sys.stderr)
+        raise SystemExit(1)
+    print(
+        f"OK: {len(claimed)} document types, every one with a reader, the container "
+        f"asked last, and the document asked before the text"
+    )
+    END
+  '';
+
   playlist-formats-are-total = mkCheck "playlist-formats-are-total" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -6285,6 +6425,841 @@ let
     END
   '';
 
+  # EVERY SHORTCUT OF EVERY HINT LINE CAN EXPLAIN ITSELF.
+  #
+  # The hint teaches forty keys in three words each, which is all a line holds.
+  # Resting the pointer on one of them draws a second line underneath with the
+  # whole sentence — the owner asked for exactly that: *"ao colocar o cursor
+  # por cima de qualquer atalho do minibuffer, de qualquer coisa da
+  # ronoctua-distro, quero que apareça uma linha abaixo dos atalhos explicando
+  # com mais detalhes o atalho que está sobre hover"*.
+  #
+  # `chrome::hint_sentence` reads `cmd-<id>` where the id is a command of the
+  # registry and `about-<id>` where it is a view's own key. When neither
+  # exists it returns `None` and the line simply does not appear — which is the
+  # right runtime behaviour (a `[about-x]` marker is a note for a screenshot,
+  # not a sentence) and is exactly why nothing on screen would report the gap.
+  # A key added to a table with no sentence is a key that quietly explains
+  # nothing, for ever.
+  #
+  # # What it walks
+  #
+  # Every `OF_THE_*` table in the shell, found by its TYPE and never by a list
+  # typed here — `labels-of-a-view-are-distinct` scanned a hand-written six
+  # while eight existed, and the two it never opened were the two with the
+  # defect. Sixteen tables, a hundred and sixty ids.
+  #
+  # AND WHAT A `means` CAN ANSWER. Four of the manager's keys mean whatever the
+  # focused section says, and it is the RESOLVED id that the line explains — a
+  # `S-<left>` over a film has to talk about rewinding, not about the parent
+  # directory the same row spells when nothing is playing. Those answers are
+  # string literals inside two named functions, and both are read.
+  #
+  # # The one id that is skipped, and why that is not a hole
+  #
+  # An id with no short text key of its own is an id the line never SAYS: it
+  # only reaches the screen through a `means`, which replaces it. The four
+  # `files-strong-*` are the whole of that set today, and `i18n-complete`
+  # already refuses a table id whose short key is missing for any other reason.
+  #
+  # # Exactly one of the two
+  #
+  # Both would be two sentences for one key, in two files, with only one of
+  # them ever read — the shape this repository has paid for before. `cmd-` also
+  # MEANS something: it is the long form of a registered command, and writing
+  # `cmd-files-preview` would say the manager's `C-v` is one.
+  # THE FOOTER'S ARITHMETIC DOES NOT ASK THE FOOTER'S CONTENT.
+  #
+  # THE DEFECT, TWICE. The shell has now died of a stack overflow twice, from
+  # two different pairs of methods calling each other in `Footer`. The first was
+  # `expansion` ↔ `expansion_window`, and `manager-builds-its-own-rows` was
+  # written for it — with this, in its own words, about what it could not do:
+  #
+  #   "It catches THIS pair and no other: a different two functions calling each
+  #    other would pass it untouched, and there is no check in this file that
+  #    would catch that one."
+  #
+  # The second was a different pair, seven months later, and it went exactly
+  # through that hole:
+  #
+  #   grid_full → expansion_len → screen_columns → metric
+  #             → first_of_expansion → explain_rows → grid_full
+  #
+  # The pointer coming to rest on a key of the hint line was enough. Two
+  # coredumps of 2026-09-15 carry that stack and nothing else, and what the
+  # owner saw was the modeline and the minibuffer vanishing.
+  #
+  # # The two clauses, and why the sharp one is first
+  #
+  # ONE. `Footer::metric` is the bottom of this door's arithmetic: it turns a
+  # width, a height and the region's FIRST LINE into a frame, and `first_of
+  # _expansion` is that first line. So nothing `metric` reaches may ask what the
+  # region CONTAINS — the moment it does, the footer's geometry is a function of
+  # the footer's content and the shape is back whether or not it closes a cycle
+  # today. This is the rule the defect broke, stated positively.
+  #
+  # TWO. And the set of cycles in `impl Footer` is exactly the set declared
+  # below. A NEW one lands here; a declared one that has gone lands here too,
+  # because a line excluding something that no longer exists is a line that
+  # excludes nothing — the shape `polkit-rules-are-the-ones-we-know` reads in
+  # both directions for the same reason.
+  #
+  # # What it does not do
+  #
+  # It reads `self.NAME(` and nothing cleverer: a call through a closure, a
+  # trait object or a free function is invisible to it. That is the honest
+  # bound, and it is enough — both defects were plain method calls, which is
+  # what a footer's arithmetic is made of.
+  the-footer-does-not-ask-itself = mkCheck "the-footer-does-not-ask-itself" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    src = pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text()
+    # THE TRAILING TEST MODULE IS NOT THE DOOR. A call in an assertion is a
+    # thing the test does, not a thing the footer does.
+    stop = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", src, re.M)
+    code = src[: stop.start()] if stop else src
+
+    # EVERY METHOD, BY BRACE MATCHING. A regex for the body would stop at the
+    # first `}` in a string or a comment; this counts.
+    bodies = {}
+    for m in re.finditer(r"\n    (?:pub )?(?:const )?fn (\w+)\(", code):
+        start = code.find("{", m.end())
+        if start < 0:
+            continue
+        depth, i = 0, start
+        while i < len(code):
+            if code[i] == "{":
+                depth += 1
+            elif code[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        bodies[m.group(1)] = bodies.get(m.group(1), "") + code[start : i + 1]
+
+    if len(bodies) < 200:
+        print(f"ERROR: only {len(bodies)} methods found in surface.rs; the sweep", file=sys.stderr)
+        print("       is not reading the file's shape any more.", file=sys.stderr)
+        raise SystemExit(1)
+
+    edges = {n: sorted(set(re.findall(r"self\.(\w+)\(", b)) & set(bodies)) for n, b in bodies.items()}
+    bad = []
+
+    # --- ONE. Nothing under `metric` asks what the region CONTAINS ---------
+    #
+    # `grid`/`grid_full` size the region, `expansion*` count and build it.
+    CONTENT = ["expansion", "expansion_len", "expansion_rows", "expansion_window", "grid", "grid_full"]
+    if "metric" not in bodies:
+        bad.append("`Footer::metric` is gone — this check no longer measures anything")
+    else:
+        how = {"metric": ["metric"]}
+        edge = ["metric"]
+        while edge:
+            n = edge.pop()
+            for m in edges.get(n, ()):
+                if m in how:
+                    continue
+                how[m] = how[n] + [m]
+                edge.append(m)
+        for name in CONTENT:
+            if name in how:
+                bad.append(
+                    "`metric` reaches `" + name + "`, so the footer's geometry is a "
+                    "function of its content: " + " -> ".join(how[name])
+                )
+
+    # --- TWO. The cycles are the ones we know ------------------------------
+    #
+    # Each is a DISPATCH that recurses on purpose and terminates on a condition,
+    # and each carries the reason it is allowed.
+    KNOWN = {
+        # One branch of `expansion_window` asks `expansion` back, and only the
+        # branch with no manager — `manager-builds-its-own-rows` counts it.
+        ("expansion", "expansion_window"),
+        # `expansion_len` falls through to `expansion().len()` for the views
+        # that keep no count of their own.
+        ("expansion", "expansion_len"),
+        # A bluetooth answer can raise an errand, and an errand answers.
+        ("bluetooth_answer", "bluetooth_errand"),
+        ("bluetooth_answer", "bluetooth_errand", "run_with"),
+        # A command can run a command: the clipboard's errand goes back through
+        # the registry, which is the one door every command enters by.
+        ("clipboard_errand", "run_command", "run_with"),
+    }
+
+    WHITE, GREY, BLACK = 0, 1, 2
+    colour = dict.fromkeys(bodies, WHITE)
+    stack, found = [], set()
+
+    def walk(n):
+        colour[n] = GREY
+        stack.append(n)
+        for m in edges[n]:
+            if colour[m] == GREY:
+                # THE CYCLE AS A SET, so the same ring reported from two entry
+                # points is one fact and not two.
+                found.add(tuple(sorted(stack[stack.index(m) :])))
+            elif colour[m] == WHITE:
+                walk(m)
+        stack.pop()
+        colour[n] = BLACK
+
+    sys.setrecursionlimit(10_000)
+    for n in sorted(bodies):
+        if colour[n] == WHITE:
+            walk(n)
+
+    for ring in sorted(found - KNOWN):
+        bad.append("a cycle nobody declared: " + " <-> ".join(ring))
+    for ring in sorted(KNOWN - found):
+        bad.append(
+            "the declared cycle " + " <-> ".join(ring) + " no longer exists; a line "
+            "excluding nothing excludes nothing"
+        )
+
+    if bad:
+        print("ERROR: the footer can ask itself a question it is the answer to.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for b in bad:
+            print("       " + b, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       This has killed the shell twice, both times as a stack", file=sys.stderr)
+        print("       overflow with no diagnostic beyond `process::abort` — the", file=sys.stderr)
+        print("       modeline and the minibuffer simply gone. `first_of_expansion`", file=sys.stderr)
+        print("       is arithmetic over LINE COUNTS; anything it needs about the", file=sys.stderr)
+        print("       region's content is remembered where it was measured (see", file=sys.stderr)
+        print("       `Footer::region_can_spare_a_row`), never asked from inside it.", file=sys.stderr)
+        raise SystemExit(1)
+    print(
+        f"OK: {len(bodies)} methods of `Footer`, {len(found)} declared recursions and no "
+        f"others, and nothing under `metric` asks what the region holds"
+    )
+    END
+  '';
+
+  # A DEAD FOOTER IS NOT A DEAD DESKTOP.
+  #
+  # THE DEFECT, IN THE OWNER'S WORDS. A crash took the interface and he named
+  # two things in it, of which only one was the crash: *"o outro é o erro de que
+  # a ronoctua-distro não sabe lidar com isso, ou seja, acaba deixando o usuário
+  # sem interface"*.
+  #
+  # It was worse than it looks. With the footer gone, ALL FOUR emergency binds
+  # are dead by construction: `Ctrl+Alt+L`, `Ctrl+Shift+L`, `Ctrl+Alt+Escape`
+  # and `Ctrl+Alt+Delete` are every one of them `ronoctua-shell command <id>`,
+  # which writes to the footer's own control socket. Inside a live niri, with
+  # the footer down, there was no way back through the screen at all.
+  #
+  # # The three things that have to be true together
+  #
+  # ONE. The unit says who to raise. `OnFailure=` is what makes this cost
+  # nothing while nothing is wrong — no thread, no timer, no question — and it
+  # was MEASURED rather than assumed: `OnFailure=` is documented as firing when
+  # a unit enters `failed`, and a unit with `Restart=` and no start limit is
+  # supposed never to reach it. Probed with two transient units on this machine,
+  # it fired on every failure, three for three.
+  #
+  # TWO. The unit it names exists, and starts the line rather than something
+  # else.
+  #
+  # THREE. The nested loop raises it too. That is where the owner met the crash,
+  # and over there nothing restarts anything: `nix/dev.nix` waits on NIRI, so a
+  # footer that aborts leaves the screen bare until somebody saves a file.
+  a-dead-footer-is-not-a-dead-desktop =
+    mkCheck "a-dead-footer-is-not-a-dead-desktop" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+
+        root_dir = pathlib.Path("${self}")
+        bad = []
+
+        niri = (root_dir / "nix/modules/niri.nix").read_text()
+
+        # --- ONE. The footer names the unit to raise --------------------------
+        footer = re.search(
+            r"systemd\.user\.services\.ronoctua-footer = \{(.*?)\n    \};", niri, re.S
+        )
+        if footer is None:
+            bad.append("nix/modules/niri.nix no longer declares `ronoctua-footer`")
+            footer = None
+        else:
+            body = footer.group(1)
+            named = re.search(r'onFailure = \[\s*"([^"]+)"', body)
+            if named is None:
+                bad.append(
+                    "`ronoctua-footer` declares no `onFailure`: it crashes, it comes back, "
+                    "and nobody is told it went"
+                )
+            elif named.group(1) != "ronoctua-lifeline.service":
+                bad.append(f"`ronoctua-footer` raises `{named.group(1)}` and not the lifeline")
+            # AND IT STILL COMES BACK. The owner chose both halves — *"volta
+            # sozinho, e a linha diz que voltou"* — and a `Restart=` quietly
+            # dropped would leave the line telling the truth about a screen that
+            # stays bare.
+            if 'Restart = "on-failure"' not in body:
+                bad.append("`ronoctua-footer` no longer restarts itself on failure")
+
+        # --- TWO. The unit exists, and runs the line --------------------------
+        line = re.search(
+            r"systemd\.user\.services\.ronoctua-lifeline = \{(.*?)\n    \};", niri, re.S
+        )
+        if line is None:
+            bad.append("there is no `ronoctua-lifeline` unit for the failure to raise")
+        else:
+            body = line.group(1)
+            start = re.search(r'ExecStart = "([^"]+)"', body)
+            if start is None or " lifeline " not in start.group(1):
+                bad.append(
+                    "the lifeline unit does not run the `lifeline` subcommand: "
+                    + (start.group(1) if start else "no ExecStart at all")
+                )
+            # A RESCUE THAT RESTARTS IN A LOOP is a screen one cannot leave — the
+            # rescue console's own rule, one module along.
+            if 'Restart = "no"' not in body:
+                bad.append("the lifeline unit does not declare `Restart = \"no\"`")
+            # NOTHING STARTS IT ON PURPOSE. A `wantedBy` would put this process in
+            # every healthy session, which is the opposite of costing nothing.
+            if "wantedBy" in body:
+                bad.append("the lifeline unit is `wantedBy` something; it must be raised only by the failure")
+
+        # --- AND THE SUBCOMMAND IT NAMES IS REACHABLE -------------------------
+        main = (root_dir / "crates/ronoctua-shell/src/main.rs").read_text()
+        if 'Some("lifeline")' not in main:
+            bad.append("`ronoctua-shell` has no `lifeline` subcommand for the unit to run")
+
+        # --- THREE. And the nested loop raises it too -------------------------
+        #
+        # COMMENTS ARE NOT CODE, and a sabotage proved it: the script argues this
+        # rule out at length in prose, so a sweep that counted those lines passed
+        # green over a watcher that had stopped raising anything.
+        loop_starter = "\n".join(
+            "" if l.lstrip().startswith("#") else l
+            for l in (root_dir / "nix/footer-single.nix").read_text().split("\n")
+        )
+        if "lifeline" not in loop_starter:
+            bad.append(
+                "nix/footer-single.nix never raises the line: in the nested loop — which is "
+                "where this crash was met — a dead footer stays dead and silent"
+            )
+        if "onpurpose" not in loop_starter:
+            bad.append(
+                "the loop's watcher cannot tell a crash from a reload, so it would raise the "
+                "line on every save"
+            )
+
+        if bad:
+            print("ERROR: the interface can go without anything saying so.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for b in bad:
+                print("       " + b, file=sys.stderr)
+            print("", file=sys.stderr)
+            print("       With the footer down, all four emergency binds are dead: they", file=sys.stderr)
+            print("       all write to its own control socket. The line raised by", file=sys.stderr)
+            print("       `OnFailure=` is the only thing on screen that can say what", file=sys.stderr)
+            print("       happened and offer a way back.", file=sys.stderr)
+            raise SystemExit(1)
+        print("OK: the footer's failure raises a line, in production and in the nested loop")
+        END
+      '';
+
+  # THE LINE REACHES NOTHING THE KEYBOARD DOES NOT.
+  #
+  # It is `files-everything-has-a-key`'s promise, on the one surface where it
+  # matters most: this is drawn because something already broke, and an option
+  # only the mouse can press is an option a person without a working pointer
+  # cannot press at all.
+  #
+  # The options are a TABLE for exactly this reason — four arms of a `match`
+  # could not be read from outside, and a comment promising the same thing is
+  # not a promise.
+  lifeline-reaches-nothing-the-keyboard-does-not =
+    mkCheck "lifeline-reaches-nothing-the-keyboard-does-not" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+
+        src = pathlib.Path("${../crates/ronoctua-shell/src}/lifeline.rs").read_text()
+        i18n = pathlib.Path("${../assets/i18n}")
+        bad = []
+
+        table = re.search(r"const OFFERED: \[\(&str, &str, Doing\); (\d+)\] = \[(.*?)\n\];", src, re.S)
+        if table is None:
+            print("ERROR: lifeline.rs no longer declares its options as a table.", file=sys.stderr)
+            print("       A `match` with four arms cannot be read from out here, and", file=sys.stderr)
+            print("       this check is the only thing that says every option has a key.", file=sys.stderr)
+            raise SystemExit(1)
+
+        rows = re.findall(r'\("([^"]+)",\s*ronoctua_i18n::key::(\w+),\s*Doing::(\w+)\)', table.group(2))
+        if len(rows) != int(table.group(1)):
+            bad.append(f"the table says {table.group(1)} options and {len(rows)} were read")
+
+        pressed = [r[0] for r in rows]
+        if len(set(pressed)) != len(pressed):
+            bad.append("two options share a key: " + " ".join(sorted(pressed)))
+
+        # AND THE KEY READS APART FROM ITS WORDS.
+        #
+        # THE DEFECT, OFF THE PHOTOGRAPH: the key and its label were drawn in
+        # the SAME token, and the owner read it — *"os atalhos estão junto com
+        # o texto, ou seja, não está bem distinto"*. `chrome::Register::color`
+        # is the one place that decides what colour a key is against what
+        # colour its words are, and this line was not asking it for the second
+        # half at all.
+        for register in ("Register::Key.color()", "Register::Prose.color()"):
+            if register not in src:
+                bad.append(
+                    f"the line does not draw through `{register}`; a key and its words "
+                    "in one token is one grey run, which is what was photographed"
+                )
+
+        # AND `ESC` IS A ROW OF THE TABLE, not a keysym handled off to the side.
+        #
+        # It was: the line drew `x` for a gesture that two keys performed, and
+        # the table knew one of them. The owner asked for the key that actually
+        # closes it.
+        closing = [r for r in rows if r[2] == "Close"]
+        if not closing:
+            bad.append("no option closes the line")
+        elif closing[0][0] != "ESC":
+            bad.append(
+                f"the closing option is written `{closing[0][0]}`, and `Esc` is what "
+                "this system means everywhere by taking something away"
+            )
+
+        # EVERY VARIANT OF `Doing` IS OFFERED. One declared and left out of the
+        # table is an option that exists in the code and on no screen.
+        block = re.search(r"enum Doing \{(.*?)\n\}", src, re.S)
+        declared = {m.group(1) for m in re.finditer(r"^    ([A-Z]\w*),", block.group(1), re.M)} if block else set()
+        offered = {r[2] for r in rows}
+        for missing in sorted(declared - offered):
+            bad.append(f"`Doing::{missing}` is declared and no option offers it")
+        for ghost in sorted(offered - declared):
+            bad.append(f"the table offers `Doing::{ghost}`, which is not a variant")
+
+        # AND EVERY LABEL HAS WORDS, in every language.
+        keys = [re.sub(r"_", "-", r[1]).lower() for r in rows]
+        for language in ${builtins.toJSON languages}:
+            have = set(re.findall(r"^([a-z][a-z0-9-]*)\s*=", (i18n / f"{language}.ftl").read_text(), re.M))
+            for k in keys:
+                if k not in have:
+                    bad.append(f"{language}: the option `{k}` has no words")
+
+        if 'Keysym::Escape => "ESC"' not in src:
+            bad.append("pressing `Esc` no longer resolves to the table's own row")
+
+        if bad:
+            print("ERROR: an option of the rescue line that the keyboard cannot reach.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for b in bad:
+                print("       " + b, file=sys.stderr)
+            raise SystemExit(1)
+        print(
+            f"OK: {len(rows)} options, a key each drawn apart from its words, words in "
+            f"every language, and `Esc` closes it"
+        )
+        END
+      '';
+
+  # A HINT NEVER SPLITS A KEY FROM THE WORDS THAT SAY WHAT IT DOES.
+  #
+  # THE DEFECT, PHOTOGRAPHED: `C-<`, `C-l`, `C-{` and `C-d` each closed a line
+  # of the manager's hint with the words that explain them opening the next —
+  # four times on one screen. `fold::wrap_pieces` flattened every piece into
+  # words and filled greedily, so there was no notion of an ENTRY anywhere in
+  # the wrapper.
+  #
+  # # Why this is a check and not only the unit test
+  #
+  # Because `fold::tests::a_row_never_ends_on_a_key` walks seven widths of one
+  # table, and what broke the rule a second time was not a width: a new
+  # register arrived (`Contextual`, for the keys that exist only while their
+  # context does), `units_of` did not know it, and every key drawn in it went
+  # back to being wrapped word by word. The unit test could not see it because
+  # its table had no contextual key in it until this was written.
+  #
+  # So what is checked here is the thing a test cannot reach: THREE PLACES KNOW
+  # WHICH REGISTERS ARE KEYS, and they have to name the same set.
+  #
+  #   `Register`                — the variants that exist
+  #   `chrome::laid`            — which are drawn as TWO runs, so no ligature
+  #                               can cross the modifier
+  #   `fold::units_of`          — which make a group a shortcut rather than
+  #                               loose words
+  #
+  # A fourth register added to the first and forgotten in either of the other
+  # two lands here, which is exactly how the third one arrived.
+  a-hint-never-splits-a-key = mkCheck "a-hint-never-splits-a-key" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    chrome = (shell / "chrome.rs").read_text()
+    fold = (shell / "fold.rs").read_text()
+    bad = []
+
+    # THE VARIANTS THAT EXIST.
+    block = re.search(r"pub enum Register \{(.*?)\n\}", chrome, re.S)
+    if block is None:
+        bad.append("chrome.rs no longer declares `enum Register`")
+        variants = set()
+    else:
+        variants = {m.group(1) for m in re.finditer(r"^    ([A-Z]\w*),", block.group(1), re.M)}
+    if len(variants) < 4:
+        bad.append(f"only {len(variants)} registers found; the sweep is not reading the enum")
+
+    # THE ONES DRAWN AS TWO RUNS — the `match p.register` inside `laid`.
+    walk = re.search(r"fn laid\(pieces: &\[Piece\], column: u16, room: u16\).*?\n\}", chrome, re.S)
+    if walk is None:
+        bad.append("chrome.rs no longer has `laid` — what places the runs now?")
+        drawn = set()
+    else:
+        split = re.search(r"let runs: Vec<&str> = match p\.register \{(.*?)\n        \};", walk.group(0), re.S)
+        if split is None:
+            bad.append("`laid` no longer splits a key at its modifier")
+            drawn = set()
+        else:
+            arms = split.group(1)
+            # THE KEY ARM IS THE ONE THAT CUTS; the other names the rest.
+            cut = arms.split("=>")[0]
+            drawn = set(re.findall(r"Register::(\w+)", cut))
+            rest = set(re.findall(r"Register::(\w+)", arms)) - drawn
+            if drawn | rest != variants:
+                bad.append(
+                    "`laid` does not name every register: missing "
+                    + ", ".join(sorted(variants - drawn - rest))
+                )
+
+    # AND THE ONES THAT MAKE A GROUP A SHORTCUT.
+    keyed = re.search(r"let keyed = group\.iter\(\)\.any\(\|p\| \{(.*?)\n        \}\);", fold, re.S)
+    if keyed is None:
+        bad.append("fold.rs no longer decides which groups are shortcuts")
+        grouped = set()
+    else:
+        grouped = set(re.findall(r"Register::(\w+)", keyed.group(1)))
+
+    if drawn and grouped and drawn != grouped:
+        bad.append(
+            "the two lists of key registers differ — `laid` draws "
+            + ", ".join(sorted(drawn))
+            + " as keys and `units_of` groups "
+            + ", ".join(sorted(grouped))
+            + "; whichever is missing from `units_of` gets wrapped word by word"
+        )
+
+    # AND THE WRAPPER STILL HAS THE NOTION OF AN ENTRY AT ALL.
+    for word in ("enum Unit", "Unit::Entry", "fn units_of"):
+        if word not in fold:
+            bad.append(f"fold.rs no longer has `{word}` — the wrap is by word again")
+
+    if bad:
+        print("ERROR: a hint line that can break a key away from its words.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for b in bad:
+            print("       " + b, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A key and the words that say what it does are ONE thing to", file=sys.stderr)
+        print("       read, so they are one thing to place: `fold::units_of`", file=sys.stderr)
+        print("       recovers the runs `hint_of_marked` emitted, and a break may", file=sys.stderr)
+        print("       only fall between them.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {len(variants)} registers, and the two places that know which are keys agree")
+    END
+  '';
+
+  # THE HOVER BAND ASKS THE SECTION, and never a line of the flattened region.
+  #
+  # THE DEFECT, PHOTOGRAPHED: resting the pointer on the PREVIEW's scrollbar lit
+  # a row of the LISTING. The footer took the band from `row_under_pointer`,
+  # which is an index into the whole page with every section's lines laid end to
+  # end — one number for four columns — so nothing downstream could tell which
+  # column the pointer was in.
+  #
+  # `View::band_row` answers a PANE and that pane's own line, and
+  # `View::band_belongs` is the rule that keeps a band off a photograph. Asked
+  # of a flattened index, the second one is being asked about the wrong
+  # section — which is also how "no band over a picture" quietly stopped
+  # applying on the cells between the panels.
+  #
+  # # What it measures, exactly
+  #
+  # That in each door, the `band_belongs` decision is made in the same breath as
+  # a `band_row` lookup. It does not prove the arithmetic; the unit tests
+  # `every_cell_of_the_region_has_a_section` and
+  # `the_panels_leak_nowhere_the_listing_did_not_already` do that, at every cell
+  # of eight widths. What it proves is that neither door has gone back to
+  # deciding on its own.
+  the-band-asks-the-section = mkCheck "the-band-asks-the-section" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    bad = []
+    doors = 0
+    for name in ("surface.rs", "files_window.rs"):
+        # COMMENTS ARE NOT CODE. Both doors argue this rule out at length in
+        # prose, and a sweep that counted those would report the paragraph
+        # explaining the fix as the defect — which is what the first version of
+        # this check did.
+        lines = [
+            "" if l.lstrip().startswith("//") else l
+            for l in (shell / name).read_text().split("\n")
+        ]
+        sites = [n for n, l in enumerate(lines) if "band_belongs" in l]
+        if not sites:
+            bad.append(f"{name} draws a hover band without asking `band_belongs`")
+            continue
+        doors += 1
+        for n in sites:
+            # THE SAME BREATH: what it is asked about has to have come from
+            # `band_row` just above, and not from a line of the flattened page.
+            #
+            # EITHER FORM COUNTS. `band_belongs` takes the PANE and answers for
+            # the band's rows; `band_belongs_at` takes the CELL and answers for
+            # its rectangle. They are two questions and both of them follow a
+            # `band_row` in the doors as they stand.
+            near = "\n".join(lines[max(0, n - 12) : n + 2])
+            if "band_row" not in near:
+                bad.append(
+                    f"{name}:{n + 1}: `band_belongs` is asked about something that "
+                    "did not come from `band_row` — the flattened region line is back"
+                )
+    if doors < 2:
+        bad.append(f"only {doors} of the manager's two doors were swept")
+
+    if bad:
+        print("ERROR: a hover band taken off a line that belongs to four sections.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for b in bad:
+            print("       " + b, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       `row_under_pointer` is an index into the whole page, with", file=sys.stderr)
+        print("       every section's lines laid end to end. `View::band_row`", file=sys.stderr)
+        print("       answers a PANE and that pane's own line, and it is what", file=sys.stderr)
+        print("       `band_belongs` has to be asked about.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: both of the manager's doors take the band from the section it is in")
+    END
+  '';
+
+  # A REFUSAL IS WRAPPED AND NOT CUT.
+  #
+  # THE DEFECT, READ OFF THE SCREEN: the owner selected `playlist.asx` and got
+  # half a sentence. `files-preview-playlist-unread` is 71 cells in en-GB, the
+  # panel is 24 to 40, and the refusal was drawn on ONE line with
+  # `layout::elide_end` — with four empty rows underneath it.
+  #
+  # Three things have to be true together, and only the three together make the
+  # sentence readable:
+  #
+  #   the drawing WRAPS it                 (`layout::wrap`, not `elide_end`)
+  #   `refusal_lines` measures the wrap    at the panel's own width
+  #   `preview_total` counts that height   so the scrollbar exists at all
+  #
+  # A fix that wrapped and did not count would draw four lines into a panel that
+  # thinks it has one, with no bar and no way to reach the rest.
+  a-refusal-is-not-cut = mkCheck "a-refusal-is-not-cut" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    body = (pathlib.Path("${../crates/ronoctua-shell/src}") / "files.rs").read_text()
+    bad = []
+
+    def block(head):
+        at = body.find(head)
+        if at < 0:
+            return None
+        depth, i = 0, body.index("{", at)
+        start = i
+        while i < len(body):
+            if body[i] == "{":
+                depth += 1
+            elif body[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return body[start : i + 1]
+            i += 1
+        return None
+
+    # ONE. The drawing wraps the sentence.
+    drawing = block("fn preview_content(")
+    if drawing is None:
+        bad.append("files.rs has no `preview_content` — where is the panel drawn?")
+    else:
+        said = drawing.find("let said = match looked.and_then(|l| l.why.as_ref())")
+        if said < 0:
+            bad.append("the refusal's sentence is no longer built where it was")
+        else:
+            after = drawing[said : said + 1200]
+            if "layout::wrap(&said" not in after:
+                bad.append(
+                    "the refusal is not wrapped — a sentence wider than the panel "
+                    "is cut with an ellipsis and the rows under it stay empty"
+                )
+            if "elide_end(&said" in after:
+                bad.append("the refusal is still cut with `elide_end`")
+
+    # TWO. The height is measured at the panel's own width.
+    measured = block("fn refusal_lines(")
+    if measured is None:
+        bad.append("files.rs no longer measures how tall a refusal is")
+    else:
+        if "layout::wrap(" not in measured:
+            bad.append("`refusal_lines` does not wrap — it cannot be counting rows")
+        if "drawn_panel" not in measured:
+            bad.append(
+                "`refusal_lines` does not read `drawn_panel`, so it is measuring "
+                "against a width nothing drew"
+            )
+
+    # THREE. And the panel's total counts it, or there is no scrollbar.
+    total = block("pub fn preview_total(")
+    if total is None:
+        bad.append("files.rs no longer has `preview_total`")
+    elif "self.refusal_lines()" not in total:
+        bad.append(
+            "`preview_total` does not count the refusal's rows; the sentence "
+            "would wrap into a panel that thinks it is one line tall"
+        )
+
+    if bad:
+        print("ERROR: a refusal the panel cannot show whole.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for b in bad:
+            print("       " + b, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       **A refusal is a value, not an absence** — and a refusal", file=sys.stderr)
+        print("       cut in half is half a value. `layout::wrap` hands back", file=sys.stderr)
+        print("       everything so the caller can hang a bar on the rest.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: the refusal wraps, is measured at the panel's width, and is counted")
+    END
+  '';
+
+  every-hint-key-explains-itself = mkCheck "every-hint-key-explains-itself" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    i18n = pathlib.Path("${../assets/i18n}")
+
+    # BOTH SPELLINGS OF THE ROW. The tables are `&str` where the ids are only
+    # read and `&'static str` where they travel on to the pointer as the id of
+    # a shortcut, and a pattern that knew one of the two would silently walk
+    # half of them.
+    STR = r"&(?:'static )?str"
+    TABLE = re.compile(
+        r"pub const (OF_THE_[A-Z_]+):\s*&\[\(" + STR + r",\s*" + STR
+        + r"(?:,\s*\w+)?\)\]\s*=\s*&\[(.*?)\n\];",
+        re.S,
+    )
+    ROW = re.compile(r'\(\s*"[^"]*"\s*,\s*"([a-z0-9-]+)"')
+
+    ids, tables = {}, []
+    for f in sorted(shell.glob("*.rs")):
+        for m in TABLE.finditer(f.read_text()):
+            found = ROW.findall(m.group(2))
+            tables.append((f.name, m.group(1), len(found)))
+            for i in found:
+                ids.setdefault(i, f"{f.name}:{m.group(1)}")
+
+    # A FLOOR, never the count: a table that stops being recognised takes the
+    # sweep below it and says so, where a number equal to what was found would
+    # prove nothing.
+    if len(tables) < 14:
+        print(f"ERROR: only {len(tables)} hint tables found; the sweep is not", file=sys.stderr)
+        print("       recognising `OF_THE_*` any more.", file=sys.stderr)
+        raise SystemExit(1)
+
+    # AND WHAT THE TWO `means` FUNCTIONS CAN ANSWER — see the header.
+    MEANS = [("files.rs", r"pub fn strong_meaning\("), ("notifications.rs", r"fn means\(")]
+    answered = 0
+    for name, head in MEANS:
+        body = (shell / name).read_text()
+        m = re.search(head + r".*?\n    \}\n", body, re.S)
+        if not m:
+            print(f"ERROR: {name}: the `means` function this check reads is gone;", file=sys.stderr)
+            print("       the ids it can answer are no longer being covered.", file=sys.stderr)
+            raise SystemExit(1)
+        for i in re.findall(r'"([a-z0-9-]+)"', m.group(0)):
+            answered += 1
+            ids.setdefault(i, f"{name}:means")
+
+    if answered < 10:
+        print(f"ERROR: only {answered} ids read out of the `means` functions.", file=sys.stderr)
+        raise SystemExit(1)
+
+    # THE IDS A `means` ALWAYS REPLACES, derived and never listed.
+    #
+    # `files::strong_of` is what maps a table id to a direction, and an id it
+    # maps is an id the line never says on its own: `hint_of_marked` asks the
+    # `means` first and always gets an answer for those four. Everything else
+    # reaches the screen as itself.
+    always = set(
+        re.findall(
+            r'"([a-z0-9-]+)"\s*=>\s*Some\(',
+            re.search(r"pub fn strong_of\(.*?\n\}\n", (shell / "files.rs").read_text(), re.S).group(0),
+        )
+    )
+    if not always:
+        print("ERROR: `files::strong_of` no longer names the ids a `means`", file=sys.stderr)
+        print("       always replaces; the exception below cannot be derived.", file=sys.stderr)
+        raise SystemExit(1)
+
+    wrong, skipped, covered = [], [], 0
+    for language in ${builtins.toJSON languages}:
+        text = (i18n / f"{language}.ftl").read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M))
+        for i, where in sorted(ids.items()):
+            if i not in have:
+                # A SHORT WORD IS WHAT THE LINE DRAWS. `chrome::hint_of` asks
+                # `texts.t(<id>)`, so an id with no key of that name comes out
+                # as `[the-id]` — the missing-key marker, in the middle of the
+                # hint. That is how this check found ten: eight of the
+                # Syncthing view's ten keys, and two of the locale view's.
+                if i in always:
+                    skipped.append(i)
+                    continue
+                wrong.append(
+                    f"{language}: `{i}` ({where}) has no short word, so the "
+                    f"hint line draws `[{i}]`"
+                )
+                continue
+            long = [k for k in (f"cmd-{i}", f"about-{i}") if k in have]
+            if not long:
+                wrong.append(
+                    f"{language}: `{i}` ({where}) has neither `cmd-{i}` nor "
+                    f"`about-{i}` — pointing at it explains nothing"
+                )
+            elif len(long) == 2:
+                wrong.append(
+                    f"{language}: `{i}` ({where}) has BOTH `cmd-{i}` and "
+                    f"`about-{i}`; only the first is ever read"
+                )
+            else:
+                covered += 1
+
+    if wrong:
+        print("ERROR: a shortcut on a hint line that cannot explain itself.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       `chrome::hint_sentence` reads `cmd-<id>` for a command of", file=sys.stderr)
+        print("       the registry and `about-<id>` for a view's own key, and", file=sys.stderr)
+        print("       draws nothing when neither is there — so a missing one is", file=sys.stderr)
+        print("       a line that never appears rather than a marker on screen.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print(
+        f"OK: {len(tables)} hint tables, {len(ids)} ids, "
+        f"{covered // max(len(${builtins.toJSON languages}), 1)} with a word and a sentence in "
+        f"every language ({len(set(skipped))} never said on their own)"
+    )
+    END
+  '';
+
   # NO TWO LABELS OF ONE VIEW SAY THE SAME THING.
   #
   # THE DEFECT, read off the screen: *"há duas labels com nome `tailnet` e
@@ -7130,10 +8105,29 @@ let
     import pathlib, sys
 
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    # THE FOOTER IS THE EXCEPTION: it creates BOTH — one that repeats for
-    # the views, and a plain one for the leader — and the reason is written
-    # beside them.
-    EXCEPT = {"surface.rs"}
+    # TWO DOORS ARE EXCUSED, AND EACH ONE PROVES ITS OWN EXCUSE.
+    #
+    # A name on a list is a hole: the reason stops being true and nobody
+    # rechecks it. `the-cursor-is-a-colour` makes the same argument about the
+    # file manager and re-measures its excuse rather than trusting it, and these
+    # two are re-measured here.
+    #
+    #   surface.rs   the footer creates BOTH — one keyboard that repeats for
+    #                the views and a plain one for the leader, because
+    #                repeating the leader is an error. So it has to contain
+    #                both calls; one of them gone and the excuse is gone.
+    #
+    #   lifeline.rs  the line that outlives the footer walks NOTHING. Four
+    #                letters, each a single press, and a held `r` would restart
+    #                the interface four times. So it has to contain no list at
+    #                all: no bar to drag, no wheel, no offset to move.
+    EXCUSED = {
+        "surface.rs": {"must": ["get_keyboard_with_repeat", "get_keyboard("], "must_not": []},
+        "lifeline.rs": {
+            "must": [],
+            "must_not": ["list_bar", "PointerEventKind::Axis", "offset"],
+        },
+    }
     wrong = []
     handlers = 0
 
@@ -7142,7 +8136,25 @@ let
         if "impl KeyboardHandler for" not in body:
             continue
         handlers += 1
-        if f.name in EXCEPT:
+        if f.name in EXCUSED:
+            # THE REASON IS RE-MEASURED, never taken on trust.
+            for word in EXCUSED[f.name]["must"]:
+                if word not in body:
+                    wrong.append(
+                        f"{f.name} is excused from repeating, and the reason was that it "
+                        f"names `{word}` — it does not any more"
+                    )
+            for word in EXCUSED[f.name]["must_not"]:
+                if word in body:
+                    wrong.append(
+                        f"{f.name} is excused from repeating because it walks no list, "
+                        f"and it now names `{word}`"
+                    )
+            # AND IT STILL HAS THE METHOD. The trait is not optional, and a
+            # door that lost it would not compile — this is here so the excuse
+            # cannot quietly become "it has no keyboard at all".
+            if "fn repeat_key" not in body:
+                wrong.append(f"{f.name}: has no `repeat_key` at all")
             continue
         if "get_keyboard_with_repeat" not in body:
             wrong.append(
@@ -7151,6 +8163,12 @@ let
             )
         if "fn repeat_key" not in body:
             wrong.append(f"{f.name}: has no `repeat_key` at all")
+
+    # AND THE EXCUSED ONES EXIST AT ALL. A renamed file would leave its name
+    # here excusing nothing, and the door it names swept by nobody.
+    for name in sorted(EXCUSED):
+        if not (shell / name).is_file():
+            wrong.append(f"{name} is excused and is not there any more")
 
     # AND THE CHECK ITSELF IS NOT VACUOUS: it has to have found the windows.
     if handlers < 6:
@@ -8370,13 +9388,21 @@ let
             if word in body:
                 bad.append(f"{f.name} names '{word}' — a shape is drawn here, not fetched")
 
-    # TWO. The five are still five.
+    # TWO. The count of programs is pinned, so a new one has to be argued for.
     #
-    # Not a forbidden list of program names: what is asserted is the COUNT,
-    # so a sixth of any name at all lands here.
+    # Not a forbidden list of names: what is asserted is the COUNT, so one of
+    # any name at all lands here and somebody has to come and change this line
+    # on purpose.
+    #
+    # IT WAS FIVE AND IS EIGHT. `catdoc`, `xls2csv` and `catppt` arrived
+    # together — one package, 36,6 MiB measured — for the three OLE office
+    # formats, which are not XML and which no library in this tree reads. They
+    # do not weaken clause ONE by a line: the mesh readers and the rasteriser
+    # still name no program at all, which is the thing this check is called
+    # after.
     tools = (src / "tools.rs").read_text()
-    if "pub const ALL: [Self; 5]" not in tools:
-        bad.append("tools.rs no longer declares exactly five programs")
+    if "pub const ALL: [Self; 8]" not in tools:
+        bad.append("tools.rs no longer declares exactly eight programs")
 
     # THREE. The table's mesh row asks for no program.
     pixels = (src / "pixels.rs").read_text()
@@ -8437,7 +9463,7 @@ let
         print("       variable in, and one more line in the closure sweep. The", file=sys.stderr)
         print("       rasteriser is two hundred lines and costs none of that.", file=sys.stderr)
         raise SystemExit(1)
-    print(f"OK: {len(readers)} files read and draw in process, and the five programs are five")
+    print(f"OK: {len(readers)} files read and draw in process, and the eight programs are eight")
     END
   '';
 
@@ -15040,6 +16066,7 @@ let
       inspect-labels-are-keys
       files-keys-are-not-the-compositors
       playlist-formats-are-total
+      document-formats-are-total
       # The preview's player: the size it never guesses, and the child it never
       # leaves behind.
       motion-never-guesses-a-frame
@@ -15059,6 +16086,13 @@ let
       every-window-knows-its-scale
       every-list-window-has-a-bar
       every-modal-view-has-a-hint
+      the-footer-does-not-ask-itself
+      a-dead-footer-is-not-a-dead-desktop
+      lifeline-reaches-nothing-the-keyboard-does-not
+      a-hint-never-splits-a-key
+      every-hint-key-explains-itself
+      the-band-asks-the-section
+      a-refusal-is-not-cut
       labels-of-a-view-are-distinct
       the-cursor-is-a-colour
       the-footer-draws-what-the-keyboard-drives
@@ -15113,6 +16147,7 @@ let
       inspect-labels-are-keys
       files-keys-are-not-the-compositors
       playlist-formats-are-total
+      document-formats-are-total
       motion-never-guesses-a-frame
       motion-never-leaks-a-child
       motion-photo-is-found-by-bytes
@@ -15122,6 +16157,13 @@ let
       every-window-knows-its-scale
       every-list-window-has-a-bar
       every-modal-view-has-a-hint
+      the-footer-does-not-ask-itself
+      a-dead-footer-is-not-a-dead-desktop
+      lifeline-reaches-nothing-the-keyboard-does-not
+      a-hint-never-splits-a-key
+      every-hint-key-explains-itself
+      the-band-asks-the-section
+      a-refusal-is-not-cut
       labels-of-a-view-are-distinct
       the-cursor-is-a-colour
       the-footer-draws-what-the-keyboard-drives

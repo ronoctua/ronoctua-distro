@@ -60,6 +60,13 @@ writeShellApplication {
     if [ -s "$pidfile" ]; then
       previous=$(cat "$pidfile")
       if kill -0 "$previous" 2>/dev/null; then
+        # SAID OUT LOUD, so the watcher below knows this death was asked for.
+        #
+        # Hot reload kills the footer on every rebuild, and a watcher that
+        # could not tell that from a crash would raise the rescue line on
+        # every save — which is the shape of alarm nobody reads after the
+        # second time.
+        echo "$previous" > "$pidfile.onpurpose"
         kill "$previous" 2>/dev/null || true
         # 5 s of TERM before the KILL. The footer leaves the event loop in
         # milliseconds; 5 s is the time of a frozen one, not of a busy one.
@@ -112,5 +119,36 @@ writeShellApplication {
     new_pid=$!
     echo "$new_pid" > "$pidfile"
     echo "  footer $new_pid standing"
+
+    # ---------------------------------------------------------------
+    # AND SOMEBODY NOTICES IF IT DIES ON ITS OWN
+    # ---------------------------------------------------------------
+    # In production this is `OnFailure=ronoctua-lifeline.service` on the unit,
+    # and it costs nothing at all. Here there is no unit: `dev.nix` waits on
+    # NIRI, so a footer that aborts leaves the screen bare until somebody saves
+    # a file — which is exactly where the owner met a crash and reported that
+    # the distro "acaba deixando o usuário sem interface".
+    #
+    # A POLL, AND IT IS THE ONLY ONE IN THIS TREE. `wait` would be exact and
+    # cannot be used: this script has to return so the loop can go on, and a
+    # subshell may not wait for a process its PARENT started. One `kill -0` a
+    # second against something that is almost always alive is the cheapest
+    # correct thing, and it lives only in the nested loop.
+    #
+    # THE LINE IS RAISED AFTER THE FOOTER IS BACK, in that order, because the
+    # production side does the same: `Restart=on-failure` brings it back and
+    # the line says it fell. A line over a screen that is still bare would be
+    # the rescue arriving before the rescue.
+    (
+      while kill -0 "$new_pid" 2>/dev/null; do sleep 1; done
+      if [ -s "$pidfile.onpurpose" ] && [ "$(cat "$pidfile.onpurpose")" = "$new_pid" ]; then
+        exit 0
+      fi
+      # THE SAME SECOND THE UNIT WAITS. `RestartSec=1` over there; a tight loop
+      # here would be a crash loop spinning at the speed of the poll.
+      sleep 1
+      "$0" "$pidfile" "$binary" "$@" || true
+      "$binary" lifeline ronoctua-footer.service || true
+    ) &
   '';
 }

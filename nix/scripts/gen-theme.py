@@ -669,6 +669,15 @@ DISTANCE_GATES = (
     ("text.subtle.default", "text.dim", 0.03, 0.04),
     ("text.subtle.strong", "brain.dim", 0.03, 0.04),
     ("text.subtle.alternate", "text.subtle.strong", 0.03, 0.04),
+    # THE THREE KINDS OF KEY ON A HINT LINE, each told from the other two.
+    #
+    # `strong` is a key that is always there, `alternate` one whose MEANING
+    # moves under the reader, `contextual` one that is only on the line because
+    # of what is under the cursor. They sit side by side in one sentence, so a
+    # theme that solved any pair to one tone would be a line that says three
+    # things in one voice.
+    ("text.subtle.contextual", "text.subtle.strong", 0.03, 0.04),
+    ("text.subtle.contextual", "text.subtle.alternate", 0.03, 0.04),
     ("state.error", "state.critical", 0.04, 0.05),
     # THE MESSAGE AND THE BUTTON UNDER IT. They are drawn one line apart on the
     # same ground and they are not the same kind of thing — one is read, the

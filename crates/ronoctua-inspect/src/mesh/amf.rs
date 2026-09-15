@@ -17,9 +17,9 @@
 //! of the first object's points.
 
 use super::xml::tagged;
-use super::zip::{member_bytes, members};
 use super::{Mesh, Read, Shape, TRIANGLE_CEILING};
 use crate::Refusal;
+use crate::zip::{member_bytes, members};
 
 /// Reads an AMF, compressed or not.
 ///

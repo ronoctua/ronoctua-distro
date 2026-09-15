@@ -1,13 +1,29 @@
-//! Enough of the zip container for the two formats that are one.
+//! Enough of the zip container for the formats that are one.
 //!
-//! 3MF is a zip of XML, and an AMF may be. Written here rather than taken from
-//! a crate because the whole of what is needed is "walk the directory, inflate
-//! one member" — see [`members`].
+//! # Why it is a module of the crate and was one of `mesh/`
+//!
+//! Because a zip is not a shape. It was written for 3MF and AMF, which are
+//! zips of XML, and it lived beside them; then the office formats arrived —
+//! `.docx`, `.odt`, `.ods`, `.xlsx`, `.epub` are every one of them a zip of
+//! XML, and `.zip` itself is a zip of anything — and a reader that two
+//! unrelated halves of a crate need is a reader that belongs to neither.
+//!
+//! Written here rather than taken from a crate because the whole of what is
+//! needed is "walk the directory, inflate one member" — see [`members`].
 
 use std::io::Read as _;
 
-use super::INFLATED_CEILING;
 use crate::Refusal;
+
+/// How many bytes a member may inflate to.
+///
+/// A zip is a thing somebody can build to inflate for ever out of a few
+/// kilobytes. The compressed size cannot bound it — that is the whole trick —
+/// so the bound is on what comes OUT, applied while inflating and not after.
+/// Two hundred and fifty-six mebibytes is roughly this crate's mesh ceiling
+/// expressed as XML, which is about ten times bulkier than the binary form,
+/// and it is generous for a document: `sample.docx` is a megabyte.
+pub const INFLATED_CEILING: u64 = 256 * 1024 * 1024;
 
 /// One member of the zip, as the central directory describes it.
 pub struct Member {
@@ -16,6 +32,23 @@ pub struct Member {
     compressed: u64,
     plain: u64,
     at: u64,
+}
+
+impl Member {
+    /// Its name inside the archive.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// How many bytes it is once inflated, as the directory CLAIMS.
+    ///
+    /// A claim and not a measurement, which is why nothing bounds an inflate
+    /// by it — see [`member_bytes`]. It is honest enough to list beside a name.
+    #[must_use]
+    pub const fn plain(&self) -> u64 {
+        self.plain
+    }
 }
 
 /// The members of a zip, found through its central directory.
@@ -145,9 +178,8 @@ pub fn part<'a>(list: &'a [Member], name: &str) -> Option<&'a Member> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Member, member_bytes};
+    use super::{INFLATED_CEILING, Member, member_bytes};
     use crate::Refusal;
-    use crate::mesh::INFLATED_CEILING;
 
     #[test]
     // THE DEFECT THIS CATCHES: bounding the inflation by the COMPRESSED size,

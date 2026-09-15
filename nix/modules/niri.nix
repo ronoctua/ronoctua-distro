@@ -405,10 +405,65 @@ in
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];
+      # AND WHEN IT FAILS, SOMEBODY SAYS SO.
+      #
+      # `Restart=on-failure` above brings the footer back, and for a year that
+      # was the whole answer: the interface returned and nobody was told it had
+      # gone. The owner named that as a defect of its own — *"a ronoctua-distro
+      # não sabe lidar com isso, ou seja, acaba deixando o usuário sem
+      # interface"* — after a crash left him with a bare screen in the nested
+      # loop, where nothing restarts anything.
+      #
+      # MEASURED, because the received wisdom says otherwise: `OnFailure=` is
+      # documented as firing when a unit enters the `failed` state, and a unit
+      # with `Restart=` and no start limit is supposed never to reach it. Probed
+      # here with two transient units — `Restart=on-failure`, `RestartSec=1`,
+      # `StartLimitIntervalSec=0`, a child exiting 7 — the witness fired on
+      # EVERY failure, three for three. So this is the mechanism, and it costs
+      # nothing at all while nothing is wrong: no thread, no timer, no question.
+      onFailure = [ "ronoctua-lifeline.service" ];
       serviceConfig = {
         ExecStart = "${ronoctua.shell}/bin/ronoctua-shell";
         Restart = "on-failure";
         RestartSec = 1;
+        Slice = "session.slice";
+        OOMPolicy = "stop";
+      };
+    };
+
+    # THE LINE THAT OUTLIVES THE FOOTER.
+    #
+    # Two rows saying what happened and what can be done about it: see the
+    # logs, restart the interface, ask an AI (drawn and refusing — it is not
+    # built yet), close. It is a second `wlr-layer-shell` surface, and that is
+    # not a second chrome against invariant 14: it is the footer's own row drawn
+    # by another process, alive exactly while there is no chrome at all, and
+    # gone on one key.
+    #
+    # NO `wantedBy`. Nothing starts this on purpose — it is started BY the
+    # failure above and by nothing else, which is why a healthy session never
+    # has this process at all.
+    #
+    # `Restart = "no"`, for the rescue console's reason one module along: a
+    # rescue that restarts in a loop is a screen one cannot leave. And a crash
+    # LOOP does not stack lines either — starting a unit that is already active
+    # is a no-op, so there is one line however many times the footer falls.
+    systemd.user.services.ronoctua-lifeline = {
+      description = "ronoctua — the line that outlives the footer";
+      environment = {
+        # THE THEME, because this process is not the footer's child and
+        # inherits nothing from it. Without these two the line would draw in
+        # the fallback palette on a machine that chose another — a message
+        # about the interface being gone is the one place the colours must not
+        # be assumed.
+        RONOCTUA_THEME = config.ronoctua.theme;
+        RONOCTUA_THEMES = "${ronoctua.themed}";
+      };
+      after = [ "graphical-session.target" ];
+      partOf = [ "graphical-session.target" ];
+      serviceConfig = {
+        ExecStart = "${ronoctua.shell}/bin/ronoctua-shell lifeline ronoctua-footer.service";
+        Restart = "no";
         Slice = "session.slice";
         OOMPolicy = "stop";
       };

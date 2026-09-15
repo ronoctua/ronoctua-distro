@@ -4510,6 +4510,71 @@ esse crate constrói o `ronoctua-files-root`: seria um cliente D-Bus dentro de u
 como root, e uma segunda fronteira num crate cujo motivo de existir é ter UMA. O hospedeiro tem os
 dois e emenda as linhas por `devices_are`.
 
+### A dica que se explica, e a linha que não pode crescer
+
+A linha de dicas ensina quarenta teclas em três palavras cada, que é tudo o que uma linha guarda. O
+dono pediu a outra metade: *"ao colocar o cursor por cima de qualquer atalho do minibuffer, de
+qualquer coisa da ronoctua-distro, quero que apareça uma linha abaixo dos atalhos explicando com
+mais detalhes o atalho que está sobre hover"*.
+
+Duas coisas nisso são decisão e não detalhe.
+
+**Onde a frase mora.** Ela é `cmd-<id>` para os ids que são comandos do registro — cento e dois de
+cento e sessenta e dois já tinham uma — e `about-<id>` para os que são teclas de uma VISTA:
+`files-preview`, `notif-read`, `transfers-pause`. Escrever `cmd-files-preview` diria que o `C-v` do
+gerenciador é um comando registrado, que é exatamente o que `cmd-` significa. Nunca as duas, porque
+duas frases para uma tecla são dois lugares para manter em dia — e o check que cobra isso achou,
+ao ser escrito, **dez ids sem frase curta nenhuma**: oito das dez teclas do Syncthing e duas do
+idioma desenhavam `[syncthing-down]` na tela, o marcador de chave faltante, nas duas portas.
+
+**De onde vem a linha.** Do próprio quadro anterior (`hint_marks`), pela regra que o `band_placed` e
+o `modeline_placed` já seguem: o que o ponteiro está em cima tem de ser o que foi DESENHADO. A linha
+é construída dentro do quadro a partir de uma dúzia de empréstimos do rodapé, e um segundo
+construtor para o ponteiro perguntar seria a mesma tabela mantida duas vezes — que discordariam na
+primeira tecla que um contexto retirasse.
+
+**E a linha SAI DA REGIÃO, nunca da altura do rodapé.** Este é o desenho inteiro. O rodapé é
+ancorado embaixo: uma linha acrescentada sob o minibuffer deixa a superfície mais alta, e tudo o que
+está acima da linha nova sobe uma linha na TELA. O minibuffer está acima dela — então a dica
+escorregaria de baixo do ponteiro que está em cima dela, o hover acabaria, a linha sumiria, a dica
+voltaria para baixo do ponteiro, e roda. É o laço de layout que o `Fold::held` descreve por inteiro,
+com o ponteiro no mesmo lugar da corrente. Então a linha é paga com uma linha da região de baixo:
+`grid()` desenha uma linha a menos enquanto a explicação está de pé, `wanted_height` soma a dela, e
+os dois termos se cancelam. A listagem fica uma linha mais curta enquanto o ponteiro descansa numa
+tecla, e nada acima dela se mexe um pixel. Uma região de UMA linha não oferece a frase: tirar a
+única que ela tem faria a altura crescer de qualquer jeito.
+
+Nas dez janelas o mesmo desenho custa menos, e por isso elas compartilham um `chrome::Hinted`: uma
+janela não está ancorada no fundo da tela e simplesmente mostra uma linha a menos de lista.
+
+### O nome que não cabe — três caminhos, e um deles anda
+
+Uma listagem é uma grade, e grade corta. O dono pediu o resto de um nome cortado por três caminhos,
+e os três são deliberadamente diferentes:
+
+- **o ponteiro** põe o nome inteiro no minibuffer, pelo canal do `explain` que a permissão, o dono e
+  a data já usam — e só quando ele FOI cortado, porque explicar um nome que se lê inteiro gasta a
+  única linha do rodapé em toda linha de toda listagem;
+- **o teclado** o ECOA por três segundos ao chegar nele (`Step::Say`, o `ECHO_SECONDS` que as duas
+  portas já dividem);
+- **o desenho** o faz andar de lado, *"em uma animação de movimento, de tempo em tempo"*.
+
+O andar é `slide.rs`, e é uma função PURA de uma duração: um segundo parado, uma célula a cada 200
+ms até o fim, um segundo parado, e volta ao começo de uma vez — a forma que o dono escolheu quando
+perguntei (*"passo a passo, com pausa nas pontas"*). Pura porque então o relógio é da PORTA e a
+animação é aritmética: as duas portas desenham esta listagem e nenhuma delas pode ter ideia própria
+de onde o nome chegou. Uma célula por vez porque é o que a mantém uma grade — movimento sub-célula
+exigiria desenhar o nome num deslocamento em PIXELS, que é um segundo jeito de posicionar texto numa
+superfície onde tudo o mais é posicionado em colunas.
+
+O relógio é ARMADO, o único padrão que este repositório já abençoou como exceção: sobe quando um
+nome começa a andar e cai sozinho quando nenhum anda. Cinco vezes por segundo é mais rápido do que o
+segundo que o rodapé já acorda, e um temporizador permanente de 200 ms acordaria o laço a sessão
+inteira para que um nome pudesse se mexer nos poucos quadros em que alguém descansa sobre ele.
+
+**Um nome anda por vez** — o do ponteiro, ou o do cursor quando o ponteiro não está sobre nenhum.
+Dois seriam duas coisas se mexendo numa tela onde nada se mexe, e o olho está num dos dois.
+
 ### A prévia e os fatos — dois painéis, e por que eles custaram tão pouco
 
 Nome, tamanho, modo e data: nenhuma das quatro colunas responde *é esta a foto?*, que é a pergunta
@@ -5028,6 +5093,58 @@ e os pixmaps do localizador. Uma prévia que funcionasse numa das duas portas e 
 exatamente a divergência que o arranjo de duas portas existe para impedir, então a janela ganhou o
 `Images` do `ronoctua-render` e o mesmo quadro texturizado, na mesma superfície. Não conseguir
 criá-lo custa a figura, e não a janela.
+
+### O documento — porque quase todos eles são o MESMO arquivo
+
+A pasta de testes do dono tem onze documentos e a prévia abria um: o PDF. O resto — `.docx`,
+`.odt`, `.odp`, `.ods`, `.xlsx`, `.pptx` — caía em "sem prévia", e o `.rtf` era pior que isso: a
+base do freedesktop diz que `text/rtf` desce de `text/plain`, o que é verdade, então o leitor de
+texto o reivindicava e o painel desenhava `{\rtf1\ansi\deff0{\fonttbl…`. É a lição da playlist
+outra vez, escrita nas palavras daquele módulo: **o que decide não é do que um arquivo é feito, é
+para que ele SERVE**.
+
+O que tornou isso barato é que os seis primeiros são um formato só: **zip de XML**. Este crate tem
+leitor de zip desde o dia em que aprendeu a desenhar um 3MF, e um parser de XML desde o mesmo dia.
+Faltavam as vinte linhas que dizem qual membro guarda as palavras — `word/document.xml`,
+`content.xml`, `ppt/slides/slideN.xml`. O leitor subiu de `mesh/zip.rs` para `src/zip.rs` quando
+ganhou o segundo consumidor: um zip não é uma forma, e um leitor de que duas metades sem relação
+precisam não pertence a nenhuma das duas.
+
+**A resposta é `text::Read`**, que é o tipo de um `.rs`. Essa é a integração inteira: o painel já
+rola, já pagina, já move de lado, já pendura barra. Um tipo `Document` próprio seria uma segunda
+coisa para o painel aprender e uma segunda coisa para as duas portas desenharem. Sem realce —
+`language: None` —, porque documento é prosa e prosa não é colorida.
+
+**Planilha vira TABELA**, escolha do dono em três palavras: *"planilha vira tabela"*. O que torna
+uma planilha legível num painel monoespaçado é a mesma coluna começando na mesma célula em toda
+linha, e um despejo separado por vírgulas é o arquivo e não a planilha. Por isso o `.xls` — que
+chega como CSV do `xls2csv` — passa pelo mesmo `align` que o `.xlsx` e o `.ods`; a decisão é sobre
+planilhas, não sobre qual biblioteca abriu uma. E a medida é em CÉLULAS (`ronoctua_protocol::cells`):
+uma tabela acolchoada por BYTES entorta na primeira palavra acentuada.
+
+Três armadilhas que custaram medição:
+
+- **O container é o ÚLTIMO a ser perguntado.** Todos os seis descem de `application/zip`, então um
+  `kind_of` que perguntasse o genérico primeiro responderia "um arquivo compactado" para um
+  documento do Word — e o painel listaria `[Content_Types].xml` onde deviam estar as palavras. O
+  check lê a ORDEM, e lê também que ele é perguntado UMA vez: um `is("application/zip")` no topo
+  deixa o fall-through no fim, e uma verificação que só olhasse a última posição passaria verde.
+- **A ordem das transparências não é a ordem dos nomes.** `slide10.xml` vem antes de `slide2.xml`
+  como texto; a apresentação lida assim é uma apresentação embaralhada.
+- **As strings do `.xlsx` moram noutra parte.** Uma célula de tipo `s` guarda um ÍNDICE para
+  `xl/sharedStrings.xml`; sem seguir isso, uma planilha de palavras é uma planilha de inteiros
+  pequenos. E uma coluna pulada (`<c r="C1">` logo depois de `<c r="A1">`) tem de continuar pulada,
+  ou todo valor escorrega uma coluna para a esquerda.
+
+**E os três OLE precisam de programa.** `.doc`, `.xls` e `.ppt` são compound files — um sistema de
+arquivos dentro de um arquivo — e nada neles é XML. O `catdoc` traz os três binários em 36,6 MiB
+medidos. Medido também o que cada um FAZ, nos arquivos do dono: `catdoc sample.doc` deu **8 377
+bytes**, `xls2csv sample.xls` deu **364 057**, e `catppt sample.ppt` deu **zero bytes, saída zero e
+nada no stderr** — num arquivo que o `file` chama de OLE compound de verdade. Dois dos três
+funcionam; o terceiro falha do único jeito que nada mais adiante consegue ver. Por isso resposta
+vazia é **falha** e não documento vazio: painel em branco e painel recusado são iguais na tela, e só
+um dos dois tem frase. Nada de LibreOffice (2-3 GB) e nada de pandoc: a linha que o `media.nix` já
+traça é que isto é suporte a FORMATO, não a aplicativo.
 
 ### A prévia 3D — onze formatos, e ela se deixa girar
 
@@ -6537,6 +6654,88 @@ E faltava `boot.resumeDevice`. Com `boot.initrd.systemd.enable`, o nixpkgs só e
 essa opção existe: a linha de comando levava `resume_offset=` sozinho, que é meio caminho.
 
 
+
+### Quando o rodapé morre — a linha que sobrevive a ele
+
+O dono passou o ponteiro pela linha de dicas e a interface inteira fechou. Ele apontou dois defeitos
+naquilo, e só um deles era a queda: *"o outro é o erro de que a ronoctua-distro não sabe lidar com
+isso, ou seja, acaba deixando o usuário sem interface"*.
+
+Ele estava certo, e era pior do que parece. **Com o rodapé morto, os quatro binds de emergência estão
+mortos junto.** `Ctrl+Alt+L`, `Ctrl+Shift+L`, `Ctrl+Alt+Esc` e `Ctrl+Alt+Del` são todos
+`ronoctua-shell command <id>`, e todos escrevem no socket de controle **do rodapé**. Dentro de um
+niri vivo, com o rodapé caído, não havia caminho nenhum de volta pela tela — a porta do
+`Ctrl+Alt+Del` que sobrevive é a do systemd, e ela só dispara num console que o compositor não está
+segurando.
+
+**A detecção é `OnFailure=`, e custa zero.** Não há thread, não há relógio, não há pergunta: o
+systemd já sabe que a unidade falhou e levanta a outra. Isso responde ao que o dono pediu — *"caso
+haja algo do brain procurando erros o tempo todo, faça isso da melhor maneira possível, de forma a
+não consumir muita memória CPU/RAM"* — melhor do que qualquer coisa que procurasse.
+
+E foi **medido**, porque a sabedoria recebida diz o contrário: `OnFailure=` está documentado como
+disparando quando a unidade entra em `failed`, e uma unidade com `Restart=` e sem teto de reinício
+supostamente nunca chega lá. Sondado aqui com duas unidades transientes — `Restart=on-failure`,
+`RestartSec=1`, `StartLimitIntervalSec=0`, um filho saindo com 7 — a testemunha disparou em **toda**
+falha, três de três. Um `ExecStopPost` teria sido o plano B e não foi preciso.
+
+**O brain fica de fora, e isso é decisão.** O contrato dele está escrito neste documento: *"não
+desenha, não segura teclado, não abre `/proc` e não reimplementa Nix"*. Ele é um decisor com fila e
+registro de tarefas, e uma queda não é tarefa agendada. O dono sugeriu que a detecção fosse dele; o
+que ele pediu de verdade — detecção que não custe nada — o systemd entrega sem o brain existir no
+caminho.
+
+**A linha é uma SEGUNDA superfície layer-shell, e o invariante 14 foi levado ao dono antes de ser
+contornado.** Lido ao pé da letra, "nenhuma chrome além do rodapé" proíbe exatamente isso. A leitura
+que ele aprovou: não é uma segunda chrome, é a linha do rodapé desenhada por outro processo — ela
+existe precisamente quando não há chrome nenhuma, fica onde o rodapé fica, e sai numa tecla.
+
+Duas linhas: o que aconteceu (e o que a unidade disse de si, `Result=`), e quatro opções com uma
+letra cada — ver os logs, reiniciar, IA, fechar. A IA é **desenhada e recusa**, com frase própria
+dizendo que ainda não existe: é o molde da linha do XFS no formatar, e é o oposto de uma opção que
+falta. O teclado só é tomado `OnDemand` — em repouso ela não tira o teclado de ninguém, e um clique
+lhe dá o foco como a qualquer janela; as opções são uma TABELA justamente para que
+`lifeline-reaches-nothing-the-keyboard-does-not` possa ler que cada uma tem letra.
+
+É um subcomando do binário que já existe, ao lado dos outros vinte e quatro. Um crate próprio seria
+um segundo fechamento carregando o mesmo wgpu para um processo que vive segundos por ano.
+
+No laço aninhado não há unidade nenhuma — `nix/footer-single.nix` sobe o rodapé como filho comum e o
+`dev.nix` espera pelo **niri** —, então o próprio `footer-single` vigia o PID e levanta a mesma
+linha. Ele distingue queda de recarga por um arquivo `.onpurpose` escrito antes do `kill`: sem isso
+a linha nasceria a cada save, que é o alarme que ninguém lê depois da segunda vez.
+
+### O ciclo que matou a shell duas vezes
+
+`Footer::metric` é o fundo da aritmética desta porta: ele transforma largura, altura e a **primeira
+linha da região** num frame, e essa primeira linha é o `first_of_expansion`. Portanto nada que o
+`metric` alcance pode perguntar o que a região **contém** — no instante em que pergunta, a geometria
+do rodapé vira função do conteúdo do rodapé.
+
+Aconteceu duas vezes, com dois pares diferentes de funções, e as duas vezes o sintoma foi o mesmo:
+stack overflow, `process::abort`, modeline e minibuffer simplesmente sumidos, sem diagnóstico nenhum.
+A primeira foi `expansion` ↔ `expansion_window`. A segunda:
+
+```
+grid_full → expansion_len → screen_columns → metric → first_of_expansion → explain_rows → grid_full
+```
+
+e bastava o ponteiro parar sobre uma tecla da linha de dicas. Dois coredumps de 2026-09-15 carregam
+essa pilha e mais nada.
+
+Os dois consertos são um só: **as duas arestas gratuitas saíram**. `screen_columns` perguntava
+`metric` só para ler `columns()`, que é `width / cell` e nunca lê `first`; agora constrói o frame com
+`0`. E `explain_rows` media a região; agora **lembra** — `grid` escreve `region_can_spare_a_row` onde
+a medição acontece, e a soma lê de volta. Custa um quadro: no primeiríssimo hover a linha ainda não é
+oferecida, que é a mesma batida que o `hint_placed` já corre, e pela mesma razão.
+
+O check que existia para a primeira vez, `manager-builds-its-own-rows`, escreveu no próprio
+comentário o buraco por onde a segunda entrou: *"um par diferente de funções chamando uma à outra
+passaria intocado, e não há check neste arquivo que pegaria esse"*. O
+`the-footer-does-not-ask-itself` fecha isso: monta o grafo de chamadas `self.…()` entre os métodos do
+`Footer`, exige que nada abaixo de `metric` alcance o conteúdo, e recusa qualquer ciclo que não esteja
+declarado — as cinco recursões de despacho que existem estão listadas com o motivo, e uma declarada
+que desaparecer também falha, porque linha que não exclui nada não exclui nada.
 
 ### O console de resgate — `Ctrl+Alt+Del`, e duas portas para a mesma tela
 

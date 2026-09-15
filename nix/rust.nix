@@ -476,6 +476,10 @@ let
     # a user unit's `PATH` is minimal. `journalctl` counts how many times the
     # protection acted, and `nix` answers what the store weighs — a question
     # only its own database can answer without walking the disk for minutes.
+    #
+    # AND THE LINE THAT OUTLIVES THE FOOTER READS THE SAME ONE: its `see the
+    # logs` opens the journal in the rescue console. One declaration, two
+    # readers — see `crates/.../lifeline.rs`.
     RONOCTUA_JOURNALCTL = "${systemd}/bin/journalctl";
     RONOCTUA_NIX = "${nix}/bin/nix";
     # WHAT THE RESCUE CONSOLE SPAWNS, and the reason is sharper here than
@@ -906,6 +910,13 @@ rec {
       RONOCTUA_EXIFTOOL = "${pkgs.exiftool}/bin/exiftool";
       RONOCTUA_PDFTOPPM = "${pkgs.poppler-utils}/bin/pdftoppm";
       RONOCTUA_PDFINFO = "${pkgs.poppler-utils}/bin/pdfinfo";
+      # AND THE THREE OLE READERS, for the same reason the five above are here:
+      # a test that reaches one of them without the variable set answers
+      # `Refusal::Missing` and proves nothing, which is the trap AGENTS.md
+      # records as "every ffmpeg test was EMPTY".
+      RONOCTUA_CATDOC = "${pkgs.catdoc}/bin/catdoc";
+      RONOCTUA_XLS2CSV = "${pkgs.catdoc}/bin/xls2csv";
+      RONOCTUA_CATPPT = "${pkgs.catdoc}/bin/catppt";
     }
   );
 

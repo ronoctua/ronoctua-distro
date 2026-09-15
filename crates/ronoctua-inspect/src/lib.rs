@@ -33,14 +33,22 @@
 
 #![forbid(unsafe_code)]
 
+// WHAT A DOCUMENT SAYS — the office formats, which are zips of XML, and the
+// three old ones, which need a program.
+pub mod document;
 pub mod facts;
 pub mod mesh;
 pub mod motion;
 pub mod pixels;
 pub mod playlist;
+// RICH TEXT, with the control words taken off.
+pub mod rtf;
 pub mod solid;
 pub mod text;
 pub mod tools;
+// A ZIP CONTAINER — the office formats, the e-book, `.zip` itself, and the
+// two meshes that were here first.
+pub mod zip;
 
 /// Pixels ready for the GPU, in **straight** (not premultiplied) RGBA8.
 ///

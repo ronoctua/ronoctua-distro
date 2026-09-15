@@ -51,7 +51,6 @@ mod stl;
 mod surface;
 mod three_mf;
 mod xml;
-mod zip;
 
 use std::path::Path;
 
@@ -71,14 +70,13 @@ use crate::Refusal;
 /// makes one file over.
 pub const TRIANGLE_CEILING: usize = 2_000_000;
 
-/// How many bytes a `.3mf` may inflate to.
+/// How many bytes a `.3mf` may inflate to — [`crate::zip::INFLATED_CEILING`].
 ///
-/// A 3MF is a zip, and a zip is a thing somebody can build to inflate for ever
-/// out of a few kilobytes. The compressed size cannot bound it — that is the
-/// whole trick — so the bound is on what comes OUT, applied while inflating and
-/// not after. Two hundred and fifty-six mebibytes is roughly the ceiling above
-/// expressed as XML, which is about ten times bulkier than the binary form.
-pub const INFLATED_CEILING: u64 = 256 * 1024 * 1024;
+/// The reader moved up to the crate when the office formats arrived, and the
+/// ceiling went with it: it is a fact about inflating a zip and not about
+/// meshes. Named here so the two readers that were written against it keep
+/// reading one number.
+pub use crate::zip::INFLATED_CEILING;
 
 /// How large a mesh file is read at all.
 ///

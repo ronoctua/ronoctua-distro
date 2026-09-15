@@ -71,6 +71,8 @@ mod history_window;
 mod keyboard;
 mod language;
 mod leader;
+// THE LINE THAT OUTLIVES THE FOOTER — raised by systemd when it fails.
+mod lifeline;
 mod locale;
 mod locale_window;
 mod manual;
@@ -85,6 +87,8 @@ mod paint;
 mod power;
 mod power_window;
 mod power_words;
+// A NAME TOO LONG FOR ITS COLUMN, walking sideways a cell at a time.
+mod slide;
 mod sound;
 mod stage;
 mod surface;
@@ -419,6 +423,24 @@ fn main() -> Result<()> {
                 .split_first()
                 .context("usage: ronoctua-shell monitor <program> [args]")?;
             return terminal::host_monitor(program, rest).context("host the monitor");
+        }
+        // THE LINE THAT OUTLIVES THE FOOTER.
+        //
+        // Raised by `OnFailure=` when `ronoctua-footer.service` fails, and by
+        // the nested loop's starter when the child exits badly. It is a
+        // subcommand of this binary for the reason the ten window doors are:
+        // everything it needs — the renderer, the chrome, the tokens, both
+        // languages — is already here, and a crate of its own would be a second
+        // closure carrying the same wgpu for a process that lives seconds.
+        //
+        // It does NOT go through the control socket. That socket belongs to the
+        // footer, and this exists precisely when the footer does not answer —
+        // which is also why all four emergency binds are dead in that moment.
+        Some("lifeline") => {
+            let unit = std::env::args()
+                .nth(2)
+                .context("usage: ronoctua-shell lifeline <unit>")?;
+            return lifeline::host_it(&unit).context("raise the lifeline");
         }
         // THE RESCUE CONSOLE, and a third identity for the same terminal.
         //

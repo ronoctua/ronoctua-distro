@@ -97,6 +97,26 @@ in
   config.environment.sessionVariables.RONOCTUA_EXIFTOOL = "${pkgs.exiftool}/bin/exiftool";
   config.environment.sessionVariables.RONOCTUA_PDFTOPPM = "${pkgs.poppler-utils}/bin/pdftoppm";
   config.environment.sessionVariables.RONOCTUA_PDFINFO = "${pkgs.poppler-utils}/bin/pdfinfo";
+  # AND THE THREE OLD OFFICE FORMATS, which no library in this tree reads.
+  #
+  # `.doc`, `.xls` and `.ppt` are OLE compound files — a filesystem inside a
+  # file — and nothing about them is XML. `catdoc` is 36,6 MiB measured
+  # (`nix path-info -S`) and brings all three programs in one package.
+  #
+  # MEASURED WITH THE PACKAGED BINARIES, on the owner's own files:
+  # `catdoc sample.doc` answered 8 377 bytes, `xls2csv sample.xls` answered
+  # 364 057 bytes, and `catppt sample.ppt` answered ZERO BYTES with exit
+  # status zero and nothing on stderr — on a file `file` calls a real OLE
+  # compound document. Two of the three work; what the third is promised is
+  # the honest refusal, because `document::from_a_program` reads an empty
+  # answer as a failure and a sentence on screen beats a blank panel.
+  #
+  # AND NOT LIBREOFFICE, which reads all three: two to three gigabytes, and the
+  # line this file already draws is that this is format support and not
+  # applications.
+  config.environment.sessionVariables.RONOCTUA_CATDOC = "${pkgs.catdoc}/bin/catdoc";
+  config.environment.sessionVariables.RONOCTUA_XLS2CSV = "${pkgs.catdoc}/bin/xls2csv";
+  config.environment.sessionVariables.RONOCTUA_CATPPT = "${pkgs.catdoc}/bin/catppt";
   config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_FFMPEG =
     "${pkgs.ffmpeg-full}/bin/ffmpeg";
   config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_FFPROBE =
@@ -107,6 +127,12 @@ in
     "${pkgs.poppler-utils}/bin/pdftoppm";
   config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_PDFINFO =
     "${pkgs.poppler-utils}/bin/pdfinfo";
+  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_CATDOC =
+    "${pkgs.catdoc}/bin/catdoc";
+  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_XLS2CSV =
+    "${pkgs.catdoc}/bin/xls2csv";
+  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_CATPPT =
+    "${pkgs.catdoc}/bin/catppt";
 
   # PLAYERCTL IS NOT HERE, and that is the point: it moved to
   # `nix/modules/base.nix`. The media keys are bound by the compositor's config

@@ -197,16 +197,139 @@ pub const WIDTH: u16 = 2;
 /// question about six lines. See [`ronoctua_render::layout::wrap`].
 const CEILING: usize = 512;
 
+/// A word of the line, with everything a piece of it carries.
+///
+/// The register is its colour and the id is which shortcut it belongs to —
+/// both travel word by word through the wrap, because the wrap is what
+/// decides which ROW each word lands on and both answers are per-row.
+type Word = (String, crate::chrome::Register, Option<&'static str>);
+
+/// One thing the wrapper may not break.
+enum Unit {
+    /// A WHOLE SHORTCUT: its dot, its key and the words that say what it does.
+    ///
+    /// It is one unit because a key without its words teaches nothing, and the
+    /// owner photographed exactly that — `C-<` closing a line and `the first`
+    /// opening the next, four times on one screen.
+    Entry(Vec<Word>),
+    /// A word of prose, which breaks wherever it has to.
+    Word(Word),
+}
+
+/// The pieces, grouped into the things that may not be broken.
+///
+/// [`crate::chrome::hint_of_with`] emits a shortcut as a RUN of two or three
+/// pieces — `[separator?, key, prose]` — and a separator is what starts the
+/// next one. That run is the unit. Everything else is prose: the sentence a
+/// message carries, the `type to filter` the manager puts in front of its
+/// keys, and a line that is not a hint at all.
+fn units_of(pieces: &[crate::chrome::Piece]) -> Vec<Unit> {
+    let mut out: Vec<Unit> = Vec::new();
+    let mut group: Vec<&crate::chrome::Piece> = Vec::new();
+    let close = |group: &mut Vec<&crate::chrome::Piece>, out: &mut Vec<Unit>| {
+        if group.is_empty() {
+            return;
+        }
+        // ALL THREE KEY REGISTERS, and the third was missing for a release.
+        // `Contextual` had just been added for the keys that exist only while
+        // their context does, and a group whose key was one of them was not
+        // recognised as a shortcut — so `C-;` and its words went back to being
+        // wrapped word by word, which is the exact defect this function was
+        // rewritten to end, reappearing on the keys added last.
+        let keyed = group.iter().any(|p| {
+            matches!(
+                p.register,
+                crate::chrome::Register::Key
+                    | crate::chrome::Register::Alternate
+                    | crate::chrome::Register::Contextual
+            )
+        });
+        let words: Vec<Word> = group
+            .iter()
+            .flat_map(|p| {
+                p.text
+                    .split_whitespace()
+                    .map(move |w| (w.to_owned(), p.register, p.id))
+            })
+            .collect();
+        if keyed {
+            out.push(Unit::Entry(words));
+        } else {
+            out.extend(words.into_iter().map(Unit::Word));
+        }
+        group.clear();
+    };
+    for p in pieces {
+        if matches!(p.register, crate::chrome::Register::Separator) {
+            close(&mut group, &mut out);
+        }
+        group.push(p);
+    }
+    close(&mut group, &mut out);
+    out
+}
+
+/// How wide a run of words is once [`rebuild`] has joined them with spaces.
+fn span_of(words: &[Word]) -> usize {
+    let ink: usize = words
+        .iter()
+        .map(|(w, _, _)| usize::from(ronoctua_render::layout::width(w)))
+        .sum();
+    ink + words.len().saturating_sub(1)
+}
+
+/// Puts one word down, breaking the line before it when it does not fit.
+fn lay(
+    out: &mut Vec<Vec<Word>>,
+    line: &mut Vec<Word>,
+    used: &mut usize,
+    room: usize,
+    (word, register, id): Word,
+) {
+    let w = usize::from(ronoctua_render::layout::width(&word));
+    if w > room && line.is_empty() {
+        // A WORD WIDER THAN THE LINE — a path, which is what this line
+        // carries most. By CLUSTER, for the reason `layout::wrap` gives.
+        let mut rest: Vec<&str> = ronoctua_render::layout::cells_of(&word).collect();
+        while rest.len() > room && out.len() < CEILING {
+            let piece: String = rest.drain(..room).collect();
+            out.push(vec![(piece, register, id)]);
+        }
+        line.push((rest.into_iter().collect::<String>(), register, id));
+        *used = usize::from(ronoctua_render::layout::width(&line[0].0));
+        return;
+    }
+    let needs = if line.is_empty() { w } else { w + 1 };
+    if *used + needs > room && !line.is_empty() {
+        out.push(std::mem::take(line));
+        *used = 0;
+    }
+    *used += if line.is_empty() { w } else { w + 1 };
+    line.push((word, register, id));
+}
+
 /// The line's text, wrapped over several lines, KEEPING its pieces.
 ///
 /// # Why it wraps pieces and not a string
 ///
-/// Because the line is four registers — a fixed key, a key that follows the
-/// focused section, the prose around them and the mark between one shortcut
-/// and the next — and `chrome::hint_spans` is what knows their colours.
-/// Wrapping the joined text would give the drawer back as one grey run, so the
-/// same sentence would be drawn one way on the first line and another way
-/// three lines below it.
+/// Because the line is five registers — a fixed key, a key that follows the
+/// focused section, a key that only exists in this context, the prose around
+/// them and the mark between one shortcut and the next — and
+/// `chrome::hint_spans` is what knows their colours. Wrapping the joined text
+/// would give the drawer back as one grey run, so the same sentence would be
+/// drawn one way on the first line and another way three lines below it.
+///
+/// # And why it wraps ENTRIES and not words
+///
+/// It wrapped words, and the owner photographed what that does: the key at the
+/// end of one line and the words that say what it means at the start of the
+/// next, four times on one screen. A key and its sentence are ONE THING to
+/// read, so they are one thing to place — [`units_of`] recovers the runs that
+/// `hint_of_with` emitted, and a break may only fall between them.
+///
+/// An entry wider than the whole line goes back to breaking by word. That is
+/// the pathological case, not the common one, and a line that cannot hold one
+/// shortcut has nothing better to offer.
 ///
 /// Spacing is rebuilt as single spaces, exactly as
 /// [`ronoctua_render::layout::wrap`] does with a plain text: a wrap is already
@@ -214,44 +337,76 @@ const CEILING: usize = 512;
 #[must_use]
 pub fn wrap_pieces(pieces: &[crate::chrome::Piece], width: u16) -> Vec<Vec<crate::chrome::Piece>> {
     let room = usize::from(width.max(1));
-    // ONE FLAT LIST OF WORDS, each remembering which register it came from.
-    let mut words: Vec<(String, crate::chrome::Register)> = Vec::new();
-    for p in pieces {
-        for w in p.text.split_whitespace() {
-            words.push((w.to_owned(), p.register));
-        }
-    }
-    let mut out: Vec<Vec<(String, crate::chrome::Register)>> = Vec::new();
-    let mut line: Vec<(String, crate::chrome::Register)> = Vec::new();
+    let mut out: Vec<Vec<Word>> = Vec::new();
+    let mut line: Vec<Word> = Vec::new();
     let mut used = 0_usize;
-    for (word, register) in words {
-        let w = usize::from(ronoctua_render::layout::width(&word));
-        if w > room && line.is_empty() {
-            // A WORD WIDER THAN THE LINE — a path, which is what this line
-            // carries most. By CLUSTER, for the reason `layout::wrap` gives.
-            let mut rest: Vec<&str> = ronoctua_render::layout::cells_of(&word).collect();
-            while rest.len() > room && out.len() < CEILING {
-                let piece: String = rest.drain(..room).collect();
-                out.push(vec![(piece, register)]);
-            }
-            line.push((rest.into_iter().collect::<String>(), register));
-            used = usize::from(ronoctua_render::layout::width(&line[0].0));
-            continue;
+    for unit in units_of(pieces) {
+        // THE CEILING BOUNDS THE WORK, not the layout: the caller windows what
+        // it can show. It is here so that a pathological message cannot make
+        // this walk a megabyte to answer a question about six lines — the same
+        // bound `layout::wrap` carries.
+        if out.len() >= CEILING {
+            return rebuild(out);
         }
-        let needs = if line.is_empty() { w } else { w + 1 };
-        if used + needs > room && !line.is_empty() {
-            out.push(std::mem::take(&mut line));
-            used = 0;
-            // THE CEILING BOUNDS THE WORK, not the layout: the caller windows
-            // what it can show. It is here so that a pathological message
-            // cannot make this walk a megabyte to answer a question about six
-            // lines — the same bound `layout::wrap` carries.
-            if out.len() >= CEILING {
-                return rebuild(out);
+        match unit {
+            Unit::Entry(words) => {
+                let wide = span_of(&words);
+                let needs = if line.is_empty() { wide } else { wide + 1 };
+                if wide <= room {
+                    if used + needs > room && !line.is_empty() {
+                        out.push(std::mem::take(&mut line));
+                        used = 0;
+                    }
+                    // AND THE DOT NEVER BEGINS A LINE. It is the mark BETWEEN
+                    // two shortcuts, so at the left margin it separates the
+                    // entry from nothing.
+                    let words: Vec<_> = if line.is_empty() {
+                        words
+                            .into_iter()
+                            .skip_while(|(_, r, _)| matches!(r, crate::chrome::Register::Separator))
+                            .collect()
+                    } else {
+                        words
+                    };
+                    let wide = span_of(&words);
+                    used += if line.is_empty() { wide } else { wide + 1 };
+                    line.extend(words);
+                    continue;
+                }
+                // AN ENTRY WIDER THAN THE WHOLE LINE breaks by word — but
+                // never between the key and its FIRST word. `C-d` alone on a
+                // row is the photographed defect in miniature, and a row
+                // reading `C-d permissions` teaches something.
+                let mut rest = words.into_iter();
+                let mut head: Vec<Word> = Vec::new();
+                for word in rest.by_ref() {
+                    let prose = matches!(word.1, crate::chrome::Register::Prose);
+                    head.push(word);
+                    if prose {
+                        break;
+                    }
+                }
+                let wide = span_of(&head);
+                if used + wide + usize::from(!line.is_empty()) > room && !line.is_empty() {
+                    out.push(std::mem::take(&mut line));
+                    used = 0;
+                }
+                let head: Vec<_> = if line.is_empty() {
+                    head.into_iter()
+                        .skip_while(|(_, r, _)| matches!(r, crate::chrome::Register::Separator))
+                        .collect()
+                } else {
+                    head
+                };
+                let wide = span_of(&head);
+                used += wide + usize::from(!line.is_empty());
+                line.extend(head);
+                for word in rest {
+                    lay(&mut out, &mut line, &mut used, room, word);
+                }
             }
+            Unit::Word(word) => lay(&mut out, &mut line, &mut used, room, word),
         }
-        used += if line.is_empty() { w } else { w + 1 };
-        line.push((word, register));
     }
     if !line.is_empty() {
         out.push(line);
@@ -267,13 +422,20 @@ pub fn wrap_pieces(pieces: &[crate::chrome::Piece], width: u16) -> Vec<Vec<crate
 }
 
 /// Turns the wrapped words back into pieces, one row at a time.
-fn rebuild(rows: Vec<Vec<(String, crate::chrome::Register)>>) -> Vec<Vec<crate::chrome::Piece>> {
+fn rebuild(rows: Vec<Vec<Word>>) -> Vec<Vec<crate::chrome::Piece>> {
     rows.into_iter()
         .map(|words| {
             let mut row: Vec<crate::chrome::Piece> = Vec::new();
-            for (word, register) in words {
+            for (word, register, id) in words {
                 match row.last_mut() {
-                    Some(last) if last.register == register => {
+                    // THE ID JOINS THE REGISTER IN DECIDING WHAT MERGES.
+                    // Two runs of prose from two different shortcuts are one
+                    // colour and two answers, and merged into one piece the
+                    // pointer would be told about whichever of them came
+                    // first. It cannot happen while a dot separates every
+                    // entry — but the dot is dropped at the left margin, and
+                    // "cannot happen today" is not a rule.
+                    Some(last) if last.register == register && last.id == id => {
                         last.text.push(' ');
                         last.text.push_str(&word);
                     }
@@ -282,11 +444,13 @@ fn rebuild(rows: Vec<Vec<(String, crate::chrome::Register)>>) -> Vec<Vec<crate::
                         row.push(crate::chrome::Piece {
                             text: word,
                             register,
+                            id,
                         });
                     }
                     None => row.push(crate::chrome::Piece {
                         text: word,
                         register,
+                        id,
                     }),
                 }
             }
@@ -558,5 +722,149 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(back, "one two three four five");
+    }
+
+    /// FAILS IF: a row ends on a key, which is a key torn from the words that
+    /// say what it does.
+    ///
+    /// THE OWNER PHOTOGRAPHED IT, four times on one screen: `C-<` closing a
+    /// line and `the first` opening the next, and the same for `C-l`, `C-{`
+    /// and `C-d`. The wrapper flattened every piece into words, so nothing
+    /// anywhere bound a key to its sentence.
+    #[test]
+    fn a_row_never_ends_on_a_key() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        // THE REAL TABLE, and the widest one this system has: if the manager's
+        // thirty-six shortcuts wrap without tearing, so does every other.
+        //
+        // HALF OF THEM MARKED CONTEXTUAL, because that register was added
+        // after this test was written and `units_of` did not know it: a group
+        // whose key was one of them was not recognised as a shortcut at all,
+        // and went back to being wrapped word by word — the photographed
+        // defect, alive again on the keys added last. Marked here, the test
+        // sees it.
+        let line = crate::chrome::hint_of_marked(
+            &[
+                ("<down>", "files-down", false),
+                ("<up>", "files-up", false),
+                ("C-<", "files-first", false),
+                ("C->", "files-last", false),
+                ("C-l", "files-sidebar", false),
+                ("C-{", "files-playlist-previous", true),
+                ("C-}", "files-playlist-next", true),
+                ("C-d", "files-columns", false),
+                ("C-w", "files-theatre", true),
+            ],
+            |_| None,
+            &texts,
+        );
+        for width in [20u16, 30, 40, 60, 80, 120, 200] {
+            let out = wrap_pieces(&line, width);
+            for (n, row) in out.iter().enumerate() {
+                let Some(last) = row.last() else { continue };
+                assert!(
+                    !matches!(
+                        last.register,
+                        crate::chrome::Register::Key
+                            | crate::chrome::Register::Alternate
+                            | crate::chrome::Register::Contextual
+                    ),
+                    "at {width} cells, row {n} ends on the key `{}`",
+                    last.text
+                );
+                // AND NO ROW BEGINS ON THE DOT, which separates an entry from
+                // nothing at the left margin.
+                let Some(first) = row.first() else { continue };
+                assert!(
+                    !matches!(first.register, crate::chrome::Register::Separator),
+                    "at {width} cells, row {n} begins on the separator"
+                );
+            }
+        }
+    }
+
+    /// THE SHORTCUT'S ID SURVIVES THE WRAP, on every row.
+    ///
+    /// The drawer is where the whole table is legible, so it is where somebody
+    /// goes looking for what a key does — and the pointer's answer there comes
+    /// from marks taken off the WRAPPED rows. Dropped in `rebuild`, the second
+    /// row onwards would explain nothing; carried but merged across entries,
+    /// it would explain the wrong key.
+    #[test]
+    fn a_wrapped_row_still_knows_which_shortcut_each_word_is() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        let table: &[(&'static str, &'static str)] = &[
+            ("C-v", "files-preview"),
+            ("C-i", "files-facts"),
+            ("C-l", "files-sidebar"),
+            ("C-d", "files-columns"),
+            ("C-w", "files-theatre"),
+        ];
+        let line = crate::chrome::hint_of(table, &texts);
+        for width in [24u16, 32, 48, 70, 120] {
+            let rows = wrap_pieces(&line, width);
+            let mut seen: Vec<&'static str> = Vec::new();
+            for row in &rows {
+                for p in row {
+                    match p.register {
+                        crate::chrome::Register::Separator => {
+                            assert_eq!(p.id, None, "the dot belongs to no shortcut");
+                        }
+                        _ => {
+                            let id = p.id.unwrap_or_else(|| {
+                                panic!("at {width} cells, `{}` lost its shortcut", p.text)
+                            });
+                            if !seen.contains(&id) {
+                                seen.push(id);
+                            }
+                        }
+                    }
+                }
+            }
+            // ALL FIVE, IN THE TABLE'S ORDER: a merge across two entries would
+            // swallow one of them, and that is the shape in which this would
+            // fail silently.
+            assert_eq!(
+                seen,
+                table.iter().map(|(_, id)| *id).collect::<Vec<_>>(),
+                "at {width} cells the wrap lost or reordered a shortcut"
+            );
+        }
+        // AND TWO RUNS OF ONE COLOUR THAT ARE TWO SHORTCUTS STAY TWO PIECES.
+        //
+        // Built by hand, because the hint's own line cannot reach this shape:
+        // a dot of its own register sits between every pair of entries. That
+        // is exactly why `rebuild` asks the id as well as the register — a
+        // merge here would hand the pointer one answer for two keys, and there
+        // would be nothing on screen to say which one it was.
+        let two = vec![
+            crate::chrome::Piece::prose("first").about("files-preview"),
+            crate::chrome::Piece::prose("second").about("files-facts"),
+        ];
+        let rows = wrap_pieces(&two, 80);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].iter().map(|p| p.id).collect::<Vec<_>>(),
+            vec![Some("files-preview"), Some("files-facts")],
+            "two shortcuts of one colour were merged into one answer"
+        );
+    }
+
+    /// FAILS IF: a shortcut that FITS on a line is broken anyway.
+    #[test]
+    fn a_shortcut_that_fits_is_not_broken() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        let line =
+            crate::chrome::hint_of(&[("<down>", "files-down"), ("<up>", "files-up")], &texts);
+        // Wide enough for one entry and not for two.
+        let out = wrap_pieces(&line, 12);
+        assert_eq!(out.len(), 2, "two entries did not take two rows: {out:?}");
+        for row in &out {
+            let said: String = row.iter().map(|p| p.text.as_str()).collect();
+            assert!(
+                said.split_whitespace().count() >= 2,
+                "a row carries a key with no words: {said:?}"
+            );
+        }
     }
 }

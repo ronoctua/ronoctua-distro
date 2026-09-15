@@ -12,9 +12,9 @@
 //! anywhere would say why.
 
 use super::xml::{attr, tagged};
-use super::zip::{member_bytes, members, part};
 use super::{Bounds, Mesh, Read, Shape, TRIANGLE_CEILING};
 use crate::Refusal;
+use crate::zip::{member_bytes, members, part};
 
 /// How deep a chain of `<components>` may go before it is called a loop.
 ///

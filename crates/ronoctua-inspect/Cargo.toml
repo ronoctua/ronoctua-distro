@@ -30,6 +30,15 @@ publish.workspace = true
 # `ronoctua-files-root` gains nothing from this line, which is the whole reason
 # the two crates are separate.
 ronoctua-files = { path = "../ronoctua-files" }
+# THE ONE RULER, for the spreadsheet's columns.
+#
+# `document::align` pads cells into columns, and a table padded by BYTES leans
+# the moment a cell has an accent in it — `ronoctua_protocol::cells` is the
+# function this whole tree measures with, and a second answer written here
+# would be the defect `ink-is-not-a-count` exists to refuse. One workspace
+# crate with one dependency of its own (`unicode-segmentation`), no store path
+# and nothing new in the lock.
+ronoctua-protocol = { path = "../ronoctua-protocol" }
 
 # WHERE EACH COLOUR OF A LINE BEGINS AND ENDS.
 #

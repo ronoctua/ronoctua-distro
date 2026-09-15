@@ -105,6 +105,29 @@ let
       ""
     ]
   );
+  # A DOCUMENT MADE HERE, and nothing of the owner's brought in.
+  #
+  # The repository is PUBLIC (invariant 2) and nothing personal enters it
+  # (invariant 13), so his own `sample.docx` cannot be the fixture. A `.docx`
+  # is a zip with one XML part in it, and that is the whole reason the office
+  # family was cheap to read — so building one here proves the reader against
+  # the FORMAT rather than against a file somebody once sent.
+  #
+  # STORED and not deflated (`-0`): what is under test is which member holds
+  # the words, and the inflate has its own tests in `crate::zip`.
+  sampleDocument = pkgs.runCommand "sample.docx" { nativeBuildInputs = [ pkgs.zip ]; } ''
+    mkdir -p build/word
+    cat > build/word/document.xml <<XML
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>
+        <w:p><w:r><w:t>A document the preview can read</w:t></w:r></w:p>
+        <w:p><w:r><w:t>and a second paragraph under it</w:t></w:r></w:p>
+      </w:body>
+    </w:document>
+    XML
+    cd build && zip -q -r -X -0 $out .
+  '';
+
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-shots";
@@ -915,6 +938,52 @@ pkgs.testers.runNixOSTest {
             "scroll"
         )
 
+    with subtest("a document: a zip of XML reaching the panel as words"):
+        # THE DEFECT THE OWNER FOUND, in one sentence: his folder had eleven
+        # documents and the preview opened one of them, the PDF. The other six
+        # of the office family are a ZIP OF XML — and this crate has had a zip
+        # reader since the day it learnt to draw a 3MF, so what was missing was
+        # the twenty lines that say which member holds the words.
+        #
+        # PHOTOGRAPHED and not only unit-tested, because the unit tests know
+        # `text::Read` and this is the only thing that knows the panel: the
+        # answer comes back as the same type a `.rs` does, so the panel scrolls
+        # it, pages it and hangs a bar on it with no new code at all — and that
+        # claim is about a screen.
+        machine.succeed("mkdir -p /root/shots/papers")
+        machine.succeed("cp ${sampleDocument} /root/shots/papers/sample.docx")
+        # ONE LEVEL UP, and one only. The subtest above left the window in
+        # `/root/shots/code`; `papers` is its sibling, so a second `BackSpace`
+        # would leave the manager at `/root`, where the filter finds nothing
+        # and the panel photographs an empty directory.
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
+        machine.sleep(1)
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'papers'"
+        )
+        machine.sleep(1)
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+        machine.sleep(3)
+        shot("33-preview-of-a-document")
+
+        w_d, h_d, x_d, y_d = niri_geometry()
+        # THE SAME BOX THE TEXT PREVIEW IS MEASURED IN, and for its reasons.
+        paper = f"{w_d // 4 - 70}x{h_d - 4 * LINE}+{w_d // 2 + 10}+{2 * LINE}"
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+        drawn = rows_with_ink(paper)
+        # A REFUSED PANEL DRAWS ONE DIM LINE. Two paragraphs draw more, and
+        # taking `document::of` out of the chain brings this straight back to a
+        # sentence — which is what `sem prévia` looked like before any of this.
+        assert drawn >= 3, (
+            f"the preview drew ink on {drawn} row(s) of pixels — a document "
+            "came out as a sentence about not being able to show one"
+        )
+        # AND IT IS THE CONTENT'S OWN COLOUR, and not the dim tone a refusal
+        # wears: the one measurement that tells "it read the file" from "it
+        # said it could not".
+        crop(paper, "/tmp/paper.png")
+        has_colour("#" + token_hex("text.primary"), at_least=20, of="/tmp/paper.png")
+
     with subtest("the miniplayer: it moves, it holds, and it draws over nothing"):
         # A GIF MADE HERE, and not a video, and that is not a compromise.
         #
@@ -1516,6 +1585,115 @@ pkgs.testers.runNixOSTest {
             machine.sleep(2)
             machine.succeed("grep -q '\"backdrop\":\"black\"' /root/.config/ronoctua/theme.json")
             machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
+    with subtest("the pointer on the hint line does not take the interface with it"):
+        # THE ASSERTION THAT WOULD HAVE CAUGHT IT, and it is the second time.
+        #
+        # `Footer::first_of_expansion` counted a row whose existence depended on
+        # how TALL the region is, and `Footer::metric` is built on
+        # `first_of_expansion`. The pointer coming to rest on a key of the hint
+        # line closed the ring: stack overflow, `process::abort`, no modeline
+        # and no minibuffer. Two coredumps of 2026-09-15 carry that stack and
+        # nothing else, and the owner read it as the interface closing when he
+        # hovered a video preview — the video was where the hand was going, the
+        # hint line was what it crossed.
+        #
+        # EVERY LINE OF THE FOOTER, from the bottom up, and not one aimed
+        # number: the hint's own row moves with the band, the glance, the
+        # opened drawer and the brain's line, so a shot that knew where it was
+        # would be photographing a listing row the day any of them appears.
+        for _ in range(8):
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+        machine.sleep(1)
+        control("files-open")
+        machine.sleep(2)
+        w_p, h_p, x_p, y_p = niri_geometry()
+        for n in range(1, 16):
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_p + 200} {y_p + h_p - n * LINE}"
+            )
+            # A SECOND ON EACH, because what killed it was not the motion but
+            # the FRAME after it: the sentence is resolved from what the last
+            # frame drew, so the ring only closes on the paint that follows.
+            machine.sleep(1)
+        # AND THE FOOTER IS STILL THERE. `is-active` and not a screenshot: an
+        # aborted footer leaves its surface behind for an instant, and a picture
+        # taken in that instant would pass over a dead process.
+        machine.succeed("systemctl is-active footer")
+        shot("34-the-pointer-on-the-hint-line", lines=3)
+
+    with subtest("the line that outlives the footer"):
+        # THE SECOND DEFECT THE OWNER NAMED, which was not the crash: *"a
+        # ronoctua-distro não sabe lidar com isso, ou seja, acaba deixando o
+        # usuário sem interface"*. With the footer down, all four emergency
+        # binds are dead by construction — they all write to its own control
+        # socket — so nothing on screen could say what had happened.
+        #
+        # KILLED ON PURPOSE, and with the signal the defect produced: a stack
+        # overflow ends in `process::abort`, which is `SIGABRT`.
+        machine.succeed("systemctl kill -s SIGABRT footer")
+        machine.wait_until_fails("systemctl is-active footer", timeout=30)
+        # RAISED BY HAND HERE, because this transient unit is not the one the
+        # module declares and carries no `OnFailure=`. That wiring is what
+        # `a-dead-footer-is-not-a-dead-desktop` reads, and the firing itself was
+        # measured with two transient units of its own; what this subtest proves
+        # is the LINE.
+        machine.succeed(
+            "systemd-run --unit=lifeline ${xvfb.env} "
+            "--setenv=WAYLAND_DISPLAY=wayland-1 "
+            "--setenv=HOME=/root "
+            f"--setenv=NIRI_SOCKET={sock} "
+            "--setenv=RONOCTUA_THEME=${defaultTheme} "
+            "--setenv=RONOCTUA_THEMES=${themed} "
+            "${ronoctua-shell}/bin/ronoctua-shell lifeline footer.service"
+        )
+        machine.sleep(4)
+        shot("35-the-line-that-outlives-the-footer", lines=2)
+
+        # AND IT IS MEASURED. Two rows of ink where the footer used to be — with
+        # the footer gone there is nothing else down there that could draw them.
+        w_l, h_l, x_l, y_l = niri_geometry()
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+        band = f"{w_l}x{2 * LINE}+{x_l}+{y_l + h_l - 2 * LINE}"
+        drawn = rows_with_ink(band)
+        assert drawn >= 2, (
+            f"the rescue line drew ink on {drawn} row(s) of pixels — with the "
+            "footer gone there is nothing else down there to draw it"
+        )
+        # THE MARK IS THE ERROR'S COLOUR, which is the one thing on the line
+        # that says this is not an ordinary message.
+        crop(band, "/tmp/lifeline.png")
+        has_colour("#" + token_hex("state.error"), at_least=8, of="/tmp/lifeline.png")
+
+        # AND THE MOUSE REACHES THE OPTIONS, which is the half nobody had
+        # tested — the owner said so in as many words: *"tenha certeza de que
+        # eles são clicáveis pelo mouse (pois como eu não testei, não sei se o
+        # suporte do mouse está implementado)"*.
+        #
+        # THE FIRST OPTION, whose column is known by construction: the row
+        # begins at `MARGIN + 2` cells — `lifeline::MARGIN` is the footer's own
+        # `modeline.edgeLeft`, plus the two the warning glyph takes — so a click
+        # three and a half cells in lands inside `[l]`. What it does is open the
+        # journal in the rescue console, which is a SECOND PROCESS, and that is
+        # what makes the click visible from out here.
+        options_row = y_l + h_l - LINE + LINE // 2
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+            f"{x_l + int(3.5 * CELL)} {options_row}"
+        )
+        machine.sleep(1)
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 1")
+        machine.wait_until_succeeds("pgrep -f 'ronoctua-shell rescue'", timeout=30)
+
+        # AND THE KEYBOARD REACHES THEM TOO, by the key the line now draws.
+        #
+        # `Esc` and not `x`: the owner read the photograph and asked for the key
+        # that actually closes it. The surface takes the keyboard ON DEMAND — at
+        # rest it takes it from nobody, which is what lets it appear over
+        # somebody's work — so the click above is also what handed it over.
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+        machine.wait_until_fails("systemctl is-active lifeline", timeout=30)
+
 
   '';
 }

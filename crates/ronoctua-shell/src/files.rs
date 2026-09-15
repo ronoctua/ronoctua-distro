@@ -237,6 +237,14 @@ const EDGE_RIGHT: u16 = ronoctua_tokens::space::FILES_EDGERIGHT;
 /// priorities backwards.
 const NAME_FLOOR: u16 = 12;
 
+/// A bound on the work of wrapping a refusal, in lines.
+///
+/// Not a limit anybody reaches: the longest sentence this system has is 94
+/// cells, which is four rows in the narrowest panel. It is here so that a
+/// refusal carrying something pathological cannot make the wrapper walk a
+/// megabyte — the same bound `fold::wrap_pieces` and `layout::wrap` carry.
+const REFUSAL_CEILING: usize = 64;
+
 /// The narrowest the sidebar may be squeezed to.
 ///
 /// Two cells of glyph and air, plus eleven for a name: `screenshot` is ten and
@@ -511,6 +519,15 @@ const FRAME_MARK: &str = ":frame";
 /// number written twice is a number that stops agreeing.
 const TRANSPORT_SOUND: u16 = 2;
 
+/// How many cells the expand button takes on the transport's row.
+///
+/// The glyph, and one of air between it and the clock. The owner asked for it
+/// *"à direita da marcação de tempo"*, so it sits past the clock and the clock
+/// moves left by exactly this — and [`track_px`] adds the same to its tail,
+/// because the track's two ends have to keep the identical air the owner asked
+/// for. The two numbers are one constant for that reason.
+pub const TRANSPORT_THEATRE: u16 = 2;
+
 /// The air on EACH SIDE of the timeline's track.
 ///
 /// The owner asked for it in those words — *"com espaços em branco idênticos na
@@ -546,7 +563,7 @@ pub const TRANSPORT_LEAD: u16 = 1;
 pub fn track_px(left: f32, wide: f32, cell: f32, clock: u16) -> Option<(f32, f32)> {
     // THE GLYPHS, THEN THE AIR: play, a space, sound, then the air.
     let lead = f32::from(TRANSPORT_LEAD + TRANSPORT_SOUND + 1 + TRANSPORT_AIR) * cell;
-    let tail = f32::from(clock + TRANSPORT_AIR + TRANSPORT_LEAD) * cell;
+    let tail = f32::from(clock + TRANSPORT_THEATRE + TRANSPORT_AIR + TRANSPORT_LEAD) * cell;
     let track = wide - lead - tail;
     (track > cell).then_some((left + lead, track))
 }
@@ -1109,13 +1126,45 @@ impl Panes {
         // on a rule belongs to the section that starts after it, which is the
         // same choice `band_of` makes about the pixel: the rule is drawn on top
         // of whatever the band left there.
-        for (which, at, room) in self.boxes(width) {
-            if cell >= at && cell < at.saturating_add(room) {
+        //
+        // AND EVERY CELL OF THE RIGHT-HAND REGION HAS AN OWNER, which is what
+        // the sentence above PROMISED and the code did not do. `boxes` walks
+        // `at += mine + RULE`, so each rule cell — and the leading one, and the
+        // `EDGE_RIGHT` reserve past the last box — belonged to no box at all
+        // and fell out of this loop to the `Listing` below.
+        //
+        // The owner photographed the consequence: a scrollbar is drawn at
+        // `rule_x`, half a cell past its box's last text cell, so HALF ITS
+        // PIXELS answered `Listing` — and the hover band lit a row of the
+        // listing while the pointer was over the preview's bar. The same hole
+        // silently switched off `band_belongs`, which is the rule that keeps a
+        // band off a photograph.
+        //
+        // So each box claims from where the one before it ended, and the last
+        // one claims to the edge: a rule goes to the section after it, and the
+        // reserve at the end goes to the section it is the edge OF.
+        let boxes = self.boxes(width);
+        let last = boxes.len().saturating_sub(1);
+        // WHERE THE REGION BEGINS, by the same rule `boxes` uses: the panels'
+        // own width on the right, or the whole line down in the strip.
+        let mut claim = if self.right > 0 {
+            width.saturating_sub(self.right)
+        } else {
+            0
+        };
+        for (i, (which, at, room)) in boxes.into_iter().enumerate() {
+            let ends = if i == last {
+                width
+            } else {
+                at.saturating_add(room)
+            };
+            if cell >= claim && cell < ends {
                 return match which {
                     Panel::Preview => Pane::Preview,
                     Panel::Info => Pane::Info,
                 };
             }
+            claim = ends;
         }
         Pane::Listing
     }
@@ -1646,6 +1695,11 @@ pub enum Hit {
     /// is a device that is not mounted. As `Enter` does on a listing row, which
     /// is why it costs no key of its own.
     Sidebar(usize),
+    /// The button that gives the preview the whole region, or gives it back.
+    ///
+    /// As `C-w`, and through the same code: the mouse never reaches anything
+    /// the keyboard cannot, and never by a second path.
+    Theatre,
     /// The transport's play glyph: hold the film, or let it go on. As `C-;`.
     ///
     /// A DRAWN target and not a click anywhere on the picture, for the reason
@@ -2074,12 +2128,6 @@ impl Section {
             offset: self.offset,
             top: self.top,
         }
-    }
-
-    /// Whether a point of the region is inside this section.
-    #[must_use]
-    pub const fn holds(&self, line: usize, cell: u16) -> bool {
-        cell >= self.from && cell < self.to && line >= self.top && line < self.top + self.lines
     }
 }
 
@@ -2939,6 +2987,13 @@ pub struct View {
     /// draws the bar is the one that knows, and [`View::facts_bar`] is where
     /// every frame of both of them goes through.
     drawn_lines: std::cell::Cell<u16>,
+    /// How many CELLS wide the panels' content was last drawn in.
+    ///
+    /// The same arrangement as [`View::drawn_lines`] and for the same reason:
+    /// [`View::preview_total`] has to say how tall a wrapped refusal is, and
+    /// that depends on a width nine of its callers do not have. The layout is
+    /// the one place that knows, so the layout writes it down.
+    drawn_panel: std::cell::Cell<u16>,
     /// The width the view was last laid out at.
     ///
     /// # Why the view remembers a width
@@ -2956,6 +3011,39 @@ pub struct View {
     /// answer depends on what was DRAWN and only the door knows it, while the
     /// question — "may `Tab` land there?" — is asked here, where the ring is.
     fold_shown: std::cell::Cell<bool>,
+    /// Which ROW of the listing the pointer is resting on.
+    ///
+    /// Beside `pointing`, which answers the coarser question of which SECTION,
+    /// and told by the doors from the same place. It is what lets a name too
+    /// long for its column walk under the pointer as well as under the cursor
+    /// — the owner asked for both.
+    pointing_row: std::cell::Cell<Option<usize>>,
+    /// How many cells the NAME column was last drawn in.
+    ///
+    /// The same arrangement as [`View::drawn_panel`] and for the same reason: a
+    /// key arrives without a width, and "does this name fit?" depends on one.
+    /// The layout is the one place that knows, so the layout writes it down.
+    drawn_name: std::cell::Cell<u16>,
+    /// How many cells of the walking name do not fit — `0` when none walks.
+    ///
+    /// Written by the layout, read by the door's clock: it is what says
+    /// whether there is anything to animate at all, so it is what arms and
+    /// disarms the clock. See [`crate::slide`].
+    slide_over: std::cell::Cell<u16>,
+    /// When the name that is walking started to.
+    ///
+    /// `None` until the first tick after the cursor or the pointer moved,
+    /// which is what makes every name start from its own beginning with its
+    /// own pause. A `Cell` because the pointer sets it and the pointer has
+    /// `&self`.
+    slide_since: std::cell::Cell<Option<std::time::Instant>>,
+    /// How long it has been walking — the door's clock writes it, the drawing
+    /// reads it.
+    ///
+    /// The animation is a pure function of this ([`crate::slide::offset_at`]),
+    /// so the view keeps a duration and never an idea of where the name has
+    /// got to.
+    slide_elapsed: std::cell::Cell<std::time::Duration>,
 }
 
 /// What the inspector was asked about one file.
@@ -3207,6 +3295,12 @@ impl View {
             drawn_at: std::cell::Cell::new(0),
             fold_shown: std::cell::Cell::new(false),
             drawn_lines: std::cell::Cell::new(0),
+            drawn_panel: std::cell::Cell::new(0),
+            pointing_row: std::cell::Cell::new(None),
+            drawn_name: std::cell::Cell::new(0),
+            slide_over: std::cell::Cell::new(0),
+            slide_since: std::cell::Cell::new(None),
+            slide_elapsed: std::cell::Cell::new(std::time::Duration::ZERO),
         };
         view.reread();
         // PAST THE WAY OUT, the same landing `enter` makes: opening the
@@ -4376,6 +4470,10 @@ impl View {
                     .saturating_add(room)
                     .saturating_sub(TRANSPORT_LEAD)
                     .saturating_sub(TRANSPORT_LEAD)
+                    // AND THE BUTTON PAST IT, which is where the owner asked
+                    // for it. `track_px` takes the same cells off the other
+                    // end of the track, so the air stays identical.
+                    .saturating_sub(TRANSPORT_THEATRE)
                     .saturating_sub(wide),
                 text: said,
                 color: ronoctua_tokens::color::TEXT_PRIMARY,
@@ -4383,7 +4481,52 @@ impl View {
                 explain: None,
             });
         }
+        // AND THE EXPAND BUTTON, at the very end of the row.
+        //
+        // WITH THE PLAYER, because that is where the owner put it: *"esse botão
+        // deve aparecer junto com o player à direita da marcação de tempo"*.
+        // Without one it goes in the panel's corner instead — see
+        // `theatre_field`.
+        out.push(
+            self.theatre_field(
+                at.saturating_add(room)
+                    .saturating_sub(TRANSPORT_LEAD)
+                    .saturating_sub(TRANSPORT_LEAD),
+            ),
+        );
         out
+    }
+
+    /// The button that gives the preview the whole region, and gives it back.
+    ///
+    /// One field, drawn in two places — on the transport's row beside the
+    /// clock, and in the panel's bottom-right corner when there is no
+    /// transport. The GLYPH says which way it goes, which is the owner's own
+    /// requirement: *"um botão de expandir (e de reduzir, quando estiver
+    /// expandindo)"*.
+    fn theatre_field(&self, at: u16) -> Field {
+        let wide = self.whole();
+        Field {
+            at,
+            text: if wide {
+                ronoctua_tokens::icon::THEATRE_OFF
+            } else {
+                ronoctua_tokens::icon::THEATRE
+            }
+            .to_string(),
+            color: ronoctua_tokens::color::TEXT_PRIMARY,
+            hit: Hit::Theatre,
+            // AND IT SAYS WHICH WAY IT GOES on the line above, as every drawn
+            // control in this manager does.
+            explain: Some(Explanation {
+                key: if wide {
+                    ronoctua_i18n::key::FILES_THEATRE_OFF
+                } else {
+                    ronoctua_i18n::key::FILES_THEATRE_ON
+                },
+                args: Vec::new(),
+            }),
+        }
     }
 
     /// Whether a hover band belongs on a section at all.
@@ -4482,6 +4625,64 @@ impl View {
     }
 
     fn preview_fields(
+        &self,
+        n: usize,
+        rows: usize,
+        at: u16,
+        room: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<Field> {
+        let mut out = self.preview_content(n, rows, at, room, texts);
+        // AND THE EXPAND BUTTON, IN THE CORNER — the two cases without a
+        // player.
+        //
+        // The owner gave both: *"quando não houver player, deve aparecer com o
+        // hover do mouse no canto inferior direito nos casos de conteúdo grande
+        // que ocupe o espaço de todo o preview, e para quando o conteúdo não
+        // for grande, deve aparecer no canto inferior direito do preview mesmo
+        // quando não houver hover do mouse, pois nesse caso não haverá conteúdo
+        // abaixo dele, então ele não cobrirá nada"*.
+        //
+        // So the rule is exactly "does it cover anything?": over content it
+        // waits for the pointer, and over a blank corner it simply stays. With
+        // a player it is not here at all — it rides the transport's row, beside
+        // the clock.
+        // A PANEL WITH NO FILE UNDER THE CURSOR HAS NOTHING TO EXPAND, and
+        // `preview_content` answers with no fields at all there. The guard is
+        // the FILE and not the emptiness of the line: a short sentence leaves
+        // the last line empty too, and that is exactly the case the button is
+        // always drawn in.
+        if self.focused().is_some()
+            && !self.plays_here()
+            && rows > 0
+            && n + 1 == rows
+            && room > 0
+            && (!self.theatre_covers(rows) || self.pointing_at_preview())
+        {
+            out.push(self.theatre_field(at.saturating_add(room).saturating_sub(1)));
+        }
+        out
+    }
+
+    /// Whether the preview's last line has something on it already.
+    ///
+    /// A picture, a film and a shape take the whole panel by construction; a
+    /// list, a text and a wrapped refusal reach the last line only when they
+    /// are long enough, and where the panel is scrolled to decides that.
+    fn theatre_covers(&self, rows: usize) -> bool {
+        if self.looking_still()
+            || self
+                .looked
+                .as_ref()
+                .is_some_and(|l| l.rgba.is_some() || l.moving.is_some() || l.turns)
+        {
+            return true;
+        }
+        self.preview_total().saturating_sub(self.preview_offset) >= rows
+    }
+
+    /// The preview's own content, a line at a time.
+    fn preview_content(
         &self,
         n: usize,
         rows: usize,
@@ -4624,6 +4825,29 @@ impl View {
             };
             return text_fields(line, at, room, self.preview_column, target);
         }
+        // THE SENTENCE, WRAPPED — and it was one line cut with an ellipsis.
+        //
+        // The owner selected `playlist.asx` and read half a refusal: that
+        // sentence is 71 cells in en-GB and the panel is 24 to 40
+        // (`PANEL_FLOOR`..`PANEL_CEILING`), with four empty rows under it. A
+        // line that does not fit is not a reason to say less — `layout::wrap`
+        // exists and hands back EVERYTHING, so the caller can hang a bar on the
+        // rest, which is what `preview_total` now counts.
+        //
+        // WHOLE-REGION MODE IS UNCHANGED BY CONSTRUCTION: there `room` is the
+        // whole width, every sentence this system has fits on one line, and
+        // `lines.len()` is 1 — so the file's name goes on the row it always
+        // went on.
+        let said = match looked.and_then(|l| l.why.as_ref()) {
+            Some(why) => {
+                let args: Vec<(&str, String)> = why.args();
+                let borrowed: Vec<(&str, &str)> =
+                    args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                texts.t_with(why.key(), &borrowed)
+            }
+            None => texts.t(NO_PREVIEW),
+        };
+        let wrapped = ronoctua_render::layout::wrap(&said, room, REFUSAL_CEILING);
         // TWO LINES WITH THE WHOLE REGION, and one without.
         //
         // The sentence says a preview could not be made; with the region given
@@ -4633,7 +4857,7 @@ impl View {
         // the name is a cell away in the listing; with the listing gone it is
         // nowhere, and a whole screen saying only "no preview" says nothing.
         let named = self.whole();
-        if named && n == 1 {
+        if named && n == wrapped.len() {
             let entry = self.focused();
             let said = entry.map_or_else(String::new, |e| {
                 // A DIRECTORY IS A PLACE and a file is a name, which is what
@@ -4658,27 +4882,12 @@ impl View {
                 explain: None,
             }];
         }
-        // ONE LINE, AND NOTHING ON THE REST: a line that does nothing must not
-        // look like a line that does something, which is the rule the blank
-        // rows of a short listing already follow.
-        if n != 0 {
+        // AND NOTHING PAST THE SENTENCE: a line that does nothing must not look
+        // like a line that does something, which is the rule the blank rows of
+        // a short listing already follow.
+        let Some(text) = wrapped.get(n).cloned() else {
             return Vec::new();
-        }
-        // THE TOOLS' OWN REASON WHEN THERE IS ONE — "there is no picture
-        // inside this kind of file", "`ffmpeg` is not installed" — and the
-        // plain sentence when there is not. The reason is the better answer
-        // and it is the one that wins; the sentence is what a directory, a
-        // broken link and a file still being decoded get.
-        let text = match looked.and_then(|l| l.why.as_ref()) {
-            Some(why) => {
-                let args: Vec<(&str, String)> = why.args();
-                let borrowed: Vec<(&str, &str)> =
-                    args.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                texts.t_with(why.key(), &borrowed)
-            }
-            None => texts.t(NO_PREVIEW),
         };
-        let text = ronoctua_render::layout::elide_end(&text, room);
         vec![Field {
             at: centred(at, room, width_of(&text)),
             text,
@@ -5025,13 +5234,41 @@ impl View {
                         (Some(t), true) => format!("{} ⇢ {t}", entry.name),
                         (None, _) => entry.name.clone(),
                     };
-                    let text = ronoctua_render::layout::elide_end(&shown, *width);
+                    // THE WIDTH IS WRITTEN DOWN, because a KEY arrives without
+                    // one and "does this name fit?" is asked the moment the
+                    // cursor lands on a row — see `View::cut_name`.
+                    self.drawn_name.set(*width);
+                    let full = ronoctua_render::layout::width(&shown);
+                    let over = full.saturating_sub(*width);
+                    // AND THE ONE THE EYE IS ON WALKS.
+                    //
+                    // The row under the POINTER first and the cursor's only
+                    // when the pointer is on neither: one name walks at a
+                    // time, because two would be two things moving on a screen
+                    // where nothing else does, and the eye is on one of them.
+                    let walking = over > 0 && Some(n) == self.walking_row();
+                    let text = if walking {
+                        self.slide_over.set(over);
+                        ronoctua_render::layout::window(
+                            &shown,
+                            crate::slide::offset_at(self.slide_elapsed.get(), over),
+                            *width,
+                        )
+                    } else {
+                        ronoctua_render::layout::elide_end(&shown, *width)
+                    };
                     fields.push(Field {
                         at: *at,
                         text,
                         color: colour_of(entry, focused),
                         hit: Hit::Name(n),
-                        explain: None,
+                        // AND THE WHOLE NAME GOES TO THE MINIBUFFER, but only
+                        // when it was CUT: explaining a name one can already
+                        // read is noise on the one line the footer has.
+                        explain: (over > 0).then(|| Explanation {
+                            key: ronoctua_i18n::key::FILES_EXPLAIN_NAME,
+                            args: vec![("name", shown.clone())],
+                        }),
                     });
                 }
                 Column::Perms => {
@@ -5885,9 +6122,25 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                         list.entries[n].seconds = found;
                     }
                 }
+                // A DOCUMENT IS ASKED BEFORE TEXT, and it has to be.
+                //
+                // Every office format that is a zip — `.docx`, `.odt`, `.ods`,
+                // `.xlsx`, `.pptx`, `.epub` — is an `application/zip` by the
+                // database's reckoning, so nothing above claims it and it would
+                // fall through to "no preview". And `.rtf` is worse than that:
+                // `text/rtf` descends from `text/plain`, so the text reader DID
+                // claim it, and the panel drew `{\rtf1\ansi\deff0{\fonttbl…`
+                // — the file rather than the document.
+                //
+                // `document::of` answers `None` for everything it is not, so
+                // this is one question in front of another and not a branch.
                 let said =
                     (!made.drawable() && moving.is_none() && shape.is_none() && listed.is_none())
-                        .then(|| ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab))
+                        .then(|| {
+                            ronoctua_inspect::document::of(&ask.path, ask.mime).or_else(|| {
+                                ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab)
+                            })
+                        })
                         .flatten();
                 let rgba = made.rgba.map(|r| ronoctua_render::image::Rgba {
                     width: r.width,
@@ -6106,20 +6359,30 @@ fn lift_onto_a_band(fields: &mut [Field], banded: bool) {
     }
 }
 
-/// Which SECTION a point is in, and which of its lines.
+/// Which of a section's lines a point is on, the pane having been decided.
 ///
-/// # Why it is separate from the field
+/// # Why the cell is not asked twice
 ///
-/// Because they are two DEPTHS of one question, and the shallow one is what a
-/// BAND needs. A band says which row of a list the pointer is on, and a row is
-/// on screen whether or not the pointer happens to be over one of its words —
-/// the listing's name column is `Width::Fill`, so most of a row's width belongs
-/// to a field that covers only the filename's own letters.
+/// [`Panes::section_at`] answers which column a cell is in, and it is total: a
+/// rule belongs to the section after it and the reserve at the end belongs to
+/// the last. A `Section`'s `from`..`to` is a narrower thing — where its FIELDS
+/// are, which is what [`Section::fields_px`] measures the film's track against
+/// — so the two do not agree on a rule cell, and they should not have to.
 ///
-/// The window door asked the deep question for its band and so had no band over
-/// any of that space: *"as vezes o item é destacado, as vezes não, e muitos
-/// nunca são destacado"*. The footer never had the defect because its band asks
-/// the LINE. This is that rule, written once, for both.
+/// Asking the cell twice by two rules is how the pointer over the preview's
+/// scrollbar ended up on a row of the listing: the second answer contradicted
+/// the first and nothing downstream could tell. So the caller asks once, and
+/// this asks only about the LINE.
+///
+/// # Why the LINE is the whole question for a band
+///
+/// A band says which row of a list the pointer is on, and a row is on screen
+/// whether or not the pointer happens to be over one of its words — the
+/// listing's name column is `Width::Fill`, so most of a row's width belongs to
+/// a field that covers only the filename's own letters. The window door once
+/// asked the deep question for its band and so had no band over any of that
+/// space: *"as vezes o item é destacado, as vezes não, e muitos nunca são
+/// destacado"*.
 ///
 /// # The leftover belongs to the last line
 ///
@@ -6127,13 +6390,16 @@ fn lift_onto_a_band(fields: &mut [Field], banded: bool) {
 /// last whole one turns into a line index ONE PAST the section — and answered
 /// nothing. The owner found it with the pointer: *"nem o hover do mouse
 /// funciona nesse espaço"*, on the very strip the film's controls are painted
-/// across.
-fn at_point(sections: &[Section], line: usize, cell: u16) -> Option<(&Section, usize)> {
-    let sec = sections.iter().find(|s| s.holds(line, cell)).or_else(|| {
-        sections
-            .iter()
-            .find(|s| line == s.top + s.lines && cell >= s.from && cell < s.to)
-    })?;
+/// across. That is the `or_else` below.
+fn at_line(sections: &[Section], which: Pane, line: usize) -> Option<(&Section, usize)> {
+    let sec = sections
+        .iter()
+        .find(|s| s.pane == which && line >= s.top && line < s.top + s.lines)
+        .or_else(|| {
+            sections
+                .iter()
+                .find(|s| s.pane == which && line == s.top + s.lines)
+        })?;
     let inside = (line - sec.top).min(sec.lines.saturating_sub(1));
     Some((sec, inside))
 }
@@ -6232,17 +6498,77 @@ pub fn sidebar_of(
 /// `leader::OF_CLIPBOARD_VIEW` gives: the list is what the manual and the check
 /// read. A key that only exists inside a `match` arm is a key nothing can
 /// enumerate — and this table is one half of `files-everything-has-a-key`.
-pub const OF_THE_VIEW: &[(&str, &str)] = &[
+/// Where in the manager a key is worth teaching.
+///
+/// # Why this view was the last to get one
+///
+/// Every other view of this system already had it — `audio::Where`,
+/// `syncthing::Where`, `bluetooth::Where`, `display::Where`, `network::Where`,
+/// `notifications::Column` — and this one taught THIRTY-SIX keys unconditional,
+/// fourteen of them about a player, a playlist, a text or a shape that was not
+/// there. The owner read that on the screen: *"vários atalhos são muito
+/// específicos para determinados contextos … então, nesses casos, eles devem
+/// aparecer apenas quando o contexto estiver disponível"*.
+///
+/// Every predicate below already existed and was read by `strong_meaning` and
+/// by nobody else, which is the whole of the change: the table now asks the
+/// questions the view could already answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Where {
+    /// A key that means the same thing whatever is under the cursor.
+    Anywhere,
+    /// Only while the preview panel is showing something.
+    OnAPreview,
+    /// Only while the information panel is open.
+    OnTheFacts,
+    /// Only over text — the two keys that move it sideways.
+    OnText,
+    /// Only over something that moves.
+    OnAFilm,
+    /// Only over something that carries sound.
+    OnSound,
+    /// Only over a playlist.
+    OnAList,
+    /// Only over a shape.
+    OnAShape,
+}
+
+impl Where {
+    /// Is this key worth teaching on the screen that is showing?
+    ///
+    /// THE PREDICATES ARE THE VIEW'S OWN, every one of them older than this
+    /// enum: `strong_meaning` has asked them for as long as the shifted arrows
+    /// have followed the focused section. What is new is the TABLE asking too.
+    #[must_use]
+    fn shown(self, v: &View) -> bool {
+        match self {
+            Self::Anywhere => true,
+            // A PREVIEW THAT IS OPEN AND HAS SOMETHING IN IT. `preview_on`
+            // alone would teach `C-w` over an empty panel, which is a key that
+            // refuses — and `theatre()` says so, which is the same thing said
+            // twice.
+            Self::OnAPreview => v.preview_on && v.focused().is_some(),
+            Self::OnTheFacts => v.info_on,
+            Self::OnText => v.showing_text().is_some(),
+            Self::OnAFilm => v.film_here(),
+            Self::OnSound => v.has_sound(),
+            Self::OnAList => v.showing_list().is_some(),
+            Self::OnAShape => v.shape_here(),
+        }
+    }
+}
+
+pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     // MOVING: the arrows, and the Emacs pair the keymap crate calls canonical.
     //
     // AND THE ORDER OF THIS TABLE IS THE ORDER THE HINT LINE TEACHES, because
     // the hint line IS this table — see `View::hint`. What comes first is what
     // shows while the line is shut, so the walking keys come before the
     // commands and the film's transport comes near the end.
-    ("<down>", "files-down"),
-    ("C-n", "files-down"),
-    ("<up>", "files-up"),
-    ("C-p", "files-up"),
+    ("<down>", "files-down", Where::Anywhere),
+    ("C-n", "files-down", Where::Anywhere),
+    ("<up>", "files-up", Where::Anywhere),
+    ("C-p", "files-up", Where::Anywhere),
     // THE SIDEWAYS ARROWS WALK THE SECTIONS, and `TAB` still does too.
     //
     // The owner asked for it in those words — *"em vez das teclas de setas da
@@ -6256,14 +6582,14 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     //
     // The arrow comes FIRST in the pair because the first notation of an id is
     // the one the line teaches.
-    ("<right>", "files-pane-next"),
-    ("TAB", "files-pane-next"),
+    ("<right>", "files-pane-next", Where::Anywhere),
+    ("TAB", "files-pane-next", Where::Anywhere),
     // AND BACKWARDS. `S-TAB` is not "Shift plus Tab" as far as anything here
     // is concerned, it is the keysym `ISO_Left_Tab`, which is what xkb
     // produces for it — the same "xkb has already applied it" both doors'
     // `key_of` rely on when they refuse to count Shift.
-    ("<left>", "files-pane-previous"),
-    ("S-TAB", "files-pane-previous"),
+    ("<left>", "files-pane-previous", Where::Anywhere),
+    ("S-TAB", "files-pane-previous", Where::Anywhere),
     // THE FOUR THAT CHANGE MEANING WITH THE SECTION.
     //
     // The owner's answer to a collision he was shown: `S-<left>` and
@@ -6279,15 +6605,15 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // the resolved action's own sentence and a colour of their own
     // (`text.subtle.alternate`), because a key whose meaning moves under the
     // reader has to say so.
-    ("S-<right>", "files-strong-right"),
-    ("S-<left>", "files-strong-left"),
-    ("S-<up>", "files-strong-up"),
-    ("S-<down>", "files-strong-down"),
-    ("RET", "files-enter"),
-    ("C-f", "files-enter"),
-    ("C-b", "files-parent"),
-    ("C-<", "files-first"),
-    ("C->", "files-last"),
+    ("S-<right>", "files-strong-right", Where::Anywhere),
+    ("S-<left>", "files-strong-left", Where::Anywhere),
+    ("S-<up>", "files-strong-up", Where::Anywhere),
+    ("S-<down>", "files-strong-down", Where::Anywhere),
+    ("RET", "files-enter", Where::Anywhere),
+    ("C-f", "files-enter", Where::Anywhere),
+    ("C-b", "files-parent", Where::Anywhere),
+    ("C-<", "files-first", Where::Anywhere),
+    ("C->", "files-last", Where::Anywhere),
     // THE VIEW'S OWN COMMANDS, all under `C-`. NEVER UNDER `M-`.
     //
     // They were bare letters, and a bare letter is now a letter of the query.
@@ -6300,13 +6626,13 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // `Ctrl` is the family nothing above us claims: the leader is a sequence,
     // the chords are `Mod+…`, and the emergency binds are `Ctrl+Alt+…`. The
     // check `files-keys-are-not-the-compositors` is what keeps it that way.
-    ("C-h", "files-hidden"),
-    ("C-s", "files-sort"),
-    ("C-S", "files-sort-reverse"),
-    ("C-SPC", "files-mark"),
-    ("C-a", "files-mark-all"),
-    ("C-A", "files-unmark-all"),
-    ("C-m", "files-menu"),
+    ("C-h", "files-hidden", Where::Anywhere),
+    ("C-s", "files-sort", Where::Anywhere),
+    ("C-S", "files-sort-reverse", Where::Anywhere),
+    ("C-SPC", "files-mark", Where::Anywhere),
+    ("C-a", "files-mark-all", Where::Anywhere),
+    ("C-A", "files-unmark-all", Where::Anywhere),
+    ("C-m", "files-menu", Where::Anywhere),
     // THE SIDEBAR, and its four keys are LETTERS on purpose.
     //
     // The obvious choice for crossing panes was `C-<left>`, and it would have
@@ -6317,7 +6643,7 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // doors would disagree — which is the divergence the whole two-door
     // arrangement exists to prevent, and it would be reported as "the shortcut
     // does not work", one of the three causes with the same screen.
-    ("C-l", "files-sidebar"),
+    ("C-l", "files-sidebar", Where::Anywhere),
     // `C-o` USED TO CROSS TO THE SIDEBAR, and it is gone.
     //
     // It was a second way into a section the `TAB` ring already reaches, and
@@ -6327,8 +6653,8 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // not having it". The lesson outlived the key, and it is why the hint line
     // is now generated out of this table instead of choosing eleven of its
     // rows by hand.
-    ("C-e", "files-eject"),
-    ("C-u", "files-unpin"),
+    ("C-e", "files-eject", Where::Anywhere),
+    ("C-u", "files-unpin", Where::Anywhere),
     // THE TWO PANELS, and both are LETTERS for the reason the sidebar's four
     // are: `Footer::press_key` sends an arrow held with the RIGHT `Ctrl` to
     // `navigate` before the view sees it, and the window door does not track
@@ -6340,8 +6666,8 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // maps `Keysym::Tab` and `Keysym::i` separately — and the test beside this
     // table pins it, because the day they collided `TAB` would silently stop
     // measuring a directory.
-    ("C-v", "files-preview"),
-    ("C-i", "files-facts"),
+    ("C-v", "files-preview", Where::Anywhere),
+    ("C-i", "files-facts", Where::Anywhere),
     // AND THE FACTS SCROLL, because the panel no longer stretches the region
     // to hold them — see `View::panel_lines`. It PAGES and it WRAPS, in one
     // key, and the shape is `files-sort`'s: a list of a dozen rows that comes
@@ -6358,8 +6684,8 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // every bare key is a letter of the query. `C-,` is the keysym `comma` and
     // `C-<` is `less`; xkb has already applied Shift, so both doors' `key_of`
     // tell them apart.
-    ("C-,", "files-preview-scroll"),
-    ("C-.", "files-facts-scroll"),
+    ("C-,", "files-preview-scroll", Where::OnAPreview),
+    ("C-.", "files-facts-scroll", Where::OnTheFacts),
     // AND THE LINE MOVES SIDEWAYS, because a panel is twenty-four cells at its
     // floor and a line of code is not.
     //
@@ -6372,8 +6698,8 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // already: `Footer::press_key` sends an arrow held with the RIGHT `Ctrl`
     // to `navigate` before the view sees it, and the window door does not
     // track that Ctrl at all — so the two doors would disagree.
-    ("C-[", "files-preview-left"),
-    ("C-]", "files-preview-right"),
+    ("C-[", "files-preview-left", Where::OnText),
+    ("C-]", "files-preview-right", Where::OnText),
     // THE BRACES MOVE THE ENTRY, and the brackets one line up move the LINE.
     //
     // Punctuation, so they are not letters of the query; the SHIFTED members
@@ -6384,8 +6710,8 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // Not `C-<arrow>`: the footer sends an arrow held with the RIGHT `Ctrl` to
     // `navigate` before the view sees it, and the window door does not track
     // that Ctrl at all.
-    ("C-{", "files-playlist-previous"),
-    ("C-}", "files-playlist-next"),
+    ("C-{", "files-playlist-previous", Where::OnAList),
+    ("C-}", "files-playlist-next", Where::OnAList),
     // THE FILM'S TRANSPORT, and every one of them is PUNCTUATION for the
     // reason `C-,` two lines up gives: every bare key is a letter of the query,
     // and an arrow held with the RIGHT `Ctrl` is paging before the view sees
@@ -6396,15 +6722,15 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // and they go backwards and forwards along the film. `Key::parse` handles
     // `C--` on purpose — the comment in `ronoctua-keymap` says so, because the
     // modifier loop would otherwise read the hyphen as an empty prefix.
-    ("C-;", "files-play"),
-    ("C-'", "files-sound"),
-    ("C--", "files-rewind"),
-    ("C-=", "files-forward"),
+    ("C-;", "files-play", Where::OnAFilm),
+    ("C-'", "files-sound", Where::OnSound),
+    ("C--", "files-rewind", Where::OnAFilm),
+    ("C-=", "files-forward", Where::OnAFilm),
     // AND THE WHOLE REGION, which is the owner's answer to "how big": one key
     // gives it and the same key takes it back. A LETTER here and not
     // punctuation, because it is not about the film's time — `w` for the
     // window it becomes.
-    ("C-w", "files-theatre"),
+    ("C-w", "files-theatre", Where::OnAPreview),
     // TURNING A SHAPE HAS NO ROW OF ITS OWN ANY MORE, and that is not the same
     // as being unreachable: `S-<arrow>` resolves to these four whenever the
     // preview has the keyboard and there is a shape in it. `strong_meaning` is
@@ -6414,15 +6740,15 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // that reads as a pair; `C--` and `C-=` would have been the obvious two
     // and they are the film's rewind and forward, and one notation cannot
     // carry two ids.
-    ("C-k", "files-zoom-in"),
-    ("C-j", "files-zoom-out"),
-    ("C-r", "files-reframe"),
+    ("C-k", "files-zoom-in", Where::OnAShape),
+    ("C-j", "files-zoom-out", Where::OnAShape),
+    ("C-r", "files-reframe", Where::OnAShape),
     // THE THREE COLUMNS ONE LOOKS UP, hidden until asked for.
     //
     // `C-d` for the DETAIL, and a letter for the reason the sidebar's four
     // are: `Footer::press_key` sends an arrow held with the right `Ctrl` to
     // `navigate` before the view sees it.
-    ("C-d", "files-columns"),
+    ("C-d", "files-columns", Where::Anywhere),
     // AND THE FOUR SECTIONS, WALKED BY `TAB`.
     //
     // `TAB` ALREADY MEANT THIS ONE ROOM AWAY: the notification manager's own
@@ -6434,7 +6760,7 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // answers, and a letter for the reason the sidebar's four are letters:
     // `Footer::press_key` sends an arrow held with the RIGHT `Ctrl` to
     // `navigate` before the view sees it.
-    ("C-t", "files-measure"),
+    ("C-t", "files-measure", Where::Anywhere),
 ];
 
 /// The hint line: every key this view answers to, in the order of its table.
@@ -6490,8 +6816,15 @@ impl View {
         // BEFORE `Key::parse` had a say, so a mistyped notation took its id off
         // the line for good, including a later row that spelt it correctly.
         // `hint_of_with` is the one loop, with the resolver passed in.
-        let keys = crate::chrome::hint_of_with(
-            OF_THE_VIEW,
+        // ONLY THE KEYS THAT DO SOMETHING WHERE YOU ARE, and the ones that are
+        // here only because of it drawn as guests. See `Where`.
+        let here: Vec<(&str, &str, bool)> = OF_THE_VIEW
+            .iter()
+            .filter(|(_, _, w)| w.shown(self))
+            .map(|(notation, id, w)| (*notation, *id, *w != Where::Anywhere))
+            .collect();
+        let keys = crate::chrome::hint_of_marked(
+            &here,
             |id| strong_of(id).map(|d| self.strong_meaning(d)),
             texts,
         );
@@ -6553,8 +6886,8 @@ pub fn strong_of(id: &str) -> Option<Strong> {
 pub fn key_that_runs(id: &str) -> Option<Key> {
     OF_THE_VIEW
         .iter()
-        .find(|(_, command)| *command == id)
-        .and_then(|(notation, _)| Key::parse(notation).ok())
+        .find(|(_, command, _)| *command == id)
+        .and_then(|(notation, _, _)| Key::parse(notation).ok())
 }
 
 /// The id a key runs, if the table has one for it.
@@ -6570,8 +6903,12 @@ pub fn of_the_view(t: Key) -> Option<&'static str> {
     let notation = notation_of(t);
     OF_THE_VIEW
         .iter()
-        .find(|(k, _)| *k == notation)
-        .map(|(_, id)| *id)
+        // THE TABLE DISPATCHES WHATEVER THE CONTEXT IS. `Where` decides what
+        // the line TEACHES; a key that is pressed still runs, and the code it
+        // reaches says whether there is anything to do — which is where a
+        // refusal belongs, with a sentence.
+        .find(|(k, _, _)| *k == notation)
+        .map(|(_, id, _)| *id)
 }
 
 impl View {
@@ -7142,6 +7479,7 @@ impl View {
             // keyboard cannot, and never by a second path.
             Hit::Play => self.play_pause(),
             Hit::Sound => self.hear(),
+            Hit::Theatre => self.theatre(),
             // THE MOUSE GOES THROUGH THE SAME CODE THE KEY GOES THROUGH: it
             // puts the cursor where it clicked and then presses the key. That
             // is what keeps `files-everything-has-a-key` honest — the mouse
@@ -7713,6 +8051,11 @@ impl View {
                 width
             };
             let mut rows: Vec<Row> = chrome.to_vec();
+            // NOTHING WALKS UNTIL A ROW SAYS IT DOES. Cleared here, once, and
+            // set again by whichever row the eye is on — see `row_of`. Left to
+            // decay on its own it would keep the door's clock armed over a
+            // listing whose long name has been scrolled away.
+            self.slide_over.set(0);
             for k in above..take {
                 let n = first + k - above;
                 rows.push(self.shown.get(n).map_or_else(
@@ -7785,6 +8128,15 @@ impl View {
                 // page key would have worked against a stale number.
                 self.drawn_lines
                     .set(u16::try_from(lines).unwrap_or(u16::MAX));
+                // THE PANEL'S OWN WIDTH, and not the content's.
+                //
+                // `content_room` is a cell narrower when there is a bar, and
+                // whether there is a bar is what `total` — two lines below — is
+                // being asked. Measuring the refusal against the narrower one
+                // would be asking the answer to decide the question.
+                if matches!(pane, Pane::Preview) {
+                    self.drawn_panel.set(room);
+                }
                 if !wanted(pane) {
                     continue;
                 }
@@ -7972,7 +8324,7 @@ impl View {
         // film's controls are painted across. The band already takes that
         // residue (see `transport_band`); this is the same decision for the
         // pointer, so what is drawn there is what answers there.
-        let (sec, inside) = at_point(&sections, line, cell)?;
+        let (sec, inside) = at_line(&sections, which, line)?;
         let f = sec.content.get(inside)?.field_at(cell)?;
         // WHICH ROW OF ITS OWN LIST. The listing's chrome is not one of them —
         // `usize::MAX` is what both doors already spell for the header — and
@@ -8009,7 +8361,7 @@ impl View {
         let in_strip = panes.strip > 0 && line >= room;
         let which = panes.section_at(cell, width, in_strip);
         let sections = self.sections_of(&chrome, room, width, &self.texts, Some(which));
-        let (sec, inside) = at_point(&sections, line, cell)?;
+        let (sec, inside) = at_line(&sections, which, line)?;
         // A LINE WITH NOTHING ON IT IS NOT A ROW. Past the last entry the
         // listing pads with empty rows and the sidebar with its gaps; lighting
         // those would promise a click on nothing.
@@ -8935,6 +9287,25 @@ impl View {
         // on, and a scroll position kept across two different files opens the
         // next one half way down a list it does not have.
         self.info_offset = 0;
+        // AND THE NAME STARTS WALKING FROM ITS OWN BEGINNING.
+        self.restart_the_walk();
+        // AND A NAME THAT DOES NOT FIT IS SAID, briefly.
+        //
+        // The owner asked for it in those words: *"assim que se seleciona um
+        // arquivo pelas setas do teclado, o nome completo também deve aparecer
+        // no minibuffer, mas deve ficar apenas por um período de tempo breve,
+        // e logo desaparecer"*. It is the echo both doors already have, at the
+        // three seconds both doors already use.
+        //
+        // ONLY WHEN IT WAS CUT: a name one can read whole on the row is a name
+        // the minibuffer has nothing to add about, and saying it would spend
+        // the footer's one line on every arrow press.
+        if let Some(name) = self.cut_name() {
+            return Step::Say(Explanation {
+                key: ronoctua_i18n::key::FILES_EXPLAIN_NAME,
+                args: vec![("name", name)],
+            });
+        }
         Step::Changed
     }
 
@@ -10879,6 +11250,88 @@ impl View {
         self.pointing.set(pane);
     }
 
+    /// Which ROW of the listing the pointer is on, told by the door.
+    ///
+    /// Moving to another row starts the walk again, so every name is read from
+    /// its own beginning with its own pause — see [`crate::slide`].
+    pub fn pointing_at(&self, row: Option<usize>) {
+        if self.pointing_row.get() != row {
+            self.pointing_row.set(row);
+            self.restart_the_walk();
+        }
+    }
+
+    /// The row whose name walks: the pointer's, or the cursor's.
+    ///
+    /// One at a time. Two names moving at once would be two animations on a
+    /// screen where nothing else moves, and the eye is on one of them — the
+    /// pointer's when there is one, because pointing is the more deliberate of
+    /// the two.
+    fn walking_row(&self) -> Option<usize> {
+        self.pointing_row
+            .get()
+            .or_else(|| matches!(self.pane, Pane::Listing).then_some(self.cursor))
+    }
+
+    /// The name under the cursor, when the listing had to cut it.
+    ///
+    /// Asked of `drawn_name`, which is the width the last frame gave the
+    /// column: a key arrives without one, and the door that draws is the only
+    /// thing that knows. `None` before the first frame, which is right — there
+    /// is nothing on screen to have been cut.
+    fn cut_name(&self) -> Option<String> {
+        let room = self.drawn_name.get();
+        if room == 0 {
+            return None;
+        }
+        let entry = self.focused()?;
+        let shown = match (&entry.target, entry.broken()) {
+            (Some(t), false) => format!("{} → {t}", entry.name),
+            (Some(t), true) => format!("{} ⇢ {t}", entry.name),
+            (None, _) => entry.name.clone(),
+        };
+        (ronoctua_render::layout::width(&shown) > room).then_some(shown)
+    }
+
+    /// The name that walks starts again from its beginning.
+    fn restart_the_walk(&self) {
+        self.slide_since.set(None);
+        self.slide_elapsed.set(std::time::Duration::ZERO);
+    }
+
+    /// Is a name walking right now? It is what arms the door's clock.
+    ///
+    /// `slide_over` is written by the layout — the one place that knows both
+    /// the name and the room it got — so this answers about what is on SCREEN
+    /// and not about what the view would like to draw.
+    #[must_use]
+    pub fn sliding(&self) -> bool {
+        self.slide_over.get() > 0
+    }
+
+    /// The clock ticked. Answers whether the name actually moved a cell.
+    ///
+    /// A tick that moves nothing asks for no frame: the walk rests a second at
+    /// each end, which at this step is five ticks of standing still.
+    pub fn slide(&self, now: std::time::Instant) -> bool {
+        let over = self.slide_over.get();
+        if over == 0 {
+            self.restart_the_walk();
+            return false;
+        }
+        let since = match self.slide_since.get() {
+            Some(s) => s,
+            None => {
+                self.slide_since.set(Some(now));
+                now
+            }
+        };
+        let was = self.slide_elapsed.get();
+        let is = now.saturating_duration_since(since);
+        self.slide_elapsed.set(is);
+        crate::slide::offset_at(was, over) != crate::slide::offset_at(is, over)
+    }
+
     /// The letters behind the cursor, when the file has any and no picture.
     ///
     /// It answers `None` the moment the cursor leaves the file, exactly as the
@@ -11015,10 +11468,39 @@ impl View {
         if let Some(l) = self.showing_list() {
             return l.entries.len() + usize::from(l.cut);
         }
-        match self.showing_text() {
-            Some(t) => t.lines.len() + usize::from(t.cut),
-            None => 1,
+        if let Some(t) = self.showing_text() {
+            return t.lines.len() + usize::from(t.cut);
         }
+        // AND A REFUSAL IS AS TALL AS IT READS. It answered `1` while the
+        // sentence was cut at the panel's width; now that it wraps, the bar
+        // has to know — a panel four rows tall with a five-row sentence is
+        // exactly what a scrollbar is for.
+        self.refusal_lines()
+    }
+
+    /// How many rows the refusal's sentence takes at the panel's width.
+    ///
+    /// `0` when there is no sentence to draw, which is what a picture, a film
+    /// and a shape answer: their rows are the panel's own.
+    fn refusal_lines(&self) -> usize {
+        let room = self.drawn_panel.get();
+        if room == 0 {
+            // NOT DRAWN YET is one row, which is what it was before any of
+            // this: a number nobody has measured must not claim a scrollbar.
+            return 1;
+        }
+        let said = match self.looked.as_ref().and_then(|l| l.why.as_ref()) {
+            Some(why) => {
+                let args: Vec<(&str, String)> = why.args();
+                let borrowed: Vec<(&str, &str)> =
+                    args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                self.texts.t_with(why.key(), &borrowed)
+            }
+            None => self.texts.t(NO_PREVIEW),
+        };
+        ronoctua_render::layout::wrap(&said, room, REFUSAL_CEILING)
+            .len()
+            .max(1)
     }
 
     /// The widest line the preview holds, in cells.
@@ -12568,6 +13050,69 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// THE EXPAND BUTTON, IN ITS THREE PLACES.
+    ///
+    /// The owner gave the three cases in one sentence, and they are three
+    /// because covering content is the thing to avoid: beside the clock when
+    /// there is a player, in the corner under the pointer when the content
+    /// reaches it, and in the corner always when it does not.
+    #[test]
+    fn the_expand_button_waits_for_the_pointer_only_where_it_would_cover_something() {
+        let b = bundle();
+
+        // WITHOUT A PLAYER AND WITH A SHORT SENTENCE: the corner is blank, so
+        // the button simply stays. A file with no preview at all is the case —
+        // its panel is one wrapped sentence in a panel many rows tall.
+        let dir = scratch("theatre-corner");
+        std::fs::write(dir.join("a.bin"), [0u8, 159, 146, 150]).unwrap();
+        let mut v = view_at(&dir);
+        v.reread();
+        let _ = v.key(ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Down));
+        with_panels(&mut v);
+        let rows = v.drawn(120, &b);
+        let buttons: Vec<&Field> = rows
+            .iter()
+            .flat_map(|r| r.fields.iter())
+            .filter(|f| f.hit == Hit::Theatre)
+            .collect();
+        assert_eq!(
+            buttons.len(),
+            1,
+            "a blank corner drew {} buttons with no pointer on it",
+            buttons.len()
+        );
+        assert!(
+            buttons[0].explain.is_some(),
+            "the button explains nothing on the line above"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // AND OVER CONTENT IT WAITS FOR THE POINTER. A text preview long
+        // enough to reach the last line is the case.
+        // `a_text_view` opens with the panels already on — it is the fixture
+        // for exactly this question.
+        let (mut v, dir) = a_text_view("theatre-over-text", &"a line of code\n".repeat(400));
+        let without: usize = v
+            .drawn(120, &b)
+            .iter()
+            .flat_map(|r| r.fields.iter())
+            .filter(|f| f.hit == Hit::Theatre)
+            .count();
+        assert_eq!(
+            without, 0,
+            "the button covered a line of the file with no pointer on the panel"
+        );
+        v.pointing(Some(Pane::Preview));
+        let with: usize = v
+            .drawn(120, &b)
+            .iter()
+            .flat_map(|r| r.fields.iter())
+            .filter(|f| f.hit == Hit::Theatre)
+            .count();
+        assert_eq!(with, 1, "the pointer did not bring the button out");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FAILS IF: the timeline's air is not the same on both sides.
     ///
     /// The owner asked for it in those words — *"com espaços em branco
@@ -12584,8 +13129,15 @@ mod tests {
         // The glyphs and the lead are on the left, so the two are not equal
         // outright: what has to match is the AIR, which is what is left after
         // the things beside it.
+        //
+        // AND THE EXPAND BUTTON JOINED THE RIGHT-HAND SIDE, past the clock —
+        // `TRANSPORT_THEATRE`. The two numbers have to move together, which is
+        // why they are one constant and why this test is what says so: with
+        // only `track_px` taught about it the track would have grown two cells
+        // into the button, and with only `transport_fields` taught the clock
+        // would have moved without the track following.
         let left_air = before - f32::from(TRANSPORT_LEAD + TRANSPORT_SOUND + 1) * cell;
-        let right_air = after - f32::from(11 + TRANSPORT_LEAD) * cell;
+        let right_air = after - f32::from(11 + TRANSPORT_THEATRE + TRANSPORT_LEAD) * cell;
         assert!(
             (left_air - right_air).abs() < 0.01,
             "the air is {left_air} on the left and {right_air} on the right"
@@ -13102,7 +13654,9 @@ mod tests {
             .filter(|p| {
                 matches!(
                     p.register,
-                    crate::chrome::Register::Key | crate::chrome::Register::Alternate
+                    crate::chrome::Register::Key
+                        | crate::chrome::Register::Alternate
+                        | crate::chrome::Register::Contextual
                 )
             })
             .map(|p| p.text)
@@ -13581,7 +14135,7 @@ mod tests {
         // sequence, the chords are `Mod+…`, and the emergency binds are
         // `Ctrl+Alt+…`. So the rule is simple enough to check: no `M-`, and no
         // `C-M-` either.
-        for (notation, id) in OF_THE_VIEW {
+        for (notation, id, _) in OF_THE_VIEW {
             let t = ronoctua_keymap::Key::parse(notation)
                 .unwrap_or_else(|_| panic!("`{notation}` is not a key"));
             assert!(
@@ -14676,7 +15230,16 @@ mod tests {
         let b = bundle();
         let keys = hint_keys(&v, &b);
         let line = hint_line(&v, &b);
-        for (notation, id) in OF_THE_VIEW {
+        for (notation, id, w) in OF_THE_VIEW {
+            // A KEY THAT ONLY EXISTS IN A CONTEXT IS NOT TAUGHT WITHOUT IT,
+            // and that is the point of `Where`: this view taught thirty-six
+            // keys unconditionally, fourteen of them about a player, a
+            // playlist, a text or a shape that was not under the cursor. The
+            // gated ones have their own test below, which asks the harder
+            // question — that they appear when their context does.
+            if *w != Where::Anywhere {
+                continue;
+            }
             let t = Key::parse(notation).expect("a notation in the table");
             let drawn = crate::chrome::key_text(&t);
             // THE FIRST NOTATION OF AN ID IS THE ONE SHOWN, so an id bound
@@ -14684,8 +15247,8 @@ mod tests {
             // taught", not "is this spelling on the line".
             let first = OF_THE_VIEW
                 .iter()
-                .find(|(_, other)| other == id)
-                .map(|(n, _)| *n)
+                .find(|(_, other, _)| other == id)
+                .map(|(n, _, _)| *n)
                 .expect("the id is in the table it came from");
             if first != *notation {
                 continue;
@@ -14796,7 +15359,9 @@ mod tests {
                     assert!(since <= 1, "two shortcuts between two separators");
                     since = 0;
                 }
-                crate::chrome::Register::Key | crate::chrome::Register::Alternate => since += 1,
+                crate::chrome::Register::Key
+                | crate::chrome::Register::Alternate
+                | crate::chrome::Register::Contextual => since += 1,
                 crate::chrome::Register::Prose => {}
             }
         }
@@ -17056,6 +17621,137 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A NAME THAT DOES NOT FIT IS REACHABLE THREE WAYS, and this is the pair
+    /// that costs no clock: the pointer's line, and the cursor's echo.
+    ///
+    /// The owner asked for both in one sentence — *"ao colocar o cursor por
+    /// cima do nome do arquivo, o nome completo deve aparecer no minibuffer"*
+    /// and *"assim que se seleciona um arquivo pelas setas do teclado, o nome
+    /// completo também deve aparecer no minibuffer … por um período de tempo
+    /// breve"*. A name one can read whole says nothing either way, because
+    /// then the line would be spent on every row of every listing.
+    #[test]
+    fn a_name_that_does_not_fit_says_itself_and_a_short_one_does_not() {
+        let dir = scratch("long-name");
+        let long = "a-name-far-too-long-for-any-listing-column-to-hold-whole.txt";
+        std::fs::write(dir.join(long), b"x").unwrap();
+        std::fs::write(dir.join("b.txt"), b"x").unwrap();
+        let b = bundle();
+        let mut v = view_at(&dir);
+        v.reread();
+        // A NARROW LISTING, so the long name really is cut.
+        let rows = v.drawn(46, &b);
+        let cut: Vec<&Field> = rows
+            .iter()
+            .flat_map(|r| r.fields.iter())
+            .filter(|f| matches!(f.hit, Hit::Name(_)))
+            .collect();
+        assert!(cut.len() >= 2, "both entries drew a name");
+        let long_field = cut
+            .iter()
+            .find(|f| f.text.starts_with("a-name"))
+            .expect("the long name is on screen");
+        let short_field = cut
+            .iter()
+            .find(|f| f.text.starts_with('b'))
+            .expect("the short name is on screen");
+        assert!(
+            long_field.explain.is_some(),
+            "the cut name explains nothing under the pointer"
+        );
+        assert_eq!(
+            short_field.explain, None,
+            "a name one can read whole spends the line for nothing"
+        );
+        assert_eq!(
+            long_field
+                .explain
+                .as_ref()
+                .and_then(|e| e.args.first())
+                .map(|(_, name)| name.as_str()),
+            Some(long),
+            "the line says something other than the whole name"
+        );
+
+        // AND THE CURSOR ARRIVING SAYS IT TOO, for three seconds.
+        //
+        // WHICH ROW IS WHICH depends on the sort, so the test walks until it
+        // is on the long one rather than assuming an index.
+        let mut said = None;
+        let walk = [ronoctua_keymap::Sym::Down, ronoctua_keymap::Sym::Up];
+        'walk: for sym in walk {
+            for _ in 0..rows.len() {
+                if let Step::Say(e) = v.key(ronoctua_keymap::Key::simple(sym)) {
+                    said = e.args.first().map(|(_, n)| n.clone());
+                    break 'walk;
+                }
+            }
+        }
+        assert_eq!(
+            said.as_deref(),
+            Some(long),
+            "arriving on the cut name said nothing"
+        );
+    }
+
+    /// AND IT WALKS — but only the one the eye is on, and only while there is
+    /// something to walk to.
+    #[test]
+    fn only_the_name_under_the_eye_walks_and_only_when_it_is_cut() {
+        let dir = scratch("walking-name");
+        let long = "a-name-far-too-long-for-any-listing-column-to-hold-whole.txt";
+        std::fs::write(dir.join(long), b"x").unwrap();
+        let b = bundle();
+        let mut v = view_at(&dir);
+        v.reread();
+
+        // WIDE ENOUGH FOR THE WHOLE NAME: nothing walks, so no door arms a
+        // clock. This is the half that keeps the footer asleep.
+        let _ = v.drawn(200, &b);
+        assert!(!v.sliding(), "a name that fits asked for a clock");
+
+        // NARROW: the cursor's row walks. The cursor is on the way out when
+        // the view opens, so one step down puts it on the only file there is.
+        let _ = v.key(ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Down));
+        let _ = v.drawn(46, &b);
+        assert!(v.sliding(), "a cut name under the cursor does not walk");
+
+        // AND IT STEPS ONE CELL AT A TIME, from the beginning, after the rest
+        // the owner asked for. The clock is the door's; here it is arithmetic.
+        let start = std::time::Instant::now();
+        assert!(!v.slide(start), "the first tick moved the name");
+        // THE WALKING NAME IS THE ONE DRAWN AS A WINDOW OF ITSELF — no
+        // ellipsis, so it is a plain substring of the whole name, which is what
+        // tells it apart from the date and the size on the same row.
+        let name_at = |v: &mut View| -> String {
+            v.drawn(46, &b)
+                .iter()
+                .flat_map(|r| r.fields.iter())
+                .filter(|f| matches!(f.hit, Hit::Name(_)))
+                .map(|f| f.text.clone())
+                .find(|t| t.len() > 8 && long.contains(t.as_str()))
+                .unwrap_or_default()
+        };
+        let first = name_at(&mut v);
+        assert!(first.starts_with("a-name"), "it did not start at the start");
+        // PAST THE REST AT THE START, one step in.
+        assert!(
+            v.slide(start + crate::slide::DWELL + crate::slide::STEP),
+            "it never left the first cell"
+        );
+        let moved = name_at(&mut v);
+        assert_ne!(first, moved, "the name did not move");
+        assert!(
+            long.contains(moved.as_str()),
+            "it moved to somewhere that is not in the name: {moved}"
+        );
+        assert_eq!(
+            long.find(moved.as_str()),
+            Some(1),
+            "it moved by something other than one cell"
+        );
+    }
+
     #[test]
     fn the_panels_leak_nowhere_the_listing_did_not_already() {
         // The listing alone leaks at ONE cell and has since before there was a
@@ -17473,6 +18169,11 @@ mod tests {
             .iter()
             .flat_map(|r| r.fields.iter())
             .filter(|f| f.at >= at && f.at < at + room)
+            // THE EXPAND BUTTON IS NOT A PICTURE. It sits in the corner of a
+            // panel whose last line is blank — which is the case this test
+            // builds — and the question here is whether anything stands in for
+            // the FILE, at the size of a picture. See `theatre_field`.
+            .filter(|f| f.hit != Hit::Theatre)
             .collect();
         assert_eq!(
             inside.len(),
@@ -18091,7 +18792,7 @@ mod tests {
         }
         std::fs::write(root.join("d.stl"), one_triangle_stl()).unwrap();
         std::fs::create_dir(root.join("folder")).unwrap();
-        for (notation, label) in OF_THE_VIEW {
+        for (notation, label, _) in OF_THE_VIEW {
             let mut v = view_at(&root);
             // THE CURSOR IN THE MIDDLE. At the top, `k` moves nowhere and
             // answers `Nothing` — correctly — and the test would read that as
@@ -18503,5 +19204,202 @@ mod tests {
                 "the thumb went past the end of the region: {y} + {tall}"
             );
         }
+    }
+
+    /// FAILS IF: a cell of the region belongs to no section, and so falls
+    /// through to the listing.
+    ///
+    /// THE OWNER PHOTOGRAPHED WHAT THAT DOES: the pointer on the preview's
+    /// scrollbar, and a row of the LISTING lit with a hover band. The bar is
+    /// drawn at `rule_x`, half a cell past its box's last text cell, so half
+    /// its pixels asked about the RULE — and `boxes` walks `at += mine + RULE`,
+    /// leaving every rule cell, the leading one and the `EDGE_RIGHT` reserve
+    /// owned by nobody. `section_at`'s own comment promised the opposite.
+    #[test]
+    fn every_cell_of_the_region_has_a_section() {
+        for (sidebar, right, whole) in [
+            (0u16, 0u16, false),
+            (14, 0, false),
+            (0, 40, false),
+            (14, 40, false),
+            (14, 80, false),
+            (0, 60, true),
+        ] {
+            let panes = Panes {
+                sidebar,
+                right,
+                strip: 0,
+                preview: right > 0,
+                info: right > 40,
+                whole,
+            };
+            for width in [60u16, 80, 118, 160, 200] {
+                if right >= width {
+                    continue;
+                }
+                // WHERE EACH SECTION'S CELLS BEGIN AND END, walked once.
+                let mut seen: Vec<Pane> = Vec::with_capacity(usize::from(width));
+                for cell in 0..width {
+                    seen.push(panes.section_at(cell, width, false));
+                }
+                // THE LISTING NEVER APPEARS INSIDE THE PANELS' OWN REGION,
+                // which is the whole of the defect: a cell that fell through
+                // answered `Listing` from the far right of the screen.
+                let region = width.saturating_sub(right);
+                for (cell, pane) in seen.iter().enumerate() {
+                    let cell = u16::try_from(cell).unwrap_or(u16::MAX);
+                    if right > 0 && cell >= region {
+                        assert_ne!(
+                            *pane,
+                            Pane::Listing,
+                            "cell {cell} of {width} is past the listing's own \
+                             columns and still answers `Listing` \
+                             (sidebar={sidebar} right={right} whole={whole}, \
+                             boxes={:?})",
+                            panes.boxes(width)
+                        );
+                    }
+                }
+                // AND THE ANSWER NEVER GOES BACKWARDS: sidebar, then listing,
+                // then the panels from the left. A section that reappeared
+                // after another would be two columns interleaved.
+                let order = |p: &Pane| match p {
+                    // `Fold` is the drawer's own line and is never a CELL of
+                    // the region, so it cannot appear in this sweep.
+                    Pane::Fold | Pane::Sidebar => 0,
+                    Pane::Listing => 1,
+                    Pane::Preview => 2,
+                    Pane::Info => 3,
+                };
+                for pair in seen.windows(2) {
+                    assert!(
+                        order(&pair[1]) >= order(&pair[0]),
+                        "at {width} cells the sections interleave: {seen:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// FAILS IF: a refusal is cut instead of wrapped.
+    ///
+    /// THE OWNER SELECTED `playlist.asx` and read half a sentence. That one is
+    /// 71 cells in en-GB and the panel is 24 to 40, with four empty rows under
+    /// it — a line that does not fit is not a reason to say less.
+    #[test]
+    fn a_refusal_wraps_instead_of_being_cut() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        let said = texts.t(ronoctua_i18n::key::FILES_PREVIEW_PLAYLIST_UNREAD);
+        let wide = usize::from(ronoctua_render::layout::width(&said));
+        assert!(
+            wide > usize::from(PANEL_CEILING),
+            "the sentence got short; this test measures the one that did not fit"
+        );
+        for room in [PANEL_FLOOR, 30, PANEL_CEILING] {
+            let rows = ronoctua_render::layout::wrap(&said, room, REFUSAL_CEILING);
+            assert!(
+                rows.len() > 1,
+                "at {room} cells the sentence claims one row and is {wide} wide"
+            );
+            // AND NOTHING IS LOST: every word of the sentence is still there.
+            let back: Vec<&str> = rows.iter().flat_map(|r| r.split_whitespace()).collect();
+            assert_eq!(
+                back.join(" "),
+                said.split_whitespace().collect::<Vec<_>>().join(" "),
+                "the wrap lost or invented a word at {room} cells"
+            );
+            for row in &rows {
+                assert!(
+                    ronoctua_render::layout::width(row) <= room,
+                    "a wrapped row is wider than the panel at {room} cells: {row:?}"
+                );
+                assert!(
+                    !row.contains('\u{2026}'),
+                    "a wrapped row was elided as well at {room} cells: {row:?}"
+                );
+            }
+        }
+    }
+
+    /// FAILS IF: a gated key is taught with no context, or missing from the
+    /// one it belongs to.
+    ///
+    /// The owner asked for both halves — *"eles devem aparecer apenas quando o
+    /// contexto estiver disponível; e devem aparecer com cor diferente dos
+    /// atalhos fixos"* — and a test that only checked the first could be
+    /// passed by a table that teaches nothing at all.
+    #[test]
+    fn a_gated_key_appears_with_its_context_and_not_without() {
+        let dir = scratch("dica-contexto");
+        std::fs::write(dir.join("a.txt"), b"x").unwrap();
+        let mut v = view_beside(&dir, 3);
+        v.reread();
+        let b = bundle();
+
+        // WITH NOTHING UNDER THE CURSOR BUT A FILE: no film, no shape, no
+        // playlist, no text read yet.
+        v.preview_on = false;
+        v.info_on = false;
+        let bare = hint_keys(&v, &b);
+        for (notation, id, w) in OF_THE_VIEW {
+            if *w == Where::Anywhere {
+                continue;
+            }
+            let t = Key::parse(notation).expect("a notation in the table");
+            let drawn = crate::chrome::key_text(&t);
+            assert!(
+                !bare.contains(&drawn),
+                "`{drawn}` ({id}) is taught with no context for it: {bare:?}"
+            );
+        }
+
+        // AND WITH A FILM UNDER IT, the film's own keys arrive — and in the
+        // guest's register, which is the other half of the report.
+        v.preview_on = true;
+        let ask = v.wants_look(512).expect("a look");
+        v.looked(Looked {
+            key: ask.key.clone(),
+            path: ask.path,
+            rgba: None,
+            moving: Some(a_gif()),
+            list: None,
+            text: None,
+            why: None,
+            facts: Vec::new(),
+            mime: "image/gif",
+            turns: false,
+            outlined: 0,
+        });
+        let playing = hint_keys(&v, &b);
+        for want in ["C-;", "C--", "C-="] {
+            let t = Key::parse(want).expect("a notation");
+            let drawn = crate::chrome::key_text(&t);
+            assert!(
+                playing.contains(&drawn),
+                "`{drawn}` is not taught over a film: {playing:?}"
+            );
+        }
+        // AND THE SHAPE'S KEYS ARE STILL ABSENT: a film is not a shape.
+        for never in ["C-k", "C-j", "C-r"] {
+            let t = Key::parse(never).expect("a notation");
+            let drawn = crate::chrome::key_text(&t);
+            assert!(
+                !playing.contains(&drawn),
+                "`{drawn}` is taught over a film: {playing:?}"
+            );
+        }
+        // THE GUEST'S COLOUR. A key that comes and goes has to read
+        // differently from one that is always there, or the line teaches two
+        // kinds of thing in one voice.
+        let guests = v
+            .hint(&b)
+            .iter()
+            .filter(|p| p.register == crate::chrome::Register::Contextual)
+            .count();
+        assert!(
+            guests >= 3,
+            "the film's three keys are on the line in the fixed register, \
+             not the guest's: {guests} contextual pieces"
+        );
     }
 }

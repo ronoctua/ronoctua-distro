@@ -74,8 +74,14 @@ pub const APP_ID: &str = "br.ronoctua.display";
 /// `BTN_LEFT`, from `linux/input-event-codes.h`.
 const LEFT_BUTTON: u32 = 0x110;
 
-/// The first line of the list. Above it: the hint line, and nothing else —
-/// the arrangement the notification window has, for the reason it gives.
+/// The first line of the list, before the explanation takes its own.
+///
+/// Everything asks [`Self::first_of_list`] instead: while the pointer rests on
+/// a shortcut of the hint, the sentence about it is drawn on the line under
+/// the hint and the list starts one row lower. A window is not anchored to the
+/// bottom of the screen, so that costs a row of list and nothing else — the
+/// footer, which is anchored, pays for the same line another way (see
+/// `Footer::explain_rows`).
 const FIRST_OF_LIST: u16 = 1;
 
 /// The margin inside the window, in cells — see `chrome::FIELDS_LEAD`.
@@ -269,6 +275,7 @@ pub fn host_it() -> Result<()> {
         ticking: false,
         texts,
         row_under_pointer: None,
+        hinted: crate::chrome::Hinted::default(),
         offset: 0,
         message: None,
         said: 0,
@@ -378,6 +385,8 @@ struct DisplayWindow {
     ticking: bool,
     texts: std::rc::Rc<ronoctua_i18n::Texts>,
     row_under_pointer: Option<usize>,
+    /// The hint line, and the shortcut the pointer is resting on it.
+    hinted: crate::chrome::Hinted,
     /// The first visible row. A window has no page: it scrolls.
     offset: usize,
     message: Option<String>,
@@ -630,8 +639,8 @@ impl DisplayWindow {
     }
 
     /// How many rows fit under the hint line.
-    const fn room(&self) -> usize {
-        self.lines.saturating_sub(FIRST_OF_LIST) as usize
+    fn room(&self) -> usize {
+        self.lines.saturating_sub(self.first_of_list()) as usize
     }
 
     /// Keeps the cursor on screen, starting to scroll two rows before the edge.
@@ -853,6 +862,14 @@ impl DisplayWindow {
         }
         let size = tokens::text::size();
         let margin = CONTENT_MARGIN;
+        // A MESSAGE TAKES THIS LINE, and then there is no shortcut on it to
+        // point at. Decided BEFORE the list is measured, because the
+        // explanation's row comes out of that measurement — see
+        // `Self::first_of_list`. Left until the drawing, the list would be
+        // measured against a row that the frame then does not draw.
+        if self.message.is_some() {
+            self.hinted.say(None);
+        }
         let rows = self.rows();
         self.settle_offset(rows.len());
 
@@ -872,22 +889,44 @@ impl DisplayWindow {
                 edge: false,
                 foot: false,
             });
+            self.hinted.drew_nothing();
         } else {
+            let pieces = self
+                .view
+                .hint(&self.snapshot, std::time::Instant::now(), &self.texts);
             spans.extend(crate::chrome::hint_spans(
-                &self
-                    .view
-                    .hint(&self.snapshot, std::time::Instant::now(), &self.texts),
+                &pieces,
                 ronoctua_render::Size::Px(size),
                 margin,
                 0,
                 room,
             ));
+            // WHERE EACH SHORTCUT LANDED, for the pointer: the same
+            // placement the ink came out of — see `chrome::hint_marks`.
+            self.hinted.drew(&pieces, margin, 0, room);
+        }
+
+        // AND THE SHORTCUT UNDER THE POINTER, SPELT OUT.
+        //
+        // The line the owner asked for under the hints. It exists only
+        // while the pointer is on a key, and the list below starts one
+        // row lower for as long as it does — see `chrome::Hinted`.
+        if let Some(said) = self.hinted.said() {
+            spans.push(ronoctua_render::Span {
+                size: ronoctua_render::Size::Px(size),
+                text: ronoctua_render::layout::elide_end(said, room),
+                column: margin,
+                line: FIRST_OF_LIST,
+                color: crate::chrome::Register::Prose.color(),
+                edge: false,
+                foot: false,
+            });
         }
 
         // THE FOCUS IS A COLOUR, NOT A BAND — the same mark the footer's door
         // draws for these rows.
         for (i, row) in rows.iter().skip(self.offset).take(self.room()).enumerate() {
-            let y = FIRST_OF_LIST + u16::try_from(i).unwrap_or(0);
+            let y = self.first_of_list() + u16::try_from(i).unwrap_or(0);
             for f in &row.fields {
                 spans.push(ronoctua_render::Span {
                     size: ronoctua_render::Size::Px(size),
@@ -904,8 +943,12 @@ impl DisplayWindow {
         // THE BAR, from the same `Scroll` every other bar in this system uses.
         let scroll = crate::chrome::list_scroll(rows.len(), self.room(), self.offset);
         #[allow(clippy::cast_precision_loss)]
-        let bar =
-            crate::chrome::list_bar(scroll, FIRST_OF_LIST, self.width as f32, self.height as f32);
+        let bar = crate::chrome::list_bar(
+            scroll,
+            self.first_of_list(),
+            self.width as f32,
+            self.height as f32,
+        );
         // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
         // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes,
         // and nothing else in this function may borrow `self` by then. See
@@ -977,6 +1020,11 @@ impl DisplayWindow {
         }
     }
 
+    /// The first line of the list, pushed down by the explanation line.
+    fn first_of_list(&self) -> u16 {
+        FIRST_OF_LIST + self.hinted.rows()
+    }
+
     /// Which drawn row is at height `y`.
     fn row_at(&self, y: f64) -> Option<usize> {
         let line = f64::from(tokens::metrics::line_height(tokens::text::size()));
@@ -986,7 +1034,7 @@ impl DisplayWindow {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let which = (y / line) as usize;
         which
-            .checked_sub(usize::from(FIRST_OF_LIST))
+            .checked_sub(usize::from(self.first_of_list()))
             .map(|i| i + self.offset)
     }
 }
@@ -1235,14 +1283,25 @@ impl PointerHandler for DisplayWindow {
         #[allow(clippy::cast_precision_loss)]
         let (bar_w, bar_h) = (self.width as f32, self.height as f32);
         let mut dragged: Option<usize> = None;
+        // WHETHER THE LINE UNDER THE HINT CHANGED, which is the one thing
+        // the pointer does draw in this door.
+        let mut explained = false;
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    // WHICH SHORTCUT OF THE HINT LINE the pointer is resting
+                    // on, read off what the last frame DREW — see
+                    // `chrome::Hinted`.
+                    let now = self
+                        .hinted
+                        .under(e.position.0, e.position.1)
+                        .and_then(|id| crate::chrome::hint_sentence(id, &self.texts));
+                    explained |= self.hinted.say(now);
                     #[allow(clippy::cast_possible_truncation)]
                     if self.dragging {
                         dragged = Some(crate::chrome::list_offset_at(
                             scroll,
-                            FIRST_OF_LIST,
+                            self.first_of_list(),
                             bar_w,
                             bar_h,
                             e.position.1 as f32,
@@ -1252,6 +1311,9 @@ impl PointerHandler for DisplayWindow {
                     }
                 }
                 PointerEventKind::Leave { .. } => {
+                    // THE SENTENCE GOES WITH THE POINTER. A pointer that
+                    // leaves sends no motion on the way out.
+                    explained |= self.hinted.say(None);
                     // AND THE DRAG ENDS WITH THE POINTER. Wayland's implicit
                     // grab usually delivers the release, but a popup grab, an
                     // unmap or a broken grab drops it — and a `dragging` left
@@ -1267,7 +1329,7 @@ impl PointerHandler for DisplayWindow {
                     #[allow(clippy::cast_possible_truncation)]
                     if crate::chrome::on_the_list_bar(
                         scroll,
-                        FIRST_OF_LIST,
+                        self.first_of_list(),
                         bar_w,
                         bar_h,
                         e.position.0 as f32,
@@ -1276,7 +1338,7 @@ impl PointerHandler for DisplayWindow {
                         self.dragging = true;
                         dragged = Some(crate::chrome::list_offset_at(
                             scroll,
-                            FIRST_OF_LIST,
+                            self.first_of_list(),
                             bar_w,
                             bar_h,
                             e.position.1 as f32,
@@ -1333,6 +1395,13 @@ impl PointerHandler for DisplayWindow {
             )
             .unwrap_or(0)
             .min(last);
+            self.ask_paint();
+        }
+        // EXCEPT THE LINE UNDER THE HINT, which IS drawn from the pointer:
+        // resting on a shortcut spells it out, and moving off it takes the
+        // sentence away. The paragraph below still holds for the ROW under the
+        // pointer, which nothing here draws.
+        if explained {
             self.ask_paint();
         }
         // NO FRAME FOR A POINTER THAT CHANGED NOTHING. Nothing on this

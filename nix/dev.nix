@@ -31,6 +31,7 @@
   ffmpeg-full,
   exiftool,
   poppler-utils,
+  catdoc,
   graphicsHost,
   reloadApp,
   singleFooter,
@@ -506,7 +507,7 @@ let
       # the environment because `ronoctua-files` also builds the binary that
       # runs as ROOT, whose closure must not learn about video.
       #
-      # Without these five lines the preview and the info panel would work on
+      # Without these eight lines the preview and the info panel would work on
       # an installed machine and silently do nothing in the nested loop — which
       # is the first place anybody looks.
       export RONOCTUA_FFMPEG="${ffmpeg-full}/bin/ffmpeg"
@@ -514,6 +515,9 @@ let
       export RONOCTUA_EXIFTOOL="${exiftool}/bin/exiftool"
       export RONOCTUA_PDFTOPPM="${poppler-utils}/bin/pdftoppm"
       export RONOCTUA_PDFINFO="${poppler-utils}/bin/pdfinfo"
+      export RONOCTUA_CATDOC="${catdoc}/bin/catdoc"
+      export RONOCTUA_XLS2CSV="${catdoc}/bin/xls2csv"
+      export RONOCTUA_CATPPT="${catdoc}/bin/catppt"
       export RONOCTUA_FILES_START="${import ./files-start.nix}"
       # AND WHAT THE SIDEBAR STARTS WITH — the same two files the installed
       # system resolves, for the same reason: there is no NixOS here to read an

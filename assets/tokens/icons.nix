@@ -258,6 +258,22 @@
   # And sound OFF, which is what a preview starts as: a panel that speaks when
   # a cursor passes over a file is a panel one turns off.
   volume-off = "md-volume_off";
+  # THE PREVIEW'S OTHER BUTTON: give it the whole region, and give the region
+  # back. `C-w` does the same thing and always has; the owner asked for the
+  # gesture to exist for the mouse too — *"quero que haja um botão de expandir
+  # (e de reduzir, quando estiver expandindo) para o preview"*.
+  #
+  # A MATCHED PAIR from the same family as `play`/`pause` above, and for the
+  # reason written there: the two alternate in ONE cell, so a difference in
+  # weight between them is a row that twitches every time it is pressed.
+  # `md-fullscreen` is U+F0293 and `md-fullscreen_exit` U+F0294 — neighbours,
+  # drawn together.
+  #
+  # NOT the `expand`/`collapse` chevrons: those are the drawer's, and the
+  # owner's own words reserve them — *"não quero mais o chevron, pois isso é
+  # utilizado em elementos de descolapsar/colapsar"*. This is not a drawer.
+  theatre = "md-fullscreen";
+  theatre-off = "md-fullscreen_exit";
   sync = "cod-sync";
 
   # SYNCTHING'S TWO, and they are neighbours in one face on purpose.

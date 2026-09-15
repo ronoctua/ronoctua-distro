@@ -17,6 +17,54 @@ Tudo abaixo é decisão, não esquecimento. Está aqui para que ninguém o refa�
 - **Renomear uma pasta pelo id.** O Syncthing não muda o id de uma pasta; a linha do id é um FATO,
   e `RET` nela copia.
 
+### A prévia de documento — o que ela deliberadamente NÃO faz
+
+Tudo abaixo é decisão, não esquecimento.
+
+- **Layout nenhum.** Um `.docx` é a descrição de uma página e a prévia não desenha nada dela: sem
+  fontes, sem colunas, sem imagens, sem tabela dentro de tabela. Ela responde *o que este documento
+  DIZ*, que é a pergunta que se leva a um painel de prévia; o arquivo abre num editor de verdade a
+  uma tecla.
+- **`.ppt` mostra a recusa e não o texto.** Medido com o binário empacotado: `catppt` no
+  `sample.ppt` do dono devolve **zero bytes, saída zero e nada no stderr**, num arquivo que o `file`
+  chama de OLE compound de verdade. O `catdoc` (8 377 bytes) e o `xls2csv` (364 057) funcionam. Ler
+  OLE aqui seria um leitor de compound file inteiro — um sistema de arquivos dentro de um arquivo —
+  para um formato de 1997; o que existe é a frase honesta, que é melhor que um painel em branco.
+- **Nada de LibreOffice nem de pandoc.** 2-3 GB o primeiro, +297 MiB o segundo (e ele não lê
+  `.doc/.xls/.ppt`). A linha que o `nix/modules/media.nix` já traça é que isto é suporte a FORMATO e
+  não a aplicativo.
+- **`.odg` e os outros zips que ninguém nomeou viram LISTA DE ENTRADAS.** É o que um `.zip` mostra,
+  e é honesto: o painel diz o que está lá dentro em vez de dizer que não sabe. Dar texto a um
+  desenho é decisão própria, e ninguém a pediu.
+
+### 0.0000001. A opção "usar IA" da linha de resgate · médio
+
+A linha que aparece quando o rodapé cai (`ronoctua-shell lifeline`) oferece quatro coisas, e três
+funcionam: ver os logs, reiniciar e fechar. A quarta é **desenhada e recusa**, com frase própria — a
+pedido do dono, que pediu a opção existindo e a implementação para depois: *"deixar a implementação
+dessa funcionalidade de no pending, pois será implementada mais tarde"*.
+
+O que falta é o que ela faria: pegar o que já está na mão naquele instante — a unidade, o
+`Result=`, as últimas linhas do journal, o coredump se houver — e levar a alguém que responda. Isso
+é uma decisão de rede e de privacidade antes de ser uma de código: o que sai desta máquina, para
+onde, e com o quê. Nada disso está decidido.
+
+- **como saber que acabou**: a quarta opção deixa de recusar, e o que ela manda está escrito na tela
+  antes de sair daqui.
+- **o que NÃO fazer sem decidir**: mandar log a lugar nenhum por padrão. O invariante 13 vale aqui
+  como em qualquer outro lugar, e um backtrace carrega caminhos de arquivo.
+
+### 0.0000002. Um rodapé que TRAVA não é um rodapé que morre · pequeno
+
+`OnFailure=` vê processo que morre. Um que para de responder — laço apertado, GPU travada, espera
+sem prazo — continua `active` e a linha nunca nasce. O que resolveria é um `WatchdogSec=` na unidade
+e um `sd_notify` no laço de eventos, e as duas coisas são um relógio novo numa porta cujo desenho
+inteiro é não ter relógio em repouso.
+
+- **como saber que acabou**: matar o rodapé com `SIGSTOP` levanta a linha.
+- **o preço**: um `sd_notify` por intervalo, para sempre, em troca de um modo de falha que ninguém
+  relatou ainda.
+
 ## Regra de manutenção — leia antes de mexer
 
 **Ao concluir um item daqui, remova-o.** Se ele mudar *como o sistema funciona*, escreva uma linha

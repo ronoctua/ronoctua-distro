@@ -147,6 +147,30 @@ impl Texts {
         &self.language
     }
 
+    /// Is there a sentence under this key at all?
+    ///
+    /// # Why anything needs to ask
+    ///
+    /// Because [`Texts::t`] never fails, and what it returns for a key nobody
+    /// declared is `[the-key]` — a marker meant for a screenshot, not for a
+    /// sentence somebody is supposed to read. Every caller in this tree knows
+    /// its key exists, because a build guard says so, and so none of them ever
+    /// had to ask.
+    ///
+    /// One does now. The hint line explains the shortcut under the pointer,
+    /// and the long form of a shortcut lives under `cmd-<id>` for the ones that
+    /// are commands of the registry and under `about-<id>` for the ones that
+    /// are a view's own keys. Which of the two a given id has is a fact about
+    /// the catalogue, and this is the only honest way to read it: sniffing
+    /// `t()`'s answer for a leading bracket would make a translator who wrote
+    /// a sentence in square brackets into a bug.
+    #[must_use]
+    pub fn has(&self, key: &str) -> bool {
+        self.bundle
+            .get_message(key)
+            .is_some_and(|m| m.value().is_some())
+    }
+
     /// Resolves a key.
     ///
     /// **It never fails.** An unknown key becomes `[key]`, visible on screen and

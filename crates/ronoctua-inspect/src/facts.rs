@@ -204,7 +204,13 @@ pub fn facts(path: &Path, mime: &str, place: Place) -> Told {
             Tool::Ffprobe => probe_args(path),
             Tool::Exiftool => exif_args(path),
             Tool::Pdfinfo => vec![OsString::from("--"), path.as_os_str().to_owned()],
-            Tool::Ffmpeg | Tool::Pdftoppm => continue,
+            // AND THE THREE OLE READERS ARE NOT FACT PROGRAMS. They answer
+            // what a document SAYS, which is the preview's question and not
+            // this one; `needs` never names them, and this arm is what keeps
+            // that true rather than assumed.
+            Tool::Ffmpeg | Tool::Pdftoppm | Tool::Catdoc | Tool::Xls2csv | Tool::Catppt => {
+                continue;
+            }
         };
         let borrowed: Vec<&OsStr> = args.iter().map(OsString::as_os_str).collect();
         match tools::run(tool, &borrowed) {

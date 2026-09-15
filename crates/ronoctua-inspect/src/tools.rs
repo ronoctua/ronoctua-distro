@@ -77,6 +77,25 @@ pub enum Tool {
     Pdftoppm,
     /// How many pages a PDF has.
     Pdfinfo,
+    /// The words of a `.doc`, on stdout.
+    ///
+    /// # The three come as one package, and two of the three work
+    ///
+    /// Measured with the packaged binaries, on the owner's own files:
+    /// `catdoc sample.doc` answered **8 377 bytes**, `xls2csv sample.xls`
+    /// answered **364 057 bytes**, and `catppt sample.ppt` answered **zero
+    /// bytes, exit status zero and nothing on stderr** — on a file `file`
+    /// calls a real OLE compound document.
+    ///
+    /// So `.doc` and `.xls` are previewed, and `.ppt` gets the HONEST REFUSAL:
+    /// `document::from_a_program` reads an empty answer as a failure, because
+    /// a blank panel and a refused one look the same on screen and only one of
+    /// them has a sentence.
+    Catdoc,
+    /// The cells of a `.xls`, as CSV on stdout.
+    Xls2csv,
+    /// The words of a `.ppt`, on stdout.
+    Catppt,
 }
 
 impl Tool {
@@ -89,6 +108,9 @@ impl Tool {
             Self::Exiftool => "RONOCTUA_EXIFTOOL",
             Self::Pdftoppm => "RONOCTUA_PDFTOPPM",
             Self::Pdfinfo => "RONOCTUA_PDFINFO",
+            Self::Catdoc => "RONOCTUA_CATDOC",
+            Self::Xls2csv => "RONOCTUA_XLS2CSV",
+            Self::Catppt => "RONOCTUA_CATPPT",
         }
     }
 
@@ -116,13 +138,34 @@ impl Tool {
     }
 
     /// Every tool, so a check can walk them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 8] = [
         Self::Ffmpeg,
         Self::Ffprobe,
         Self::Exiftool,
         Self::Pdftoppm,
         Self::Pdfinfo,
+        Self::Catdoc,
+        Self::Xls2csv,
+        Self::Catppt,
     ];
+}
+
+/// What a program says about a file, as text.
+///
+/// The three OLE readers all take one argument and write to stdout, which is
+/// what every other tool of this crate does — so this is [`run`] with the
+/// bytes turned into a string, and not a second way of starting a program.
+///
+/// # Errors
+///
+/// Whatever [`run`] refuses with, plus [`Refusal::NotText`] when what came
+/// back is not UTF-8: `catdoc` has a `-d` for the output encoding and the
+/// default is the locale's, so a file in another codepage comes back as bytes
+/// nobody can draw. That is a sentence, not a panel of replacement characters
+/// — the same choice `text::of` makes.
+pub fn text_of(tool: Tool, path: &std::path::Path) -> Result<String, Refusal> {
+    let out = run(tool, &[path.as_os_str()])?;
+    String::from_utf8(out).map_err(|_| Refusal::NotText)
 }
 
 /// The program's name, out of the variable that names it.

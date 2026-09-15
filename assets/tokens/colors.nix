@@ -280,6 +280,21 @@
       default = "subtle.text-muted";
       faint = "subtle.text-faint";
       alternate = "alternate.text";
+      # THE KEY THAT IS ONLY HERE BECAUSE OF WHAT YOU ARE LOOKING AT.
+      #
+      # A film's rewind, a shape's zoom, a playlist's next track: on the line
+      # now and gone a row later. The owner asked for both halves — that they
+      # appear only in their context, and that they READ differently from the
+      # keys that are always there.
+      #
+      # THE ALTERNATE'S HUE AT HALF ITS COLOUR, and not a family of its own: a
+      # new family is a seed in all nine themes plus the frozen reference, and
+      # what this has to say is a DEGREE, not another kind of thing. The
+      # alternate is already the register for "this key is not what it looks
+      # like"; a guest is that, quieter.
+      contextual = {
+        of = "alternate.text-muted";
+      };
     };
     # THE LABEL COLUMN of the three views that are a list of a label and a
     # value — network, power and Bluetooth.

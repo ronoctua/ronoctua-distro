@@ -76,8 +76,10 @@ impl FilesWindow {
     /// one of them is a line the listing does not get — so the number moved
     /// from a `const` to a question, and `chrome::Frame` carries the answer
     /// for everything downstream of it.
+    /// AND THE SHORTCUT'S EXPLANATION, when the pointer is on one. It is the
+    /// same argument one line further: a line the listing does not get.
     fn first_of_region(&self) -> u16 {
-        FIRST_OF_REGION + crate::fold::rows(self.fold)
+        FIRST_OF_REGION + crate::fold::rows(self.fold) + self.hinted.rows()
     }
 }
 
@@ -332,7 +334,9 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
             top: 0,
         },
         fold_wrapped: 0,
+        hinted: crate::chrome::Hinted::default(),
         handle: handle.clone(),
+        walk_armed: false,
         spinning: None,
         notice,
         _theme_watch,
@@ -507,14 +511,24 @@ struct FilesWindow {
     /// it and answers once, and `draw` goes round one more time. After that
     /// nothing reopens the question: see `fold::Fold::held`.
     fold_wrapped: usize,
+    /// The hint line, and the shortcut the pointer is resting on it.
+    hinted: crate::chrome::Hinted,
     /// The loop, for the two things that need one.
     ///
     /// A keyboard that REPEATS: SCTK only generates repeat events for one made
     /// with `get_keyboard_with_repeat`, and that wants a `LoopHandle` — which
     /// is why this is carried rather than reached for (see `new_capability`).
     ///
-    /// And the message line's expiry: see [`FilesWindow::say`].
+    /// And the message line's expiry: see [`FilesWindow::say`]. And the clock
+    /// that walks a name too long for its column: see
+    /// [`FilesWindow::arm_the_walk`].
     handle: calloop::LoopHandle<'static, Self>,
+    /// Whether the walking name's clock is up.
+    ///
+    /// One at a time: armed when a name starts walking, dropped by its own
+    /// tick when none is. Without the flag, every frame drawn while a long
+    /// name is on screen would hang another timer on the loop.
+    walk_armed: bool,
     /// The thread that draws a shape at the angle it is being looked at.
     turning: Option<crate::stage::Stage>,
     /// Where the pointer was when it last moved a shape.
@@ -1155,6 +1169,17 @@ impl FilesWindow {
     /// one of them was added is the day two of the three would have been left
     /// without it.
     fn aim(&mut self, x: f64, y: f64) {
+        // WHICH SHORTCUT OF THE HINT LINE, first: it is ABOVE the region, so
+        // `line_and_cell` answers nothing up there and everything below would
+        // never be asked. Read off what the last frame DREW — see
+        // `chrome::Hinted`.
+        let now = self
+            .hinted
+            .under(x, y)
+            .and_then(|id| crate::chrome::hint_sentence(id, &self.texts));
+        if self.hinted.say(now) {
+            self.ask_paint();
+        }
         self.under_pointer = self.target_at(x, y);
         let at = self.line_and_cell(x, y);
         self.cell_under_pointer = at.map(|(_, c)| c);
@@ -1179,6 +1204,16 @@ impl FilesWindow {
             })
             .map(|(pane, _)| pane);
         self.view.pointing(pane);
+        // AND WHICH ROW OF THE LISTING, which is what decides whose name
+        // walks: the owner asked for the hover to move a name too long for its
+        // column, as well as the cursor. Through the TARGET, which is the
+        // resolution that already knows which row of which section a cell is.
+        self.view.pointing_at(
+            self.under_pointer
+                .as_ref()
+                .filter(|t| t.pane == crate::files::Pane::Listing && t.row != usize::MAX)
+                .map(|t| t.row),
+        );
     }
 
     /// What is under a point, asked of the view.
@@ -1315,6 +1350,22 @@ impl FilesWindow {
         // ways the cursor can move, and the one that got forgotten would be a
         // panel showing the previous file with nothing saying why.
         self.look_again();
+        // A MESSAGE, A MENU ROW OR A FILTER TAKES THE HINT'S LINE, and then
+        // there is no shortcut on it to point at.
+        //
+        // ASKED HERE and not inside the frame, because the row the explanation
+        // costs comes out of the REGION (`first_of_region`) and the frame
+        // measures the region on its first line. Cleared in there, the region
+        // would be laid out one row short of what it drew — a blank line under
+        // the message, for as long as nothing else asked for a frame.
+        //
+        // The pointer's own field explanation is not in this list on purpose:
+        // it only exists while the pointer is over the REGION, and a pointer
+        // cannot be there and on the hint line at once.
+        if self.message.is_some() || self.view.cursor_explains().is_some() || self.view.filtering()
+        {
+            self.hinted.say(None);
+        }
         if self.gpu.is_none() {
             self.assemble_gpu();
         }
@@ -1337,6 +1388,43 @@ impl FilesWindow {
         // whole of `Fold::held`.
         if crate::fold::settle(&mut self.fold, self.fold_wrapped) {
             self.ask_paint();
+        }
+        // AND THE WALKING NAME'S CLOCK, asked for AFTER the frame: whether
+        // there is a name to walk is written down by the layout, and the
+        // layout is this frame.
+        self.arm_the_walk();
+    }
+
+    /// Hangs the clock that walks a name too long for its column.
+    ///
+    /// The footer's twin, and the argument is written out there
+    /// (`Footer::arm_the_walk`): armed while a name is walking and dropped by
+    /// its own tick when none is. This door has no clock at all at rest — that
+    /// is what lets several of these windows be open at once — so the
+    /// alternative here is not a second timer but a first one.
+    fn arm_the_walk(&mut self) {
+        if self.walk_armed || !self.view.sliding() {
+            return;
+        }
+        let armed = self.handle.insert_source(
+            calloop::timer::Timer::from_duration(crate::slide::STEP),
+            move |_, (), state: &mut Self| {
+                if !state.view.sliding() {
+                    state.walk_armed = false;
+                    return calloop::timer::TimeoutAction::Drop;
+                }
+                // A TICK THAT MOVES NOTHING ASKS FOR NO FRAME: the walk rests
+                // a second at each end, which at this step is five ticks of
+                // standing still.
+                if state.view.slide(std::time::Instant::now()) {
+                    state.ask_paint();
+                }
+                calloop::timer::TimeoutAction::ToDuration(crate::slide::STEP)
+            },
+        );
+        match armed {
+            Ok(_) => self.walk_armed = true,
+            Err(e) => tracing::warn!(error = %e, "could not hang the walking name's clock"),
         }
     }
 
@@ -1378,6 +1466,7 @@ impl FilesWindow {
             fold_control: None,
             fold_scroll: self.fold_scroll,
             fold_wrapped: self.fold_wrapped,
+            hinted: &mut self.hinted,
             view: &mut self.view,
             texts: &self.texts,
         }
@@ -1655,6 +1744,12 @@ pub(crate) struct Scene<'a> {
     pub fold_scroll: ronoctua_design::Scroll,
     /// How many rows the line's text came to — out, for the same reason.
     pub fold_wrapped: usize,
+    /// The hint line, and the shortcut the pointer is resting on it.
+    ///
+    /// Borrowed MUTABLY, because the drawing is what writes down where each
+    /// shortcut landed — the pointer then asks that, and not a second
+    /// placement of its own. See `chrome::Hinted`.
+    pub hinted: &'a mut crate::chrome::Hinted,
 }
 
 /// One frame, as spans and rectangles. No Wayland, no wgpu, no `self`.
@@ -1742,6 +1837,8 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         )]
     };
     let line_text: String = line_pieces.iter().map(|p| p.text.as_str()).collect();
+    // WHERE THE SHORTCUTS OF THIS LINE LAND, collected while they are drawn.
+    let mut marks: Vec<crate::chrome::Mark> = Vec::new();
     // THE ROOM IS THE WHOLE OF `columns`: `recount` took BOTH margins off the
     // width before counting cells, so a line that starts `margin` in and
     // runs `columns` wide ends `margin` short of the edge. It used to take
@@ -1773,6 +1870,10 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
                     at,
                     room,
                 ));
+                // EVERY ROW OF THE DRAWER ANSWERS THE POINTER, not just the
+                // first: opened, this line is where the whole table is
+                // legible, which is where somebody goes looking.
+                marks.extend(crate::chrome::hint_marks(&row, margin, at, room));
             } else {
                 spans.push(ronoctua_render::Span {
                     size: ronoctua_render::Size::Px(size),
@@ -1834,6 +1935,25 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             0,
             room,
         ));
+        marks.extend(crate::chrome::hint_marks(&line_pieces, margin, 0, room));
+    }
+    // WHERE EACH SHORTCUT LANDED — what the pointer asks, and what was drawn.
+    s.hinted.took(marks);
+
+    // AND THE SHORTCUT UNDER THE POINTER, SPELT OUT, on the line below the
+    // hint: the line the owner asked for. It costs the region one row for as
+    // long as the pointer is on a key — `first_of_region` is where that is
+    // paid — and nothing above it moves.
+    if let Some(said) = s.hinted.said() {
+        spans.push(ronoctua_render::Span {
+            size: ronoctua_render::Size::Px(size),
+            text: ronoctua_render::layout::elide_end(said, plain_room),
+            column: margin,
+            line: FIRST_OF_REGION + crate::fold::rows(s.fold),
+            color: crate::chrome::Register::Prose.color(),
+            edge: false,
+            foot: false,
+        });
     }
 
     // THE CONTROL THAT OPENS THE LINE, flush against the right edge. No box
@@ -2657,10 +2777,16 @@ impl PointerHandler for FilesWindow {
                     self.aim(e.position.0, e.position.1);
                 }
                 PointerEventKind::Leave { .. } => {
+                    // THE SENTENCE GOES WITH THE POINTER: one that leaves
+                    // sends no motion on the way out.
+                    if self.hinted.say(None) {
+                        self.ask_paint();
+                    }
                     self.under_pointer = None;
                     self.cell_under_pointer = None;
                     self.line_under_pointer = None;
                     self.view.pointing(None);
+                    self.view.pointing_at(None);
                 }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
                     self.aim(e.position.0, e.position.1);
@@ -3345,6 +3471,7 @@ mod tests {
                 fold: crate::fold::Fold::default(),
                 fold_control: None,
                 fold_wrapped: 0,
+                hinted: &mut crate::chrome::Hinted::default(),
                 fold_scroll: ronoctua_design::Scroll {
                     total: 0,
                     lines: 0,

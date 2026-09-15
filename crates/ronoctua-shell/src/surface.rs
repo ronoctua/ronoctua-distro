@@ -280,6 +280,47 @@ struct Footer {
     /// What the brain line's control under the pointer says, for the message
     /// line.
     brain_hint: Option<String>,
+    /// THE HINT LINE, as the LAST FRAME laid it out — for the pointer.
+    ///
+    /// Remembered and not recomputed, for the reason `band_placed` is: what
+    /// the pointer is over has to be what was DRAWN. Here it is more than a
+    /// preference — the line is built inside the frame out of a dozen borrows
+    /// of this struct, and a second builder for the pointer to ask would be
+    /// the same list kept twice.
+    ///
+    /// Every drawn row of it, so an OPENED drawer answers on all of them.
+    hint_placed: Vec<crate::chrome::Mark>,
+    /// Whether the region had a row to spare, as the LAST FRAME measured it.
+    ///
+    /// # Why it is remembered and not asked
+    ///
+    /// Because [`Footer::first_of_expansion`] is line arithmetic — how many
+    /// rows are above the region — and [`Footer::metric`] is built on it. The
+    /// moment a term of that sum asks how tall the region IS, the footer's
+    /// geometry depends on the footer's content, and this file has now been
+    /// killed twice by exactly that shape. The second time was
+    /// `explain_rows` calling `grid_full`, and it aborted the shell the instant
+    /// the pointer came to rest on a key of the hint line.
+    ///
+    /// So the measurement happens where measurements happen — inside
+    /// `grid_full`, which is the one function whose job is to size the region
+    /// — and the sum reads the answer back. A `Cell` for the reason
+    /// `files::View::drawn_lines` is one: the reader has `&self`.
+    ///
+    /// It costs one frame: on the very first hover the row is not offered yet.
+    /// That is the same beat `hint_placed` already runs on, and for the same
+    /// reason — what the pointer is told about has to be what was DRAWN.
+    region_can_spare_a_row: std::cell::Cell<bool>,
+    /// The sentence explaining the shortcut under the pointer, while there is
+    /// one.
+    ///
+    /// # Why it exists only while the pointer is on a key
+    ///
+    /// The owner asked for the line in those words — *"ao colocar o cursor por
+    /// cima de qualquer atalho do minibuffer … quero que apareça uma linha
+    /// abaixo dos atalhos"* — and chose, when asked, that it be born with the
+    /// hover and go with it rather than standing empty at rest.
+    hint_said: Option<String>,
     /// Whether the minibuffer's line is OPEN, and how far it is scrolled.
     ///
     /// The line holds one line and cuts the rest; opened, it shows the rest
@@ -803,12 +844,24 @@ struct Footer {
     files_looking: Option<std::sync::mpsc::Sender<crate::files::Ask>>,
     /// The thread that follows a moving file, when there is one to follow.
     files_playing: Option<crate::motion::Player>,
-    /// The loop, so a keyboard can be made that REPEATS.
+    /// The loop — for the keyboard that REPEATS, and for the one armed clock.
     ///
     /// `Option` because the seat may announce itself before the loop exists —
     /// it does not any more, and the fallback is still here rather than a
     /// `panic` on an ordering nobody would think to check.
+    ///
+    /// The second use is [`Footer::arm_the_walk`], and it is the exception
+    /// this footer's design otherwise refuses: everything else rides the one
+    /// second this loop already wakes for. A name walking sideways moves five
+    /// times a second, which that clock cannot carry — and it runs only while
+    /// a name is actually walking.
     repeat: Option<calloop::LoopHandle<'static, Self>>,
+    /// Whether the walking name's clock is up.
+    ///
+    /// One at a time: armed when a name starts walking, dropped by its own
+    /// tick when none is. Without the flag, every frame drawn while a long
+    /// name is on screen would hang another timer on the loop.
+    walk_armed: bool,
     /// The thread that draws a shape at the angle it is being looked at.
     files_turning: Option<crate::stage::Stage>,
     /// Where the pointer was when it last moved a shape.
@@ -2031,6 +2084,9 @@ pub fn run() -> Result<()> {
         brain: None,
         brain_placed: None,
         brain_hint: None,
+        region_can_spare_a_row: std::cell::Cell::new(false),
+        hint_placed: Vec::new(),
+        hint_said: None,
         fold: crate::fold::Fold::default(),
         fold_control: None,
         dragging_fold: false,
@@ -2147,6 +2203,7 @@ pub fn run() -> Result<()> {
         files_looking: None,
         files_playing: None,
         repeat: None,
+        walk_armed: false,
         files_turning: None,
         spinning: None,
         // Read ONCE, at startup. Neither answer changes while a listing is on
@@ -3374,6 +3431,32 @@ impl Footer {
         (row < self.band_rows()).then_some(row)
     }
 
+    /// WHICH SHORTCUT OF THE HINT LINE the pointer is resting on.
+    ///
+    /// Asked of `hint_placed`, which is what the last frame DREW — so the
+    /// answer is about the keys that were on the line, in the cells they were
+    /// drawn in, elision and context gating included.
+    ///
+    /// The cell is counted RAW, and not through [`Self::cell_at`]: that one
+    /// takes `chrome::FIELDS_LEAD` off because it answers about a row of the
+    /// REGION, which is drawn shifted. The hint is not a row of the region and
+    /// is drawn at `modeline.edgeLeft`, which `hint_marks` already put into
+    /// the marks.
+    fn hint_under(&self, x: f64, y: f64) -> Option<&'static str> {
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let cell_px = f64::from(crate::chrome::cell_width());
+        if line_height <= 0.0 || cell_px <= 0.0 || x < 0.0 || y < 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let line = (y / line_height) as u16;
+        let cell = u16::try_from((x / cell_px) as u64).ok()?;
+        self.hint_placed
+            .iter()
+            .find(|m| m.covers(line, cell))
+            .map(|m| m.id)
+    }
+
     /// A click on the band: the circle marks it read, an action runs.
     ///
     /// # The mouse reaches nothing the keyboard does not
@@ -4485,6 +4568,11 @@ impl PointerHandler for Footer {
             self.under_pointer,
             self.row_under_pointer,
             self.cell_under_pointer,
+            // AND THE SHORTCUT'S SENTENCE, which changes WITHIN one row of the
+            // minibuffer: moving from `C-v` to `C-i` never leaves the line, so
+            // none of the three above would notice, and the line under them
+            // would go on explaining the key one has just left.
+            self.hint_said.clone(),
             // THROUGH `current_offset`, because with the manager open the
             // number is the view's — see `Footer::scroll_offset_to`. Reading
             // the field directly here would say "nothing changed" for every
@@ -4534,6 +4622,19 @@ impl PointerHandler for Footer {
                     self.band_hint = self
                         .band_at(e.position.0, e.position.1)
                         .and_then(|p| p.explain.clone());
+                    // AND WHICH SHORTCUT OF THE HINT LINE IT IS ON, which is
+                    // the same question one line down: the hint is the
+                    // minibuffer's line, and what a person points at there is
+                    // a key and the words beside it.
+                    //
+                    // Read off `hint_placed`, which is what was DRAWN. The
+                    // line is built inside the frame from a dozen borrows of
+                    // this struct; a second builder here would be the same
+                    // table kept twice, and the two would disagree the first
+                    // time a context gated a key away.
+                    self.hint_said = self
+                        .hint_under(e.position.0, e.position.1)
+                        .and_then(|id| crate::chrome::hint_sentence(id, &self.texts));
                     // AND THE POINTER RESTING ON THE BAND STOPS ITS CLOCK.
                     //
                     // ANYWHERE on it, and not only on a piece: what is being
@@ -4562,9 +4663,18 @@ impl PointerHandler for Footer {
                     // decides the film's two buttons are drawn — see the
                     // window door's twin. Their CELLS are reserved either way,
                     // so nothing moves when they arrive.
-                    let over = self.files_target().map(|t| t.pane);
+                    // AND WHICH ROW OF THE LISTING, which is what decides
+                    // whose name walks: the owner asked for the hover to move
+                    // a name too long for its column, as well as the cursor.
+                    let aimed = self.files_target();
+                    let over = aimed.as_ref().map(|t| t.pane);
+                    let row = aimed
+                        .as_ref()
+                        .filter(|t| t.pane == crate::files::Pane::Listing && t.row != usize::MAX)
+                        .map(|t| t.row);
                     if let Some(v) = self.files.as_ref() {
                         v.pointing(over);
+                        v.pointing_at(row);
                     }
                     // AND A SHAPE TURNS WITH THE HAND. The deltas are in
                     // PIXELS and become radians here, because the view has no
@@ -4620,10 +4730,16 @@ impl PointerHandler for Footer {
                     self.segment_under_pointer = None;
                     self.band_hint = None;
                     self.brain_hint = None;
+                    // THE LINE GOES WITH THE POINTER, which is the whole of
+                    // what it is: a pointer that leaves sends no motion on the
+                    // way out, so without this the explanation of a key nobody
+                    // is pointing at would stay on screen for ever.
+                    self.hint_said = None;
                     self.dragging = false;
                     self.dragging_shelf = None;
                     if let Some(v) = self.files.as_ref() {
                         v.pointing(None);
+                        v.pointing_at(None);
                     }
                 }
                 // THE RIGHT BUTTON OPENS THE FILE MANAGER'S MENU, and nothing
@@ -4988,6 +5104,7 @@ impl PointerHandler for Footer {
                     self.under_pointer,
                     self.row_under_pointer,
                     self.cell_under_pointer,
+                    self.hint_said.clone(),
                     self.current_offset(),
                 )
         {
@@ -7959,6 +8076,62 @@ impl Footer {
             self.draw();
             self.paint();
         }
+        // AND THE WALKING NAME'S CLOCK, asked for AFTER the frame: whether
+        // there is a name to walk is written down by the layout, and the
+        // layout is this frame. See `arm_the_walk`.
+        self.arm_the_walk();
+    }
+
+    /// Hangs the clock that walks a name too long for its column.
+    ///
+    /// # Why this one is armed, when nothing else here is
+    ///
+    /// Because it is the only thing in this footer that moves faster than the
+    /// second it already wakes for — five cells a second — and because it is
+    /// the only thing that is usually not happening at all. Riding the second
+    /// would make the walk a crawl; a permanent 200 ms timer would wake the
+    /// loop five times a second for the whole session so that a name could
+    /// move on the few frames one is resting on it.
+    ///
+    /// So it is armed when a name starts walking and drops itself when none
+    /// is. It is the display window's pattern, which is the one exception
+    /// this repository has already blessed, and for the same reason: a
+    /// countdown that has to beat, and nothing else that beats with it.
+    fn arm_the_walk(&mut self) {
+        if self.walk_armed || !self.files.as_ref().is_some_and(crate::files::View::sliding) {
+            return;
+        }
+        let Some(handle) = self.repeat.clone() else {
+            return;
+        };
+        let armed = handle.insert_source(
+            calloop::timer::Timer::from_duration(crate::slide::STEP),
+            move |_, (), state: &mut Self| {
+                let now = std::time::Instant::now();
+                // NO NAME, NO CLOCK. The view answers `false` the moment the
+                // layout stops writing a walk down — the cursor moved to a
+                // short name, the column got wider, the manager closed.
+                let Some(view) = state.files.as_ref() else {
+                    state.walk_armed = false;
+                    return calloop::timer::TimeoutAction::Drop;
+                };
+                if !view.sliding() {
+                    state.walk_armed = false;
+                    return calloop::timer::TimeoutAction::Drop;
+                }
+                // A TICK THAT MOVES NOTHING ASKS FOR NO FRAME: the walk rests
+                // a second at each end, which at this step is five ticks of
+                // standing still.
+                if view.slide(now) {
+                    state.draw_and_paint();
+                }
+                calloop::timer::TimeoutAction::ToDuration(crate::slide::STEP)
+            },
+        );
+        match armed {
+            Ok(_) => self.walk_armed = true,
+            Err(e) => tracing::warn!(error = %e, "could not hang the walking name's clock"),
+        }
     }
 
     /// The theme's file changed under this process.
@@ -9689,6 +9862,60 @@ impl Footer {
         self.modeline_line() + FOOTER_LINES
     }
 
+    /// How many lines the shortcut's explanation takes: one, or none.
+    ///
+    /// # THE ROW IS TAKEN FROM THE REGION, NEVER ADDED TO THE FOOTER
+    ///
+    /// This is the whole design of the line, and it is not tidiness. The
+    /// footer is anchored at the BOTTOM: a row added below the minibuffer
+    /// makes the surface taller, and every line above the new row moves UP by
+    /// one. The minibuffer is above it — so the hint would slide out from
+    /// under the pointer that is resting on it, the hover would end, the row
+    /// would go, the hint would come back under the pointer, and round. That
+    /// is the layout loop [`crate::fold::Fold::held`] describes in full, with
+    /// the pointer in the same place in the chain.
+    ///
+    /// So the row is paid for out of the region below it: [`Self::grid`] draws
+    /// one line fewer while the explanation is up, and the footer's height
+    /// does not move at all. The listing is one row shorter for as long as the
+    /// pointer rests on a key, and nothing above it shifts by a pixel.
+    ///
+    /// Which is also why a region of ONE row does not offer the line: taking
+    /// its only row would leave the region empty and the height would have to
+    /// grow after all.
+    fn explain_rows(&self) -> u16 {
+        if self.hint_said.is_none() {
+            return 0;
+        }
+        // AND NOT WHILE AN ECHO HAS THE LINE. The explanation sits UNDER the
+        // hint, and with an echo up there is no hint — walking the listing
+        // with the arrow keys says a long file's whole name for three seconds
+        // (`Step::Say`), and a sentence hanging under it about a key that is
+        // not on screen is a line explaining nothing.
+        //
+        // ASKED HERE and not cleared in the drawing, because the row comes out
+        // of the region and the region is measured before the frame: cleared
+        // in there, the listing would be laid out one row short of what it
+        // drew until something else asked for a frame.
+        if self.echo.is_some() {
+            return 0;
+        }
+        // REMEMBERED, NEVER MEASURED HERE. See `region_can_spare_a_row`: this
+        // is a term of `first_of_expansion`, and a term of that sum that asks
+        // how tall the region is makes the footer's geometry depend on the
+        // footer's content — which is what aborted the shell.
+        u16::from(self.region_can_spare_a_row.get())
+    }
+
+    /// Which line the explanation sits on, when it is up.
+    ///
+    /// Directly under the hint — under the drawer when the drawer is open,
+    /// because then the drawer IS the hint. It is what was asked for: *"uma
+    /// linha abaixo dos atalhos"*.
+    fn explain_line_at(&self) -> u16 {
+        self.modeline_line() + FOOTER_LINES + self.fold_rows()
+    }
+
     /// Which line of the surface the brain's is on, when it is on one.
     ///
     /// GLUED UNDER THE MINIBUFFER, and not the last line of the surface. Three
@@ -9699,7 +9926,7 @@ impl Footer {
     /// which is exactly the defect [`Self::first_of_expansion`] exists to
     /// remove.
     fn brain_line_at(&self) -> u16 {
-        self.modeline_line() + FOOTER_LINES + self.fold_rows()
+        self.modeline_line() + FOOTER_LINES + self.fold_rows() + self.explain_rows()
     }
 
     /// The first line of the expanded region.
@@ -9709,7 +9936,11 @@ impl Footer {
     /// the same thing, and the one that gets it wrong is the one nobody looks
     /// at: the cursor describes the line above.
     fn first_of_expansion(&self) -> u16 {
-        self.modeline_line() + FOOTER_LINES + self.fold_rows() + self.brain_rows()
+        self.modeline_line()
+            + FOOTER_LINES
+            + self.fold_rows()
+            + self.explain_rows()
+            + self.brain_rows()
     }
 
     /// The height wanted right now, in px.
@@ -9732,13 +9963,26 @@ impl Footer {
         // GLANCE IS A THIRD SUCH REGION, added the same way and for the same
         // reason — and, like the band, deliberately NOT counted against the
         // expansion's ceiling; see `expansion_ceiling`.
+        // THE EXPLANATION'S ROW IS IN HERE AND CHANGES NOTHING, which is the
+        // point: `expansion_rows` has already given it up, so the two terms
+        // move by one in opposite directions and the total is the same with
+        // the pointer on a key as without it. See `explain_rows`.
+        //
+        // THE REGION IS MEASURED FIRST, and that is not style. `expansion_rows`
+        // goes through `grid`, which is where `region_can_spare_a_row` is
+        // written; `explain_rows` reads it back. Asked the other way round the
+        // two terms of one sum could be taken from two different answers on the
+        // frame the region crosses two lines — one line of footer, wrong, until
+        // something else asked for a frame.
+        let region = u32::try_from(self.expansion_rows()).unwrap_or(0);
         let lines = u32::from(
             FOOTER_LINES
                 + self.band_rows()
                 + self.above_rows()
                 + self.fold_rows()
+                + self.explain_rows()
                 + self.brain_rows(),
-        ) + u32::try_from(self.expansion_rows()).unwrap_or(0);
+        ) + region;
         (tokens::metrics::line_height(tokens::text::size()) * lines as f32).ceil() as u32
     }
 
@@ -9812,8 +10056,42 @@ impl Footer {
     /// From the first CONFIGURED screen and not the first of the list: an
     /// unconfigured one is at zero width, and everything would then fit in one
     /// column — the same reason `grid()` picks it that way.
+    ///
+    /// # AND THE REGION'S FIRST LINE IS NOT PART OF THE QUESTION
+    ///
+    /// The frame is built with `0` where [`Footer::metric`] passes
+    /// [`Footer::first_of_expansion`], and that is the whole of this function's
+    /// history. `Frame::columns()` is `width / cell` — it never reads `first`
+    /// (`ronoctua_design::rails::Frame::columns`) — so asking through `metric`
+    /// was reaching for a number it would not use.
+    ///
+    /// It was not free. It was one of the two edges of the loop that killed
+    /// the shell:
+    ///
+    /// ```text
+    /// grid_full → expansion_len → screen_columns → metric
+    ///           → first_of_expansion → explain_rows → grid_full
+    /// ```
+    ///
+    /// The pointer coming to rest on a key of the hint line was enough:
+    /// stack overflow, `process::abort`, no modeline, no minibuffer. Two
+    /// coredumps of 2026-09-15 carry that stack and nothing else, and it is the
+    /// SECOND cycle to kill this footer.
+    ///
+    /// CUTTING THIS ONE ALONE WOULD HAVE BEEN ENOUGH TO STOP THE CRASH, and
+    /// that is why the other edge was cut as well: `explain_rows` remembers
+    /// instead of measuring (see `region_can_spare_a_row`), so
+    /// `first_of_expansion` is arithmetic over line counts again and nothing
+    /// under `metric` asks what the region contains.
+    /// `the-footer-does-not-ask-itself` is what keeps both true.
     fn screen_columns(&self) -> u16 {
-        self.metric().map_or(0, crate::chrome::Frame::columns)
+        let Some(t) = self.screens.iter().find(|t| t.configured && t.width > 0) else {
+            return 0;
+        };
+        // ONE RULER STILL — `chrome::Frame` is where a token becomes a pixel,
+        // and this asks it the one question that has nothing to do with lines.
+        #[allow(clippy::cast_precision_loss)]
+        crate::chrome::Frame::of(t.width as f32, t.height as f32, 0).columns()
     }
 
     /// This door's measurements — see `chrome::Frame`, the one place a token
@@ -9836,6 +10114,25 @@ impl Footer {
     /// On scrolling it is a single column — a list. On pagination it is columns
     /// side by side, filling the width before the height.
     fn grid(&self) -> Grid {
+        let mut g = self.grid_full();
+        // AND THE MEASUREMENT IS WRITTEN DOWN, here, where it was taken.
+        //
+        // `explain_rows` reads it back rather than asking again — see
+        // `region_can_spare_a_row`. The order matters and is not incidental:
+        // `grid_full` above answers with the region's FULL height, so what is
+        // recorded is what the region has before the explanation takes
+        // anything from it.
+        self.region_can_spare_a_row.set(g.lines >= 2);
+        // THE EXPLANATION'S ROW COMES OUT OF THE REGION. See `explain_rows`.
+        g.lines = region_lines(g.lines, self.explain_rows());
+        g
+    }
+
+    /// The same grid, before the explanation line takes its row.
+    ///
+    /// Split off so `explain_rows` has something to ask that does not ask it
+    /// back: the row it decides to take is taken out of THIS answer.
+    fn grid_full(&self) -> Grid {
         // THE COUNT FIRST, and the ROWS only for whoever measures them.
         //
         // The clipboard and the file manager take a single column, so all they
@@ -11831,6 +12128,16 @@ impl Footer {
             Step::Say(e) => {
                 let text = self.texts.t_with(e.key, &e.borrowed());
                 self.echo_message(text);
+                // AND THE REGION STILL FOLLOWS THE CURSOR.
+                //
+                // A `Say` is not only a message: arriving on a row whose name
+                // does not fit ANSWERS with the whole name, and that is a
+                // cursor that moved. Without this the listing stopped
+                // scrolling on exactly the rows with the longest names — which
+                // reads as an arrow key that works everywhere but there.
+                self.follow_cursor();
+                self.apply_geometry(self.interactivity());
+                self.follow_the_place();
                 self.draw_and_paint();
             }
             Step::Do(doing) => {
@@ -13462,13 +13769,6 @@ impl Footer {
         // target instead, it answered "draw it" wherever the target came back
         // `None` while `band_of` went on banding the cell, and the owner would
         // have gone on seeing the stripe.
-        let over_a_picture = self.files.as_ref().is_some_and(|v| {
-            let columns = self.screen_columns();
-            let in_strip = self
-                .row_under_pointer
-                .is_some_and(|line| line >= self.grid().lines);
-            !v.band_belongs_at(self.cell_under_pointer.unwrap_or(0), columns, in_strip)
-        });
         // WHERE THE KEYBOARD IS, in the manager and nowhere else.
         //
         // The seven other views of this region have a focus one can see: the
@@ -13506,15 +13806,32 @@ impl Footer {
             .and_then(|v| v.resting_line(self.screen_columns(), grid.lines))
             .filter(|line| visible.get(*line).is_some_and(|l| l.click.is_some()))
             .map(place_of);
-        let under_the_pointer = self
-            .row_under_pointer
-            .filter(|_| !over_a_picture)
-            .filter(|i| visible.get(*i).is_some_and(|l| l.click.is_some()))
-            .map(place_of)
-            // ONE BAND WHERE IT IS ONE ROW. Painting the weaker colour over the
-            // stronger would dim the very row one is standing on, which is the
-            // opposite of what either band is for.
-            .filter(|p| Some(*p) != focused_row);
+        // THE SECTION ANSWERS, and not a line of the flattened region.
+        //
+        // `row_under_pointer` is an index into `visible`, which is the whole
+        // page with every section's lines laid END TO END — one number for
+        // four columns. So the pointer over the preview's scrollbar lit a row
+        // of the LISTING, which is what the owner photographed; nothing
+        // downstream could tell, because the number carries no column.
+        //
+        // `View::band_row` is the question the window door has always asked
+        // (`files_window.rs`), and it answers a PANE and that pane's own line.
+        // With it, `band_belongs` — the rule that keeps a band off a
+        // photograph — is asked about the pane the pointer is really in.
+        let under_the_pointer = match self.files.as_ref() {
+            Some(v) => self.row_under_pointer.and_then(|line| {
+                let cell = self.cell_under_pointer.unwrap_or(0);
+                let (pane, at) = v.band_row(self.screen_columns(), grid.lines, line, cell)?;
+                v.band_belongs(pane).then_some(at)
+            }),
+            None => self.row_under_pointer,
+        }
+        .filter(|i| visible.get(*i).is_some_and(|l| l.click.is_some()))
+        .map(place_of)
+        // ONE BAND WHERE IT IS ONE ROW. Painting the weaker colour over the
+        // stronger would dim the very row one is standing on, which is the
+        // opposite of what either band is for.
+        .filter(|p| Some(*p) != focused_row);
         // Does the footer have the keyboard? It is what decides whether the
         // accent stays on the window (the compositor's border) or comes to the
         // buffer's name.
@@ -13812,6 +14129,13 @@ impl Footer {
             let opens = held.open
                 || crate::fold::wanted(&line_text, plain_room.saturating_sub(crate::fold::WIDTH));
             let mini_room = plain_room.saturating_sub(if opens { crate::fold::WIDTH } else { 0 });
+            // WHERE EVERY SHORTCUT OF THIS LINE LANDED, for the pointer.
+            //
+            // Collected while drawing and never rebuilt afterwards — see
+            // `hint_placed`. Empty whenever the line is showing something else
+            // (an echo, a message, what is being typed), because then there is
+            // no shortcut on it to point at.
+            let mut marks: Vec<crate::chrome::Mark> = Vec::new();
             let (mini, mini_color) = if let Some(e) = &echo {
                 (e.clone(), tokens::color::TEXT_SUBTLE_STRONG)
             } else if let Some(d) = &explanation {
@@ -13823,6 +14147,12 @@ impl Footer {
                     spans.extend(crate::chrome::hint_spans(
                         h,
                         ronoctua_render::Size::Grid,
+                        tokens::space::MODELINE_EDGELEFT,
+                        mini_line,
+                        mini_room,
+                    ));
+                    marks.extend(crate::chrome::hint_marks(
+                        h,
                         tokens::space::MODELINE_EDGELEFT,
                         mini_line,
                         mini_room,
@@ -13915,6 +14245,16 @@ impl Footer {
                             line,
                             mini_room,
                         ));
+                        // EVERY ROW OF THE DRAWER ANSWERS, not just the first:
+                        // opened, the line is where the whole table is legible,
+                        // which is exactly where somebody would go looking for
+                        // what a key does.
+                        marks.extend(crate::chrome::hint_marks(
+                            &row,
+                            tokens::space::MODELINE_EDGELEFT,
+                            line,
+                            mini_room,
+                        ));
                     } else {
                         spans.push(ronoctua_render::Span {
                             size: ronoctua_render::Size::Grid,
@@ -13935,6 +14275,30 @@ impl Footer {
                     offset: 0,
                     top: 0,
                 };
+            }
+            // THE LAST SCREEN WINS, as it does for the modeline's segments and
+            // the band's pieces: one pointer, and it is on one output.
+            self.hint_placed = marks;
+
+            // AND THE SENTENCE ABOUT THE SHORTCUT UNDER THE POINTER, on the
+            // line below the hint.
+            //
+            // It takes its row from the region and never from the footer's
+            // height — see `explain_rows`, which is where the whole argument
+            // is. In the prose register, because that is what it is: the words
+            // around a key, one line further down.
+            if self.explain_rows() > 0
+                && let Some(said) = self.hint_said.as_ref()
+            {
+                spans.push(ronoctua_render::Span {
+                    size: ronoctua_render::Size::Grid,
+                    text: layout::elide_end(said, plain_room),
+                    column: tokens::space::MODELINE_EDGELEFT,
+                    line: self.explain_line_at(),
+                    color: crate::chrome::Register::Prose.color(),
+                    edge: false,
+                    foot: false,
+                });
             }
 
             // THE PAGE INDICATOR, flush against the right edge of the minibuffer's
@@ -15105,6 +15469,24 @@ const fn navigation_step(sym: ronoctua_keymap::Sym) -> Option<i32> {
 /// none, and it changes while the pointer sits still. It used to be a constant,
 /// and a constant here would make every row describe the one above it for as
 /// long as a notification was on screen.
+/// How many lines the region draws once the explanation has taken its row.
+///
+/// # Why it is a function and not a subtraction written where it is needed
+///
+/// Because the whole point of the line is that the footer's height does not
+/// change when it appears, and that promise is one subtraction here against
+/// one addition in [`Footer::wanted_height`]. Written inline it would be a
+/// promise nothing could test; here `the_explanation_takes_its_row_from_the_region`
+/// walks every height and checks that the two cancel exactly.
+///
+/// `Footer::explain_rows` is what guarantees the argument is never `1` on a
+/// region of one line — there the `max(1)` would keep the row and the footer
+/// would grow after all, which is the layout loop that method describes.
+const fn region_lines(full: usize, explaining: u16) -> usize {
+    let left = full.saturating_sub(explaining as usize);
+    if left == 0 { 1 } else { left }
+}
+
 fn row_at_height(y: f64, line_height: f64, first: u16, how_many: usize) -> Option<usize> {
     if y < 0.0 || line_height <= 0.0 {
         return None;
@@ -17931,6 +18313,33 @@ fn narrow_buffer_keymap(
 
 #[cfg(test)]
 mod tests {
+    /// THE FOOTER DOES NOT GROW WHEN A KEY EXPLAINS ITSELF.
+    ///
+    /// The one promise the explanation line makes, and the reason it is drawn
+    /// where it is. The footer is anchored at the bottom, so a row added under
+    /// the minibuffer lifts the minibuffer out from under the pointer resting
+    /// on it — the hover ends, the row goes, the hint comes back, and round.
+    /// See `Footer::explain_rows`, where the whole argument lives.
+    ///
+    /// So the row is taken from the region: one line fewer there, one line
+    /// here, and the sum is what it was.
+    #[test]
+    fn the_explanation_takes_its_row_from_the_region() {
+        for full in 2..64_usize {
+            assert_eq!(
+                super::region_lines(full, 1) + 1,
+                full,
+                "the footer's height moved at {full} lines of region"
+            );
+            assert_eq!(super::region_lines(full, 0), full);
+        }
+        // AND A REGION OF ONE ROW KEEPS IT — which is why `explain_rows`
+        // refuses to offer the line there at all: here the `max` would hold
+        // the row and the footer WOULD grow.
+        assert_eq!(super::region_lines(1, 1), 1);
+        assert_eq!(super::region_lines(0, 1), 1);
+    }
+
     #[test]
     fn the_battery_tags_are_the_crates() {
         // The catalogue recognises a tag; the crate names the alarm; this
