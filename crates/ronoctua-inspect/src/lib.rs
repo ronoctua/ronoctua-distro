@@ -35,12 +35,19 @@
 
 // WHAT A DOCUMENT SAYS — the office formats, which are zips of XML, and the
 // three old ones, which need a program.
+// A WORD 97 DOCUMENT, read out of the piece table that says where its text is.
+pub mod doc;
 pub mod document;
 pub mod facts;
 pub mod mesh;
 pub mod motion;
+// A FILESYSTEM INSIDE A FILE — what `.doc`, `.xls` and `.ppt` are made of.
+pub mod ole;
 pub mod pixels;
 pub mod playlist;
+// A PRESENTATION, read out of those records rather than out of a program that
+// answered nothing.
+pub mod ppt;
 // RICH TEXT, with the control words taken off.
 pub mod rtf;
 pub mod solid;

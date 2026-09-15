@@ -133,8 +133,13 @@ pub enum Kind {
     Archive,
     /// Rich text: `.rtf`.
     Rich,
-    /// One of the three OLE formats, which need a program: `.doc`, `.xls`,
-    /// `.ppt`.
+    /// A PowerPoint 97 presentation: `.ppt`. Read in process, out of the
+    /// records of its `PowerPoint Document` stream.
+    Show,
+    /// A Word 97 document: `.doc`. Read in process, through the piece table
+    /// that says where its text is.
+    Word,
+    /// The one OLE format that still needs a program: `.xls`.
     Legacy(tools::Tool),
 }
 
@@ -174,14 +179,27 @@ pub fn kind_of(mime: &str) -> Option<Kind> {
     if is("application/rtf") || is("text/rtf") {
         return Some(Kind::Rich);
     }
+    // AND A WORD DOCUMENT IS READ HERE TOO, for the same measured reason.
+    //
+    // `catdoc` was its reader, and the packaged binary — the one this flake
+    // pins, not the one an earlier comment was measured against — answers ZERO
+    // BYTES and exit 69 on the owner's own `sample.doc`, with nothing on
+    // stderr. He reported the panel's sentence twice. See `crate::doc`.
     if is("application/msword") {
-        return Some(Kind::Legacy(tools::Tool::Catdoc));
+        return Some(Kind::Word);
     }
     if is("application/vnd.ms-excel") {
         return Some(Kind::Legacy(tools::Tool::Xls2csv));
     }
+    // AND A PRESENTATION IS READ HERE, not by a program.
+    //
+    // It was `catppt`'s, and the program answered ZERO BYTES with exit status
+    // zero on the owner's own `sample.ppt` — a real compound document whose
+    // text is in plain sight. The refusal that earned was honest and it was
+    // still a panel with nothing on it, so the records are walked instead:
+    // see `crate::ppt`, which is the measurement written down.
     if is("application/vnd.ms-powerpoint") {
-        return Some(Kind::Legacy(tools::Tool::Catppt));
+        return Some(Kind::Show);
     }
     // AND A ZIP THAT IS ONLY A ZIP, last, for the reason above.
     is("application/zip").then_some(Kind::Archive)
@@ -196,19 +214,29 @@ pub fn kind_of(mime: &str) -> Option<Kind> {
 /// The shape is [`crate::text::of`]'s, deliberately: the two are asked one
 /// after the other at the same call site, and an answer that had to be folded
 /// two different ways would be a place for the folding to differ.
+///
+/// `tab` is how wide a tab stop is, and it travels for the reason it travels
+/// into [`crate::text::of`]: it is `space.files.tabWidth`, a token, and this
+/// crate receives no token values (invariant 9 is the host's to keep).
 #[must_use]
-pub fn of(path: &Path, mime: &str) -> Option<Result<text::Read, Refusal>> {
+pub fn of(path: &Path, mime: &str, tab: usize) -> Option<Result<text::Read, Refusal>> {
     let kind = kind_of(mime)?;
-    Some(read_it(path, kind))
+    Some(read_it(path, kind, tab))
 }
 
-fn read_it(path: &Path, kind: Kind) -> Result<text::Read, Refusal> {
+fn read_it(path: &Path, kind: Kind, tab: usize) -> Result<text::Read, Refusal> {
     if let Kind::Legacy(tool) = kind {
-        return from_a_program(path, tool);
+        return from_a_program(path, tool, tab);
     }
     let raw = read_capped(path)?;
     if let Kind::Rich = kind {
-        return lines_of(crate::rtf::plain(&raw)?);
+        return lines_of(crate::rtf::plain(&raw)?, tab);
+    }
+    if let Kind::Show = kind {
+        return lines_of(crate::ppt::plain(&raw)?, tab);
+    }
+    if let Kind::Word = kind {
+        return lines_of(crate::doc::plain(&raw)?, tab);
     }
     let list = zip::members(&raw)?;
     let lines = match kind {
@@ -217,9 +245,11 @@ fn read_it(path: &Path, kind: Kind) -> Result<text::Read, Refusal> {
         Kind::Sheet => sheet(&raw, &list)?,
         Kind::Book => book(&raw, &list)?,
         Kind::Archive => archive(&list),
-        Kind::Rich | Kind::Legacy(_) => unreachable!("answered above"),
+        Kind::Rich | Kind::Show | Kind::Word | Kind::Legacy(_) => {
+            unreachable!("answered above")
+        }
     };
-    lines_of(lines)
+    lines_of(lines, tab)
 }
 
 /// The lines, as the text module's `Read`.
@@ -228,7 +258,7 @@ fn read_it(path: &Path, kind: Kind) -> Result<text::Read, Refusal> {
 /// the same ceiling on ONE line, and the same `cut` flag that puts "there is
 /// more" on the panel's last row rather than replacing the content with a
 /// sentence about it.
-fn lines_of(mut lines: Vec<String>) -> Result<text::Read, Refusal> {
+fn lines_of(mut lines: Vec<String>, tab: usize) -> Result<text::Read, Refusal> {
     // A DOCUMENT OF NOTHING SAYS SO, rather than drawing a blank panel: an
     // empty panel and a refused one look the same on screen, and only one of
     // them has a sentence.
@@ -248,7 +278,17 @@ fn lines_of(mut lines: Vec<String>) -> Result<text::Read, Refusal> {
                 // whitespace is invisible on screen and never the document's:
                 // `catdoc` puts a space before every line break, an XML puts
                 // its own indentation there, and the aligned table pads.
-                text: cut_to(text.trim_end(), text::LINE_BYTES),
+                //
+                // AND DE-TABBED BY THE TEXT READER'S OWN FUNCTION, which is
+                // the whole of the fix for the line that ran over the column
+                // beside it. A tab measures ONE cell and is DRAWN to the next
+                // stop, so a document holding one was budgeted short and
+                // painted long — photographed on `sample.rtf`, whose bullet
+                // list is `\tab`-indented, crossing into the facts. A `.rs`
+                // never had the defect because `text::read_it` has flattened
+                // since the day it was written; this reader simply was not
+                // asking the same question of its lines.
+                text: cut_to(&text::flatten(text.trim_end(), tab), text::LINE_BYTES),
                 runs: Vec::new(),
             })
             .collect(),
@@ -722,7 +762,7 @@ fn read_capped(path: &Path) -> Result<Vec<u8>, Refusal> {
 /// owner's choice — *"planilha vira tabela"* — is about spreadsheets and not
 /// about which library opened one, so the cells go through the same [`align`]
 /// the `.xlsx` and the `.ods` do.
-fn from_a_program(path: &Path, tool: tools::Tool) -> Result<text::Read, Refusal> {
+fn from_a_program(path: &Path, tool: tools::Tool, tab: usize) -> Result<text::Read, Refusal> {
     let out = tools::text_of(tool, path)?;
     if out.trim().is_empty() {
         return Err(Refusal::Failed);
@@ -737,9 +777,9 @@ fn from_a_program(path: &Path, tool: tools::Tool) -> Result<text::Read, Refusal>
                 row
             })
             .collect();
-        return lines_of(align(&grid));
+        return lines_of(align(&grid), tab);
     }
-    lines_of(out.lines().map(str::to_owned).collect())
+    lines_of(out.lines().map(str::to_owned).collect(), tab)
 }
 
 /// One line of CSV, as cells.

@@ -74,6 +74,9 @@ pub enum Kind {
     Pls,
     /// The XML one, whose durations are in MILLISECONDS.
     Xspf,
+    /// Microsoft's XML one, whose tag names are CASE-INSENSITIVE and whose
+    /// durations are a clock.
+    Asx,
 }
 
 /// Where an entry points.
@@ -178,7 +181,7 @@ pub const TYPES: [&str; 6] = [
 /// `playlist-formats-are-total` can tell them apart — a seventh type added to
 /// [`TYPES`] and to neither side fails the check instead of quietly getting a
 /// refusal written for somebody else's format.
-pub const REFUSED: [&str; 2] = ["audio/x-ms-asx", "audio/x-iriver-pla"];
+pub const REFUSED: [&str; 1] = ["audio/x-iriver-pla"];
 
 /// Whether this type names other files rather than carrying sound.
 #[must_use]
@@ -193,6 +196,7 @@ fn kind_of(mime: &str) -> Option<Kind> {
         "audio/x-mpegurl" | "application/vnd.apple.mpegurl" => Some(Kind::M3u),
         "audio/x-scpls" => Some(Kind::Pls),
         "application/xspf+xml" => Some(Kind::Xspf),
+        "audio/x-ms-asx" => Some(Kind::Asx),
         _ => None,
     }
 }
@@ -207,15 +211,23 @@ pub fn of(path: &Path, mime: &str) -> Option<Result<List, Refusal>> {
     if !is_a_playlist(mime) {
         return None;
     }
-    // TWO SPELLINGS THIS READER DOES NOT OPEN, and it says so rather than
+    // ONE SPELLING THIS READER DOES NOT OPEN, and it says so rather than
     // showing an empty list.
     //
-    // ASX is Microsoft's, whose `<entryref href=…>` is a playlist inside a
-    // playlist BY URL — half of it is a fetch instruction, and there is no
-    // network here. PLA is iRiver's, a binary format with no published
-    // specification: writing a parser from a reverse-engineering note and
-    // never running it against a real file is what `mesh/` refuses to do per
-    // format, and the same answer applies.
+    // PLA is iRiver's, a binary format with no published specification:
+    // writing a parser from a reverse-engineering note and never running it
+    // against a real file is what `mesh/` refuses to do per format, and the
+    // same answer applies.
+    //
+    // ASX USED TO BE HERE, and the owner asked about it by name: *"não sei se
+    // o arquivo 'playlist.asx' foi criado com a intenção de ser visto no
+    // preview, pois ocorre que ele não abre"*. It was refused on the grounds
+    // that its `<entryref href=…>` is a playlist inside a playlist BY URL and
+    // there is no network here — which is an argument about ONE of its
+    // elements, not about the format. An `<entry><ref href=…/></entry>` names
+    // a file exactly the way an `.m3u` line does, and that is what his own
+    // file holds. The element that would need the network is simply not read,
+    // which is what every other reader here does with what it cannot answer.
     let Some(kind) = kind_of(mime) else {
         debug_assert!(
             REFUSED.contains(&ronoctua_files::mime::canonical(mime)),
@@ -244,6 +256,7 @@ fn read_it(path: &Path, kind: Kind) -> Result<List, Refusal> {
         Kind::M3u => from_m3u(&text, folder),
         Kind::Pls => from_pls(&text, folder),
         Kind::Xspf => from_xspf(&text, folder),
+        Kind::Asx => from_asx(&text, folder),
     };
     let cut = found.len() > ENTRY_CEILING;
     found.truncate(ENTRY_CEILING);
@@ -464,9 +477,89 @@ fn from_xspf(text: &str, folder: &Path) -> Vec<Entry> {
     out
 }
 
+/// Microsoft's XML list.
+///
+/// # Two things it does not share with the XSPF above
+///
+/// Its tag and attribute names are CASE-INSENSITIVE — `<ASX>`, `<Entry>` and
+/// `<REF HREF=…>` are all written in the wild, and a reader that matched
+/// `"entry"` exactly would open half the files it claims. And a duration is a
+/// CLOCK (`00:03:45.6`), not a number of seconds or milliseconds.
+///
+/// What it deliberately does not read is `<entryref href=…>`, which names
+/// another playlist by URL: fetching it is the network, and there is none
+/// here. It is skipped the way an unreadable line of an `.m3u` is.
+fn from_asx(text: &str, folder: &Path) -> Vec<Entry> {
+    let Ok(doc) = roxmltree::Document::parse(text) else {
+        return Vec::new();
+    };
+    let named = |n: &roxmltree::Node, name: &str| n.tag_name().name().eq_ignore_ascii_case(name);
+    let mut out = Vec::new();
+    for entry in doc
+        .descendants()
+        .filter(|n| n.is_element() && named(n, "entry"))
+    {
+        let child = |name: &str| entry.children().find(|c| c.is_element() && named(c, name));
+        let Some(href) = child("ref").and_then(|r| {
+            r.attributes()
+                .find(|a| a.name().eq_ignore_ascii_case("href"))
+                .map(|a| a.value())
+        }) else {
+            continue;
+        };
+        let href = href.trim();
+        if href.is_empty() {
+            continue;
+        }
+        out.push(Entry {
+            at: points_at(href, folder),
+            title: child("title")
+                .and_then(|t| t.text())
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(ToOwned::to_owned),
+            seconds: child("duration")
+                .and_then(|d| {
+                    d.attributes()
+                        .find(|a| a.name().eq_ignore_ascii_case("value"))
+                        .map(|a| a.value())
+                })
+                .and_then(on_the_clock),
+            written: href.to_owned(),
+        });
+    }
+    out
+}
+
+/// `hh:mm:ss.f`, `mm:ss` or `ss` as seconds.
+///
+/// A separate function because it is the only place in this module that reads
+/// a time written as a clock, and because getting it wrong is silent: a
+/// duration that does not parse becomes "unknown", which looks exactly like a
+/// file whose length nobody asked for.
+fn on_the_clock(value: &str) -> Option<f64> {
+    let mut seconds = 0.0_f64;
+    let mut parts = 0_u32;
+    for piece in value.trim().split(':') {
+        let n: f64 = piece.parse().ok()?;
+        if !n.is_finite() || n < 0.0 {
+            return None;
+        }
+        seconds = seconds * 60.0 + n;
+        parts += 1;
+        if parts > 3 {
+            return None;
+        }
+    }
+    (seconds > 0.0).then_some(seconds)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Entry, Kind, Where, from_m3u, from_pls, from_xspf, is_a_playlist, of};
+    use super::{
+        Entry, Kind, Where, from_asx, from_m3u, from_pls, from_xspf, is_a_playlist, of,
+        on_the_clock,
+    };
     use std::path::{Path, PathBuf};
 
     /// The folder every fixture resolves against.
@@ -651,9 +744,9 @@ mod tests {
     /// FAILS IF: a type this reader cannot open is answered with an empty list
     /// rather than a sentence.
     #[test]
-    fn the_two_spellings_this_reader_does_not_open_say_so() {
-        let nowhere = Path::new("/nonexistent.asx");
-        for kind in ["audio/x-ms-asx", "audio/x-iriver-pla"] {
+    fn the_spelling_this_reader_does_not_open_says_so() {
+        let nowhere = Path::new("/nonexistent.pla");
+        for kind in super::REFUSED {
             assert!(is_a_playlist(kind));
             match of(nowhere, kind) {
                 Some(Err(crate::Refusal::Unsupported(key))) => {
@@ -665,14 +758,65 @@ mod tests {
         // AND A FILE THAT IS NOT A PLAYLIST GETS NO OPINION AT ALL.
         assert!(of(nowhere, "audio/mpeg").is_none());
         assert!(of(nowhere, "image/png").is_none());
-        // THE THREE THAT ARE READ reach the reader, and fail on the file
+        // THE FOUR THAT ARE READ reach the reader, and fail on the file
         // rather than on the spelling.
-        for kind in ["audio/x-mpegurl", "audio/x-scpls", "application/xspf+xml"] {
+        for kind in [
+            "audio/x-mpegurl",
+            "audio/x-scpls",
+            "application/xspf+xml",
+            "audio/x-ms-asx",
+        ] {
             assert!(matches!(
                 of(nowhere, kind),
                 Some(Err(crate::Refusal::Unreadable))
             ));
         }
+    }
+
+    /// FAILS IF: an ASX stops being read, or is read as if its tag names were
+    /// case-sensitive.
+    ///
+    /// THE OWNER ASKED ABOUT THIS FILE BY NAME — *"não sei se o arquivo
+    /// 'playlist.asx' foi criado com a intenção de ser visto no preview, pois
+    /// ocorre que ele não abre"* — and it was refused as a whole format over
+    /// one element of it, `<entryref>`, which names another list by URL.
+    #[test]
+    fn microsoft_s_list_is_read_whatever_case_it_is_written_in() {
+        let text = concat!(
+            "<ASX version=\"3.0\">\n",
+            "  <Entry><REF HREF=\"one.mp3\"/><TITLE>First</TITLE>",
+            "<DURATION VALUE=\"00:03:45\"/></Entry>\n",
+            "  <entry><ref href=\"http://192.0.2.1/two.mp3\"/></entry>\n",
+            // NAMES ANOTHER LIST BY URL, which is the network: skipped, and
+            // the entries around it are not lost with it.
+            "  <entryref href=\"http://192.0.2.1/more.asx\"/>\n",
+            "  <entry><ref/></entry>\n",
+            "</ASX>\n",
+        );
+        let out = from_asx(text, folder());
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!(out[0].at, Where::Local(folder().join("one.mp3")));
+        assert_eq!(out[0].title.as_deref(), Some("First"));
+        assert_eq!(out[0].seconds, Some(225.0));
+        assert_eq!(
+            out[1].at,
+            Where::Remote("http://192.0.2.1/two.mp3".to_owned())
+        );
+        assert_eq!(out[1].seconds, None);
+    }
+
+    /// FAILS IF: a clock is read as a count of seconds.
+    #[test]
+    fn a_duration_written_as_a_clock_is_seconds() {
+        assert_eq!(on_the_clock("00:03:45"), Some(225.0));
+        assert_eq!(on_the_clock("3:45"), Some(225.0));
+        assert_eq!(on_the_clock("12"), Some(12.0));
+        assert_eq!(on_the_clock("00:00:01.5"), Some(1.5));
+        // NOT A CLOCK, and a wrong number is worse than none.
+        assert_eq!(on_the_clock(""), None);
+        assert_eq!(on_the_clock("1:2:3:4"), None);
+        assert_eq!(on_the_clock("nope"), None);
+        assert_eq!(on_the_clock("0"), None);
     }
 
     /// FAILS IF: the host is asked to probe something it should not, or is not

@@ -914,9 +914,7 @@ rec {
       # a test that reaches one of them without the variable set answers
       # `Refusal::Missing` and proves nothing, which is the trap AGENTS.md
       # records as "every ffmpeg test was EMPTY".
-      RONOCTUA_CATDOC = "${pkgs.catdoc}/bin/catdoc";
       RONOCTUA_XLS2CSV = "${pkgs.catdoc}/bin/xls2csv";
-      RONOCTUA_CATPPT = "${pkgs.catdoc}/bin/catppt";
     }
   );
 

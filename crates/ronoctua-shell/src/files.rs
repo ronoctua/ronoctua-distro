@@ -1547,11 +1547,29 @@ pub fn picture_in(
         y: space.y + air,
         // NEVER NEGATIVE. A panel at its floor in a two-line strip is smaller
         // than the air twice over, and a negative width would come out of
-        // `fit_into` as a scale nobody can see.
+        // the fit as a scale nobody can see.
         width: (space.width - air - air).max(0.0),
         height: (space.height - air - air).max(0.0),
     }
-    .fit_into(w, h)
+    // AND IT SHRINKS, NEVER GROWS.
+    //
+    // `Area::centre` and not `fit_into`, which is the same arithmetic with the
+    // enlargement taken out — and `centre` already existed, for the icon
+    // browser, with the argument written beside it: *whoever is choosing a
+    // size needs to see the size*.
+    //
+    // THE OWNER READ IT OFF THE SCREEN, on his own `sample-img.ico`: a 390-byte
+    // icon blown up to fill a panel. *"As imagens do preview nunca devem
+    // expandir além dos seus tamanhos máximo de altura e de largura"*. An
+    // enlargement invents pixels, and on a 16-square icon it invents all but
+    // 256 of them — what one is shown is not the file.
+    //
+    // NOTHING THAT MOVES LOSES BY IT: a film's frame and a GIF's composite are
+    // both produced AT the box's size (`Fit::of`), so the two answers agree
+    // exactly. Where they differ is a frame that is a moment stale, and there
+    // drawing it at its own size is the honest half of the same choice the
+    // letterbox already makes.
+    .centre(w, h)
 }
 
 /// Which columns fit, and where.
@@ -4838,7 +4856,8 @@ impl View {
         // whole width, every sentence this system has fits on one line, and
         // `lines.len()` is 1 — so the file's name goes on the row it always
         // went on.
-        let said = match looked.and_then(|l| l.why.as_ref()) {
+        let refused = looked.and_then(|l| l.why.as_ref());
+        let said = match refused {
             Some(why) => {
                 let args: Vec<(&str, String)> = why.args();
                 let borrowed: Vec<(&str, &str)> =
@@ -4848,6 +4867,26 @@ impl View {
             None => texts.t(NO_PREVIEW),
         };
         let wrapped = ronoctua_render::layout::wrap(&said, room, REFUSAL_CEILING);
+        // AND A REFUSAL IS READ, WHICH IS WHY IT IS NOT CENTRED.
+        //
+        // The owner's words, and he drew the line himself: *"as mensagens de
+        // erro que aparecem no preview, diferente da mensagem 'no preview',
+        // devem ficar alinhadas à esquerda"*. `no preview` is two words and
+        // sits in the middle of an empty panel like a label; a refusal is a
+        // SENTENCE, it wraps over three or four rows of a panel twenty-four
+        // cells wide, and centred wrapped text gives every row a different
+        // left edge — so the eye has to hunt for the start of each one.
+        //
+        // One rule for the whole block, including the file's name underneath
+        // it in whole-region mode: a centred name under a left-aligned
+        // sentence would be two alignments in one paragraph.
+        let start = |what: u16| {
+            if refused.is_some() {
+                at
+            } else {
+                centred(at, room, what)
+            }
+        };
         // TWO LINES WITH THE WHOLE REGION, and one without.
         //
         // The sentence says a preview could not be made; with the region given
@@ -4875,7 +4914,7 @@ impl View {
             }
             let said = ronoctua_render::layout::elide_middle(&said, room);
             return vec![Field {
-                at: centred(at, room, width_of(&said)),
+                at: start(width_of(&said)),
                 text: said,
                 color: ronoctua_tokens::color::TEXT_SECONDARY,
                 hit: target,
@@ -4889,7 +4928,7 @@ impl View {
             return Vec::new();
         };
         vec![Field {
-            at: centred(at, room, width_of(&text)),
+            at: start(width_of(&text)),
             text,
             // THE DIMMEST TEXT THERE IS, which is the whole of the "very
             // discreet formatting" that was asked for: no box, no rule, no
@@ -6137,9 +6176,9 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                 let said =
                     (!made.drawable() && moving.is_none() && shape.is_none() && listed.is_none())
                         .then(|| {
-                            ronoctua_inspect::document::of(&ask.path, ask.mime).or_else(|| {
-                                ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab)
-                            })
+                            ronoctua_inspect::document::of(&ask.path, ask.mime, ask.tab).or_else(
+                                || ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab),
+                            )
                         })
                         .flatten();
                 let rgba = made.rgba.map(|r| ronoctua_render::image::Rgba {
@@ -15362,7 +15401,9 @@ mod tests {
                 crate::chrome::Register::Key
                 | crate::chrome::Register::Alternate
                 | crate::chrome::Register::Contextual => since += 1,
-                crate::chrome::Register::Prose => {}
+                // `Explain` is not a piece of a hint line: the sentence is
+                // drawn on its own row, from `Hinted::said`.
+                crate::chrome::Register::Prose | crate::chrome::Register::Explain => {}
             }
         }
         // AND NO COMMA IN ANY OF THE SENTENCES: on this line a comma reads as
@@ -18937,6 +18978,24 @@ mod tests {
         let (l, r, t, b) = sides(&got);
         assert!(t >= air && b >= air, "no air above and below: {t} and {b}");
         assert!((l - r).abs() < 0.001 && (t - b).abs() < 0.001);
+
+        // AND A PICTURE SMALLER THAN ITS BOX KEEPS ITS OWN SIZE.
+        //
+        // The owner's `sample-img.ico` is a 16-square icon and the panel is
+        // hundreds of pixels: `fit_into` blew it up to fill, which invents all
+        // but 256 of the pixels one is then shown.
+        let got = picture_in(space, 16, 16);
+        assert!(
+            (got.width - 16.0).abs() < 0.001 && (got.height - 16.0).abs() < 0.001,
+            "a 16-square icon came back {}x{}",
+            got.width,
+            got.height
+        );
+        let (l, r, t, b) = sides(&got);
+        assert!(
+            (l - r).abs() < 0.001 && (t - b).abs() < 0.001,
+            "it is not centred"
+        );
 
         // AND A BOX SMALLER THAN THE AIR TWICE OVER gives back nothing, and
         // never a negative picture.

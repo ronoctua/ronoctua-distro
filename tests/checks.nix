@@ -4760,7 +4760,7 @@ let
     for k in sorted(kinds):
         if not arm or f"Kind::{k}" not in arm.group(1):
             bad.append(f"Kind::{k} is declared and `kind_of` never answers it")
-    read = re.search(r"fn read_it\(path: &Path, kind: Kind\) -> .*?\n\}", module, re.S)
+    read = re.search(r"fn read_it\(path: &Path, kind: Kind,.*?\) -> .*?\n\}", module, re.S)
     if read is None:
         bad.append("document.rs no longer has read_it")
     else:
@@ -4784,16 +4784,75 @@ let
             "from `text/plain`, so an .rtf would be drawn as its own markup again"
         )
 
-    # --- The three programs are named in all three Nix files ---------------
+    # --- EVERY program the inspector can run is named, on every side -------
+    #
+    # It read a HAND-TYPED list of three — the OLE readers — so the four that
+    # came before them were checked by nobody, and a tool added tomorrow would
+    # be checked by nobody too. What the enum names is now the whole question,
+    # in both directions: a variable the Rust can ask for and the Nix does not
+    # set is a preview that refuses on a machine where the program is
+    # installed, and a variable the Nix sets and the Rust never asks for is a
+    # closure carrying a program nothing runs.
     ROOT = pathlib.Path("${self}")
-    variables = sorted(set(re.findall(r'"(RONOCTUA_(?:CATDOC|XLS2CSV|CATPPT))"', (src / "tools.rs").read_text())))
-    if len(variables) != 3:
-        bad.append(f"tools.rs names {len(variables)} of the three OLE variables")
+    variables = sorted(
+        set(re.findall(r'Self::\w+ => "(RONOCTUA_\w+)"', (src / "tools.rs").read_text()))
+    )
+    if len(variables) < 6:
+        bad.append(
+            f"tools.rs names {len(variables)} programs; the sweep is not reading "
+            "`Tool::variable`"
+        )
     for where in ("nix/modules/media.nix", "nix/rust.nix", "nix/dev.nix"):
         said = (ROOT / where).read_text()
         for v in variables:
             if v not in said:
                 bad.append(f"{where} does not set {v} — the reader would refuse with `missing`")
+    # AND THE FOOTER'S OWN UNIT, which is the one that matters on an installed
+    # machine: `environment.sessionVariables` reaches a login shell, and the
+    # footer is a systemd USER UNIT, which inherits the manager's environment
+    # and not the shell's. A tool named in one and not the other works in the
+    # nested loop and refuses on the machine the distro is for.
+    media = (ROOT / "nix/modules/media.nix").read_text()
+    unit = set(
+        re.findall(
+            r"systemd\.user\.services\.ronoctua-footer\.environment\.(RONOCTUA_\w+)", media
+        )
+    )
+    for v in variables:
+        if v not in unit:
+            bad.append(
+                f"the ronoctua-footer unit does not set {v}; the preview would refuse "
+                "with `missing` on an installed machine while working in `nix run .#dev`"
+            )
+    # AND A VARIABLE IN THAT UNIT THAT IS NOT A TOOL HAS TO PROVE IT.
+    #
+    # There is one — `RONOCTUA_SWAPPY`, the editor a screenshot's notification
+    # offers — and it is excused by MEASUREMENT rather than by name: the
+    # inspector must never mention it, and the shell must. An excuse written as
+    # a bare name would go on excusing a variable that had quietly become the
+    # inspector's.
+    #
+    # READ AS CODE AND NOT AS PROSE: `tools.rs` names `RONOCTUA_SWAPPY` in its
+    # own header, explaining that the variable is the SHAPE this module copied.
+    # A sweep that counted that would excuse nothing and fail forever — which
+    # is the mistake two checks in this file have already made.
+    def code(where):
+        out = []
+        for f in sorted(pathlib.Path(where).rglob("*.rs")):
+            for line in f.read_text().splitlines():
+                bare = line.strip()
+                if bare.startswith("//"):
+                    continue
+                out.append(line)
+        return "\n".join(out)
+
+    inspect = code(src)
+    shell_said = code(ROOT / "crates/ronoctua-shell/src")
+    for v in sorted(unit - set(variables)):
+        if v in inspect:
+            bad.append(f"the ronoctua-footer unit sets {v}; ronoctua-inspect reads it and no `Tool` names it")
+        elif v not in shell_said:
+            bad.append(f"the ronoctua-footer unit sets {v} and nothing in this workspace reads it")
 
     if bad:
         print("ERROR: a document format that is claimed and not served.", file=sys.stderr)
@@ -7087,11 +7146,11 @@ let
     if drawing is None:
         bad.append("files.rs has no `preview_content` — where is the panel drawn?")
     else:
-        said = drawing.find("let said = match looked.and_then(|l| l.why.as_ref())")
+        said = drawing.find("let refused = looked.and_then(|l| l.why.as_ref())")
         if said < 0:
             bad.append("the refusal's sentence is no longer built where it was")
         else:
-            after = drawing[said : said + 1200]
+            after = drawing[said : said + 2400]
             if "layout::wrap(&said" not in after:
                 bad.append(
                     "the refusal is not wrapped — a sentence wider than the panel "
@@ -7099,6 +7158,22 @@ let
                 )
             if "elide_end(&said" in after:
                 bad.append("the refusal is still cut with `elide_end`")
+            # AND IT IS READ FROM THE LEFT EDGE, which is the other half of
+            # "not cut": a sentence that wraps over four rows and is centred
+            # gives every row a different left edge, so the eye hunts for the
+            # start of each one. The owner drew the line himself — *"as
+            # mensagens de erro … devem ficar alinhadas à esquerda"* — and
+            # left `no preview` where it was, in the middle of an empty panel.
+            if "let start = |what: u16| {" not in after:
+                bad.append(
+                    "the refusal no longer chooses its own alignment; it is "
+                    "centred with the `no preview` label again"
+                )
+            elif "if refused.is_some() {\n                at\n            } else {" not in after:
+                bad.append(
+                    "the refusal's alignment no longer turns on there BEING a "
+                    "refusal, so `no preview` and a sentence are aligned alike"
+                )
 
     # TWO. The height is measured at the panel's own width.
     measured = block("fn refusal_lines(")
@@ -9394,15 +9469,23 @@ let
     # any name at all lands here and somebody has to come and change this line
     # on purpose.
     #
-    # IT WAS FIVE AND IS EIGHT. `catdoc`, `xls2csv` and `catppt` arrived
-    # together — one package, 36,6 MiB measured — for the three OLE office
-    # formats, which are not XML and which no library in this tree reads. They
-    # do not weaken clause ONE by a line: the mesh readers and the rasteriser
-    # still name no program at all, which is the thing this check is called
-    # after.
+    # IT WAS FIVE, THEN EIGHT, AND IS SIX. `catdoc`, `xls2csv` and `catppt`
+    # arrived together — one package, 36,6 MiB measured — for the three OLE
+    # office formats, which are not XML and which no library in this tree
+    # read. TWO OF THE THREE LEFT AGAIN, and both times the reason was a
+    # measurement against the binary this flake actually pins: `catppt` answers
+    # zero bytes with exit status zero on a real `.ppt`, and `catdoc` answers
+    # zero bytes with exit 69 on a real `.doc`. So `crate::ppt` walks the
+    # records and `crate::doc` the piece table, both over `crate::ole`, and
+    # neither needs anything installed. That is this check's own argument
+    # running the other way, and it is the only direction it is ever nice to go.
+    #
+    # None of them weakens clause ONE by a line: the mesh readers and the
+    # rasteriser still name no program at all, which is the thing this check is
+    # called after.
     tools = (src / "tools.rs").read_text()
-    if "pub const ALL: [Self; 8]" not in tools:
-        bad.append("tools.rs no longer declares exactly eight programs")
+    if "pub const ALL: [Self; 6]" not in tools:
+        bad.append("tools.rs no longer declares exactly six programs")
 
     # THREE. The table's mesh row asks for no program.
     pixels = (src / "pixels.rs").read_text()
@@ -9463,7 +9546,7 @@ let
         print("       variable in, and one more line in the closure sweep. The", file=sys.stderr)
         print("       rasteriser is two hundred lines and costs none of that.", file=sys.stderr)
         raise SystemExit(1)
-    print(f"OK: {len(readers)} files read and draw in process, and the eight programs are eight")
+    print(f"OK: {len(readers)} files read and draw in process, and the six programs are six")
     END
   '';
 
@@ -15879,6 +15962,167 @@ let
     echo "OK: the gate downloads what no cache has, before compiling"
   '';
 
+  the-explanation-has-its-own-register =
+    mkCheck "the-explanation-has-its-own-register" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+
+        # THE SENTENCE UNDER THE HINT LINE IS DRAWN IN ELEVEN PLACES, and it has to
+        # read the same in all of them.
+        #
+        # It was `Register::Prose` — the hint's OWN words — in every one, and the
+        # owner read it off the screen: *"a cor do texto está igual à dos textos dos
+        # outros atalhos, assim não criando uma boa distinção visual"*. Eleven doors
+        # writing the same line by hand is exactly the shape of `the-cursor-is-a-
+        # colour`, which found a third view nobody had looked at: the twelfth door
+        # will be written by copying one of these, and copying the wrong colour is
+        # silent.
+        src = pathlib.Path("${../crates/ronoctua-shell/src}")
+        bad = []
+        doors = []
+        for f in sorted(src.rglob("*.rs")):
+            body = f.read_text()
+            # WHERE THE SENTENCE IS TAKEN OUT, in either of its two spellings: the
+            # windows ask `Hinted::said`, the footer keeps its own field.
+            for m in re.finditer(r"(hinted\.said\(\)|self\.hint_said\.as_ref\(\))", body):
+                after = body[m.end() : m.end() + 900]
+                if "ronoctua_render::Span" not in after:
+                    continue
+                doors.append(f.name)
+                if "Register::Explain.color()" not in after:
+                    bad.append(
+                        f"{f.name} draws the pointer's sentence and not in "
+                        "`Register::Explain` — it reads as one more shortcut on the "
+                        "row above it"
+                    )
+        if len(doors) != 11:
+            bad.append(
+                f"{len(doors)} doors draw the sentence, and there are eleven; the "
+                "sweep is reading the wrong thing or a door has stopped explaining"
+            )
+
+        # AND THE REGISTER RESOLVES TO A TOKEN NOBODY ELSE ON THOSE LINES WEARS.
+        # The tone itself is the theme generator's to hold — `text.subtle.explain`
+        # is gated against both registers of the hint and all three steps of the
+        # content ramp — and this is the half that says the shell ASKS for it.
+        chrome = (src / "chrome.rs").read_text()
+        if "Self::Explain => tokens::color::TEXT_SUBTLE_EXPLAIN," not in chrome:
+            bad.append("`Register::Explain` no longer resolves to `text.subtle.explain`")
+
+        if bad:
+            print("ERROR: the sentence under the hint line is not its own thing.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for b in bad:
+                print("       " + b, file=sys.stderr)
+            raise SystemExit(1)
+        print(f"OK: {len(doors)} doors draw the pointer's sentence, every one in its own register")
+        END
+      '';
+
+  shots-scenes-are-total = mkCheck "shots-scenes-are-total" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    # WHAT THE BATTERY PHOTOGRAPHS, read from both sides.
+    #
+    # `nix/shots-scenes.nix` is the list and the flake makes one package of
+    # each; `nix/shots.nix` guards every subtest with one of the ids. A scene
+    # declared and never used is a package that photographs nothing — it would
+    # boot a VM, run no subtest and pass. A subtest with no guard is a picture
+    # nobody can ask for on its own, which is the whole of what the list is
+    # for.
+    root = pathlib.Path("${self}")
+    listed = (root / "nix/shots-scenes.nix").read_text()
+    declared = re.findall(r"id = \"([a-z0-9-]+)\";", listed)
+    # WHICH SCENES SAY THEY CANNOT STAND ALONE.
+    needy = set(
+        re.findall(r"id = \"([a-z0-9-]+)\";\s*\n\s*needs = \[", listed)
+    )
+    # AND WHICH ONE OPENS NOTHING ON PURPOSE, which is a different claim: it
+    # photographs the screen with nothing on it.
+    alone = set(
+        re.findall(r"id = \"([a-z0-9-]+)\";\s*\n\s*alone = true;", listed)
+    )
+    script = (root / "nix/shots.nix").read_text().splitlines()
+    bad = []
+
+    if len(declared) != len(set(declared)):
+        bad.append("nix/shots-scenes.nix names the same scene twice")
+    if len(declared) < 10:
+        bad.append(f"only {len(declared)} scenes declared; the sweep is not reading the list")
+
+    used = []
+    for n, line in enumerate(script):
+        if not line.lstrip().startswith("with subtest("):
+            continue
+        # THE GUARD IS THE LINE ABOVE, and it has to be: an `if` further up
+        # would be guarding something else, and the subtest would run inside
+        # somebody else's scene.
+        above = script[n - 1].strip() if n else ""
+        found = re.fullmatch(r'if wanted\("([a-z0-9-]+)"\):', above)
+        if found is None:
+            bad.append(
+                f"nix/shots.nix:{n + 1} — a subtest with no scene above it: {line.strip()[:60]}"
+            )
+            continue
+        used.append(found.group(1))
+
+    for scene in used:
+        if scene not in declared:
+            bad.append(f"nix/shots.nix guards a subtest with `{scene}`, which no scene declares")
+    for scene in declared:
+        if scene not in used:
+            bad.append(
+                f"nix/shots-scenes.nix declares `{scene}` and no subtest uses it — "
+                f"`nix build .#shots-{scene}` would boot a VM, photograph nothing and pass"
+            )
+
+    # --- AND A SCENE EITHER OPENS A DOOR OR SAYS WHOSE IT USES ------------
+    #
+    # MEASURED, and it is why this clause exists: `nix build .#shots-document`
+    # photographed an EMPTY DESKTOP and passed. That subtest opens nothing —
+    # it walks the directory the manager's window scene left it in — and its
+    # measurement asked whether `text.primary` covered twenty pixels, which the
+    # white mouse pointer answered. A scene that photographs nothing and says
+    # it worked is what this whole battery exists to prevent.
+    #
+    # The rule is mechanical: a subtest that never calls `control(` is a
+    # subtest that did not open its own view, and it has to name what it rides
+    # on. What is excused is what raises its own state ANOTHER way — a
+    # notification (`notify(`), a unit (`systemctl`) — and the excuse is
+    # re-measured here rather than written as a name.
+    for n, line in enumerate(script):
+        found = re.fullmatch(r'if wanted\("([a-z0-9-]+)"\):', line.strip())
+        if found is None:
+            continue
+        scene = found.group(1)
+        end = len(script)
+        for m in range(n + 1, len(script)):
+            if script[m].strip() and len(script[m]) - len(script[m].lstrip()) <= 4:
+                end = m
+                break
+        body = "\n".join(script[n:end])
+        opens = any(
+            w in body for w in ("control(", "notify(", "systemctl", "systemd-run")
+        )
+        if not opens and scene not in needy and scene not in alone:
+            bad.append(
+                f"`{scene}` opens no view of its own, declares no `needs` and is not "
+                f"marked `alone` — run by itself it would photograph whatever the "
+                f"scene before it left on the screen"
+            )
+
+    if bad:
+        print("ERROR: the shots and the scenes do not agree.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for b in bad:
+            print("       " + b, file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {len(declared)} scenes, every one of them a subtest and every subtest one of them")
+    END
+  '';
+
   # -------------------------------------------------------------------
   # The test tiers, and the guards that keep them total
   # -------------------------------------------------------------------
@@ -16067,6 +16311,8 @@ let
       files-keys-are-not-the-compositors
       playlist-formats-are-total
       document-formats-are-total
+      shots-scenes-are-total
+      the-explanation-has-its-own-register
       # The preview's player: the size it never guesses, and the child it never
       # leaves behind.
       motion-never-guesses-a-frame
@@ -16148,6 +16394,8 @@ let
       files-keys-are-not-the-compositors
       playlist-formats-are-total
       document-formats-are-total
+      shots-scenes-are-total
+      the-explanation-has-its-own-register
       motion-never-guesses-a-frame
       motion-never-leaks-a-child
       motion-photo-is-found-by-bytes

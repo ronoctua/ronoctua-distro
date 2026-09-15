@@ -77,25 +77,24 @@ pub enum Tool {
     Pdftoppm,
     /// How many pages a PDF has.
     Pdfinfo,
-    /// The words of a `.doc`, on stdout.
-    ///
-    /// # The three come as one package, and two of the three work
-    ///
-    /// Measured with the packaged binaries, on the owner's own files:
-    /// `catdoc sample.doc` answered **8 377 bytes**, `xls2csv sample.xls`
-    /// answered **364 057 bytes**, and `catppt sample.ppt` answered **zero
-    /// bytes, exit status zero and nothing on stderr** — on a file `file`
-    /// calls a real OLE compound document.
-    ///
-    /// So `.doc` and `.xls` are previewed, and `.ppt` gets the HONEST REFUSAL:
-    /// `document::from_a_program` reads an empty answer as a failure, because
-    /// a blank panel and a refused one look the same on screen and only one of
-    /// them has a sentence.
-    Catdoc,
     /// The cells of a `.xls`, as CSV on stdout.
+    ///
+    /// # The only one of its package left, and that is a MEASUREMENT
+    ///
+    /// `catdoc` brought three programs for the three OLE office formats and
+    /// two of them are gone. Measured against the binary this flake actually
+    /// pins, on the owner's own files: `catppt sample.ppt` answered zero bytes
+    /// with exit status zero, and `catdoc sample.doc` answered **zero bytes
+    /// with exit 69** and nothing on stderr. An earlier comment in three files
+    /// claimed `catdoc` answered 8 377 bytes — that number was measured
+    /// against a `catdoc` from a different nixpkgs, and it was wrong about the
+    /// one that ships.
+    ///
+    /// `xls2csv` from the same package reads his `.xls` — **364 057 bytes**,
+    /// re-measured against the pinned binary — so the package stays for this
+    /// one program. A spreadsheet is BIFF, which is neither a piece table nor
+    /// a record tree, and nothing in this tree reads one.
     Xls2csv,
-    /// The words of a `.ppt`, on stdout.
-    Catppt,
 }
 
 impl Tool {
@@ -108,9 +107,7 @@ impl Tool {
             Self::Exiftool => "RONOCTUA_EXIFTOOL",
             Self::Pdftoppm => "RONOCTUA_PDFTOPPM",
             Self::Pdfinfo => "RONOCTUA_PDFINFO",
-            Self::Catdoc => "RONOCTUA_CATDOC",
             Self::Xls2csv => "RONOCTUA_XLS2CSV",
-            Self::Catppt => "RONOCTUA_CATPPT",
         }
     }
 
@@ -138,21 +135,19 @@ impl Tool {
     }
 
     /// Every tool, so a check can walk them.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 6] = [
         Self::Ffmpeg,
         Self::Ffprobe,
         Self::Exiftool,
         Self::Pdftoppm,
         Self::Pdfinfo,
-        Self::Catdoc,
         Self::Xls2csv,
-        Self::Catppt,
     ];
 }
 
 /// What a program says about a file, as text.
 ///
-/// The three OLE readers all take one argument and write to stdout, which is
+/// The spreadsheet's reader takes one argument and writes to stdout, which is
 /// what every other tool of this crate does — so this is [`run`] with the
 /// bytes turned into a string, and not a second way of starting a program.
 ///

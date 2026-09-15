@@ -4727,6 +4727,16 @@ as duas imagens ganham uma, e um `.m3u` genuinamente é texto.
   megabytes, e o `elide_end` percorre o argumento inteiro por cluster antes de cortar — aquela
   `String` seria percorrida **uma vez por frame**, dentro do frame que desenha.
 
+##### Expandir tabulação é de UMA função, e o leitor de documentos não a chamava
+
+`text::flatten` abre o tab até o próximo stop e tira o `\r`. Ela era privada deste módulo, e
+`document::lines_of` montava as linhas dele sem ela — duas réguas para a mesma pergunta, e esta com
+consequência visível. O painel orça em CÉLULAS (`ronoctua_protocol::cells` chama o tab de UMA) e o
+shaper o leva ao próximo stop, então uma linha com um tab dentro era medida cabendo e desenhada
+vários cells mais larga, **por cima da coluna ao lado**. O dono fotografou: o `sample.rtf` dele tem
+uma lista indentada por `\tab`, e ela atravessava a prévia e cobria os fatos. Um `.rs` nunca teve o
+defeito, porque este leitor achata desde o dia em que foi escrito.
+
 ##### Tudo o que é caro acontece UMA vez
 
 Ler, quebrar, expandir tabulação e calcular um estado de realce por linha acontecem na thread do
@@ -5136,15 +5146,62 @@ Três armadilhas que custaram medição:
   pequenos. E uma coluna pulada (`<c r="C1">` logo depois de `<c r="A1">`) tem de continuar pulada,
   ou todo valor escorrega uma coluna para a esquerda.
 
-**E os três OLE precisam de programa.** `.doc`, `.xls` e `.ppt` são compound files — um sistema de
-arquivos dentro de um arquivo — e nada neles é XML. O `catdoc` traz os três binários em 36,6 MiB
-medidos. Medido também o que cada um FAZ, nos arquivos do dono: `catdoc sample.doc` deu **8 377
-bytes**, `xls2csv sample.xls` deu **364 057**, e `catppt sample.ppt` deu **zero bytes, saída zero e
-nada no stderr** — num arquivo que o `file` chama de OLE compound de verdade. Dois dos três
-funcionam; o terceiro falha do único jeito que nada mais adiante consegue ver. Por isso resposta
-vazia é **falha** e não documento vazio: painel em branco e painel recusado são iguais na tela, e só
-um dos dois tem frase. Nada de LibreOffice (2-3 GB) e nada de pandoc: a linha que o `media.nix` já
-traça é que isto é suporte a FORMATO, não a aplicativo.
+**E os OLE são outra coisa.** `.doc`, `.xls` e `.ppt` são compound files — um sistema de arquivos
+dentro de um arquivo — e nada neles é XML. O `catdoc` traz três binários em 36,6 MiB medidos.
+
+**A medição que estava aqui era FALSA, e custou duas reclamações do dono.** Esta seção dizia que
+`catdoc sample.doc` devolvia **8 377 bytes**; esse número foi medido contra um `catdoc` de OUTRO
+nixpkgs, não o que o flake pina. Remedido contra o binário que a distro instala, nos arquivos do
+dono:
+
+| programa | resposta | saída |
+|---|---|---|
+| `catdoc sample.doc` | **zero bytes** | **69** |
+| `catppt sample.ppt` | zero bytes | 0 |
+| `xls2csv sample.xls` | 364 057 bytes | 0 |
+
+Os dois primeiros falham do único jeito que nada mais adiante consegue ver — nada no stderr —, e o
+painel dizia *"o que voltou não era uma imagem — o arquivo pode estar quebrado"* sobre um documento
+perfeitamente bom. Por isso resposta vazia é **falha** e não documento vazio: painel em branco e
+painel recusado são iguais na tela, e só um dos dois tem frase. **A lição é do processo e não do
+formato**: um número escrito num comentário é uma medição, e medir contra um binário que não é o
+que se instala é não ter medido. Nada de LibreOffice (2-3 GB) e nada de pandoc: a linha que o
+`media.nix` já traça é que isto é suporte a FORMATO, não a aplicativo.
+
+**O DOCUMENTO também é lido aqui** (`src/doc.rs`), e o que ele tem de difícil é onde o texto mora:
+não num lugar só. O stream `WordDocument` guarda os caracteres, mas em PEDAÇOS, e a tabela que diz
+onde cada um começa vive em OUTRO stream — `1Table` ou `0Table`, e qual dos dois é um BIT no
+cabeçalho. Um leitor que pegasse de `fcMin` a `fcMac` acerta o Word 6 e erra o 97. Cada descritor
+de pedaço carrega um deslocamento e uma marca dizendo se aquele pedaço é UTF-16 ou um byte por
+caractere — e quando é um byte, os bytes são **cp1252 e não Latin-1**: uma aspa curva é `0x92` lá e
+um caractere de controle aqui, então o caminho fácil transforma todo apóstrofo que o Word escreveu
+num codepoint que não desenha nada. O que fica entre `0x13` e `0x14` é INSTRUÇÃO DE CAMPO
+(`PAGEREF _Toc123 \h`), que é maquinária e sai — o mesmo juízo que o `rtf::plain` faz sobre o
+`\listtext`.
+
+**A apresentação deixou de precisar de programa, e o dono é quem pediu**: *"o preview também não foi
+capaz de abrir o arquivo sample.ppt"*. Uma recusa honesta continua sendo um painel sem nada, então o
+`.ppt` é lido aqui — `src/ole.rs` abre o compound file e `src/ppt.rs` anda os registros do stream
+`PowerPoint Document`. É o argumento do `zip.rs` outra vez: o que uma prévia precisa de um OLE é UM
+stream nomeado, e isso é um cabeçalho, uma tabela de setores e uma caminhada. Um crate faria isso
+direito e traria escrita, transação e a API de diretório junto.
+
+Três coisas que o formato cobra:
+
+- **Todo registro é oito bytes de cabeçalho**, e o nibble de versão `0xF` é o que diz "aqui dentro
+  há outros registros". Dois átomos carregam texto e a diferença entre eles é o ALFABETO:
+  `TextCharsAtom` é UTF-16 e `TextBytesAtom` é um byte por caractere, cada byte a metade BAIXA da
+  unidade UTF-16 que ele representa.
+- **Só as TRANSPARÊNCIAS contam.** O mesmo stream guarda a prosa do slide-mestre — *Click to edit the
+  title text format*, e um `*` por nível de marcador — e um leitor que pegasse todo átomo de texto
+  poria a instrução do template na tela como se o autor a tivesse escrito. Medido no arquivo do dono:
+  **catorze dos vinte e quatro** átomos são do mestre. Texto conta dentro de um container `Slide` e
+  em lugar nenhum mais, que é também o que o leitor de `.pptx` ao lado faz — uma apresentação lida de
+  dois jeitos tem de dizer a mesma coisa.
+- **O stream pode estar na tabela MINI.** Abaixo de 4 KiB ele não mora nos setores comuns e sim
+  dentro do stream do Root Entry, em setores de 64 bytes com uma FAT própria. O arquivo do dono usa a
+  comum (57 093 bytes); qual das duas nada no `.ppt` diz, o TAMANHO decide, e por isso as duas são
+  lidas e as duas têm fixture.
 
 ### A prévia 3D — onze formatos, e ela se deixa girar
 

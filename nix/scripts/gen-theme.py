@@ -678,6 +678,19 @@ DISTANCE_GATES = (
     # things in one voice.
     ("text.subtle.contextual", "text.subtle.strong", 0.03, 0.04),
     ("text.subtle.contextual", "text.subtle.alternate", 0.03, 0.04),
+    # THE SENTENCE UNDER THE HINT LINE, against everything it is drawn between.
+    #
+    # The owner asked for exactly this and named both sides: a tone told apart
+    # from the shortcuts above it AND from the content that begins on the row
+    # below. So it is gated against both — the two registers of the hint, and
+    # the three steps of the content ramp — because a theme that solved it to
+    # any one of them would put the explanation back into the line it is
+    # supposed to be distinguishable from.
+    ("text.subtle.explain", "text.subtle.strong", 0.03, 0.04),
+    ("text.subtle.explain", "text.subtle.default", 0.03, 0.04),
+    ("text.subtle.explain", "text.primary", 0.03, 0.04),
+    ("text.subtle.explain", "text.secondary", 0.03, 0.04),
+    ("text.subtle.explain", "text.dim", 0.03, 0.04),
     ("state.error", "state.critical", 0.04, 0.05),
     # THE MESSAGE AND THE BUTTON UNDER IT. They are drawn one line apart on the
     # same ground and they are not the same kind of thing — one is read, the

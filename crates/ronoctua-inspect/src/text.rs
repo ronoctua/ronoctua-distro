@@ -235,7 +235,17 @@ fn read_it(path: &Path, mime: &str, tab: usize) -> Result<Read, Refusal> {
 /// The tab expands to the NEXT multiple of `tab`, not to `tab` spaces: that is
 /// what makes a second level of indentation line up under a first when the
 /// first was reached by other characters.
-fn flatten(row: &str, tab: usize) -> String {
+///
+/// # And it is the DOCUMENT reader's too
+///
+/// It was private, and `document::lines_of` built its lines without it — so a
+/// `.rs` reached the panel de-tabbed and an `.rtf` did not. That is two rulers
+/// again, and this one has teeth: the panel budgets in CELLS
+/// (`ronoctua_protocol::cells`, which calls a tab ONE) and the shaper advances
+/// it to the next stop, so a line with a tab in it was measured as fitting and
+/// drawn four cells longer — over the column beside it. The owner photographed
+/// exactly that, with `sample.rtf`'s bullet list running across the facts.
+pub(crate) fn flatten(row: &str, tab: usize) -> String {
     let row = row.strip_suffix('\r').unwrap_or(row);
     let mut out = String::with_capacity(row.len());
     let mut column = 0usize;

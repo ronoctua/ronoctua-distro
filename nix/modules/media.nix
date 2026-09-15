@@ -97,26 +97,31 @@ in
   config.environment.sessionVariables.RONOCTUA_EXIFTOOL = "${pkgs.exiftool}/bin/exiftool";
   config.environment.sessionVariables.RONOCTUA_PDFTOPPM = "${pkgs.poppler-utils}/bin/pdftoppm";
   config.environment.sessionVariables.RONOCTUA_PDFINFO = "${pkgs.poppler-utils}/bin/pdfinfo";
-  # AND THE THREE OLD OFFICE FORMATS, which no library in this tree reads.
+  # AND THE SPREADSHEET, which is the ONE old office format still read by a
+  # program.
   #
   # `.doc`, `.xls` and `.ppt` are OLE compound files — a filesystem inside a
   # file — and nothing about them is XML. `catdoc` is 36,6 MiB measured
-  # (`nix path-info -S`) and brings all three programs in one package.
+  # (`nix path-info -S`) and brings three programs in one package.
   #
-  # MEASURED WITH THE PACKAGED BINARIES, on the owner's own files:
-  # `catdoc sample.doc` answered 8 377 bytes, `xls2csv sample.xls` answered
-  # 364 057 bytes, and `catppt sample.ppt` answered ZERO BYTES with exit
-  # status zero and nothing on stderr — on a file `file` calls a real OLE
-  # compound document. Two of the three work; what the third is promised is
-  # the honest refusal, because `document::from_a_program` reads an empty
-  # answer as a failure and a sentence on screen beats a blank panel.
+  # RE-MEASURED AGAINST THE BINARY THIS FLAKE PINS, on the owner's own files,
+  # and the earlier number in this comment was WRONG: it said `catdoc
+  # sample.doc` answered 8 377 bytes, which was measured against a `catdoc`
+  # from another nixpkgs. The one that ships answers **zero bytes and exit 69**,
+  # with nothing on stderr — so the panel said "the file may be damaged" about
+  # a perfectly good Word document, and the owner reported it twice.
+  # `catppt sample.ppt` answers zero bytes with exit status zero. Only
+  # `xls2csv sample.xls` works: 364 057 bytes.
+  #
+  # So two of the three are gone and this package stays for ONE program:
+  # `ronoctua_inspect::doc` walks the piece table and `::ppt` the records,
+  # neither of which needs anything installed. A spreadsheet is BIFF, which is
+  # neither, and nothing in this tree reads one.
   #
   # AND NOT LIBREOFFICE, which reads all three: two to three gigabytes, and the
   # line this file already draws is that this is format support and not
   # applications.
-  config.environment.sessionVariables.RONOCTUA_CATDOC = "${pkgs.catdoc}/bin/catdoc";
   config.environment.sessionVariables.RONOCTUA_XLS2CSV = "${pkgs.catdoc}/bin/xls2csv";
-  config.environment.sessionVariables.RONOCTUA_CATPPT = "${pkgs.catdoc}/bin/catppt";
   config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_FFMPEG =
     "${pkgs.ffmpeg-full}/bin/ffmpeg";
   config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_FFPROBE =
@@ -127,12 +132,8 @@ in
     "${pkgs.poppler-utils}/bin/pdftoppm";
   config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_PDFINFO =
     "${pkgs.poppler-utils}/bin/pdfinfo";
-  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_CATDOC =
-    "${pkgs.catdoc}/bin/catdoc";
   config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_XLS2CSV =
     "${pkgs.catdoc}/bin/xls2csv";
-  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_CATPPT =
-    "${pkgs.catdoc}/bin/catppt";
 
   # PLAYERCTL IS NOT HERE, and that is the point: it moved to
   # `nix/modules/base.nix`. The media keys are bound by the compositor's config

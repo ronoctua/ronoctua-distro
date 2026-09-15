@@ -25,11 +25,11 @@ Tudo abaixo é decisão, não esquecimento.
   fontes, sem colunas, sem imagens, sem tabela dentro de tabela. Ela responde *o que este documento
   DIZ*, que é a pergunta que se leva a um painel de prévia; o arquivo abre num editor de verdade a
   uma tecla.
-- **`.ppt` mostra a recusa e não o texto.** Medido com o binário empacotado: `catppt` no
-  `sample.ppt` do dono devolve **zero bytes, saída zero e nada no stderr**, num arquivo que o `file`
-  chama de OLE compound de verdade. O `catdoc` (8 377 bytes) e o `xls2csv` (364 057) funcionam. Ler
-  OLE aqui seria um leitor de compound file inteiro — um sistema de arquivos dentro de um arquivo —
-  para um formato de 1997; o que existe é a frase honesta, que é melhor que um painel em branco.
+- **`.xls` continua vindo de um programa.** O `xls2csv` é o único dos três binários do `catdoc`
+  que funciona contra o que o flake pina (364 057 bytes, remedidos), e uma planilha é BIFF — nem
+  árvore de registros nem tabela de pedaços, e nada nesta árvore lê uma. O `.doc` e o `.ppt`
+  deixaram de precisar de programa: eram esta linha, e viraram `src/ole.rs` + `src/doc.rs` +
+  `src/ppt.rs` depois de o dono reportar a mesma frase de recusa duas vezes.
 - **Nada de LibreOffice nem de pandoc.** 2-3 GB o primeiro, +297 MiB o segundo (e ele não lê
   `.doc/.xls/.ppt`). A linha que o `nix/modules/media.nix` já traça é que isto é suporte a FORMATO e
   não a aplicativo.

@@ -295,6 +295,41 @@
       contextual = {
         of = "alternate.text-muted";
       };
+      # THE SENTENCE UNDER THE HINT LINE, and it is the only role in this
+      # family with NO COLOUR AT ALL.
+      #
+      # The owner read it off the screen: *"a cor do texto está igual à dos
+      # textos dos outros atalhos, assim não criando uma boa distinção
+      # visual"*. It was drawn in `default` — the hint's own prose — so the
+      # line that answers a question looked like one more shortcut on the row
+      # above it. And he said what it should be instead: a tone told apart
+      # from the shortcuts AND from the content just below, *"uma cor bem
+      # neutra"*.
+      #
+      # ACHROMATIC IS THE ANSWER TO BOTH AT ONCE, and it is the palette's own
+      # rule read backwards. Hue says "another kind of thing": the hint line
+      # is a hue (this family), the content is the warm ramp, and NO hue is
+      # the third seat — the only one left that is not another family.
+      #
+      # `chroma = 0.0` AND NOT A FAMILY OF ITS OWN, for the reason
+      # `contextual` above gives: a family is a seed in all nine themes plus
+      # the frozen reference, and what this has to say is the ABSENCE of a
+      # degree rather than another kind of thing.
+      #
+      # AND THE STEP IS `text-loud` BECAUSE ZERO CHROMA IS NOT ENOUGH ON ITS
+      # OWN. It was written at the middle step first, and the gates answered
+      # in four themes at once: cyber, industrial and darkside have greys with
+      # no colour in them to begin with, so there `neutral.text × 0` IS
+      # `text.secondary` — ΔE 0.0000, the same pixel — and frost came within
+      # 0.023 of it. A role that is the same colour as another role in a third
+      # of the themes is a role that exists only in the ones nobody looked at.
+      # So it takes a LUMINANCE of its own as well, the rung between the
+      # content's brightest and the ramp's middle: the sentence is what one is
+      # reading at that moment, and it stands just under the names it explains.
+      explain = {
+        of = "neutral.text-loud";
+        chroma = 0.0;
+      };
     };
     # THE LABEL COLUMN of the three views that are a list of a label and a
     # value — network, power and Bluetooth.

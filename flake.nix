@@ -898,6 +898,36 @@
           ronoctua-brain = rust.brain;
         };
 
+        # AND ONE PACKAGE PER SCENE, so a delivery can photograph the screen it
+        # changed instead of the whole system.
+        #
+        # The owner read the cost off the deliveries — *"os mesmos screenshots
+        # dos mesmos locais estão sendo gerados toda vez que você testa algo
+        # novo"* — and he is right about the arithmetic: a full run is four
+        # minutes and thirty-five pictures, of which a delivery changes one or
+        # two. `nix build .#shots-manager` is the file manager and nothing
+        # else. `.#shots` above is still every scene, and is still what proves
+        # the whole screen.
+      }
+      // lib.listToAttrs (
+        map (scene: {
+          name = "shots-${scene}";
+          value = pkgs.callPackage ./nix/shots.nix {
+            inherit
+              fonts
+              themed
+              themes
+              defaultTheme
+              ;
+            only = [ scene ];
+            niri = inputs.niri.packages.${system}.niri;
+            ronoctua-shell = rust.shell;
+            ronoctua-brain = rust.brain;
+          };
+        }) (map (s: s.id) (import ./nix/shots-scenes.nix))
+      )
+      // {
+
         iso = self.nixosConfigurations.installer.config.system.build.isoImage;
       };
 

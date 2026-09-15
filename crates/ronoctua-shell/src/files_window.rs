@@ -1950,7 +1950,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             text: ronoctua_render::layout::elide_end(said, plain_room),
             column: margin,
             line: FIRST_OF_REGION + crate::fold::rows(s.fold),
-            color: crate::chrome::Register::Prose.color(),
+            color: crate::chrome::Register::Explain.color(),
             edge: false,
             foot: false,
         });

@@ -84,13 +84,21 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
+/// How wide a tab stop is in these tests.
+///
+/// The token's own value (`space.files.tabWidth`), written here because this
+/// crate receives no token values — the host passes the number in. What it has
+/// to be is the number the panel MEASURES with, and a fixture that chose a
+/// different one would be testing an arrangement nobody runs.
+const TAB: usize = 4;
+
 /// Writes the bytes to a file and asks the reader about them.
 fn read(name: &str, mime: &str, bytes: &[u8]) -> Result<Vec<String>, Refusal> {
     let dir = std::env::temp_dir().join(format!("ronoctua-doc-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("the test directory");
     let path = dir.join(name);
     std::fs::write(&path, bytes).expect("write the fixture");
-    let answer = of(&path, mime).expect("this type is a document");
+    let answer = of(&path, mime, TAB).expect("this type is a document");
     let _ = std::fs::remove_file(&path);
     answer.map(|read| read.lines.into_iter().map(|l| l.text).collect())
 }
@@ -289,32 +297,65 @@ fn a_document_with_no_words_in_it_is_refused_and_not_left_blank() {
     assert!(read("c.docx", DOCX, b"not a zip at all").is_err());
 }
 
-/// THE THREE OLD FORMATS: two of them work, and the third says so.
+/// FAILS IF: a document reaches the panel with a tab still in it.
 ///
-/// MEASURED with the packaged binaries, on real OLE compound files:
-/// `catdoc` answered 8 377 bytes, `xls2csv` answered 364 057, and `catppt`
-/// answered **zero bytes with exit status zero and nothing on stderr**. An
-/// empty answer is therefore a FAILURE and not an empty document — a blank
-/// panel says nothing, and a refusal has a sentence.
+/// THE DEFECT, photographed: `sample.rtf`'s bullet list is `\tab`-indented,
+/// and its lines ran across the preview column and over the facts beside it.
+/// The panel budgets in CELLS — `ronoctua_protocol::cells` calls a tab ONE —
+/// and the shaper advances it to the next stop, so a line holding one was
+/// measured as fitting and painted several cells longer. A `.rs` never had it:
+/// `text::read_it` has flattened since the day it was written, and this reader
+/// simply was not asking the same question of its lines.
 ///
-/// Run only where the environment names the programs, which is the devshell,
+/// RICH TEXT AND NOT A ZIP OF XML, because that is where a tab can reach the
+/// panel at all: `push_cell` collapses the whitespace of an OOXML run, so a
+/// `.docx` never carried one. An `\tab` control word is a tab on purpose.
+#[test]
+fn a_document_reaches_the_panel_with_its_tabs_opened_out() {
+    let out = read(
+        "tabbed.rtf",
+        "application/rtf",
+        br"{\rtf1\ansi a\tab b\par}",
+    )
+    .expect("it reads");
+    assert_eq!(out.len(), 1, "{out:?}");
+    let line = &out[0];
+    assert!(!line.contains('\t'), "a tab reached the panel: {line:?}");
+    // AND IT REACHES THE NEXT STOP, not a fixed run of spaces — the same rule
+    // `text::flatten` follows, because it is the same function.
+    assert_eq!(line, "a   b");
+}
+
+/// THE ONE OLD FORMAT THAT STILL NEEDS A PROGRAM, and what an empty answer
+/// from it means.
+///
+/// MEASURED against the binary this flake pins, on the owner's own files:
+/// `xls2csv sample.xls` answered 364 057 bytes. The other two programs of that
+/// package are gone — `catppt sample.ppt` answered zero bytes with exit status
+/// zero, and `catdoc sample.doc` answered zero bytes with **exit 69** — and
+/// `crate::ppt` and `crate::doc` read those two formats themselves. What is
+/// under test here is the rule that outlived them: an empty answer is a
+/// FAILURE and not an empty document, because a blank panel says nothing and a
+/// refusal has a sentence.
+///
+/// Run only where the environment names the program, which is the devshell,
 /// the `tests` derivation and an installed machine. Everywhere else it is the
 /// nothing it should be: a test that quietly passes because the tool was
 /// missing is the trap this repository already records against ffmpeg.
 #[test]
 fn a_program_that_answers_nothing_is_a_failure_and_not_an_empty_document() {
     use crate::tools::Tool;
-    if !Tool::Catppt.there() {
+    if !Tool::Xls2csv.there() {
         return;
     }
-    // A FILE THAT IS NOT A PRESENTATION AT ALL. `catppt` answers nothing for
-    // it exactly as it does for a real `.ppt`, which is the behaviour under
-    // test — what must not happen is a blank panel with no sentence.
+    // A FILE THAT IS NOT A SPREADSHEET AT ALL. `xls2csv` answers nothing for
+    // it, which is the behaviour under test — what must not happen is a blank
+    // panel with no sentence.
     let dir = std::env::temp_dir().join(format!("ronoctua-ole-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("the test directory");
-    let path = dir.join("nothing.ppt");
-    std::fs::write(&path, b"not a presentation").expect("write the fixture");
-    let answer = of(&path, "application/vnd.ms-powerpoint").expect("this type is a document");
+    let path = dir.join("nothing.xls");
+    std::fs::write(&path, b"not a spreadsheet").expect("write the fixture");
+    let answer = of(&path, "application/vnd.ms-excel", TAB).expect("this type is a document");
     let _ = std::fs::remove_file(&path);
     assert!(
         matches!(answer, Err(Refusal::Failed | Refusal::TimedOut)),

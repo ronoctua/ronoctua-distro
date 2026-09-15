@@ -349,6 +349,19 @@ pub enum Register {
     Prose,
     /// The mark between one shortcut and the next.
     Separator,
+    /// The SENTENCE about the shortcut under the pointer, a line further down.
+    ///
+    /// It was drawn in [`Register::Prose`] — the hint's own words — and the
+    /// owner read it off the screen: *"a cor do texto está igual à dos textos
+    /// dos outros atalhos, assim não criando uma boa distinção visual"*. It is
+    /// not one more shortcut on that row; it is the answer to a question
+    /// somebody asked by putting the pointer somewhere, and the only line on
+    /// the screen that exists because they did.
+    ///
+    /// Its tone is told apart from BOTH sides, which is what he asked for: the
+    /// registers above it, and the content that begins on the row below. See
+    /// `text.subtle.explain` for why the answer is no colour at all.
+    Explain,
 }
 
 impl Register {
@@ -361,6 +374,7 @@ impl Register {
             Self::Contextual => tokens::color::TEXT_SUBTLE_CONTEXTUAL,
             Self::Prose => tokens::color::TEXT_SUBTLE_DEFAULT,
             Self::Separator => tokens::color::TEXT_SUBTLE_FAINT,
+            Self::Explain => tokens::color::TEXT_SUBTLE_EXPLAIN,
         }
     }
 }
@@ -1100,7 +1114,12 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
                 split_at_the_modifier(&p.text)
                     .map_or_else(|| vec![p.text.as_str()], |(a, b)| vec![a, b])
             }
-            Register::Prose | Register::Separator => vec![p.text.as_str()],
+            // AND `Explain` NEVER REACHES HERE, because the sentence is not a
+            // PIECE of a hint line: it is drawn on its own row, by each door,
+            // from `Hinted::said`. It is named all the same — a `_` arm would
+            // let the next register added arrive here without anybody
+            // deciding how it is shaped.
+            Register::Prose | Register::Separator | Register::Explain => vec![p.text.as_str()],
         };
         for run in runs {
             if left == 0 {

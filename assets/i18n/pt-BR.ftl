@@ -1852,7 +1852,12 @@ files-preview-empty = não há nada dentro deste arquivo
 files-preview-unreadable = não deu para abrir este arquivo para leitura
 files-preview-missing = { $program } não está instalado, e é ele que lê este formato
 files-preview-too-big = grande demais para uma prévia ({ $amount })
-files-preview-failed = o que voltou não era uma imagem — o arquivo pode estar quebrado
+# NOT "a picture". This is every reader's failure, not the raster path's: a
+# Word document whose piece table does not add up, a presentation with no
+# records, a program that ran and answered nothing. The owner read it off the
+# screen against a `.doc` — a panel telling him a perfectly good document was
+# "not a picture" is a sentence about the wrong thing twice over.
+files-preview-failed = não deu para ler este arquivo — ele pode estar quebrado
 files-preview-slow = passou de { $seconds } s e foi parado — não é o tamanho, é algo travado
 # NÃO "quebrado". O arquivo está inteiro e é este leitor que não dá conta —
 # dizer "quebrado" manda a pessoa consertar algo que não tem defeito.

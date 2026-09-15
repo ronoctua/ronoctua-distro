@@ -44,6 +44,7 @@ Ao bater num invariante: **pare e reporte.** Não contorne, não peça exceção
 nix develop           entra no ambiente (direnv é atalho opcional, e do HOST)
 nix run .#dev         niri aninhado + rodapé; leader = Ctrl+Alt+Espaço, não Super
 nix run .#png         um buffer vira PNG em 0,2 s, sem VM: a tela antes do "pronto"
+nix build .#shots-<cena>  fotografa UMA cena e o que ela precisa; .#shots são as 19
 nix run .#quick       DEZ escolhidos (tests/quick.nix), ~1 min; subconjunto, não categoria
 nix run .#gate        TUDO; dimensiona pela RAM e o earlyoom. Só ele fecha o inv. 7; .#most é a bateria de todo dia, sem instalação
 nix run .#vm  VM completa; .#iso o ISO; .#bench falha se estourar; .#diagnostics só lê
@@ -100,6 +101,13 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   linha sai da REGIÃO e nunca da altura do rodapé**: o rodapé é ancorado embaixo, então uma linha
   acrescentada sob o minibuffer o levanta de baixo do ponteiro — o hover acaba, a linha some, e
   roda. É o laço que o `Fold::held` descreve, com o ponteiro no mesmo lugar da corrente.
+  **E a frase tem REGISTRO PRÓPRIO** (`Register::Explain` → `text.subtle.explain`): era a prosa
+  da dica, e o dono leu na tela que ela parecia mais um atalho da linha de cima. É a ÚNICA cor
+  ACROMÁTICA do sistema (`chroma = 0.0`), porque é o terceiro assento: a dica é uma matiz, o
+  conteúdo é a rampa quente, e matiz nenhuma é o que sobra. Croma zero sozinho não bastava —
+  em cyber, industrial e darkside os cinzas já não têm cor e o degrau do meio virava
+  `text.secondary` exato (ΔE 0,0000, medido) —, então ela leva LUMINÂNCIA própria também
+  (`neutral.text-loud`), com portão contra os dois registros da dica e os três da rampa.
 - **Três navegadores, um léxico** (`m i n`, `m i u`, `m i l`). Só o da Lucide personaliza; a prévia é o SVG COPIADO, e a marca sai da MESMA `affordance` que a tecla lê.
 - **São TREZE vistas, e a precedência vive só em `Footer::view()`** — nenhuma é menu (inv. 14), e
   **TODA porta pergunta a ele**: o ramo de teclas, o `expansion()` e o `region_is_free` das onze
@@ -129,7 +137,13 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   ARMADO e só existe enquanto um nome anda. **`..` é o primeiro renque** — nunca
   oculta, nunca marcável, e toda célula dela responde a saída. Permissão
   PERGUNTA nos DOIS caminhos. **Rótulo de `Choice` é TEXTO, não chave**; texto abre no `emacsclient`.
-  **Prévia e infos nascem LIGADAS** (`C-v`/`C-i` ainda escondem) e por isso a região sobe ao teto
+  **A prévia ENCOLHE e nunca cresce** (`Area::centre`, que já existia para o navegador de ícones):
+  o dono leu na tela no `sample-img.ico` dele, um ícone de 390 bytes esticado no painel inteiro —
+  aumentar inventa pixel, e num ícone de 16 inventa todos menos 256. Filme e GIF não perdem nada:
+  o quadro já nasce DO tamanho da caixa. **Clique no minibuffer VAZIO é a leader**
+  (`on_the_empty_minibuffer`): "vazio" é o `Footer::view()` respondendo `NoneOf`, que é o mesmo
+  lugar que decide todo o resto; o chevron e os segmentos da modeline são perguntados ANTES e
+  ficam com o sentido que têm. **Prévia e infos nascem LIGADAS** (`C-v`/`C-i` ainda escondem) e por isso a região sobe ao teto
   com o gerenciador aberto — a ALTURA deixou de responder ao que foi digitado, e o `leader-vm` lê
   a TELA. Sem foco, painel não pede linha nenhuma. **A pasta DÁ NOTÍCIA** (`ronoctua_files::notice`,
   o nome `watch` já é das cópias): inotify na pasta aberta e na da barra, um watch e nunca recursivo,
@@ -140,7 +154,20 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   que é o custo de ter várias abertas), só se o observador não subir. Fechar DESCANSA o watch, e os
   dois lugares que largam a vista chamam — o segundo é perder o FOCO. A ficha ROLA (`C-.`, e a barra diz que cortou);
   permissão, dono e grupo nascem OCULTOS na listagem (`C-d`), e no painel de infos os campos são
-  os MESMOS da linha — mesma `Hit`, mesma máquina. **A prévia mostra TEXTO** quando o arquivo é
+  os MESMOS da linha — mesma `Hit`, mesma máquina. **A prévia mostra DOCUMENTO** — 13 tipos,
+  `document.rs`: os seis do office são zip de XML, planilha vira TABELA, `.rtf` tem leitor próprio
+  (`rtf.rs`, e o `\uc` é pago pelo `\'hh` ao lado — sem isso toda linha de lista perdia a primeira
+  letra; o `\listtext` é maquinária e sai, porque a marca dele é PUA e a PUA é dos NOSSOS ícones),
+  e os DOIS OLE que têm texto são lidos AQUI (`ole.rs` abre o compound file; `ppt.rs` anda os
+  registros, `doc.rs` a tabela de pedaços). Medido contra o binário que o flake PINA — e a medição
+  anterior estava errada, feita contra um `catdoc` de outro nixpkgs: `catppt` devolve **zero bytes
+  com saída zero** e `catdoc` devolve **zero bytes com saída 69** nos arquivos do dono, que leu a
+  frase na tela duas vezes. Só o `xls2csv` funciona (364 057 bytes), então são SEIS programas e o
+  pacote fica por causa de um só. Na apresentação só as transparências contam — 14 dos 24 átomos de
+  texto são do slide-mestre; no documento o texto vem pela tabela de pedaços, porque `fcMin..fcMac`
+  acerta o Word 6 e erra o 97. **E a playlist tem
+  QUATRO grafias** (`m3u`, `pls`, `xspf`, `asx`); a do iRiver é a única recusada por nome, porque é
+  binária e sem especificação. **A prévia mostra TEXTO** quando o arquivo é
   texto (`is_a(mime, "text/plain")`, 277 tipos pelo DAG do freedesktop), com realce e rolagem: setas
   quando ela tem o foco, `C-,` pagina e dá a volta, `C-[`/`C-]` movem a linha para os lados, e a
   barra aparece sozinha porque a seção passou a ter `total`. **Barra nenhuma
@@ -150,8 +177,15 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   o mesmo `thumb` com os eixos trocados): teclado sem mouse é meia vista, e o
   arrasto passou a ter EIXO. Tetos: 1 MiB, 2 000 linhas, 512 bytes
   por linha — o último porque `.js` minificado é UMA linha de 2 MB e o `elide_end` a percorreria por
-  cluster a cada frame. **Arquivo sem imagem E sem texto diz o que a pasta diz** (`sem prévia`); a
-  frase sobre imagem morreu. **A prévia é um MINIPLAYER** (2026-08-30, a pedido do dono, que
+  cluster a cada frame. **TODA linha da prévia passa por UMA função** (`text::flatten`): ela era
+  privada do leitor de texto, e o de DOCUMENTOS montava as suas sem ela — duas réguas de novo, e
+  esta com dente. O painel orça em CÉLULAS (o tab vale UMA) e o shaper o leva ao próximo stop, então
+  linha com tab era medida cabendo e desenhada vários cells maior, POR CIMA da coluna ao lado; o
+  dono fotografou no `sample.rtf`, cuja lista é indentada por `\tab`. **Arquivo sem imagem E sem
+  texto diz o que a pasta diz** (`sem prévia`); a frase sobre imagem morreu. **Recusa é alinhada à
+  ESQUERDA e o `sem prévia` fica centrado** — a segunda é um rótulo de duas palavras no meio de um
+  painel vazio, a primeira é uma FRASE que quebra em quatro linhas, e centrada dá a cada linha uma
+  margem diferente. **A prévia é um MINIPLAYER** (2026-08-30, a pedido do dono, que
   reverte a frase "um reprodutor que ninguém pediu"): GIF pelo `image`, vídeo por um ffmpeg VIVO
   cuspindo RGBA cru; um player (`motion.rs`), uma thread, um quadro por vez, e **o quadro chegando
   É o relógio** (nenhuma porta ganhou timer). **O TAMANHO DO QUADRO É NOSSO**, não do arquivo:
@@ -347,7 +381,12 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   o teste diz que os dois papéis diferem, e o portão do tema (`notification.quiet vs .acts`, ΔE ≥
   0,04) diz que os papéis resolvem em tintas diferentes em TODO tema — um papel desenhado duas
   vezes passa no portão, e dois papéis numa primitiva passam no teste. Rótulo de app ESTRANGEIRO
-  não se toca: `gtk-update` viraria `Gtk-update`.
+  não se toca: `gtk-update` viraria `Gtk-update`. **E uma ação se separa da outra pelo `·` da dica**
+  (`mark.separator`, no tom do `Register::Separator`): quatro rótulos num tom só com duas células
+  entre eles leem como UMA frase — *Edit the image Open the image Open the folder* —, e rótulo de
+  ação É uma frase, então nada nas palavras diz onde uma acaba. Só ENTRE, nunca antes da primeira,
+  e o ponto não é alvo. No registro ABERTO não há ponto nenhum: lá cada ação é uma LINHA, e a linha
+  já é a fronteira.
 - **Um registro se chama `(id, quando chegou)`** (`ronoctua_notify::RecordKey`), nunca só a `id`: o
   contador do barramento nasce em 1 a cada partida e o das nossas nasce em `u32::MAX` e desce,
   enquanto o histórico dura 15 dias — a mesma `id` existe várias vezes em disco, e `replaces_id`
@@ -1128,6 +1167,18 @@ isso moram aqui, no único arquivo que chega sozinho ao contexto.
   falhou" e seguia com o rodapé velho. Toda edição de Rust, de toda sessão. O
   `dev-rebuilds-what-sits-beside` não pegou porque conferia o NOME; agora confere o PACOTE, contra
   os manifestos que declaram cada binário.
+- **O PONTEIRO ENTRA NA FOTO, e ele é BRANCO.** O niri compõe o próprio cursor na saída, então o
+  `xwd -root` o pega e todo recorte que o contém carrega uma seta clara. `text.primary` é `#E0E0E0`,
+  e 12% de fuzz cobre a distância: uma asserção de "há texto aqui" foi respondida pelo MOUSE, sobre
+  uma mesa VAZIA, e o subteste passou. O conserto NÃO é tirar o ponteiro antes de medir — tentei, e
+  mover o ponteiro entre duas cenas mudou qual porta recebia as teclas, quebrando o miniplayer três
+  cenas adiante. O conserto é a asserção ser de FORA da tela (`pgrep` na porta que a cena usa), que
+  é o que um cursor não tem como responder.
+- **Cena de foto ou abre a própria porta, ou declara de quem ela usa** (`needs`/`alone` em
+  `nix/shots-scenes.nix`): o `document` e o `miniplayer` andam na janela que o `manager-window`
+  abriu, e sozinhos fotografavam a mesa. Pedir uma cena traz o fecho transitivo dela, na ordem
+  declarada; e o `shots-scenes-are-total` recusa cena que não chama `control(`/`notify(`/`systemd*`
+  e não diz de que depende.
 - **`nix run .#png` ANTES DA PALAVRA "PRONTO".** Verde não é prova, e desde que olhar custa 0,2 s não
   há desculpa. Teste que compara ESTADO não vê espaço em branco, sobreposição nem faixa de seleção.
 - **ARQUIVO NOVO PRECISA DE `git add -N`** — o que o git não rastreia não entra na fonte do flake, e

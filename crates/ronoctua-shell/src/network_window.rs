@@ -986,7 +986,7 @@ impl NetworkWindow {
                 text: ronoctua_render::layout::elide_end(said, room),
                 column: margin,
                 line: FIRST_OF_LIST,
-                color: crate::chrome::Register::Prose.color(),
+                color: crate::chrome::Register::Explain.color(),
                 edge: false,
                 foot: false,
             });

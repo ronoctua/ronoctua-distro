@@ -14,6 +14,11 @@
   pkgs,
   lib,
   niri,
+  # WHICH SCENES TO PHOTOGRAPH. `null` is every one of them, which is what
+  # `nix build .#shots` asks for; the flake also exposes one package per scene,
+  # and that is what a delivery that changed one screen should run. See
+  # `nix/shots-scenes.nix` for the list and for why it exists.
+  only ? null,
   # The solved palettes and the theme list: the driver reads the default
   # theme's values when it measures a screenshot.
   themed,
@@ -25,6 +30,40 @@
 }:
 
 let
+  declared = import ./shots-scenes.nix;
+  scenes = map (s: s.id) declared;
+  needsOf = lib.listToAttrs (
+    map (s: {
+      name = s.id;
+      value = s.needs or [ ];
+    }) declared
+  );
+  # WHAT A SCENE STANDS ON, all the way down.
+  #
+  # Two levels would be enough today and the closure is what the rule MEANS:
+  # asking for a scene asks for everything it cannot run without. The answer is
+  # put back into the declared ORDER, because the script runs top to bottom and
+  # a need that came after its dependant would be a need that never ran.
+  closure =
+    let
+      step = have: lib.unique (have ++ lib.concatMap (s: needsOf.${s}) have);
+      settle = have: if step have == have then have else settle (step have);
+    in
+    have: lib.filter (s: builtins.elem s (settle have)) scenes;
+  wanted =
+    if only == null then
+      scenes
+    else
+      let
+        unknown = lib.subtractLists scenes only;
+      in
+      # A NAME NOBODY WROTE IS A RUN THAT PHOTOGRAPHS NOTHING, and silently:
+      # the guard in the script would simply never fire. Refused here, where
+      # the message can name it.
+      if unknown == [ ] then
+        closure only
+      else
+        throw "shots: no such scene: ${lib.concatStringsSep ", " unknown}";
   xvfb = import ../tests/niri-xvfb.nix { inherit pkgs lib; };
   typography = import ../assets/tokens/typography.nix;
   linePx = builtins.ceil (typography.size.base * typography.lineHeight);
@@ -200,6 +239,21 @@ pkgs.testers.runNixOSTest {
 
     ${xvfb.prelude}
 
+    # EVERY SCENE THERE IS, and the ones this run is for — see
+    # `nix/shots-scenes.nix` for the list and for why it exists.
+    ALL_SCENES = {${lib.concatMapStringsSep ", " (s: "\"${s}\"") scenes}}
+    SCENES = {${lib.concatMapStringsSep ", " (s: "\"${s}\"") wanted}}
+
+
+    def wanted(scene):
+        """Whether this run photographs that scene."""
+        # THE ID HAS TO BE ONE OF THE DECLARED ONES, asked here rather than
+        # only in the check: a typo in a guard would otherwise skip a subtest
+        # for ever and the run would still pass, which is the shape of every
+        # empty assertion this file has already been bitten by.
+        assert scene in ALL_SCENES, f"no such scene: {scene}"
+        return scene in SCENES
+
     FOOTER = ${toString footerPx}
     LINE = ${toString linePx}
     CELL = ${toString cellPx}
@@ -348,1380 +402,1508 @@ pkgs.testers.runNixOSTest {
         timeout=90,
     )
 
-    with subtest("the clipboard with an EMPTY history — the photographed defect"):
-        # -----------------------------------------------------------------
-        # THIS IS THE STATE THE OWNER SENT A PHOTOGRAPH OF. The panel used to
-        # reserve three lines and draw them at `end - 3`, `end - 2` and
-        # `end - 1`, where `end` is the top of the region plus the number of
-        # rows — and with no history that number is ONE. Nothing clamped them,
-        # so `ClipCascade: not integrated` landed on the MINIBUFFER's line and
-        # the actions strip landed on the row that says the history is empty.
-        #
-        # An empty history is the FIRST state to photograph and was the only
-        # one nobody had: there was no layout test of the clipboard at all.
-        #
-        # IT RUNS FIRST, before anything opens a WINDOW: it gives the region
-        # back with `Escape`, and an `Escape` with a window focused closes that
-        # window — which took the file manager out from under the theme
-        # chooser's subtest when this sat in the middle.
-        # -----------------------------------------------------------------
-        control("clipboard-open")
-        shot("30-clipboard-empty", lines=10)
-        # THE REGION CARRIES MORE THAN ONE LINE OF INK, and that is the
-        # measurement — not a word on it.
-        #
-        # Before the fix the drawn list was ONE row ("Nothing copied yet") and
-        # the other three lines were painted OUTSIDE the region entirely, at
-        # `end - 3`, `end - 2` and `end - 1`, which with `grid.lines == 1`
-        # land on the modeline, the minibuffer and that single row. So the
-        # region itself held one inked row while the screen showed four lines
-        # of clipboard. Now every one of them is a ROW, and the region is as
-        # tall as they are.
-        w, h, x, y = niri_geometry()
-        region = f"{w}x{10 * LINE}+{x}+{y + h - 10 * LINE}"
-        inked = rows_with_ink(region)
-        assert inked > LINE, (
-            f"the clipboard's region has {inked} rows of ink with an empty "
-            "history; the sections were drawn somewhere else"
-        )
-        focus_niri()
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
-        machine.sleep(1)
-
-    with subtest("the shell history, and the row the keyboard is on"):
-        # -----------------------------------------------------------------
-        # WHAT THE OWNER READ ON THE SCREEN: nothing said which line the
-        # cursor was on. `Row::focused` is set by the view and read by NO door
-        # in this system — neither the footer nor the window draws a band
-        # behind the cursor — so the colour IS the cursor, and this view was
-        # the one that never set it. Nine others have carried it since
-        # `network.rs` arrived at the split: the label takes `state.accent`
-        # ("the keyboard is here") and the value goes on saying whether the
-        # answer can be changed.
-        #
-        # THE ASSERTION IS A COLOUR, because the report was. A count of rows
-        # or a word on screen would have passed the whole time the defect
-        # existed.
-        #
-        # `atuin` itself is a store path baked into the shell
-        # (`RONOCTUA_ATUIN`), so this machine has it without installing
-        # anything, and it is not logged in — which is the state a fresh
-        # machine is in and the one worth photographing.
-        # -----------------------------------------------------------------
-        control("atuin-open")
-        shot("32-shell-history", lines=12)
-        has_colour(
-            "#" + token_hex("state.accent"),
-            at_least=20,
-            of="/tmp/32-shell-history.png",
-        )
-        focus_niri()
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
-        machine.sleep(1)
-
-    with subtest("Tor: the section exists with the daemon STOPPED"):
-        # -----------------------------------------------------------------
-        # THE OTHER HALF OF WHAT THE OWNER REPORTED: he could not find a way
-        # to turn Tor on. The section lived behind `if let Some(scene)`, and
-        # the control socket only answers when Tor is already running — so a
-        # stopped Tor drew no heading, no row and no key.
-        #
-        # This machine does not run Tor, which is exactly the case being
-        # photographed: the heading has to be there anyway, with a row that
-        # says what the UNIT is doing.
-        #
-        # `network-tor-open` AND NOT A COUNT OF `TAB`s. The first version of
-        # this pressed `TAB` nine times and the picture came out on the Wi-Fi
-        # section — the ring's length depends on what hardware the machine
-        # has, and this VM has neither radio nor cable. A guess that produces
-        # a picture is worse than no picture.
-        # -----------------------------------------------------------------
-        # THE LIST FIRST, so the sheet can be told from it. This subtest had
-        # NO ASSERTION, and that is how it passed twice on a picture of the
-        # wrong screen: first the nine `TAB`s that landed on Wi-Fi, then
-        # `fresh_at` looking for a row that a machine without Tor does not
-        # draw. Two pictures that are equal prove the door opened nothing.
-        control("network-open")
-        machine.sleep(1)
-        shot("31a-network-list", lines=12)
-        focus_niri()
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
-        machine.sleep(1)
-
-        control("network-tor-open")
-        shot("31-tor-stopped", lines=12)
-        list_shot = machine.succeed(
-            "${pkgs.imagemagick}/bin/magick /tmp/31a-network-list.png -format '%#' info:"
-        ).strip()
-        sheet_shot = machine.succeed(
-            "${pkgs.imagemagick}/bin/magick /tmp/31-tor-stopped.png -format '%#' info:"
-        ).strip()
-        assert list_shot != sheet_shot, (
-            "`network-tor-open` drew the same screen as `network-open`: "
-            "the sheet was never opened"
-        )
-        # AND IT IS NOT A BLANK SCREEN EITHER. The sheet is a definition list
-        # — the service, the path, the bridges, the onion services and the
-        # drawer — so nearly every line of it carries ink, which a view that
-        # opened on nothing would not.
-        w, h, x, y = niri_geometry()
-        tall = LINE * 12
-        assert rows_with_ink(f"{w}x{tall}+{x}+{y + h - tall}") > tall // 2, (
-            "the Tor sheet came out mostly blank"
-        )
-        focus_niri()
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
-        machine.sleep(1)
-
-    with subtest("the footer at rest — two lines, and no bell"):
-        shot("1-footer-at-rest", lines=2)
-
-    with subtest("the discreet band, one line tall"):
-        notify("copied to the clipboard")
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'band=1'", timeout=30
-        )
-        shot("2-discreet-band", lines=3)
-
-    with subtest("the queue, with the counter"):
-        for i in (1, 2, 3, 4):
-            notify(f"message {i}")
-        shot("3-queue-with-counter", lines=3)
-
-    with subtest("the loud band, three lines tall"):
-        # A critical one is level 90, so the distro's `important-gets-room`
-        # catches it: full, loud, and long enough to photograph.
-        notify(
-            "battery at 3%",
-            body="the machine shuts down in a few minutes; plug it in",
-            level="critical",
-        )
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'loud=true'", timeout=30
-        )
-        shot("4-loud-band", lines=4)
-
-    with subtest("the screenshot: the font's own glyph, and the actions"):
-        # THE WHOLE SCREENSHOT PATH, as the compositor drives it.
-        #
-        # niri sends `app_name = "niri"`, the English summary, and the file's
-        # path in the ICON field as a `file://` URL — which is where the actions
-        # get the image from. Here the URL is real, so the actions survive
-        # `usable_actions`.
-        #
-        # And the glyph is `md-monitor_screenshot`, named in
-        # `assets/notifications.nix` as a NerdFonts glyph rather than a design
-        # system token: nothing in the design system says "screen capture".
-        machine.succeed("mkdir -p /root/Pictures")
-        machine.succeed(
-            "${pkgs.imagemagick}/bin/magick -size 320x200 canvas:gray30 "
-            "'/root/Pictures/Screenshot 2026-08-22.png'"
-        )
-        for _ in range(8):
-            control("notif-dismiss")
-        # THE RAW `Notify`, exactly as the compositor sends it.
-        #
-        # `notify-send` is the wrong tool here and the log said so: libnotify
-        # loads the file and sends the standard `image-path` hint, leaving
-        # `app_icon` empty. niri does neither — it calls the method itself with
-        # the `file://` URL IN the icon field (`utils/mod.rs`), and that is the
-        # path the `screenshot` entry reads.
-        #
-        # Reproducing it by hand is the only way this scene shows what actually
-        # happens on the machine rather than what libnotify would have done.
-        machine.succeed(
-            "XDG_RUNTIME_DIR=/run/user/0 "
-            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
-            "${pkgs.glib}/bin/gdbus call --session "
-            "--dest org.freedesktop.Notifications "
-            "--object-path /org/freedesktop/Notifications "
-            "--method org.freedesktop.Notifications.Notify "
-            # EVERY ARGUMENT TYPED, and the last one especially: `-1` on its
-            # own is read by GOption as a FLAG, and `gdbus` answers with its
-            # usage instead of sending anything. `int32 -1` is one GVariant
-            # literal that does not begin with a dash.
-            "'niri' 'uint32 0' 'file:///root/Pictures/Screenshot%202026-08-22.png' "
-            "'Screenshot captured' 'You can paste the image from the clipboard.' "
-            "'@as []' \"{'urgency': <byte 1>}\" 'int32 -1'"
-        )
-        machine.sleep(1)
-        decided = machine.succeed(
-            "journalctl -u footer --no-pager | grep 'notification decided' | tail -1"
-        ).strip()
-        print(decided)
-        assert 'catalogue="screenshot"' in decided, decided
-        shot("5-screenshot-with-actions", lines=5)
-
-    with subtest("the manager, in two columns"):
-        control("notif-open")
-        shot("6-manager-two-columns")
-
-    with subtest("the distro's catalogue, in the third column"):
-        # X INPUT FOCUS FIRST. With no window manager nobody calls
-        # `XSetInputFocus`, so the focus stays on `PointerRoot` and every key
-        # `xdotool` injects is lost — no error, no log, nowhere.
-        focus_niri()
-        # TAB twice: what happened, what was suppressed, what is configured.
-        for _ in (1, 2):
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Tab")
-            machine.sleep(1)
-        shot("7-distro-catalogue")
-        # And one entry's sheet, which is where "use the distro's default or
-        # customise" is actually done.
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
-        machine.sleep(1)
-        shot("8-adjustment-sheet")
-        control("notif-open")
-
-    with subtest("the file manager, with the preview and the facts"):
-        # A PICTURE MADE IN THE VM, and nothing brought in. The owner's own
-        # test files live outside this repository and stay there; what a shot
-        # has to prove is that a picture reaches the panel, and a picture made
-        # here proves it without carrying somebody's photographs into a store
-        # path that never forgets.
-        #
-        # A PNG on purpose: the raster path is the `image` crate, in process,
-        # so this shot needs none of the five external programs and works on a
-        # machine that has no media group at all.
-        machine.succeed("mkdir -p /root/shots")
-        machine.succeed(
-            "${pkgs.imagemagick}/bin/magick -size 480x320 "
-            # TWO LIGHT COLOURS on purpose: a gradient that fades into the
-            # background makes the picture's own edge unmeasurable, and the
-            # air below it then reads as forty pixels that are not there.
-            "gradient:'#7AA2F7'-'#E0AF68' /root/shots/test-picture.png"
-        )
-        focus_niri()
-        control("files-open")
-        # THE LETTER IS QUERY in this view, which is what makes this
-        # deterministic: typing narrows to the one file rather than depending on
-        # where the cursor happened to land.
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'shot'"
-        )
-        machine.sleep(1)
-        # AND INTO THE DIRECTORY. Filtering alone leaves the cursor on
-        # `shots/` — which is a folder, and a folder has no picture inside
-        # it, so the panel correctly drew the type's glyph. The file is one
-        # level down.
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
-        machine.sleep(1)
-        # AND NOTHING IS PRESSED FOR THE PANELS. They used to need `C-v` and
-        # `C-i`; the owner asked for them to be on from the start, so pressing
-        # the two keys here is what would TURN THEM OFF — which is how this
-        # shot came back with no picture in it at all.
-        machine.sleep(1)
-        # THE POINTER ON A ROW, because the band only exists under it — and the
-        # band's left edge is the thing the owner keeps photographing. A shot
-        # with the pointer parked outside cannot show it at all.
-        w_g, h_g, x_g, y_g = niri_geometry()
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
-            f"{x_g + 300} {y_g + h_g - 3 * LINE}"
-        )
-        machine.sleep(1)
-        shot("10-manager-with-preview")
-
-        # AND THE POINTER OVER THE FACTS, which is the defect the owner
-        # reported in words: hovering a fact lit the row of the LISTING beside
-        # it, because every section's fields ride one `Row`. What has to be on
-        # screen here is a band inside the facts' own column and NOTHING lit in
-        # the listing.
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
-            f"{x_g + w_g - 120} {y_g + h_g - 4 * LINE}"
-        )
-        machine.sleep(1)
-        shot("14-hover-on-the-facts")
-
-        # AND A LISTING THAT IS ACTUALLY CUT, which no shot here had.
-        #
-        # Every manager shot above opens on a folder with one file, so no
-        # section scrolls and no bar is drawn — which is why the owner's
-        # photograph of TWO BARS in one column could not be reproduced from
-        # this file. The footer used to draw its own generic bar over the
-        # manager's per-section one: two rectangles in the same cell, moving
-        # against different totals. Forty files make the listing scroll, and
-        # the picture then has exactly one bar in it or the defect is back.
-        machine.succeed("mkdir -p /root/many && touch /root/many/f-{01..40}.txt")
-        for _ in range(8):
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
-        machine.sleep(1)
-        control("files-open")
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'many'"
-        )
-        machine.sleep(1)
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
-        machine.sleep(2)
-        shot("16-footer-listing-cut")
-        # `files-open` OPENS — it does not toggle, so asking twice reopened it.
-        # And what the manager leaves up is a PAGE, which the footer draws BELOW
-        # the band and below the modeline: cropping the last lines with it on
-        # screen photographs the listing. That is exactly how the brain's line
-        # came out as a file listing and no one noticed — green is not proof,
-        # and neither is a screenshot nobody opened.
-        for _ in range(8):
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
-        # TWO DIGITS IS THE ASSERTION, and not a number of my own: the footer
-        # sums a fractional line height and comes to 53 where `LINE` — which
-        # ceils, because a crop cannot take half a pixel — would say 54. What
-        # is being asserted is that the PAGE is gone, and chrome alone is tens
-        # of pixels tall where a page is hundreds.
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | tail -6"
-            " | grep -qE 'height=[0-9]{1,2} '",
-            timeout=30,
-        )
-
-    with subtest("the manager at the WINDOW door, which the footer does not show"):
-        # THE DOOR NOBODY PHOTOGRAPHED. Every shot here is of the footer, and
-        # the manager has two doors — so the window's own spacing went three
-        # rounds unseen while the owner was looking straight at it. A door with
-        # no picture of it is a door whose defects are reported from his screen
-        # instead of caught here.
-        control("files-window")
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | tail -40"
-            " | grep -q 'br.ronoctua.files'",
-            timeout=60,
-        )
-        machine.sleep(3)
-        # AND INTO THE PICTURE'S FOLDER, so this door is photographed with a
-        # picture in it: the window opens at HOME, where every entry is a
-        # directory and the preview correctly says there is none.
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'shots'"
-        )
-        machine.sleep(1)
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
-        machine.sleep(2)
-        # SAME REASON as the footer's: the band needs the pointer.
-        w_w, h_w, x_w, y_w = niri_geometry()
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
-            f"{x_w + 300} {y_w + 4 * LINE}"
-        )
-        machine.sleep(1)
-        shot("13-manager-in-a-window")
-
-        # AND THE POINTER ON THE FACTS, in THIS door — the one the owner
-        # photographed. Down in the strip the facts have a `top` of their own,
-        # and a band that forgot it lit the listing's row of the same number.
-        #
-        # THE WINDOW'S OWN HALF, and not the output's: niri tiles this window
-        # into the left half of the screen, so `w_w` — which is the whole
-        # output — put the pointer on the desktop and nothing was hovered.
-        # The facts sit to the right of the strip's rule; the third of them is
-        # three lines below the strip's top.
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
-            f"{x_w + 450} {y_w + h_w - 3 * LINE - 6}"
-        )
-        machine.sleep(1)
-        shot("15-hover-on-the-windows-facts")
-
-        # AND THE FACTS SCROLLED TO THE END, which is the photograph the owner
-        # sent twice.
-        #
-        # No shot here ever reached the last row of a panel, so the gap under
-        # the thumb could not be seen from this file: the track was
-        # `lines × line_px` and a surface is not a whole number of lines, so at
-        # the last offset the thumb stopped short by the residue and the
-        # background showed through below it. The wheel takes it to the end;
-        # what has to be true in the picture is that the thumb's bottom and the
-        # window's bottom are the same pixel.
-        for _ in range(12):
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 5")
-        machine.sleep(2)
-        shot("17-facts-scrolled-to-the-end")
-
-        # AND THE LISTING SCROLLED TO ITS END, in the SAME door and with the
-        # strip below it — the other half of the same arithmetic.
-        #
-        # Giving the facts the surface's bottom was right: theirs is the last
-        # band in its column. Giving it to EVERY band was not, and the owner
-        # watched the listing's thumb run past the boundary and down into the
-        # facts' box. What has to be true in this picture is the opposite of
-        # the one above: the thumb's bottom is the strip's rule, not the
-        # window's bottom edge.
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
-        machine.sleep(1)
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'many'"
-        )
-        machine.sleep(1)
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
-        machine.sleep(2)
-        # THE POINTER OVER THE LISTING and not over a panel: the wheel moves
-        # the section it is on, which is the whole point of the four sections.
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
-            f"{x_w + 200} {y_w + 6 * LINE}"
-        )
-        machine.sleep(1)
-        for _ in range(60):
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 5")
-        machine.sleep(2)
-        shot("18-window-listing-scrolled-to-the-end")
-
-        # AND A FILE OF LETTERS, WITH ITS OWN CONTENT IN THE PANEL.
-        #
-        # THE DEFECT THIS IS THE PICTURE OF: the owner selected a markdown
-        # file and the preview said "there is no picture inside this kind of
-        # file". The panel is not an image panel — it answers what is IN a
-        # file — and every one of the eighteen shots above photographed it
-        # with a picture or with nothing, so the sentence was on his screen and
-        # in none of ours.
-        #
-        # A `.nix` on purpose: it is the file this repository is made of, the
-        # type is one we invent ourselves in `mime-glyphs.nix`, and its
-        # highlight uses four of the twelve tokens in one screenful.
-        machine.succeed("mkdir -p /root/shots/code")
-        # FROM THE STORE, and not from a heredoc written here.
-        #
-        # A heredoc would be a shell string inside a Python string inside this
-        # Nix fence, and AGENTS.md names that trap in as many words: inside the
-        # fence a Nix interpolation is live even in a comment, a backtick is
-        # command substitution, and the fence itself closes on two apostrophes
-        # wherever they appear. Writing this very comment closed it once. A
-        # file the store already holds has none of those levels.
-        machine.succeed("cp ${sampleCode} /root/shots/code/sample.nix")
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
-        machine.sleep(1)
-        control("files-window")
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | tail -40"
-            " | grep -q 'br.ronoctua.files'",
-            timeout=60,
-        )
-        machine.sleep(3)
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'shots'"
-        )
-        machine.sleep(1)
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
-        machine.sleep(1)
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'code'"
-        )
-        machine.sleep(1)
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
-        machine.sleep(2)
-        shot("19-preview-of-a-file-of-text")
-
-        # AND IT IS MEASURED, because a picture nobody reads is not proof.
-        #
-        # The panels sit in the right-hand half of the window from
-        # `space.files.panelsFrom` on, and the preview is the left of the two.
-        w_t, h_t, x_t, y_t = niri_geometry()
-        # SAFELY INSIDE THE PREVIEW, and narrower than the panel it sits in.
-        #
-        # A quarter of the width was the first box, and the two panels are not
-        # exactly a quarter each: it reached past the rule and into the facts,
-        # so a measurement of "the preview" was reading its neighbour's text.
-        # The panels begin at the halfway mark; this stops well short of the
-        # rule between them, which costs a few columns of reach and buys an
-        # answer about the right panel.
-        panel = f"{w_t // 4 - 70}x{h_t - 4 * LINE}+{w_t // 2 + 10}+{2 * LINE}"
-
-        # ONE: THERE IS CONTENT, and not a sentence. A refused panel draws one
-        # dim line; planting `Refusal::NoPicture` back brings this to 1.
-        drawn = rows_with_ink(panel)
-        assert drawn >= 3, (
-            f"the preview drew ink on {drawn} row(s) of pixels — a file of "
-            "letters came out as a sentence again"
-        )
-
-        # TWO: THE HIGHLIGHT IS REAL, AND IT IS THE TOKENS'.
-        #
-        # This is the sharpest measurement available here, because it ties the
-        # photograph to `assets/tokens/colors.nix`: a colour written into Rust
-        # by hand, or a role-to-token map that lost an arm, fails HERE and not
-        # on the owner's screen. The two asked for are the two furthest apart
-        # in the palette — a string's green and a keyword's purple.
-        crop(panel, "/tmp/panel-before.png")
-        has_colour("#" + token_hex("syntax.string"), at_least=20)
-        has_colour("#" + token_hex("syntax.keyword"), at_least=20)
-
-        # AND IT SCROLLS. `C-,` pages the preview and the bar follows.
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+comma")
-        machine.sleep(2)
-        shot("20-preview-of-text-paged")
-
-        # AND THE SIDEWAYS BAR IS THERE, which is the half the owner found
-        # missing: the keys moved the line and there was nothing to drag.
-        #
-        # WHERE IT IS, IS MEASURED AND NOT ASSUMED. The first version computed
-        # the foot from the WINDOW's height and cropped the modeline instead —
-        # which has ink of its own, so the assertion passed while pointing at
-        # the wrong thing entirely. The panel's last row of ink is a fact on
-        # the screen; ask for it.
-        def ink_bottom(box, at_y):
-            """The absolute y where the ink inside `box` ends."""
-            crop(box, "/tmp/col.png")
-            got = machine.succeed(
-                "${pkgs.imagemagick}/bin/magick /tmp/col.png -threshold 20% -trim "
-                "-format '%[fx:page.y+h]' info: 2>/dev/null || echo 0"
-            ).strip()
-            return at_y + int(got)
-
-        bottom = ink_bottom(panel, 2 * LINE)
-        foot = f"{w_t // 4 - 70}x{LINE}+{w_t // 2 + 10}+{bottom - LINE}"
-        assert rows_with_ink(foot) >= 1, (
-            "there is nothing along the foot of the preview — a line one can "
-            "only reach with the keyboard is half a view"
-        )
-
-        # AND THE SIDEWAYS BAR MOVES, which is the whole of what the owner
-        # asked for: a thumb that is only there to look at is not a control.
-        #
-        # Measured as its own left edge before and after the key. `C-]` moves
-        # the line, and the thumb has to follow it — where a bar is drawn is
-        # where it is grabbed, and a thumb that stood still while the text
-        # moved would be lying about where one is.
-        # DID THE THUMB LEAVE THE LEFT EDGE? — asked of a four-pixel probe
-        # there, counting the pixels drawn in the bar's own token.
-        #
-        # NOT `-trim`, and the reason is the case that matters most: trim
-        # answers from the CORNER pixel, and at column nought the corner IS the
-        # thumb — so it reported nothing exactly when the thumb was where it
-        # should be. The first version read that "nothing" as a position of
-        # minus one, and then `after > before` passed because 3 is more than
-        # -1 rather than because anything moved.
-        #
-        # This count cannot do that. With no bar at all it is nought at both
-        # ends and the assertion fails; with a bar that does not move it is the
-        # same at both ends and the assertion fails.
-        def thumb_over_the_left(box):
-            probe = f"4x{LINE}+{box.split('+')[1]}+{box.split('+')[2]}"
-            return int(
-                machine.succeed(
-                    f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {probe} +repage "
-                    f"-fuzz 6% -fill white -opaque '#{token_hex('rule.strong')}' -fill black "
-                    "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
-                ).strip()
-            )
-
-        before_left = thumb_over_the_left(foot)
-        assert before_left > 0, (
-            "the foot of the preview has no bar on it at all — a line one can "
-            "only reach with the keyboard is half a view"
-        )
-        for _ in range(6):
-            machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+bracketright"
-            )
-        machine.sleep(2)
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
-        after_left = thumb_over_the_left(foot)
-        assert after_left < before_left, (
-            f"the sideways thumb covered {before_left} pixels of the left edge "
-            f"and still covers {after_left} — the line moved and the bar did "
-            "not follow it"
-        )
-        shot("21-preview-scrolled-sideways")
-
-        # AND IT IS MEASURED TOO: the panel's own pixels changed. Restoring
-        # `total: 1` leaves the key with nothing to move and this fails.
-        machine.succeed(
-            "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
-            f"{panel} +repage /tmp/after.png"
-        )
-        # BY SIGNATURE, and not by `compare`.
-        #
-        # `compare`'s EXIT CODE is its answer — nought when the pictures match,
-        # one when they differ — so every attempt to keep the command from
-        # "failing" also threw away the result. The first version wrapped it in
-        # `|| true` and read an error message as "they differ"; the second
-        # measured two crops of different sizes and got away with it.
-        #
-        # A signature is one number per picture. Two of them are equal or they
-        # are not, and a magick that fell over gives two empty strings — which
-        # compare EQUAL, so the assertion below fails rather than passes.
-        def signature(path):
-            return machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick {path} -format '%#' info:"
-            ).strip()
-
-        assert signature("/tmp/panel-before.png") != signature("/tmp/after.png"), (
-            "the preview drew the same pixels after the page key — it did not "
-            "scroll"
-        )
-
-    with subtest("a document: a zip of XML reaching the panel as words"):
-        # THE DEFECT THE OWNER FOUND, in one sentence: his folder had eleven
-        # documents and the preview opened one of them, the PDF. The other six
-        # of the office family are a ZIP OF XML — and this crate has had a zip
-        # reader since the day it learnt to draw a 3MF, so what was missing was
-        # the twenty lines that say which member holds the words.
-        #
-        # PHOTOGRAPHED and not only unit-tested, because the unit tests know
-        # `text::Read` and this is the only thing that knows the panel: the
-        # answer comes back as the same type a `.rs` does, so the panel scrolls
-        # it, pages it and hangs a bar on it with no new code at all — and that
-        # claim is about a screen.
-        machine.succeed("mkdir -p /root/shots/papers")
-        machine.succeed("cp ${sampleDocument} /root/shots/papers/sample.docx")
-        # ONE LEVEL UP, and one only. The subtest above left the window in
-        # `/root/shots/code`; `papers` is its sibling, so a second `BackSpace`
-        # would leave the manager at `/root`, where the filter finds nothing
-        # and the panel photographs an empty directory.
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
-        machine.sleep(1)
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'papers'"
-        )
-        machine.sleep(1)
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
-        machine.sleep(3)
-        shot("33-preview-of-a-document")
-
-        w_d, h_d, x_d, y_d = niri_geometry()
-        # THE SAME BOX THE TEXT PREVIEW IS MEASURED IN, and for its reasons.
-        paper = f"{w_d // 4 - 70}x{h_d - 4 * LINE}+{w_d // 2 + 10}+{2 * LINE}"
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
-        drawn = rows_with_ink(paper)
-        # A REFUSED PANEL DRAWS ONE DIM LINE. Two paragraphs draw more, and
-        # taking `document::of` out of the chain brings this straight back to a
-        # sentence — which is what `sem prévia` looked like before any of this.
-        assert drawn >= 3, (
-            f"the preview drew ink on {drawn} row(s) of pixels — a document "
-            "came out as a sentence about not being able to show one"
-        )
-        # AND IT IS THE CONTENT'S OWN COLOUR, and not the dim tone a refusal
-        # wears: the one measurement that tells "it read the file" from "it
-        # said it could not".
-        crop(paper, "/tmp/paper.png")
-        has_colour("#" + token_hex("text.primary"), at_least=20, of="/tmp/paper.png")
-
-    with subtest("the miniplayer: it moves, it holds, and it draws over nothing"):
-        # A GIF MADE HERE, and not a video, and that is not a compromise.
-        #
-        # The GIF path is the `image` crate, decoded in process — so this
-        # subtest needs none of the five external programs and runs on a machine
-        # with no media group at all. What it proves is the whole player: a
-        # frame reaching the panel, the box being sized from the FRAME rather
-        # than from a still, the transport taking a line of its own, and the
-        # hold being real.
-        #
-        # What it cannot prove is the TIMELINE, which needs a duration, which
-        # needs a video, which needs `ffmpeg-full` inside this VM. That is a
-        # closure decision and not a test decision, so it is not taken here.
-        #
-        # FOUR COLOURS THIS INTERFACE DOES NOT CONTAIN, and that is measured
-        # rather than assumed. The first version used four palette colours and
-        # the blue one matched the interface elsewhere within the fuzz: the
-        # picture's own box came back as 172x644 — most of the panel — while
-        # the orange, which is not near anything, came back as 130x97 for
-        # exactly 12610 pixels. A measurement that catches its neighbours is
-        # not a measurement.
-        FILM = ["#FF00FF", "#00FFFF", "#FFFF00", "#FF6000"]
-        machine.succeed(
-            "${pkgs.imagemagick}/bin/magick -delay 20 -loop 0 -size 240x180 "
-            + " ".join(f"xc:'{c}'" for c in FILM)
-            + " /root/shots/moving.gif"
-        )
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
-        machine.sleep(1)
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'moving'"
-        )
-        machine.sleep(3)
-        shot("22-miniplayer")
-
-        w_m, h_m, x_m, y_m = niri_geometry()
-        # THE SAME BOX THE TEXT PREVIEW USES, and for the reason written there:
-        # a quarter of the width reaches past the rule into the facts.
-        pane = f"{w_m // 4 - 70}x{h_m - 4 * LINE}+{w_m // 2 + 10}+{2 * LINE}"
-
-        def panel_now(name):
-            """Crops the preview out of a fresh capture."""
-            machine.succeed(
-                "${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd"
-            )
-            machine.succeed(
-                "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
-                f"{pane} +repage /tmp/{name}.png"
-            )
-            return f"/tmp/{name}.png"
-
-        def film_pixels(path, colour):
-            """How many pixels of one of the film's colours the panel holds."""
-            return int(
-                machine.succeed(
-                    f"${pkgs.imagemagick}/bin/magick {path} -fuzz 4% "
-                    f"-fill white -opaque '{colour}' -fill black +opaque white "
-                    "-format '%[fx:int(mean*w*h+0.5)]' info:"
-                ).strip()
-            )
-
-        def frame_showing(path):
-            """Which of the film's frames is on screen, or None."""
-            counts = [film_pixels(path, c) for c in FILM]
-            best = max(range(len(FILM)), key=lambda i: counts[i])
-            # A THRESHOLD, because "none of them" has to be answerable: the
-            # picture is thousands of pixels, and a stray match is tens.
-            return (best, counts) if counts[best] > 500 else (None, counts)
-
-        # ZERO: THE PLAYER OPENED, AND AT THE SIZE THE PANEL ASKED FOR.
-        #
-        # This one needs no pixels, and it is the sharpest of the four: under
-        # the defect the owner photographed, this line said `512x32`.
-        opened = machine.succeed(
-            "journalctl --no-pager | grep -o 'motion stream opened.*' | tail -1 || true"
-        ).strip()
-        assert opened, (
-            "the player never opened a stream at all — the file under the "
-            "cursor is not being read as one that moves"
-        )
-        assert "height=32" not in opened, (
-            f"the frame's height is being guessed again: {opened}"
-        )
-
-        # ONE: DIFFERENT FRAMES OF THE FILM REACH THE SCREEN.
-        #
-        # Asked as "which frame is up", sampled six times, and NOT as "did two
-        # signatures differ" — which is what this was first and which is flaky
-        # by construction: two samples can land on the same frame, and the
-        # answer then reads exactly like a film that is frozen. It did, once,
-        # with the player provably running.
-        #
-        # Naming the frame also tells apart the two things a frozen signature
-        # cannot: a film that is stuck, and frames that never arrive at all.
-        seen = []
-        for k in range(6):
-            which, counts = frame_showing(panel_now(f"moving-{k}"))
-            assert which is not None, (
-                f"not one of the film's four colours is in the panel: {counts} "
-                "— the frames are not reaching the screen at all"
-            )
-            seen.append(which)
-            machine.sleep(1)
-        assert len(set(seen)) >= 2, (
-            f"the panel showed frame {seen} over five seconds — the film is not "
-            "running"
-        )
-
-        # TWO: THE HOLD IS REAL, and this is the sharper half. A stopped film is
-        # DETERMINISTIC — the same frame every time — and it proves the
-        # transport rather than the decoder.
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+semicolon"
-        )
-        machine.sleep(2)
-        held = []
-        for k in range(3):
-            which, _ = frame_showing(panel_now(f"held-{k}"))
-            held.append(which)
-            machine.sleep(1)
-        assert len(set(held)) == 1 and held[0] is not None, (
-            f"the panel showed frames {held} after the hold key — pausing did "
-            "not stop the player"
-        )
-        shot("23-miniplayer-held")
-
-        # THREE: THE SHAPE IS RIGHT, and this one assertion catches what the
-        # owner photographed.
-        #
-        # Measured as the BOX OF THE FILM'S OWN COLOUR, which is the picture and
-        # nothing else. A plain threshold was the first attempt and it answered
-        # 250x658 — the whole panel, text included — so it passed whatever the
-        # picture looked like.
-        #
-        # The GIF is 240x180, four to three. Under the old defect the player
-        # declared its frames 512 by 32 and the doors stretched that inside a
-        # box measured from the STILL, so the picture came out a band of roughly
-        # sixteen to one.
-        box = machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/held-0.png -fuzz 4% "
-            f"-fill white -opaque '{FILM[held[0]]}' -fill black +opaque white "
-            "-trim -format '%[fx:w] %[fx:h]' info:"
-        ).split()
-        ink_w, ink_h = int(box[0]), int(box[1])
-        assert ink_w > 0 and ink_h > 0, "the picture has no extent at all"
-        assert ink_w < ink_h * 2, (
-            f"the picture is {ink_w} by {ink_h} — a four-to-three film came out "
-            "as a band, which is the frame's height being guessed again"
-        )
-
-        # FOUR: THE CONTROLS ARRIVE WITH THE POINTER, AND NOT BEFORE.
-        #
-        # The owner asked for exactly this — *"controles que aparecem no hover
-        # do mouse"* — and it is the only claim here that has to be written as a
-        # negative as well as a positive. Without the first half, a row that was
-        # always drawn would pass the second.
-        #
-        # The transport is the panel's LAST line, which is where the picture
-        # stops: `View::transport_rows` takes it off the box, so this row is
-        # never ink drawn over the film.
-        # THE BOTTOM OF THE PANEL, which is where the controls go — counted in
-        # the colour a GLYPH is drawn in and not by a threshold. Hovering used
-        # to light the section's own band, and a band is ink: a threshold would
-        # have risen for the hover rather than for the control, and passed
-        # either way. (The band over a picture is gone now — see
-        # `View::band_belongs` — but the measurement stays honest by colour.)
-        foot = f"{w_m // 4 - 70}x{2 * LINE}+{w_m // 2 + 10}+{2 * LINE + (h_m - 4 * LINE) - 2 * LINE}"
-
-        def glyph_pixels(box):
-            return int(
-                machine.succeed(
-                    f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {box} "
-                    f"+repage -fuzz 12% -fill white -opaque '#{token_hex('text.primary')}' "
-                    "-fill black +opaque white "
-                    "-format '%[fx:int(mean*w*h+0.5)]' info:"
-                ).strip()
-            )
-
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
-        cold = glyph_pixels(foot)
-        assert cold == 0, (
-            f"the transport row has {cold} pixels of glyph with the pointer "
-            "elsewhere — the controls are drawn whether or not anybody is "
-            "reaching for them"
-        )
-
-        # AND ON THE PICTURE, found by ITS OWN COLOUR rather than computed.
-        #
-        # The panel's midpoint is not the film: here the preview sits in the
-        # bottom STRIP, so the middle of the column is the LISTING. That is
-        # where this pointer went the first time, and the controls correctly did
-        # not arrive — the assertion was right and the aim was wrong.
-        spot = machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/held-0.png -fuzz 4% "
-            f"-fill white -opaque '{FILM[held[0]]}' -fill black +opaque white "
-            "-trim -format '%[fx:page.x] %[fx:page.y] %[fx:w] %[fx:h]' info:"
-        ).split()
-        px, py, pw, ph = (int(v) for v in spot)
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
-            f"{x_m + (w_m // 2 + 10) + px + pw // 2} "
-            f"{y_m + (2 * LINE) + py + ph // 2}"
-        )
-        machine.sleep(2)
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
-        warm = glyph_pixels(foot)
-        shot("24-miniplayer-controls")
-        assert warm > 0, (
-            "the pointer is on the film and the transport row has no glyph in "
-            "it — the controls do not arrive"
-        )
-
-        # FIVE: THE CONTROLS ARE ON THE FILM, AND COST IT NO HEIGHT.
-        #
-        # The owner asked for the picture to keep *"toda a altura possível"*, so
-        # the transport is a band painted over the film's last line rather than
-        # a line taken off it. Measured as the picture's own box, with the
-        # controls up and with them away: the same number, or the band is still
-        # eating a line.
-        def film_box(path, colour):
-            got = machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick {path} -fuzz 4% "
-                f"-fill white -opaque '{colour}' -fill black +opaque white "
-                "-trim -format '%[fx:w] %[fx:h]' info:"
-            ).split()
-            return int(got[0]), int(got[1])
-
-        machine.succeed(
-            "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
-            f"{pane} +repage /tmp/with-controls.png"
-        )
-        held_w, held_h = film_box("/tmp/held-0.png", FILM[held[0]])
-
-        # MEASURED AGAINST THE PANEL, and NOT against the same picture with the
-        # controls up.
-        #
-        # That was the first shape of this and it is self-contradicting: the
-        # band is half-transparent, so it DARKENS the film it covers, and the
-        # film's own colour stops matching there. The picture then measures
-        # shorter exactly BECAUSE the band works — and the assertion two blocks
-        # down checks that the film still shows through it. One of the two had
-        # to be wrong, and it was this one.
-        #
-        # What says the controls cost the film nothing is the film filling the
-        # panel's own height: four to three in a panel twice as wide as it is
-        # tall is bounded by the height, so it reaches the box's edge. A line
-        # reserved for the controls would leave it a whole line short.
-        panel_tall = STRIP * LINE - 2 * AIR
-        assert held_h > panel_tall - LINE, (
-            f"the film is {held_w} by {held_h} in a panel {panel_tall} tall — "
-            "more than a line short, so the transport is still costing it room"
-        )
-
-        # AND NO HOVER BAND ON THE FILM.
-        #
-        # The owner reported it in those words — *"o hover do mouse está
-        # destacando o background da linha no preview de vídeos e imagens, o
-        # que é totalmente desnecessário"*. A band says which ROW of a list the
-        # pointer is on, and a picture is not a list: it lights an arbitrary
-        # stripe across the film and covers part of what one came to look at.
-        #
-        # MEASURED IN BOTH STATES, and that is not caution — it is the only way
-        # this can be measured at all.
-        #
-        # `surface.selection` and `rule.default` are THE SAME VALUE, so a count
-        # of that colour inside the panel includes every divider and rule that
-        # is always there. Asserting it is nought is asserting something
-        # impossible: the baseline is 808 pixels of rules, and it failed on them
-        # while the band it was written for was already gone. What answers the
-        # question is the DIFFERENCE — 808 against 4357 with the band, 877
-        # without it.
-        def band_pixels(path):
-            return int(
-                machine.succeed(
-                    f"${pkgs.imagemagick}/bin/magick {path} -crop {pane} +repage "
-                    f"-fuzz 2% -fill white -opaque '#{token_hex('surface.selection')}' -fill black "
-                    "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
-                ).strip()
-            )
-
-        cold_band = band_pixels("/tmp/held-0.png")
-        warm_band = band_pixels("/tmp/with-controls.png")
-        # A BAND IS A WHOLE LINE of the panel — thousands of pixels. Antialiasing
-        # around the controls moves this by tens, so the bound is generous and
-        # still an order of magnitude under what a band costs.
-        assert warm_band - cold_band < 500, (
-            f"the panel holds {cold_band} pixels of the band's colour with the "
-            f"pointer away and {warm_band} with it on the film — a picture has "
-            "no rows to light"
-        )
-
-        # AND THE BAND IS REALLY SEMI-TRANSPARENT: the film's own colour is
-        # still there under the controls. Opaque, the row would be a strip of
-        # chrome across the picture — which is what invariant 14 is about.
-        strip = machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {foot} +repage "
-            f"-fuzz 18% -fill white -opaque '{FILM[held[0]]}' -fill black "
-            "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
-        ).strip()
-        assert int(strip) > 0, (
-            "the film does not show through the transport's band at all — it is "
-            "opaque, and a strip of chrome across a picture is what invariant 14 "
-            "rules out"
-        )
-
-        # SIX: THE WHOLE REGION, AND WHAT THE OWNER FOUND IN IT.
-        #
-        # `C-w` gives the preview the region. Three of the defects he
-        # photographed only exist here, so this is where they are pinned.
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+w")
-        # LONG ENOUGH FOR THE RESPAWN. Giving the region away changes the box,
-        # which changes the frame's shape, which is a kill and a new child —
-        # 108 to 242 ms measured, and this machine is a software-rendered VM.
-        # Photographed sooner, what is on screen is the frame cut for the OLD
-        # box, letterboxed into the new one, which is a true picture of a
-        # transient and a false picture of the layout.
-        machine.sleep(4)
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
-        shot("25-miniplayer-whole")
-
-        # A RULE AGAINST THE SCREEN'S OWN EDGE. With one panel filling the
-        # width there is nothing to its left to be separated from, and the
-        # arithmetic put the line in cell nought: *"no modo largo há uma linha
-        # vertical na esquerda que continua aparecendo"*. Measured as ink in the
-        # first two columns of the region.
-        edge = f"2x{h_m - 4 * LINE}+{x_m}+{y_m + 2 * LINE}"
-        rule_ink = int(
-            machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {edge} +repage "
-                f"-fuzz 2% -fill white -opaque '#{token_hex('rule.strong')}' -fill black "
-                "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
-            ).strip()
-        )
-        assert rule_ink == 0, (
-            f"{rule_ink} pixels of a rule are against the screen's own edge in "
-            "the wide preview"
-        )
-
-        # AND THE PICTURE IS NOT DISTORTED. The film is 240x180 — four to
-        # three — and a frame stretched to a region three times as wide as it
-        # is tall is what the owner photographed twice: once on the GIF and
-        # once after pausing and going wide. Asked of the picture's own colour,
-        # which is the picture and nothing else.
-        # WHICHEVER FRAME IS UP, and not the one that was up before.
-        #
-        # Naming a colour was the first shape of this and it measured 17 by 27 —
-        # a glyph, not a film. Giving the region away is a respawn, and the film
-        # comes back at another frame; asking for the OLD colour then measures
-        # whatever stray pixels match it. What is being asserted here is the
-        # SHAPE of the picture, so which frame is showing is not the question.
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
-        machine.succeed(
-            "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
-            f"{w_m}x{h_m}+{x_m}+{y_m} +repage /tmp/whole.png"
-        )
-        # THE LARGEST CONNECTED RUN OF THE COLOUR, and not its bounding box.
-        #
-        # `-trim` answers with the box around EVERY matching pixel, and a
-        # handful of antialiased ones elsewhere on the screen stretch it: the
-        # film measured 356 by 451 while its own rectangle was 356 by 268 and
-        # its pixel count 95 408 — a box holding sixty per cent background.
-        # Connected components answer the question that was actually being
-        # asked, which is "how big is the picture".
-        def biggest_blob(path, colour):
-            out = machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick {path} -fuzz 2% "
-                f"-fill white -opaque '{colour}' -fill black +opaque white "
-                "-define connected-components:verbose=true "
-                "-define connected-components:area-threshold=2000 "
-                "-connected-components 8 null: 2>/dev/null || true"
-            )
-            best = (0, 0, 0)
-            for row in out.splitlines():
-                if "srgb(255,255,255)" not in row or ":" not in row:
-                    continue
-                box = row.split(":")[1].split()[0]
-                across, down = box.split("+")[0].split("x")
-                area = int(row.split()[-2])
-                if area > best[2]:
-                    best = (int(across), int(down), area)
-            return best
-
-        ww, wh = 0, 0
-        for colour in FILM:
-            w, h, area = biggest_blob("/tmp/whole.png", colour)
-            if area > ww * wh:
-                ww, wh = w, h
-        # A FILM, AND NOT A GLYPH. The picture is thousands of pixels; a stray
-        # match is a few hundred.
-        # A FILM, AND NOT A GLYPH. The picture is thousands of pixels; a stray
-        # match is a few hundred. It also has to be BRIGHT — the band under the
-        # controls runs to the panel's real bottom, and when the panel was four
-        # lines tall in a whole region that band covered the entire film and
-        # darkened it. The fuzz is tight for exactly that reason.
-        assert ww * wh > 20000, (
-            f"the largest thing matching the film's colours is {ww} by {wh} — "
-            "the film is either not in the region or is being covered by the "
-            "transport's own band"
-        )
-        assert abs((ww / wh) - (240 / 180)) < 0.08, (
-            f"the film is {ww} by {wh} — {ww / wh:.2f} against the four to "
-            "three it was authored at, so it is being stretched"
-        )
-
-        # AND `C-w` GIVES THE REGION BACK.
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+w")
-        machine.sleep(2)
-
-        # AND IT GOES, or it stands in front of every shot after it. The bracket
-        # keeps the pattern from matching the `pkill` that carries it —
-        # `AGENTS.md` names that one.
-        machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
-        machine.wait_until_succeeds(
-            "! ${pkgs.xwininfo}/bin/xwininfo -display :99 -root -children"
-            " | grep -q ronoctua-files || true",
-            timeout=30,
-        )
-        machine.sleep(2)
-
-    with subtest("the brain's line, with the countdown and the two answers"):
-        # THE ONE REGION NO BUFFER DRAWS. `nix run .#png` renders a wasip2
-        # component's display list; this line is the footer's own surface,
-        # below the minibuffer, so a real compositor is the only vehicle.
-        machine.succeed(
-            "systemd-run --unit=brain "
-            "--setenv=XDG_RUNTIME_DIR=/run/user/0 "
-            "--setenv=HOME=/root "
-            "--setenv=RUST_LOG=ronoctua_brain=debug "
-            "${ronoctua-brain}/bin/ronoctua-brain"
-        )
-        machine.wait_until_succeeds(
-            "test -S /run/user/0/ronoctua-brain.sock", timeout=30
-        )
-
-        # ASKING FOR THE REHEARSAL, and not for the real thing: the announcement
-        # and its countdown are the same either way, and a rehearsal changes
-        # nothing on a machine that has no update units at all.
-        machine.succeed(
-            "XDG_RUNTIME_DIR=/run/user/0 ${pkgs.python3}/bin/python3 -c '"
-            "import socket, json, os;"
-            "s = socket.socket(socket.AF_UNIX);"
-            "s.connect(os.environ[\"XDG_RUNTIME_DIR\"] + \"/ronoctua-brain.sock\");"
-            "s.sendall(json.dumps({\"ask\": \"run\", \"task\": \"system-update\","
-            " \"rehearsal\": True}).encode() + b\"\\n\");"
-            "s.shutdown(socket.SHUT_WR);"
-            "print(s.recv(65536).decode()[:200])"
-            "'"
-        )
-        # `brain=1` is the HEIGHT, in the shape `band=1` already has: waiting on
-        # a sleep would be either slow or flaky, and on a loaded machine both.
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | tail -12 | grep -q 'brain=1'",
-            timeout=60,
-        )
-        shot("9-brain-line", lines=3)
-
-    with subtest("the update's mark on the modeline, and the window it opens"):
-        # NOTHING IS ASKED FOR HERE, and that is the point: the shot above left
-        # a run in the queue, and the mark is on screen for exactly as long as
-        # something is queued or running. It is the sentence `update_window`
-        # already carries — "the queue counts, and not only what is running" —
-        # photographed. The sixty seconds of the countdown are the window this
-        # subtest works in, and it needs three of them.
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | tail -12"
-            " | grep -q 'segment id=\"update\"'",
-            timeout=60,
-        )
-        # THREE LINES because the mark is in the MODELINE, which is the third
-        # from the bottom while the band has the line under the minibuffer.
-        shot("11-update-mark", lines=3)
-
-        # AND THE WINDOW, which is a command of its own — `LEADER s w` — for
-        # this reason: it opens whether or not anything is running, and what it
-        # says when nothing is is "nothing has been said yet".
-        control("update-watch")
-        machine.sleep(3)
-        shot("12-update-window")
-
-    with subtest("the theme chooser, and the file that is the broadcast"):
-        # -----------------------------------------------------------------
-        # Three things are proved on screen, and none of them by a buffer
-        # (`nix run .#png` cannot reach a footer view). One: the list opens
-        # on the theme in force, its focused row in that theme's accent. Two:
-        # moving the cursor PREVIEWS — the second theme's accent is on the
-        # footer and the first's is gone — while the file manager's window,
-        # opened beforehand, is untouched. Three: `RET` writes the file, and
-        # the window follows the FILE: its focused row is now in the second
-        # theme's accent with no restart; and the footer copied the two
-        # fragments beside the file. The two accents are far more than the
-        # twelve per cent apart; the window is measured on its top half BELOW
-        # its own hint line, so neither the footer's lines nor the hint's
-        # registers enter the count.
-        # -----------------------------------------------------------------
-        if THEMES > 1:
-            # The region is as tall as the LONGER of the chooser's two lists:
-            # the themes, or the desk option's header and its answers — the
-            # answers counted from the texts (`DESK_ANSWERS` above), which
-            # every answer must have a key in.
-            CHOOSER_ROWS = max(THEMES, 1 + DESK_ANSWERS)
-            first_accent = "#" + token_hex("state.accent")
-            second_accent = "#" + token_hex("state.accent", SECOND)
-            control("files-window")
-            machine.sleep(2)
-            w, h, x, y = niri_geometry()
-            upper = f"{w}x{h // 2 - LINE}+{x}+{y + LINE}"
-
-            control("theme-open")
-            shot("26-theme-chooser", lines=2 + CHOOSER_ROWS)
-            has_colour(first_accent, at_least=20, of="/tmp/26-theme-chooser.png")
-            lacks_colour(second_accent, of="/tmp/26-theme-chooser.png", fuzz=6)
-
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Down")
-            machine.sleep(1)
-            shot("27-theme-preview", lines=2 + CHOOSER_ROWS)
-            has_colour(second_accent, at_least=20, of="/tmp/27-theme-preview.png")
-            lacks_colour(first_accent, of="/tmp/27-theme-preview.png", fuzz=6)
-            # THE PREVIEW REACHES THE WINDOW TOO, and this line used to assert
-            # the opposite — "the preview is the footer's alone: the window
-            # still wears the first". That WAS true, and the owner read it on
-            # screen and called it a theme worn by a strip of the display: the
-            # minibuffer changed colour while the windows, the desk and the
-            # terminals stayed in the old one. The answer was
-            # `theme::show_everywhere`, which writes `theme.json` — the channel
-            # the other doors already watch — so moving the cursor dresses
-            # every door. The assertion is inverted because the promise was.
+    if wanted("clipboard"):
+        with subtest("the clipboard with an EMPTY history — the photographed defect"):
+            # -----------------------------------------------------------------
+            # THIS IS THE STATE THE OWNER SENT A PHOTOGRAPH OF. The panel used to
+            # reserve three lines and draw them at `end - 3`, `end - 2` and
+            # `end - 1`, where `end` is the top of the region plus the number of
+            # rows — and with no history that number is ONE. Nothing clamped them,
+            # so `ClipCascade: not integrated` landed on the MINIBUFFER's line and
+            # the actions strip landed on the row that says the history is empty.
             #
-            # This is `docs/PENDING.md` item 8c's second layer, answered: it was
-            # never a broadcast defect. It was a subtest left asserting a
-            # promise that the themes delivery deliberately reversed, and it
-            # went unread because `.#shots` had not been run since.
-            crop(upper, "/tmp/window-during-preview.png")
-            has_colour(second_accent, at_least=20, of="/tmp/window-during-preview.png")
-            lacks_colour(first_accent, of="/tmp/window-during-preview.png", fuzz=6)
-
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
-            machine.sleep(2)
-            machine.succeed("grep -q '\"${second}\"' /root/.config/ronoctua/theme.json")
-            shot("28-theme-applied")
-            crop(upper, "/tmp/window-after.png")
-            has_colour(second_accent, at_least=20, of="/tmp/window-after.png")
-            lacks_colour(first_accent, of="/tmp/window-after.png")
-            second_desk_on_apply = "#" + token_hex("surface.backdrop", SECOND)
-            # And the fragments beside the file, for the compositor and the terminal.
-            machine.succeed("test -s /root/.config/ronoctua/niri-theme.kdl")
-            machine.succeed("test -s /root/.config/ronoctua/ghostty-theme.conf")
-            machine.succeed("grep -q 'active-color' /root/.config/ronoctua/niri-theme.kdl")
-            # A FILE THAT NEVER SAID A DESK IS ON THE THEME'S OWN, and the
-            # fragment says so. It was black until the owner made the theme's
-            # desk the default — every theme solves one and every gate holds
-            # it apart from the content's black, so a fresh machine shows it
-            # rather than having to be asked.
-            machine.succeed(
-                f"grep -q 'background-color \"{second_desk_on_apply}\"' "
-                "/root/.config/ronoctua/niri-theme.kdl"
+            # An empty history is the FIRST state to photograph and was the only
+            # one nobody had: there was no layout test of the clipboard at all.
+            #
+            # IT RUNS FIRST, before anything opens a WINDOW: it gives the region
+            # back with `Escape`, and an `Escape` with a window focused closes that
+            # window — which took the file manager out from under the theme
+            # chooser's subtest when this sat in the middle.
+            # -----------------------------------------------------------------
+            control("clipboard-open")
+            shot("30-clipboard-empty", lines=10)
+            # THE REGION CARRIES MORE THAN ONE LINE OF INK, and that is the
+            # measurement — not a word on it.
+            #
+            # Before the fix the drawn list was ONE row ("Nothing copied yet") and
+            # the other three lines were painted OUTSIDE the region entirely, at
+            # `end - 3`, `end - 2` and `end - 1`, which with `grid.lines == 1`
+            # land on the modeline, the minibuffer and that single row. So the
+            # region itself held one inked row while the screen showed four lines
+            # of clipboard. Now every one of them is a ROW, and the region is as
+            # tall as they are.
+            w, h, x, y = niri_geometry()
+            region = f"{w}x{10 * LINE}+{x}+{y + h - 10 * LINE}"
+            inked = rows_with_ink(region)
+            assert inked > LINE, (
+                f"the clipboard's region has {inked} rows of ink with an empty "
+                "history; the sections were drawn somewhere else"
             )
-
-            # THE SECOND COLUMN: the desk. `<right>` crosses to it, `<down>`
-            # lands on the theme's own colour and the compositor is shown it
-            # at once — the fragment is the preview — and `RET` writes the
-            # pair. The desk itself is not on this screen (the window fills
-            # it); what is proved is the file niri watches, and the check
-            # `themes-have-fragments` proves niri accepts and merges it.
-            second_desk = "#" + token_hex("surface.backdrop", SECOND)
-            control("theme-open")
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Right")
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Up")
+            focus_niri()
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
             machine.sleep(1)
-            shot("29-theme-desk", lines=2 + CHOOSER_ROWS)
-            # THE MOVE IS UPWARDS NOW. The cursor opens on the answer in
-            # force, and that is the theme's own desk — so what this proves is
-            # the OTHER one: `<up>` lands on black and the compositor is shown
-            # it at once, because the fragment IS the preview.
-            machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
-            # AND THE FILE ALREADY SAYS IT, which is the documented PRICE of
-            # the preview being the broadcast: `theme::show_everywhere` writes
-            # the whole pair, because that file is the channel the other doors
-            # watch and a second one would be a second thing to keep in step.
-            # This line asserted the opposite — "the file still says `theme`
-            # until `RET`" — which was true before that change and has not been
-            # since; it went unread because `.#shots` had not been run.
-            machine.succeed("grep -q '\"backdrop\":\"black\"' /root/.config/ronoctua/theme.json")
-            # `Esc` IS WHAT PAYS FOR IT, and that is the promise with teeth:
-            # looking at a list may not give a machine a choice it never made.
-            # Here a pair WAS committed, so what comes back is that pair —
-            # `View::chosen_before`, asked once when the chooser opened.
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
-            machine.sleep(2)
-            machine.succeed("grep -q '\"backdrop\":\"theme\"' /root/.config/ronoctua/theme.json")
-            machine.succeed(
-                f"grep -q 'background-color \"{second_desk}\"' "
-                "/root/.config/ronoctua/niri-theme.kdl"
+
+    if wanted("history"):
+        with subtest("the shell history, and the row the keyboard is on"):
+            # -----------------------------------------------------------------
+            # WHAT THE OWNER READ ON THE SCREEN: nothing said which line the
+            # cursor was on. `Row::focused` is set by the view and read by NO door
+            # in this system — neither the footer nor the window draws a band
+            # behind the cursor — so the colour IS the cursor, and this view was
+            # the one that never set it. Nine others have carried it since
+            # `network.rs` arrived at the split: the label takes `state.accent`
+            # ("the keyboard is here") and the value goes on saying whether the
+            # answer can be changed.
+            #
+            # THE ASSERTION IS A COLOUR, because the report was. A count of rows
+            # or a word on screen would have passed the whole time the defect
+            # existed.
+            #
+            # `atuin` itself is a store path baked into the shell
+            # (`RONOCTUA_ATUIN`), so this machine has it without installing
+            # anything, and it is not logged in — which is the state a fresh
+            # machine is in and the one worth photographing.
+            # -----------------------------------------------------------------
+            control("atuin-open")
+            shot("32-shell-history", lines=12)
+            has_colour(
+                "#" + token_hex("state.accent"),
+                at_least=20,
+                of="/tmp/32-shell-history.png",
             )
-            # AND NOW FOR REAL: the same three keys, and `RET` at the end.
-            control("theme-open")
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Right")
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Up")
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
-            machine.sleep(2)
-            machine.succeed("grep -q '\"backdrop\":\"black\"' /root/.config/ronoctua/theme.json")
-            machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
-    with subtest("the pointer on the hint line does not take the interface with it"):
-        # THE ASSERTION THAT WOULD HAVE CAUGHT IT, and it is the second time.
-        #
-        # `Footer::first_of_expansion` counted a row whose existence depended on
-        # how TALL the region is, and `Footer::metric` is built on
-        # `first_of_expansion`. The pointer coming to rest on a key of the hint
-        # line closed the ring: stack overflow, `process::abort`, no modeline
-        # and no minibuffer. Two coredumps of 2026-09-15 carry that stack and
-        # nothing else, and the owner read it as the interface closing when he
-        # hovered a video preview — the video was where the hand was going, the
-        # hint line was what it crossed.
-        #
-        # EVERY LINE OF THE FOOTER, from the bottom up, and not one aimed
-        # number: the hint's own row moves with the band, the glance, the
-        # opened drawer and the brain's line, so a shot that knew where it was
-        # would be photographing a listing row the day any of them appears.
-        for _ in range(8):
+            focus_niri()
             machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
-        machine.sleep(1)
-        control("files-open")
-        machine.sleep(2)
-        w_p, h_p, x_p, y_p = niri_geometry()
-        for n in range(1, 16):
+            machine.sleep(1)
+
+    if wanted("tor"):
+        with subtest("Tor: the section exists with the daemon STOPPED"):
+            # -----------------------------------------------------------------
+            # THE OTHER HALF OF WHAT THE OWNER REPORTED: he could not find a way
+            # to turn Tor on. The section lived behind `if let Some(scene)`, and
+            # the control socket only answers when Tor is already running — so a
+            # stopped Tor drew no heading, no row and no key.
+            #
+            # This machine does not run Tor, which is exactly the case being
+            # photographed: the heading has to be there anyway, with a row that
+            # says what the UNIT is doing.
+            #
+            # `network-tor-open` AND NOT A COUNT OF `TAB`s. The first version of
+            # this pressed `TAB` nine times and the picture came out on the Wi-Fi
+            # section — the ring's length depends on what hardware the machine
+            # has, and this VM has neither radio nor cable. A guess that produces
+            # a picture is worse than no picture.
+            # -----------------------------------------------------------------
+            # THE LIST FIRST, so the sheet can be told from it. This subtest had
+            # NO ASSERTION, and that is how it passed twice on a picture of the
+            # wrong screen: first the nine `TAB`s that landed on Wi-Fi, then
+            # `fresh_at` looking for a row that a machine without Tor does not
+            # draw. Two pictures that are equal prove the door opened nothing.
+            control("network-open")
+            machine.sleep(1)
+            shot("31a-network-list", lines=12)
+            focus_niri()
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.sleep(1)
+
+            control("network-tor-open")
+            shot("31-tor-stopped", lines=12)
+            list_shot = machine.succeed(
+                "${pkgs.imagemagick}/bin/magick /tmp/31a-network-list.png -format '%#' info:"
+            ).strip()
+            sheet_shot = machine.succeed(
+                "${pkgs.imagemagick}/bin/magick /tmp/31-tor-stopped.png -format '%#' info:"
+            ).strip()
+            assert list_shot != sheet_shot, (
+                "`network-tor-open` drew the same screen as `network-open`: "
+                "the sheet was never opened"
+            )
+            # AND IT IS NOT A BLANK SCREEN EITHER. The sheet is a definition list
+            # — the service, the path, the bridges, the onion services and the
+            # drawer — so nearly every line of it carries ink, which a view that
+            # opened on nothing would not.
+            w, h, x, y = niri_geometry()
+            tall = LINE * 12
+            assert rows_with_ink(f"{w}x{tall}+{x}+{y + h - tall}") > tall // 2, (
+                "the Tor sheet came out mostly blank"
+            )
+            focus_niri()
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.sleep(1)
+
+    if wanted("footer"):
+        with subtest("the footer at rest — two lines, and no bell"):
+            # AT REST IS A CLAIM, AND IT WAS NEVER CHECKED.
+            #
+            # This scene is named for a state it did not put the footer into:
+            # run after the others, the network view from the scene above was
+            # still up and the surface was 314 px — twelve lines. The shot
+            # below crops the last two, so it looked right either way, which is
+            # how a subtest photographs something other than its own name for
+            # as long as nobody measures.
+            #
+            # `Esc` closes one level, so a view several deep needs several. The
+            # X focus first, because under Xvfb nobody has it by default and a
+            # key with nowhere to go is a key that changes nothing.
+            focus_niri()
+            for _ in range(8):
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.sleep(1)
+            shot("1-footer-at-rest", lines=2)
+
+            # AND A CLICK ON THE EMPTY MINIBUFFER IS THE LEADER.
+            #
+            # The owner's rule: *"caso não haja nada aberto no minibuffer,
+            # quero que, ao clicar com o botão esquerdo do mouse nele, ocorra o
+            # mesmo que ocorreria se eu clicasse a tecla leader"*. This is the
+            # scene where nothing IS open, which is the whole precondition.
+            #
+            # MEASURED BY THE FOOTER'S OWN HEIGHT and not by pixels: the list
+            # is the surface growing upwards, so what says it opened is the
+            # layout the shell resolved — a fact from outside the picture, which
+            # a cursor or a stale frame cannot answer.
+            def footer_height():
+                said = machine.succeed(
+                    "journalctl -u footer --no-pager"
+                    " | grep -o 'footer layout resolved [^ ]* height=[0-9]*'"
+                    " | tail -1"
+                ).strip()
+                return int(said.rsplit("=", 1)[1])
+
+            w_f, h_f, x_f, y_f = niri_geometry()
+            at_rest = footer_height()
+            # AIMED FROM THE FOOTER'S TOP AND NOT FROM THE SCREEN'S BOTTOM.
+            #
+            # The bottom line is not the minibuffer: the brain's line is glued
+            # UNDER it, and in these machines the brain is up at rest — the
+            # journal says `brain=1` and the surface is three lines, not two.
+            # Aiming at the last one clicked the brain's row, and the first
+            # version of this assertion failed saying the list had not opened
+            # when what had happened is that nobody had asked for it.
+            #
+            # From the top the two lines are where the module's own header puts
+            # them: the modeline, then the minibuffer glued to it. The band and
+            # the glance are above both and are zero at rest, which is what the
+            # shot above this one is about.
+            # AND IT IS REALLY AT REST, which is this subtest's whole name: two
+            # lines, the glance and the brain's row at most. Twelve of them is
+            # a view still open, and the click below would rightly do nothing.
+            assert 2 * LINE <= at_rest < 5 * LINE, (
+                f"the footer is {at_rest} px — that is not a footer at rest"
+            )
+            top = y_f + h_f - at_rest
+            # THE LEFT HALF OF THE LINE: the chevron that opens it lives at the
+            # right edge and is a target with a meaning of its own.
             machine.succeed(
                 "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
-                f"{x_p + 200} {y_p + h_p - n * LINE}"
+                f"{x_f + w_f // 3} {top + LINE + LINE // 2}"
             )
-            # A SECOND ON EACH, because what killed it was not the motion but
-            # the FRAME after it: the sentence is resolved from what the last
-            # frame drew, so the ring only closes on the paint that follows.
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 1")
+            machine.sleep(2)
+            opened = footer_height()
+            assert opened > at_rest, (
+                f"the footer stayed {at_rest} px tall after a click on the empty "
+                "minibuffer — the shortcut list did not open"
+            )
+            shot("37-the-minibuffer-clicked", lines=2)
+            # AND `Esc` PUTS IT BACK, which is what makes this a toggle and not
+            # a trap: the scenes after this one all begin with nothing open.
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.sleep(2)
+            # SMALLER THAN IT WAS OPEN, and not equal to what it was at rest:
+            # the brain's line comes and goes on a clock of its own, so the
+            # footer at rest is not the same height twice. What is under test
+            # is the list closing.
+            assert footer_height() < opened, (
+                "the footer did not shrink after `Esc` — the shortcut list is still up"
+            )
+
+    if wanted("band"):
+        with subtest("the discreet band, one line tall"):
+            notify("copied to the clipboard")
+            machine.wait_until_succeeds(
+                "journalctl -u footer --no-pager | grep -q 'band=1'", timeout=30
+            )
+            shot("2-discreet-band", lines=3)
+
+    if wanted("queue"):
+        with subtest("the queue, with the counter"):
+            for i in (1, 2, 3, 4):
+                notify(f"message {i}")
+            shot("3-queue-with-counter", lines=3)
+
+    if wanted("loud"):
+        with subtest("the loud band, three lines tall"):
+            # A critical one is level 90, so the distro's `important-gets-room`
+            # catches it: full, loud, and long enough to photograph.
+            notify(
+                "battery at 3%",
+                body="the machine shuts down in a few minutes; plug it in",
+                level="critical",
+            )
+            machine.wait_until_succeeds(
+                "journalctl -u footer --no-pager | grep -q 'loud=true'", timeout=30
+            )
+            shot("4-loud-band", lines=4)
+
+    if wanted("screenshot"):
+        with subtest("the screenshot: the font's own glyph, and the actions"):
+            # THE WHOLE SCREENSHOT PATH, as the compositor drives it.
+            #
+            # niri sends `app_name = "niri"`, the English summary, and the file's
+            # path in the ICON field as a `file://` URL — which is where the actions
+            # get the image from. Here the URL is real, so the actions survive
+            # `usable_actions`.
+            #
+            # And the glyph is `md-monitor_screenshot`, named in
+            # `assets/notifications.nix` as a NerdFonts glyph rather than a design
+            # system token: nothing in the design system says "screen capture".
+            machine.succeed("mkdir -p /root/Pictures")
+            machine.succeed(
+                "${pkgs.imagemagick}/bin/magick -size 320x200 canvas:gray30 "
+                "'/root/Pictures/Screenshot 2026-08-22.png'"
+            )
+            for _ in range(8):
+                control("notif-dismiss")
+            # THE RAW `Notify`, exactly as the compositor sends it.
+            #
+            # `notify-send` is the wrong tool here and the log said so: libnotify
+            # loads the file and sends the standard `image-path` hint, leaving
+            # `app_icon` empty. niri does neither — it calls the method itself with
+            # the `file://` URL IN the icon field (`utils/mod.rs`), and that is the
+            # path the `screenshot` entry reads.
+            #
+            # Reproducing it by hand is the only way this scene shows what actually
+            # happens on the machine rather than what libnotify would have done.
+            machine.succeed(
+                "XDG_RUNTIME_DIR=/run/user/0 "
+                "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
+                "${pkgs.glib}/bin/gdbus call --session "
+                "--dest org.freedesktop.Notifications "
+                "--object-path /org/freedesktop/Notifications "
+                "--method org.freedesktop.Notifications.Notify "
+                # EVERY ARGUMENT TYPED, and the last one especially: `-1` on its
+                # own is read by GOption as a FLAG, and `gdbus` answers with its
+                # usage instead of sending anything. `int32 -1` is one GVariant
+                # literal that does not begin with a dash.
+                "'niri' 'uint32 0' 'file:///root/Pictures/Screenshot%202026-08-22.png' "
+                "'Screenshot captured' 'You can paste the image from the clipboard.' "
+                "'@as []' \"{'urgency': <byte 1>}\" 'int32 -1'"
+            )
             machine.sleep(1)
-        # AND THE FOOTER IS STILL THERE. `is-active` and not a screenshot: an
-        # aborted footer leaves its surface behind for an instant, and a picture
-        # taken in that instant would pass over a dead process.
-        machine.succeed("systemctl is-active footer")
-        shot("34-the-pointer-on-the-hint-line", lines=3)
+            decided = machine.succeed(
+                "journalctl -u footer --no-pager | grep 'notification decided' | tail -1"
+            ).strip()
+            print(decided)
+            assert 'catalogue="screenshot"' in decided, decided
+            shot("5-screenshot-with-actions", lines=5)
 
-    with subtest("the line that outlives the footer"):
-        # THE SECOND DEFECT THE OWNER NAMED, which was not the crash: *"a
-        # ronoctua-distro não sabe lidar com isso, ou seja, acaba deixando o
-        # usuário sem interface"*. With the footer down, all four emergency
-        # binds are dead by construction — they all write to its own control
-        # socket — so nothing on screen could say what had happened.
-        #
-        # KILLED ON PURPOSE, and with the signal the defect produced: a stack
-        # overflow ends in `process::abort`, which is `SIGABRT`.
-        machine.succeed("systemctl kill -s SIGABRT footer")
-        machine.wait_until_fails("systemctl is-active footer", timeout=30)
-        # RAISED BY HAND HERE, because this transient unit is not the one the
-        # module declares and carries no `OnFailure=`. That wiring is what
-        # `a-dead-footer-is-not-a-dead-desktop` reads, and the firing itself was
-        # measured with two transient units of its own; what this subtest proves
-        # is the LINE.
-        machine.succeed(
-            "systemd-run --unit=lifeline ${xvfb.env} "
-            "--setenv=WAYLAND_DISPLAY=wayland-1 "
-            "--setenv=HOME=/root "
-            f"--setenv=NIRI_SOCKET={sock} "
-            "--setenv=RONOCTUA_THEME=${defaultTheme} "
-            "--setenv=RONOCTUA_THEMES=${themed} "
-            "${ronoctua-shell}/bin/ronoctua-shell lifeline footer.service"
-        )
-        machine.sleep(4)
-        shot("35-the-line-that-outlives-the-footer", lines=2)
+    if wanted("notifications"):
+        with subtest("the manager, in two columns"):
+            control("notif-open")
+            shot("6-manager-two-columns")
 
-        # AND IT IS MEASURED. Two rows of ink where the footer used to be — with
-        # the footer gone there is nothing else down there that could draw them.
-        w_l, h_l, x_l, y_l = niri_geometry()
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
-        band = f"{w_l}x{2 * LINE}+{x_l}+{y_l + h_l - 2 * LINE}"
-        drawn = rows_with_ink(band)
-        assert drawn >= 2, (
-            f"the rescue line drew ink on {drawn} row(s) of pixels — with the "
-            "footer gone there is nothing else down there to draw it"
-        )
-        # THE MARK IS THE ERROR'S COLOUR, which is the one thing on the line
-        # that says this is not an ordinary message.
-        crop(band, "/tmp/lifeline.png")
-        has_colour("#" + token_hex("state.error"), at_least=8, of="/tmp/lifeline.png")
+    if wanted("catalogue"):
+        with subtest("the distro's catalogue, in the third column"):
+            # X INPUT FOCUS FIRST. With no window manager nobody calls
+            # `XSetInputFocus`, so the focus stays on `PointerRoot` and every key
+            # `xdotool` injects is lost — no error, no log, nowhere.
+            focus_niri()
+            # TAB twice: what happened, what was suppressed, what is configured.
+            for _ in (1, 2):
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Tab")
+                machine.sleep(1)
+            shot("7-distro-catalogue")
+            # And one entry's sheet, which is where "use the distro's default or
+            # customise" is actually done.
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.sleep(1)
+            shot("8-adjustment-sheet")
+            control("notif-open")
 
-        # AND THE MOUSE REACHES THE OPTIONS, which is the half nobody had
-        # tested — the owner said so in as many words: *"tenha certeza de que
-        # eles são clicáveis pelo mouse (pois como eu não testei, não sei se o
-        # suporte do mouse está implementado)"*.
-        #
-        # THE FIRST OPTION, whose column is known by construction: the row
-        # begins at `MARGIN + 2` cells — `lifeline::MARGIN` is the footer's own
-        # `modeline.edgeLeft`, plus the two the warning glyph takes — so a click
-        # three and a half cells in lands inside `[l]`. What it does is open the
-        # journal in the rescue console, which is a SECOND PROCESS, and that is
-        # what makes the click visible from out here.
-        options_row = y_l + h_l - LINE + LINE // 2
-        machine.succeed(
-            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
-            f"{x_l + int(3.5 * CELL)} {options_row}"
-        )
-        machine.sleep(1)
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 1")
-        # THE BRACKET IS THE ASSERTION, and without it there is none: `pgrep -f`
-        # reads the command line of EVERY process, including the shell running
-        # the `pgrep`, whose line carries the pattern. `[b]in/…` is the same
-        # regex and is not the same text, so the only thing that can answer is
-        # a rescue console that really started (`tests/apps-vm.nix` writes the
-        # rule out, and the manager's own shot above already spells it).
-        machine.wait_until_succeeds(
-            "pgrep -f '[b]in/ronoctua-shell rescue'", timeout=30
-        )
+    if wanted("manager"):
+        with subtest("the file manager, with the preview and the facts"):
+            # A PICTURE MADE IN THE VM, and nothing brought in. The owner's own
+            # test files live outside this repository and stay there; what a shot
+            # has to prove is that a picture reaches the panel, and a picture made
+            # here proves it without carrying somebody's photographs into a store
+            # path that never forgets.
+            #
+            # A PNG on purpose: the raster path is the `image` crate, in process,
+            # so this shot needs none of the five external programs and works on a
+            # machine that has no media group at all.
+            machine.succeed("mkdir -p /root/shots")
+            machine.succeed(
+                "${pkgs.imagemagick}/bin/magick -size 480x320 "
+                # TWO LIGHT COLOURS on purpose: a gradient that fades into the
+                # background makes the picture's own edge unmeasurable, and the
+                # air below it then reads as forty pixels that are not there.
+                "gradient:'#7AA2F7'-'#E0AF68' /root/shots/test-picture.png"
+            )
+            focus_niri()
+            control("files-open")
+            # THE LETTER IS QUERY in this view, which is what makes this
+            # deterministic: typing narrows to the one file rather than depending on
+            # where the cursor happened to land.
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'shot'"
+            )
+            machine.sleep(1)
+            # AND INTO THE DIRECTORY. Filtering alone leaves the cursor on
+            # `shots/` — which is a folder, and a folder has no picture inside
+            # it, so the panel correctly drew the type's glyph. The file is one
+            # level down.
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.sleep(1)
+            # AND NOTHING IS PRESSED FOR THE PANELS. They used to need `C-v` and
+            # `C-i`; the owner asked for them to be on from the start, so pressing
+            # the two keys here is what would TURN THEM OFF — which is how this
+            # shot came back with no picture in it at all.
+            machine.sleep(1)
+            # THE POINTER ON A ROW, because the band only exists under it — and the
+            # band's left edge is the thing the owner keeps photographing. A shot
+            # with the pointer parked outside cannot show it at all.
+            w_g, h_g, x_g, y_g = niri_geometry()
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_g + 300} {y_g + h_g - 3 * LINE}"
+            )
+            machine.sleep(1)
+            shot("10-manager-with-preview")
 
-        # AND THE KEYBOARD REACHES THEM TOO, by the key the line now draws.
-        #
-        # `Esc` and not `x`: the owner read the photograph and asked for the key
-        # that actually closes it. The surface takes the keyboard ON DEMAND — at
-        # rest it takes it from nobody, which is what lets it appear over
-        # somebody's work — so the click above is also what handed it over.
-        #
-        # AND IT STILL HAS THE KEYBOARD with the console open on top of it. That
-        # is niri's own precedence and not an accident: an on-demand layer
-        # surface on the TOP layer is asked for focus before the layout's
-        # windows are (`update_keyboard_focus`), and only another CLICK clears
-        # it. Which is the behaviour this line needs — the log one opens is the
-        # thing one reads while deciding what to do here.
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
-        machine.wait_until_fails("systemctl is-active lifeline", timeout=30)
+            # AND THE POINTER OVER THE FACTS, which is the defect the owner
+            # reported in words: hovering a fact lit the row of the LISTING beside
+            # it, because every section's fields ride one `Row`. What has to be on
+            # screen here is a band inside the facts' own column and NOTHING lit in
+            # the listing.
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_g + w_g - 120} {y_g + h_g - 4 * LINE}"
+            )
+            machine.sleep(1)
+            shot("14-hover-on-the-facts")
 
-        # AND THE CONSOLE IT OPENED IS PUT AWAY, because this subtest raised it.
-        machine.succeed("pkill -f '[b]in/ronoctua-shell rescue' || true")
+            # AND A LISTING THAT IS ACTUALLY CUT, which no shot here had.
+            #
+            # Every manager shot above opens on a folder with one file, so no
+            # section scrolls and no bar is drawn — which is why the owner's
+            # photograph of TWO BARS in one column could not be reproduced from
+            # this file. The footer used to draw its own generic bar over the
+            # manager's per-section one: two rectangles in the same cell, moving
+            # against different totals. Forty files make the listing scroll, and
+            # the picture then has exactly one bar in it or the defect is back.
+            machine.succeed("mkdir -p /root/many && touch /root/many/f-{01..40}.txt")
+            for _ in range(8):
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.sleep(1)
+            control("files-open")
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'many'"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.sleep(2)
+            shot("16-footer-listing-cut")
+            # `files-open` OPENS — it does not toggle, so asking twice reopened it.
+            # And what the manager leaves up is a PAGE, which the footer draws BELOW
+            # the band and below the modeline: cropping the last lines with it on
+            # screen photographs the listing. That is exactly how the brain's line
+            # came out as a file listing and no one noticed — green is not proof,
+            # and neither is a screenshot nobody opened.
+            for _ in range(8):
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            # TWO DIGITS IS THE ASSERTION, and not a number of my own: the footer
+            # sums a fractional line height and comes to 53 where `LINE` — which
+            # ceils, because a crop cannot take half a pixel — would say 54. What
+            # is being asserted is that the PAGE is gone, and chrome alone is tens
+            # of pixels tall where a page is hundreds.
+            machine.wait_until_succeeds(
+                "journalctl -u footer --no-pager | tail -6"
+                " | grep -qE 'height=[0-9]{1,2} '",
+                timeout=30,
+            )
+
+    if wanted("manager-window"):
+        with subtest("the manager at the WINDOW door, which the footer does not show"):
+            # THE DOOR NOBODY PHOTOGRAPHED. Every shot here is of the footer, and
+            # the manager has two doors — so the window's own spacing went three
+            # rounds unseen while the owner was looking straight at it. A door with
+            # no picture of it is a door whose defects are reported from his screen
+            # instead of caught here.
+            control("files-window")
+            machine.wait_until_succeeds(
+                "journalctl -u footer --no-pager | tail -40"
+                " | grep -q 'br.ronoctua.files'",
+                timeout=60,
+            )
+            machine.sleep(3)
+            # AND INTO THE PICTURE'S FOLDER, so this door is photographed with a
+            # picture in it: the window opens at HOME, where every entry is a
+            # directory and the preview correctly says there is none.
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'shots'"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.sleep(2)
+            # SAME REASON as the footer's: the band needs the pointer.
+            w_w, h_w, x_w, y_w = niri_geometry()
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_w + 300} {y_w + 4 * LINE}"
+            )
+            machine.sleep(1)
+            shot("13-manager-in-a-window")
+
+            # AND THE POINTER ON THE FACTS, in THIS door — the one the owner
+            # photographed. Down in the strip the facts have a `top` of their own,
+            # and a band that forgot it lit the listing's row of the same number.
+            #
+            # THE WINDOW'S OWN HALF, and not the output's: niri tiles this window
+            # into the left half of the screen, so `w_w` — which is the whole
+            # output — put the pointer on the desktop and nothing was hovered.
+            # The facts sit to the right of the strip's rule; the third of them is
+            # three lines below the strip's top.
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_w + 450} {y_w + h_w - 3 * LINE - 6}"
+            )
+            machine.sleep(1)
+            shot("15-hover-on-the-windows-facts")
+
+            # AND THE FACTS SCROLLED TO THE END, which is the photograph the owner
+            # sent twice.
+            #
+            # No shot here ever reached the last row of a panel, so the gap under
+            # the thumb could not be seen from this file: the track was
+            # `lines × line_px` and a surface is not a whole number of lines, so at
+            # the last offset the thumb stopped short by the residue and the
+            # background showed through below it. The wheel takes it to the end;
+            # what has to be true in the picture is that the thumb's bottom and the
+            # window's bottom are the same pixel.
+            for _ in range(12):
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 5")
+            machine.sleep(2)
+            shot("17-facts-scrolled-to-the-end")
+
+            # AND THE LISTING SCROLLED TO ITS END, in the SAME door and with the
+            # strip below it — the other half of the same arithmetic.
+            #
+            # Giving the facts the surface's bottom was right: theirs is the last
+            # band in its column. Giving it to EVERY band was not, and the owner
+            # watched the listing's thumb run past the boundary and down into the
+            # facts' box. What has to be true in this picture is the opposite of
+            # the one above: the thumb's bottom is the strip's rule, not the
+            # window's bottom edge.
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
+            machine.sleep(1)
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'many'"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.sleep(2)
+            # THE POINTER OVER THE LISTING and not over a panel: the wheel moves
+            # the section it is on, which is the whole point of the four sections.
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_w + 200} {y_w + 6 * LINE}"
+            )
+            machine.sleep(1)
+            for _ in range(60):
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 5")
+            machine.sleep(2)
+            shot("18-window-listing-scrolled-to-the-end")
+
+            # AND A FILE OF LETTERS, WITH ITS OWN CONTENT IN THE PANEL.
+            #
+            # THE DEFECT THIS IS THE PICTURE OF: the owner selected a markdown
+            # file and the preview said "there is no picture inside this kind of
+            # file". The panel is not an image panel — it answers what is IN a
+            # file — and every one of the eighteen shots above photographed it
+            # with a picture or with nothing, so the sentence was on his screen and
+            # in none of ours.
+            #
+            # A `.nix` on purpose: it is the file this repository is made of, the
+            # type is one we invent ourselves in `mime-glyphs.nix`, and its
+            # highlight uses four of the twelve tokens in one screenful.
+            machine.succeed("mkdir -p /root/shots/code")
+            # FROM THE STORE, and not from a heredoc written here.
+            #
+            # A heredoc would be a shell string inside a Python string inside this
+            # Nix fence, and AGENTS.md names that trap in as many words: inside the
+            # fence a Nix interpolation is live even in a comment, a backtick is
+            # command substitution, and the fence itself closes on two apostrophes
+            # wherever they appear. Writing this very comment closed it once. A
+            # file the store already holds has none of those levels.
+            machine.succeed("cp ${sampleCode} /root/shots/code/sample.nix")
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
+            machine.sleep(1)
+            control("files-window")
+            machine.wait_until_succeeds(
+                "journalctl -u footer --no-pager | tail -40"
+                " | grep -q 'br.ronoctua.files'",
+                timeout=60,
+            )
+            machine.sleep(3)
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'shots'"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.sleep(1)
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'code'"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.sleep(2)
+            shot("19-preview-of-a-file-of-text")
+
+            # AND IT IS MEASURED, because a picture nobody reads is not proof.
+            #
+            # The panels sit in the right-hand half of the window from
+            # `space.files.panelsFrom` on, and the preview is the left of the two.
+            w_t, h_t, x_t, y_t = niri_geometry()
+            # SAFELY INSIDE THE PREVIEW, and narrower than the panel it sits in.
+            #
+            # A quarter of the width was the first box, and the two panels are not
+            # exactly a quarter each: it reached past the rule and into the facts,
+            # so a measurement of "the preview" was reading its neighbour's text.
+            # The panels begin at the halfway mark; this stops well short of the
+            # rule between them, which costs a few columns of reach and buys an
+            # answer about the right panel.
+            panel = f"{w_t // 4 - 70}x{h_t - 4 * LINE}+{w_t // 2 + 10}+{2 * LINE}"
+
+            # ONE: THERE IS CONTENT, and not a sentence. A refused panel draws one
+            # dim line; planting `Refusal::NoPicture` back brings this to 1.
+            drawn = rows_with_ink(panel)
+            assert drawn >= 3, (
+                f"the preview drew ink on {drawn} row(s) of pixels — a file of "
+                "letters came out as a sentence again"
+            )
+
+            # TWO: THE HIGHLIGHT IS REAL, AND IT IS THE TOKENS'.
+            #
+            # This is the sharpest measurement available here, because it ties the
+            # photograph to `assets/tokens/colors.nix`: a colour written into Rust
+            # by hand, or a role-to-token map that lost an arm, fails HERE and not
+            # on the owner's screen. The two asked for are the two furthest apart
+            # in the palette — a string's green and a keyword's purple.
+            crop(panel, "/tmp/panel-before.png")
+            has_colour("#" + token_hex("syntax.string"), at_least=20)
+            has_colour("#" + token_hex("syntax.keyword"), at_least=20)
+
+            # AND IT SCROLLS. `C-,` pages the preview and the bar follows.
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+comma")
+            machine.sleep(2)
+            shot("20-preview-of-text-paged")
+
+            # AND THE SIDEWAYS BAR IS THERE, which is the half the owner found
+            # missing: the keys moved the line and there was nothing to drag.
+            #
+            # WHERE IT IS, IS MEASURED AND NOT ASSUMED. The first version computed
+            # the foot from the WINDOW's height and cropped the modeline instead —
+            # which has ink of its own, so the assertion passed while pointing at
+            # the wrong thing entirely. The panel's last row of ink is a fact on
+            # the screen; ask for it.
+            def ink_bottom(box, at_y):
+                """The absolute y where the ink inside `box` ends."""
+                crop(box, "/tmp/col.png")
+                got = machine.succeed(
+                    "${pkgs.imagemagick}/bin/magick /tmp/col.png -threshold 20% -trim "
+                    "-format '%[fx:page.y+h]' info: 2>/dev/null || echo 0"
+                ).strip()
+                return at_y + int(got)
+
+            bottom = ink_bottom(panel, 2 * LINE)
+            foot = f"{w_t // 4 - 70}x{LINE}+{w_t // 2 + 10}+{bottom - LINE}"
+            assert rows_with_ink(foot) >= 1, (
+                "there is nothing along the foot of the preview — a line one can "
+                "only reach with the keyboard is half a view"
+            )
+
+            # AND THE SIDEWAYS BAR MOVES, which is the whole of what the owner
+            # asked for: a thumb that is only there to look at is not a control.
+            #
+            # Measured as its own left edge before and after the key. `C-]` moves
+            # the line, and the thumb has to follow it — where a bar is drawn is
+            # where it is grabbed, and a thumb that stood still while the text
+            # moved would be lying about where one is.
+            # DID THE THUMB LEAVE THE LEFT EDGE? — asked of a four-pixel probe
+            # there, counting the pixels drawn in the bar's own token.
+            #
+            # NOT `-trim`, and the reason is the case that matters most: trim
+            # answers from the CORNER pixel, and at column nought the corner IS the
+            # thumb — so it reported nothing exactly when the thumb was where it
+            # should be. The first version read that "nothing" as a position of
+            # minus one, and then `after > before` passed because 3 is more than
+            # -1 rather than because anything moved.
+            #
+            # This count cannot do that. With no bar at all it is nought at both
+            # ends and the assertion fails; with a bar that does not move it is the
+            # same at both ends and the assertion fails.
+            def thumb_over_the_left(box):
+                probe = f"4x{LINE}+{box.split('+')[1]}+{box.split('+')[2]}"
+                return int(
+                    machine.succeed(
+                        f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {probe} +repage "
+                        f"-fuzz 6% -fill white -opaque '#{token_hex('rule.strong')}' -fill black "
+                        "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
+                    ).strip()
+                )
+
+            before_left = thumb_over_the_left(foot)
+            assert before_left > 0, (
+                "the foot of the preview has no bar on it at all — a line one can "
+                "only reach with the keyboard is half a view"
+            )
+            for _ in range(6):
+                machine.succeed(
+                    "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+bracketright"
+                )
+            machine.sleep(2)
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            after_left = thumb_over_the_left(foot)
+            assert after_left < before_left, (
+                f"the sideways thumb covered {before_left} pixels of the left edge "
+                f"and still covers {after_left} — the line moved and the bar did "
+                "not follow it"
+            )
+            shot("21-preview-scrolled-sideways")
+
+            # AND IT IS MEASURED TOO: the panel's own pixels changed. Restoring
+            # `total: 1` leaves the key with nothing to move and this fails.
+            machine.succeed(
+                "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
+                f"{panel} +repage /tmp/after.png"
+            )
+            # BY SIGNATURE, and not by `compare`.
+            #
+            # `compare`'s EXIT CODE is its answer — nought when the pictures match,
+            # one when they differ — so every attempt to keep the command from
+            # "failing" also threw away the result. The first version wrapped it in
+            # `|| true` and read an error message as "they differ"; the second
+            # measured two crops of different sizes and got away with it.
+            #
+            # A signature is one number per picture. Two of them are equal or they
+            # are not, and a magick that fell over gives two empty strings — which
+            # compare EQUAL, so the assertion below fails rather than passes.
+            def signature(path):
+                return machine.succeed(
+                    f"${pkgs.imagemagick}/bin/magick {path} -format '%#' info:"
+                ).strip()
+
+            assert signature("/tmp/panel-before.png") != signature("/tmp/after.png"), (
+                "the preview drew the same pixels after the page key — it did not "
+                "scroll"
+            )
+
+    if wanted("document"):
+        with subtest("a document: a zip of XML reaching the panel as words"):
+            # THE DEFECT THE OWNER FOUND, in one sentence: his folder had eleven
+            # documents and the preview opened one of them, the PDF. The other six
+            # of the office family are a ZIP OF XML — and this crate has had a zip
+            # reader since the day it learnt to draw a 3MF, so what was missing was
+            # the twenty lines that say which member holds the words.
+            #
+            # PHOTOGRAPHED and not only unit-tested, because the unit tests know
+            # `text::Read` and this is the only thing that knows the panel: the
+            # answer comes back as the same type a `.rs` does, so the panel scrolls
+            # it, pages it and hangs a bar on it with no new code at all — and that
+            # claim is about a screen.
+            # THE WINDOW DOOR HAS TO BE OPEN, and this scene does not open one:
+            # it walks the directory `manager-window` left it in. Asked out of
+            # band, because the alternative is what actually happened — run on
+            # its own, this subtest photographed an EMPTY DESKTOP and PASSED,
+            # its `text.primary` answered by the white mouse pointer. The
+            # closure in `nix/shots-scenes.nix` is what brings the door along;
+            # this is what says so out loud if it ever stops.
+            machine.succeed("pgrep -f '[b]in/ronoctua-shell files'")
+            machine.succeed("mkdir -p /root/shots/papers")
+            machine.succeed("cp ${sampleDocument} /root/shots/papers/sample.docx")
+            # ONE LEVEL UP, and one only. The subtest above left the window in
+            # `/root/shots/code`; `papers` is its sibling, so a second `BackSpace`
+            # would leave the manager at `/root`, where the filter finds nothing
+            # and the panel photographs an empty directory.
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
+            machine.sleep(1)
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'papers'"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.sleep(3)
+            shot("33-preview-of-a-document")
+
+            w_d, h_d, x_d, y_d = niri_geometry()
+            # THE SAME BOX THE TEXT PREVIEW IS MEASURED IN, and for its reasons.
+            paper = f"{w_d // 4 - 70}x{h_d - 4 * LINE}+{w_d // 2 + 10}+{2 * LINE}"
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            drawn = rows_with_ink(paper)
+            # A REFUSED PANEL DRAWS ONE DIM LINE. Two paragraphs draw more, and
+            # taking `document::of` out of the chain brings this straight back to a
+            # sentence — which is what `sem prévia` looked like before any of this.
+            assert drawn >= 3, (
+                f"the preview drew ink on {drawn} row(s) of pixels — a document "
+                "came out as a sentence about not being able to show one"
+            )
+            # AND IT IS THE CONTENT'S OWN COLOUR, and not the dim tone a refusal
+            # wears: the one measurement that tells "it read the file" from "it
+            # said it could not".
+            crop(paper, "/tmp/paper.png")
+            has_colour("#" + token_hex("text.primary"), at_least=20, of="/tmp/paper.png")
+
+
+
+    if wanted("miniplayer"):
+        with subtest("the miniplayer: it moves, it holds, and it draws over nothing"):
+            # A GIF MADE HERE, and not a video, and that is not a compromise.
+            #
+            # The GIF path is the `image` crate, decoded in process — so this
+            # subtest needs none of the five external programs and runs on a machine
+            # with no media group at all. What it proves is the whole player: a
+            # frame reaching the panel, the box being sized from the FRAME rather
+            # than from a still, the transport taking a line of its own, and the
+            # hold being real.
+            #
+            # What it cannot prove is the TIMELINE, which needs a duration, which
+            # needs a video, which needs `ffmpeg-full` inside this VM. That is a
+            # closure decision and not a test decision, so it is not taken here.
+            #
+            # FOUR COLOURS THIS INTERFACE DOES NOT CONTAIN, and that is measured
+            # rather than assumed. The first version used four palette colours and
+            # the blue one matched the interface elsewhere within the fuzz: the
+            # picture's own box came back as 172x644 — most of the panel — while
+            # the orange, which is not near anything, came back as 130x97 for
+            # exactly 12610 pixels. A measurement that catches its neighbours is
+            # not a measurement.
+            # THE SAME DOOR THIS SCENE RIDES ON, asked the same way.
+            machine.succeed("pgrep -f '[b]in/ronoctua-shell files'")
+            FILM = ["#FF00FF", "#00FFFF", "#FFFF00", "#FF6000"]
+            machine.succeed(
+                "${pkgs.imagemagick}/bin/magick -delay 20 -loop 0 -size 240x180 "
+                + " ".join(f"xc:'{c}'" for c in FILM)
+                + " /root/shots/moving.gif"
+            )
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
+            machine.sleep(1)
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'moving'"
+            )
+            machine.sleep(3)
+            shot("22-miniplayer")
+
+            w_m, h_m, x_m, y_m = niri_geometry()
+            # THE SAME BOX THE TEXT PREVIEW USES, and for the reason written there:
+            # a quarter of the width reaches past the rule into the facts.
+            pane = f"{w_m // 4 - 70}x{h_m - 4 * LINE}+{w_m // 2 + 10}+{2 * LINE}"
+
+            def panel_now(name):
+                """Crops the preview out of a fresh capture."""
+                machine.succeed(
+                    "${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd"
+                )
+                machine.succeed(
+                    "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
+                    f"{pane} +repage /tmp/{name}.png"
+                )
+                return f"/tmp/{name}.png"
+
+            def film_pixels(path, colour):
+                """How many pixels of one of the film's colours the panel holds."""
+                return int(
+                    machine.succeed(
+                        f"${pkgs.imagemagick}/bin/magick {path} -fuzz 4% "
+                        f"-fill white -opaque '{colour}' -fill black +opaque white "
+                        "-format '%[fx:int(mean*w*h+0.5)]' info:"
+                    ).strip()
+                )
+
+            def frame_showing(path):
+                """Which of the film's frames is on screen, or None."""
+                counts = [film_pixels(path, c) for c in FILM]
+                best = max(range(len(FILM)), key=lambda i: counts[i])
+                # A THRESHOLD, because "none of them" has to be answerable: the
+                # picture is thousands of pixels, and a stray match is tens.
+                return (best, counts) if counts[best] > 500 else (None, counts)
+
+            # ZERO: THE PLAYER OPENED, AND AT THE SIZE THE PANEL ASKED FOR.
+            #
+            # This one needs no pixels, and it is the sharpest of the four: under
+            # the defect the owner photographed, this line said `512x32`.
+            opened = machine.succeed(
+                "journalctl --no-pager | grep -o 'motion stream opened.*' | tail -1 || true"
+            ).strip()
+            assert opened, (
+                "the player never opened a stream at all — the file under the "
+                "cursor is not being read as one that moves"
+            )
+            assert "height=32" not in opened, (
+                f"the frame's height is being guessed again: {opened}"
+            )
+
+            # ONE: DIFFERENT FRAMES OF THE FILM REACH THE SCREEN.
+            #
+            # Asked as "which frame is up", sampled six times, and NOT as "did two
+            # signatures differ" — which is what this was first and which is flaky
+            # by construction: two samples can land on the same frame, and the
+            # answer then reads exactly like a film that is frozen. It did, once,
+            # with the player provably running.
+            #
+            # Naming the frame also tells apart the two things a frozen signature
+            # cannot: a film that is stuck, and frames that never arrive at all.
+            seen = []
+            for k in range(6):
+                which, counts = frame_showing(panel_now(f"moving-{k}"))
+                assert which is not None, (
+                    f"not one of the film's four colours is in the panel: {counts} "
+                    "— the frames are not reaching the screen at all"
+                )
+                seen.append(which)
+                machine.sleep(1)
+            assert len(set(seen)) >= 2, (
+                f"the panel showed frame {seen} over five seconds — the film is not "
+                "running"
+            )
+
+            # TWO: THE HOLD IS REAL, and this is the sharper half. A stopped film is
+            # DETERMINISTIC — the same frame every time — and it proves the
+            # transport rather than the decoder.
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+semicolon"
+            )
+            machine.sleep(2)
+            held = []
+            for k in range(3):
+                which, _ = frame_showing(panel_now(f"held-{k}"))
+                held.append(which)
+                machine.sleep(1)
+            assert len(set(held)) == 1 and held[0] is not None, (
+                f"the panel showed frames {held} after the hold key — pausing did "
+                "not stop the player"
+            )
+            shot("23-miniplayer-held")
+
+            # THREE: THE SHAPE IS RIGHT, and this one assertion catches what the
+            # owner photographed.
+            #
+            # Measured as the BOX OF THE FILM'S OWN COLOUR, which is the picture and
+            # nothing else. A plain threshold was the first attempt and it answered
+            # 250x658 — the whole panel, text included — so it passed whatever the
+            # picture looked like.
+            #
+            # The GIF is 240x180, four to three. Under the old defect the player
+            # declared its frames 512 by 32 and the doors stretched that inside a
+            # box measured from the STILL, so the picture came out a band of roughly
+            # sixteen to one.
+            box = machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick /tmp/held-0.png -fuzz 4% "
+                f"-fill white -opaque '{FILM[held[0]]}' -fill black +opaque white "
+                "-trim -format '%[fx:w] %[fx:h]' info:"
+            ).split()
+            ink_w, ink_h = int(box[0]), int(box[1])
+            assert ink_w > 0 and ink_h > 0, "the picture has no extent at all"
+            assert ink_w < ink_h * 2, (
+                f"the picture is {ink_w} by {ink_h} — a four-to-three film came out "
+                "as a band, which is the frame's height being guessed again"
+            )
+
+            # FOUR: THE CONTROLS ARRIVE WITH THE POINTER, AND NOT BEFORE.
+            #
+            # The owner asked for exactly this — *"controles que aparecem no hover
+            # do mouse"* — and it is the only claim here that has to be written as a
+            # negative as well as a positive. Without the first half, a row that was
+            # always drawn would pass the second.
+            #
+            # The transport is the panel's LAST line, which is where the picture
+            # stops: `View::transport_rows` takes it off the box, so this row is
+            # never ink drawn over the film.
+            # THE BOTTOM OF THE PANEL, which is where the controls go — counted in
+            # the colour a GLYPH is drawn in and not by a threshold. Hovering used
+            # to light the section's own band, and a band is ink: a threshold would
+            # have risen for the hover rather than for the control, and passed
+            # either way. (The band over a picture is gone now — see
+            # `View::band_belongs` — but the measurement stays honest by colour.)
+            foot = f"{w_m // 4 - 70}x{2 * LINE}+{w_m // 2 + 10}+{2 * LINE + (h_m - 4 * LINE) - 2 * LINE}"
+
+            def glyph_pixels(box):
+                return int(
+                    machine.succeed(
+                        f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {box} "
+                        f"+repage -fuzz 12% -fill white -opaque '#{token_hex('text.primary')}' "
+                        "-fill black +opaque white "
+                        "-format '%[fx:int(mean*w*h+0.5)]' info:"
+                    ).strip()
+                )
+
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            cold = glyph_pixels(foot)
+            assert cold == 0, (
+                f"the transport row has {cold} pixels of glyph with the pointer "
+                "elsewhere — the controls are drawn whether or not anybody is "
+                "reaching for them"
+            )
+
+            # AND ON THE PICTURE, found by ITS OWN COLOUR rather than computed.
+            #
+            # The panel's midpoint is not the film: here the preview sits in the
+            # bottom STRIP, so the middle of the column is the LISTING. That is
+            # where this pointer went the first time, and the controls correctly did
+            # not arrive — the assertion was right and the aim was wrong.
+            spot = machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick /tmp/held-0.png -fuzz 4% "
+                f"-fill white -opaque '{FILM[held[0]]}' -fill black +opaque white "
+                "-trim -format '%[fx:page.x] %[fx:page.y] %[fx:w] %[fx:h]' info:"
+            ).split()
+            px, py, pw, ph = (int(v) for v in spot)
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_m + (w_m // 2 + 10) + px + pw // 2} "
+                f"{y_m + (2 * LINE) + py + ph // 2}"
+            )
+            machine.sleep(2)
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            warm = glyph_pixels(foot)
+            shot("24-miniplayer-controls")
+            assert warm > 0, (
+                "the pointer is on the film and the transport row has no glyph in "
+                "it — the controls do not arrive"
+            )
+
+            # FIVE: THE CONTROLS ARE ON THE FILM, AND COST IT NO HEIGHT.
+            #
+            # The owner asked for the picture to keep *"toda a altura possível"*, so
+            # the transport is a band painted over the film's last line rather than
+            # a line taken off it. Measured as the picture's own box, with the
+            # controls up and with them away: the same number, or the band is still
+            # eating a line.
+            def film_box(path, colour):
+                got = machine.succeed(
+                    f"${pkgs.imagemagick}/bin/magick {path} -fuzz 4% "
+                    f"-fill white -opaque '{colour}' -fill black +opaque white "
+                    "-trim -format '%[fx:w] %[fx:h]' info:"
+                ).split()
+                return int(got[0]), int(got[1])
+
+            machine.succeed(
+                "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
+                f"{pane} +repage /tmp/with-controls.png"
+            )
+            held_w, held_h = film_box("/tmp/held-0.png", FILM[held[0]])
+
+            # MEASURED AGAINST THE PANEL, and NOT against the same picture with the
+            # controls up.
+            #
+            # That was the first shape of this and it is self-contradicting: the
+            # band is half-transparent, so it DARKENS the film it covers, and the
+            # film's own colour stops matching there. The picture then measures
+            # shorter exactly BECAUSE the band works — and the assertion two blocks
+            # down checks that the film still shows through it. One of the two had
+            # to be wrong, and it was this one.
+            #
+            # What says the controls cost the film nothing is the film filling the
+            # panel's own height: four to three in a panel twice as wide as it is
+            # tall is bounded by the height, so it reaches the box's edge. A line
+            # reserved for the controls would leave it a whole line short.
+            panel_tall = STRIP * LINE - 2 * AIR
+            assert held_h > panel_tall - LINE, (
+                f"the film is {held_w} by {held_h} in a panel {panel_tall} tall — "
+                "more than a line short, so the transport is still costing it room"
+            )
+
+            # AND NO HOVER BAND ON THE FILM.
+            #
+            # The owner reported it in those words — *"o hover do mouse está
+            # destacando o background da linha no preview de vídeos e imagens, o
+            # que é totalmente desnecessário"*. A band says which ROW of a list the
+            # pointer is on, and a picture is not a list: it lights an arbitrary
+            # stripe across the film and covers part of what one came to look at.
+            #
+            # MEASURED IN BOTH STATES, and that is not caution — it is the only way
+            # this can be measured at all.
+            #
+            # `surface.selection` and `rule.default` are THE SAME VALUE, so a count
+            # of that colour inside the panel includes every divider and rule that
+            # is always there. Asserting it is nought is asserting something
+            # impossible: the baseline is 808 pixels of rules, and it failed on them
+            # while the band it was written for was already gone. What answers the
+            # question is the DIFFERENCE — 808 against 4357 with the band, 877
+            # without it.
+            def band_pixels(path):
+                return int(
+                    machine.succeed(
+                        f"${pkgs.imagemagick}/bin/magick {path} -crop {pane} +repage "
+                        f"-fuzz 2% -fill white -opaque '#{token_hex('surface.selection')}' -fill black "
+                        "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
+                    ).strip()
+                )
+
+            cold_band = band_pixels("/tmp/held-0.png")
+            warm_band = band_pixels("/tmp/with-controls.png")
+            # A BAND IS A WHOLE LINE of the panel — thousands of pixels. Antialiasing
+            # around the controls moves this by tens, so the bound is generous and
+            # still an order of magnitude under what a band costs.
+            assert warm_band - cold_band < 500, (
+                f"the panel holds {cold_band} pixels of the band's colour with the "
+                f"pointer away and {warm_band} with it on the film — a picture has "
+                "no rows to light"
+            )
+
+            # AND THE BAND IS REALLY SEMI-TRANSPARENT: the film's own colour is
+            # still there under the controls. Opaque, the row would be a strip of
+            # chrome across the picture — which is what invariant 14 is about.
+            strip = machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {foot} +repage "
+                f"-fuzz 18% -fill white -opaque '{FILM[held[0]]}' -fill black "
+                "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
+            ).strip()
+            assert int(strip) > 0, (
+                "the film does not show through the transport's band at all — it is "
+                "opaque, and a strip of chrome across a picture is what invariant 14 "
+                "rules out"
+            )
+
+            # SIX: THE WHOLE REGION, AND WHAT THE OWNER FOUND IN IT.
+            #
+            # `C-w` gives the preview the region. Three of the defects he
+            # photographed only exist here, so this is where they are pinned.
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+w")
+            # LONG ENOUGH FOR THE RESPAWN. Giving the region away changes the box,
+            # which changes the frame's shape, which is a kill and a new child —
+            # 108 to 242 ms measured, and this machine is a software-rendered VM.
+            # Photographed sooner, what is on screen is the frame cut for the OLD
+            # box, letterboxed into the new one, which is a true picture of a
+            # transient and a false picture of the layout.
+            machine.sleep(4)
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            shot("25-miniplayer-whole")
+
+            # A RULE AGAINST THE SCREEN'S OWN EDGE. With one panel filling the
+            # width there is nothing to its left to be separated from, and the
+            # arithmetic put the line in cell nought: *"no modo largo há uma linha
+            # vertical na esquerda que continua aparecendo"*. Measured as ink in the
+            # first two columns of the region.
+            edge = f"2x{h_m - 4 * LINE}+{x_m}+{y_m + 2 * LINE}"
+            rule_ink = int(
+                machine.succeed(
+                    f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {edge} +repage "
+                    f"-fuzz 2% -fill white -opaque '#{token_hex('rule.strong')}' -fill black "
+                    "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
+                ).strip()
+            )
+            assert rule_ink == 0, (
+                f"{rule_ink} pixels of a rule are against the screen's own edge in "
+                "the wide preview"
+            )
+
+            # AND THE PICTURE IS NOT DISTORTED. The film is 240x180 — four to
+            # three — and a frame stretched to a region three times as wide as it
+            # is tall is what the owner photographed twice: once on the GIF and
+            # once after pausing and going wide. Asked of the picture's own colour,
+            # which is the picture and nothing else.
+            # WHICHEVER FRAME IS UP, and not the one that was up before.
+            #
+            # Naming a colour was the first shape of this and it measured 17 by 27 —
+            # a glyph, not a film. Giving the region away is a respawn, and the film
+            # comes back at another frame; asking for the OLD colour then measures
+            # whatever stray pixels match it. What is being asserted here is the
+            # SHAPE of the picture, so which frame is showing is not the question.
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed(
+                "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
+                f"{w_m}x{h_m}+{x_m}+{y_m} +repage /tmp/whole.png"
+            )
+            # THE LARGEST CONNECTED RUN OF THE COLOUR, and not its bounding box.
+            #
+            # `-trim` answers with the box around EVERY matching pixel, and a
+            # handful of antialiased ones elsewhere on the screen stretch it: the
+            # film measured 356 by 451 while its own rectangle was 356 by 268 and
+            # its pixel count 95 408 — a box holding sixty per cent background.
+            # Connected components answer the question that was actually being
+            # asked, which is "how big is the picture".
+            def biggest_blob(path, colour):
+                out = machine.succeed(
+                    f"${pkgs.imagemagick}/bin/magick {path} -fuzz 2% "
+                    f"-fill white -opaque '{colour}' -fill black +opaque white "
+                    "-define connected-components:verbose=true "
+                    "-define connected-components:area-threshold=2000 "
+                    "-connected-components 8 null: 2>/dev/null || true"
+                )
+                best = (0, 0, 0)
+                for row in out.splitlines():
+                    if "srgb(255,255,255)" not in row or ":" not in row:
+                        continue
+                    box = row.split(":")[1].split()[0]
+                    across, down = box.split("+")[0].split("x")
+                    area = int(row.split()[-2])
+                    if area > best[2]:
+                        best = (int(across), int(down), area)
+                return best
+
+            ww, wh = 0, 0
+            for colour in FILM:
+                w, h, area = biggest_blob("/tmp/whole.png", colour)
+                if area > ww * wh:
+                    ww, wh = w, h
+            # A FILM, AND NOT A GLYPH. The picture is thousands of pixels; a stray
+            # match is a few hundred.
+            # A FILM, AND NOT A GLYPH. The picture is thousands of pixels; a stray
+            # match is a few hundred. It also has to be BRIGHT — the band under the
+            # controls runs to the panel's real bottom, and when the panel was four
+            # lines tall in a whole region that band covered the entire film and
+            # darkened it. The fuzz is tight for exactly that reason.
+            assert ww * wh > 20000, (
+                f"the largest thing matching the film's colours is {ww} by {wh} — "
+                "the film is either not in the region or is being covered by the "
+                "transport's own band"
+            )
+            assert abs((ww / wh) - (240 / 180)) < 0.08, (
+                f"the film is {ww} by {wh} — {ww / wh:.2f} against the four to "
+                "three it was authored at, so it is being stretched"
+            )
+
+            # AND `C-w` GIVES THE REGION BACK.
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+w")
+            machine.sleep(2)
+
+            # AND IT GOES, or it stands in front of every shot after it. The bracket
+            # keeps the pattern from matching the `pkill` that carries it —
+            # `AGENTS.md` names that one.
+            machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
+            machine.wait_until_succeeds(
+                "! ${pkgs.xwininfo}/bin/xwininfo -display :99 -root -children"
+                " | grep -q ronoctua-files || true",
+                timeout=30,
+            )
+            machine.sleep(2)
+
+    if wanted("brain"):
+        with subtest("the brain's line, with the countdown and the two answers"):
+            # THE ONE REGION NO BUFFER DRAWS. `nix run .#png` renders a wasip2
+            # component's display list; this line is the footer's own surface,
+            # below the minibuffer, so a real compositor is the only vehicle.
+            machine.succeed(
+                "systemd-run --unit=brain "
+                "--setenv=XDG_RUNTIME_DIR=/run/user/0 "
+                "--setenv=HOME=/root "
+                "--setenv=RUST_LOG=ronoctua_brain=debug "
+                "${ronoctua-brain}/bin/ronoctua-brain"
+            )
+            machine.wait_until_succeeds(
+                "test -S /run/user/0/ronoctua-brain.sock", timeout=30
+            )
+
+            # ASKING FOR THE REHEARSAL, and not for the real thing: the announcement
+            # and its countdown are the same either way, and a rehearsal changes
+            # nothing on a machine that has no update units at all.
+            machine.succeed(
+                "XDG_RUNTIME_DIR=/run/user/0 ${pkgs.python3}/bin/python3 -c '"
+                "import socket, json, os;"
+                "s = socket.socket(socket.AF_UNIX);"
+                "s.connect(os.environ[\"XDG_RUNTIME_DIR\"] + \"/ronoctua-brain.sock\");"
+                "s.sendall(json.dumps({\"ask\": \"run\", \"task\": \"system-update\","
+                " \"rehearsal\": True}).encode() + b\"\\n\");"
+                "s.shutdown(socket.SHUT_WR);"
+                "print(s.recv(65536).decode()[:200])"
+                "'"
+            )
+            # `brain=1` is the HEIGHT, in the shape `band=1` already has: waiting on
+            # a sleep would be either slow or flaky, and on a loaded machine both.
+            machine.wait_until_succeeds(
+                "journalctl -u footer --no-pager | tail -12 | grep -q 'brain=1'",
+                timeout=60,
+            )
+            shot("9-brain-line", lines=3)
+
+    if wanted("update"):
+        with subtest("the update's mark on the modeline, and the window it opens"):
+            # NOTHING IS ASKED FOR HERE, and that is the point: the shot above left
+            # a run in the queue, and the mark is on screen for exactly as long as
+            # something is queued or running. It is the sentence `update_window`
+            # already carries — "the queue counts, and not only what is running" —
+            # photographed. The sixty seconds of the countdown are the window this
+            # subtest works in, and it needs three of them.
+            machine.wait_until_succeeds(
+                "journalctl -u footer --no-pager | tail -12"
+                " | grep -q 'segment id=\"update\"'",
+                timeout=60,
+            )
+            # THREE LINES because the mark is in the MODELINE, which is the third
+            # from the bottom while the band has the line under the minibuffer.
+            shot("11-update-mark", lines=3)
+
+            # AND THE WINDOW, which is a command of its own — `LEADER s w` — for
+            # this reason: it opens whether or not anything is running, and what it
+            # says when nothing is is "nothing has been said yet".
+            control("update-watch")
+            machine.sleep(3)
+            shot("12-update-window")
+
+    if wanted("theme"):
+        with subtest("the theme chooser, and the file that is the broadcast"):
+            # -----------------------------------------------------------------
+            # Three things are proved on screen, and none of them by a buffer
+            # (`nix run .#png` cannot reach a footer view). One: the list opens
+            # on the theme in force, its focused row in that theme's accent. Two:
+            # moving the cursor PREVIEWS — the second theme's accent is on the
+            # footer and the first's is gone — while the file manager's window,
+            # opened beforehand, is untouched. Three: `RET` writes the file, and
+            # the window follows the FILE: its focused row is now in the second
+            # theme's accent with no restart; and the footer copied the two
+            # fragments beside the file. The two accents are far more than the
+            # twelve per cent apart; the window is measured on its top half BELOW
+            # its own hint line, so neither the footer's lines nor the hint's
+            # registers enter the count.
+            # -----------------------------------------------------------------
+            if THEMES > 1:
+                # The region is as tall as the LONGER of the chooser's two lists:
+                # the themes, or the desk option's header and its answers — the
+                # answers counted from the texts (`DESK_ANSWERS` above), which
+                # every answer must have a key in.
+                CHOOSER_ROWS = max(THEMES, 1 + DESK_ANSWERS)
+                first_accent = "#" + token_hex("state.accent")
+                second_accent = "#" + token_hex("state.accent", SECOND)
+                control("files-window")
+                machine.sleep(2)
+                w, h, x, y = niri_geometry()
+                upper = f"{w}x{h // 2 - LINE}+{x}+{y + LINE}"
+
+                control("theme-open")
+                shot("26-theme-chooser", lines=2 + CHOOSER_ROWS)
+                has_colour(first_accent, at_least=20, of="/tmp/26-theme-chooser.png")
+                lacks_colour(second_accent, of="/tmp/26-theme-chooser.png", fuzz=6)
+
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Down")
+                machine.sleep(1)
+                shot("27-theme-preview", lines=2 + CHOOSER_ROWS)
+                has_colour(second_accent, at_least=20, of="/tmp/27-theme-preview.png")
+                lacks_colour(first_accent, of="/tmp/27-theme-preview.png", fuzz=6)
+                # THE PREVIEW REACHES THE WINDOW TOO, and this line used to assert
+                # the opposite — "the preview is the footer's alone: the window
+                # still wears the first". That WAS true, and the owner read it on
+                # screen and called it a theme worn by a strip of the display: the
+                # minibuffer changed colour while the windows, the desk and the
+                # terminals stayed in the old one. The answer was
+                # `theme::show_everywhere`, which writes `theme.json` — the channel
+                # the other doors already watch — so moving the cursor dresses
+                # every door. The assertion is inverted because the promise was.
+                #
+                # This is `docs/PENDING.md` item 8c's second layer, answered: it was
+                # never a broadcast defect. It was a subtest left asserting a
+                # promise that the themes delivery deliberately reversed, and it
+                # went unread because `.#shots` had not been run since.
+                crop(upper, "/tmp/window-during-preview.png")
+                has_colour(second_accent, at_least=20, of="/tmp/window-during-preview.png")
+                lacks_colour(first_accent, of="/tmp/window-during-preview.png", fuzz=6)
+
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+                machine.sleep(2)
+                machine.succeed("grep -q '\"${second}\"' /root/.config/ronoctua/theme.json")
+                shot("28-theme-applied")
+                crop(upper, "/tmp/window-after.png")
+                has_colour(second_accent, at_least=20, of="/tmp/window-after.png")
+                lacks_colour(first_accent, of="/tmp/window-after.png")
+                second_desk_on_apply = "#" + token_hex("surface.backdrop", SECOND)
+                # And the fragments beside the file, for the compositor and the terminal.
+                machine.succeed("test -s /root/.config/ronoctua/niri-theme.kdl")
+                machine.succeed("test -s /root/.config/ronoctua/ghostty-theme.conf")
+                machine.succeed("grep -q 'active-color' /root/.config/ronoctua/niri-theme.kdl")
+                # A FILE THAT NEVER SAID A DESK IS ON THE THEME'S OWN, and the
+                # fragment says so. It was black until the owner made the theme's
+                # desk the default — every theme solves one and every gate holds
+                # it apart from the content's black, so a fresh machine shows it
+                # rather than having to be asked.
+                machine.succeed(
+                    f"grep -q 'background-color \"{second_desk_on_apply}\"' "
+                    "/root/.config/ronoctua/niri-theme.kdl"
+                )
+
+                # THE SECOND COLUMN: the desk. `<right>` crosses to it, `<down>`
+                # lands on the theme's own colour and the compositor is shown it
+                # at once — the fragment is the preview — and `RET` writes the
+                # pair. The desk itself is not on this screen (the window fills
+                # it); what is proved is the file niri watches, and the check
+                # `themes-have-fragments` proves niri accepts and merges it.
+                second_desk = "#" + token_hex("surface.backdrop", SECOND)
+                control("theme-open")
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Right")
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Up")
+                machine.sleep(1)
+                shot("29-theme-desk", lines=2 + CHOOSER_ROWS)
+                # THE MOVE IS UPWARDS NOW. The cursor opens on the answer in
+                # force, and that is the theme's own desk — so what this proves is
+                # the OTHER one: `<up>` lands on black and the compositor is shown
+                # it at once, because the fragment IS the preview.
+                machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
+                # AND THE FILE ALREADY SAYS IT, which is the documented PRICE of
+                # the preview being the broadcast: `theme::show_everywhere` writes
+                # the whole pair, because that file is the channel the other doors
+                # watch and a second one would be a second thing to keep in step.
+                # This line asserted the opposite — "the file still says `theme`
+                # until `RET`" — which was true before that change and has not been
+                # since; it went unread because `.#shots` had not been run.
+                machine.succeed("grep -q '\"backdrop\":\"black\"' /root/.config/ronoctua/theme.json")
+                # `Esc` IS WHAT PAYS FOR IT, and that is the promise with teeth:
+                # looking at a list may not give a machine a choice it never made.
+                # Here a pair WAS committed, so what comes back is that pair —
+                # `View::chosen_before`, asked once when the chooser opened.
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+                machine.sleep(2)
+                machine.succeed("grep -q '\"backdrop\":\"theme\"' /root/.config/ronoctua/theme.json")
+                machine.succeed(
+                    f"grep -q 'background-color \"{second_desk}\"' "
+                    "/root/.config/ronoctua/niri-theme.kdl"
+                )
+                # AND NOW FOR REAL: the same three keys, and `RET` at the end.
+                control("theme-open")
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Right")
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Up")
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+                machine.sleep(2)
+                machine.succeed("grep -q '\"backdrop\":\"black\"' /root/.config/ronoctua/theme.json")
+                machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
+    if wanted("hints"):
+        with subtest("the pointer on the hint line does not take the interface with it"):
+            # THE ASSERTION THAT WOULD HAVE CAUGHT IT, and it is the second time.
+            #
+            # `Footer::first_of_expansion` counted a row whose existence depended on
+            # how TALL the region is, and `Footer::metric` is built on
+            # `first_of_expansion`. The pointer coming to rest on a key of the hint
+            # line closed the ring: stack overflow, `process::abort`, no modeline
+            # and no minibuffer. Two coredumps of 2026-09-15 carry that stack and
+            # nothing else, and the owner read it as the interface closing when he
+            # hovered a video preview — the video was where the hand was going, the
+            # hint line was what it crossed.
+            #
+            # EVERY LINE OF THE FOOTER, from the bottom up, and not one aimed
+            # number: the hint's own row moves with the band, the glance, the
+            # opened drawer and the brain's line, so a shot that knew where it was
+            # would be photographing a listing row the day any of them appears.
+            for _ in range(8):
+                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.sleep(1)
+            control("files-open")
+            machine.sleep(2)
+            w_p, h_p, x_p, y_p = niri_geometry()
+            for n in range(1, 16):
+                machine.succeed(
+                    "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                    f"{x_p + 200} {y_p + h_p - n * LINE}"
+                )
+                # A SECOND ON EACH, because what killed it was not the motion but
+                # the FRAME after it: the sentence is resolved from what the last
+                # frame drew, so the ring only closes on the paint that follows.
+                machine.sleep(1)
+            # AND THE FOOTER IS STILL THERE. `is-active` and not a screenshot: an
+            # aborted footer leaves its surface behind for an instant, and a picture
+            # taken in that instant would pass over a dead process.
+            machine.succeed("systemctl is-active footer")
+            shot("34-the-pointer-on-the-hint-line", lines=3)
+
+    if wanted("lifeline"):
+        with subtest("the line that outlives the footer"):
+            # THE SECOND DEFECT THE OWNER NAMED, which was not the crash: *"a
+            # ronoctua-distro não sabe lidar com isso, ou seja, acaba deixando o
+            # usuário sem interface"*. With the footer down, all four emergency
+            # binds are dead by construction — they all write to its own control
+            # socket — so nothing on screen could say what had happened.
+            #
+            # KILLED ON PURPOSE, and with the signal the defect produced: a stack
+            # overflow ends in `process::abort`, which is `SIGABRT`.
+            machine.succeed("systemctl kill -s SIGABRT footer")
+            machine.wait_until_fails("systemctl is-active footer", timeout=30)
+            # RAISED BY HAND HERE, because this transient unit is not the one the
+            # module declares and carries no `OnFailure=`. That wiring is what
+            # `a-dead-footer-is-not-a-dead-desktop` reads, and the firing itself was
+            # measured with two transient units of its own; what this subtest proves
+            # is the LINE.
+            machine.succeed(
+                "systemd-run --unit=lifeline ${xvfb.env} "
+                "--setenv=WAYLAND_DISPLAY=wayland-1 "
+                "--setenv=HOME=/root "
+                f"--setenv=NIRI_SOCKET={sock} "
+                "--setenv=RONOCTUA_THEME=${defaultTheme} "
+                "--setenv=RONOCTUA_THEMES=${themed} "
+                "${ronoctua-shell}/bin/ronoctua-shell lifeline footer.service"
+            )
+            machine.sleep(4)
+            shot("35-the-line-that-outlives-the-footer", lines=2)
+
+            # AND IT IS MEASURED. Two rows of ink where the footer used to be — with
+            # the footer gone there is nothing else down there that could draw them.
+            w_l, h_l, x_l, y_l = niri_geometry()
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            band = f"{w_l}x{2 * LINE}+{x_l}+{y_l + h_l - 2 * LINE}"
+            drawn = rows_with_ink(band)
+            assert drawn >= 2, (
+                f"the rescue line drew ink on {drawn} row(s) of pixels — with the "
+                "footer gone there is nothing else down there to draw it"
+            )
+            # THE MARK IS THE ERROR'S COLOUR, which is the one thing on the line
+            # that says this is not an ordinary message.
+            crop(band, "/tmp/lifeline.png")
+            has_colour("#" + token_hex("state.error"), at_least=8, of="/tmp/lifeline.png")
+
+            # AND THE MOUSE REACHES THE OPTIONS, which is the half nobody had
+            # tested — the owner said so in as many words: *"tenha certeza de que
+            # eles são clicáveis pelo mouse (pois como eu não testei, não sei se o
+            # suporte do mouse está implementado)"*.
+            #
+            # THE FIRST OPTION, whose column is known by construction: the row
+            # begins at `MARGIN + 2` cells — `lifeline::MARGIN` is the footer's own
+            # `modeline.edgeLeft`, plus the two the warning glyph takes — so a click
+            # three and a half cells in lands inside `[l]`. What it does is open the
+            # journal in the rescue console, which is a SECOND PROCESS, and that is
+            # what makes the click visible from out here.
+            options_row = y_l + h_l - LINE + LINE // 2
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_l + int(3.5 * CELL)} {options_row}"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 1")
+            # THE BRACKET IS THE ASSERTION, and without it there is none: `pgrep -f`
+            # reads the command line of EVERY process, including the shell running
+            # the `pgrep`, whose line carries the pattern. `[b]in/…` is the same
+            # regex and is not the same text, so the only thing that can answer is
+            # a rescue console that really started (`tests/apps-vm.nix` writes the
+            # rule out, and the manager's own shot above already spells it).
+            machine.wait_until_succeeds(
+                "pgrep -f '[b]in/ronoctua-shell rescue'", timeout=30
+            )
+
+            # AND THE KEYBOARD REACHES THEM TOO, by the key the line now draws.
+            #
+            # `Esc` and not `x`: the owner read the photograph and asked for the key
+            # that actually closes it. The surface takes the keyboard ON DEMAND — at
+            # rest it takes it from nobody, which is what lets it appear over
+            # somebody's work — so the click above is also what handed it over.
+            #
+            # AND THE LINE IS CLICKED ONCE MORE FIRST, on its own top row.
+            #
+            # `KeyboardInteractivity::OnDemand` is what a click BUYS: at rest the
+            # surface takes the keyboard from nobody, which is what lets it appear
+            # over somebody's work, and the console it just opened is a window that
+            # takes it. Measured — with other windows on the workspace the `Esc`
+            # went to the console and the line stayed up; on an empty one it did
+            # not, which is exactly the kind of difference a battery run finds and
+            # a single scene does not.
+            #
+            # The top row and not an option: `Lifeline::at` answers `None` for any
+            # row but the last, so this click does nothing except what a person's
+            # would — put the keyboard back on the line they are reading.
+            first_row = y_l + h_l - 2 * LINE + LINE // 2
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_l + int(3.5 * CELL)} {first_row}"
+            )
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 1")
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.wait_until_fails("systemctl is-active lifeline", timeout=30)
+
+            # AND THE CONSOLE IT OPENED IS PUT AWAY, because this subtest raised it.
+            machine.succeed("pkill -f '[b]in/ronoctua-shell rescue' || true")
 
 
   '';

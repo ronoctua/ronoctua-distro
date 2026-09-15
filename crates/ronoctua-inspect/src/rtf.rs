@@ -65,13 +65,23 @@ pub fn plain(raw: &[u8]) -> Result<Vec<String>, Refusal> {
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
+            // A BRACE ENDS ANY DEBT THE `\uc` COUNTER IS STILL CARRYING.
+            //
+            // The approximation a `\uN` asks to be skipped is written BESIDE
+            // it, inside the same group; a `\u` at the end of one with no
+            // fallback after it must not take the first character of whatever
+            // comes next. That is the shape the defect above had, and clearing
+            // it here means a file that simply omits the fallback cannot
+            // produce it again by another route.
             '{' => {
+                pending = 0;
                 depth += 1;
                 if depth > DEPTH_CEILING {
                     return Err(Refusal::Failed);
                 }
             }
             '}' => {
+                pending = 0;
                 if skip_from == Some(depth) {
                     skip_from = None;
                 }
@@ -100,6 +110,20 @@ pub fn plain(raw: &[u8]) -> Result<Vec<String>, Refusal> {
                             // which is what `\uN` is there to make rare.
                             let _ = chars.next();
                             let _ = chars.next();
+                            // AND IT IS ONE OF THE CHARACTERS `\uc` IS
+                            // COUNTING, which this arm did not know.
+                            //
+                            // THE DEFECT, read off the owner's screen: every
+                            // bullet of `sample.rtf`'s list had its first
+                            // letter missing — *aecenas non lorem*, *ulla
+                            // facilisi*, *enean congue*. LibreOffice writes the
+                            // bullet as `\u61623\'3f`, so `\u` asked for one
+                            // character to be skipped and the `\'3f` that WAS
+                            // that character went past without paying. The
+                            // debt stayed on the counter and was settled by
+                            // the next ordinary letter in the file, which is
+                            // the `M` of the paragraph after the group.
+                            pending = pending.saturating_sub(1);
                         }
                         _ => {}
                     }
@@ -151,8 +175,24 @@ pub fn plain(raw: &[u8]) -> Result<Vec<String>, Refusal> {
                     }
                     // EVERY OTHER CONTROL WORD IS MACHINERY: fonts, colours,
                     // margins, styles. The document is what is left.
-                    "fonttbl" | "colortbl" | "stylesheet" | "listtable" | "info" | "pict"
-                    | "header" | "footer"
+                    // AND `listtext` IS MACHINERY TOO, which is a decision and
+                    // not an omission.
+                    //
+                    // It holds the marker a list item is drawn WITH — the
+                    // bullet or the number — and a writer generates it rather
+                    // than a person typing it. Two things say it does not
+                    // belong on this panel. It is written as a codepoint of
+                    // the Symbol font's PRIVATE USE AREA (`U+F0B7` here), and
+                    // the private use area is where OUR font keeps its icons
+                    // (invariant 10): the owner's screen drew a Nerd Fonts
+                    // glyph in front of every bullet, because that is what
+                    // `U+F0B7` is in the face this system loads. And the other
+                    // document readers already drop it — `words()` walks
+                    // `w:t`, and a `.docx` list comes out as its sentences —
+                    // so keeping it here would make the same list read two
+                    // ways depending on which spelling of the file one has.
+                    "fonttbl" | "colortbl" | "stylesheet" | "listtable" | "listtext" | "info"
+                    | "pict" | "header" | "footer"
                         if skip_from.is_none() =>
                     {
                         skip_from = Some(depth);
@@ -212,6 +252,41 @@ mod tests {
         let raw = br"{\rtf1\ansi\uc1 caf\u233?  fim\par}";
         let out = plain(raw).expect("it reads");
         assert_eq!(out, vec!["café  fim"]);
+    }
+
+    /// FAILS IF: a `\'hh` fallback stops paying the `\uc` counter, or a brace
+    /// stops clearing it.
+    ///
+    /// THE DEFECT THIS EXISTS FOR, read off the owner's screen: every bullet
+    /// of his `sample.rtf` was missing its first letter — *aecenas non
+    /// lorem*, *ulla facilisi*, *enean congue*. LibreOffice writes the marker
+    /// as `\u61623\'3f`, and the `\'3f` went past without settling the debt
+    /// the `\u` had opened; the next ordinary letter in the file paid it, and
+    /// that letter was in the paragraph AFTER the group.
+    #[test]
+    fn the_skip_a_unicode_escape_asks_for_is_paid_by_the_fallback_beside_it() {
+        // NO BRACE BETWEEN THE ESCAPE AND THE TEXT, so the counter is the
+        // only thing that can be paying: without the fix the `\'3f` goes past
+        // for free and the space after it settles the debt instead.
+        let raw = br"{\rtf1\ansi\uc1 caf\u233\'3f fim\par}";
+        assert_eq!(plain(raw).expect("it reads"), vec!["café fim"]);
+        // AND WITH NO FALLBACK WRITTEN AT ALL, the brace is what ends it —
+        // which is the shape the owner's file has, the escape sitting at the
+        // end of the marker's own group.
+        let raw = br"{\rtf1\ansi\uc1{\b caf\u233}Maecenas\par}";
+        assert_eq!(plain(raw).expect("it reads"), vec!["caféMaecenas"]);
+    }
+
+    /// FAILS IF: the generated list marker comes back to the panel.
+    ///
+    /// It is a Symbol-font codepoint in the PRIVATE USE AREA, which is where
+    /// our own font keeps its icons — so the owner's screen drew a Nerd Fonts
+    /// glyph in front of every item — and the other document readers drop it,
+    /// so keeping it would make one list read two ways.
+    #[test]
+    fn the_generated_list_marker_is_not_the_document() {
+        let raw = br"{\rtf1\ansi{\listtext \u61623\'3f\tab}Nulla facilisi.\par}";
+        assert_eq!(plain(raw).expect("it reads"), vec!["Nulla facilisi."]);
     }
 
     #[test]

@@ -4605,6 +4605,9 @@ impl PointerHandler for Footer {
         // row what it is.
         let mut brain_hit = None;
         let mut fold_toggle = false;
+        // AND WHETHER THE PRESS LANDED ON AN EMPTY MINIBUFFER, which opens the
+        // shortcut list — see `on_the_empty_minibuffer`.
+        let mut leader_click = false;
         let mut wheel_at: Option<f64> = None;
         let mut dragging_fold = false;
         let mut fold_hit = false;
@@ -4832,6 +4835,21 @@ impl PointerHandler for Footer {
                         segment_next = Some(id);
                         continue;
                     }
+                    // AND AN EMPTY MINIBUFFER IS THE LEADER, which is the
+                    // owner's own rule: *"caso não haja nada aberto no
+                    // minibuffer, quero que, ao clicar com o botão esquerdo do
+                    // mouse nele, ocorra o mesmo que ocorreria se eu clicasse a
+                    // tecla leader"*.
+                    //
+                    // AFTER the three above and not before: the chevron that
+                    // opens the line and the modeline's segments are on these
+                    // same two lines, and each of them is a target with a
+                    // meaning of its own. What is left is the line's empty
+                    // half, which until now answered nothing at all.
+                    if self.on_the_empty_minibuffer(e.position.0, e.position.1) {
+                        leader_click = true;
+                        continue;
+                    }
                     // AND THE CONTROL THAT OPENS THE MINIBUFFER'S LINE, for
                     // the same reason as the two above: it is on a line that
                     // has no `ExpansionRow` behind it, and everything below
@@ -4961,6 +4979,10 @@ impl PointerHandler for Footer {
         }
         if fold_toggle {
             self.toggle_fold();
+        }
+        if leader_click {
+            self.activate_leader();
+            return;
         }
         if let Some(hit) = brain_hit {
             self.brain_clicked(hit);
@@ -11336,6 +11358,44 @@ impl Footer {
         cell + 1 >= at
     }
 
+    /// Whether a press landed on the minibuffer's line with nothing on it.
+    ///
+    /// # Why the whole line and not a control
+    ///
+    /// Because there is nothing there to aim at. The owner asked for the line
+    /// itself to be the target — *"caso não haja nada aberto no minibuffer,
+    /// quero que, ao clicar com o botão esquerdo do mouse nele, ocorra o mesmo
+    /// que ocorreria se eu clicasse a tecla leader"* — and a line is exactly
+    /// the kind of target a mouse finds without aiming, which is the argument
+    /// the modeline's own segments already make.
+    ///
+    /// # And "nothing open" is the view's answer, not a second one
+    ///
+    /// [`Footer::view`] is the one place that says what holds the footer
+    /// (`the-footer-draws-what-the-keyboard-drives`), and `NoneOf` is it
+    /// saying nothing does. That covers the ten views, the `M-x` prompt and
+    /// the leader itself: with the list already open this answers false, so
+    /// clicking the line again does not reopen it under the reader.
+    ///
+    /// The fold's chevron, the fold's bar and the modeline's segments are
+    /// asked BEFORE this at the call site, so each keeps the meaning it has.
+    fn on_the_empty_minibuffer(&self, x: f64, y: f64) -> bool {
+        if self.view() != ViewState::NoneOf {
+            return false;
+        }
+        let Some(f) = self.metric() else {
+            return false;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let line = f.line_at(y as f32);
+        #[allow(clippy::cast_possible_truncation)]
+        let column = f.column_at(x as f32);
+        // AND INSIDE THE SURFACE, which a press at the far right of a wide
+        // screen need not be: `column_at` answers for a cell that was never
+        // drawn.
+        line == Some(self.minibuffer_line()) && column < f.columns()
+    }
+
     /// The opened line's bar as a rectangle to PRESS, or `None`.
     ///
     /// Separate from the drawn thumb for the reason `region_track` is: the
@@ -14285,8 +14345,9 @@ impl Footer {
             //
             // It takes its row from the region and never from the footer's
             // height — see `explain_rows`, which is where the whole argument
-            // is. In the prose register, because that is what it is: the words
-            // around a key, one line further down.
+            // is. In a register of its OWN: it was drawn in the hint's prose,
+            // and the owner read it off the screen as one more shortcut on the
+            // row above rather than the answer to what he was pointing at.
             if self.explain_rows() > 0
                 && let Some(said) = self.hint_said.as_ref()
             {
@@ -14295,7 +14356,7 @@ impl Footer {
                     text: layout::elide_end(said, plain_room),
                     column: tokens::space::MODELINE_EDGELEFT,
                     line: self.explain_line_at(),
-                    color: crate::chrome::Register::Prose.color(),
+                    color: crate::chrome::Register::Explain.color(),
                     edge: false,
                     foot: false,
                 });

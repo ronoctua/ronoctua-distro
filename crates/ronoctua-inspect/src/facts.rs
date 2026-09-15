@@ -208,7 +208,7 @@ pub fn facts(path: &Path, mime: &str, place: Place) -> Told {
             // what a document SAYS, which is the preview's question and not
             // this one; `needs` never names them, and this arm is what keeps
             // that true rather than assumed.
-            Tool::Ffmpeg | Tool::Pdftoppm | Tool::Catdoc | Tool::Xls2csv | Tool::Catppt => {
+            Tool::Ffmpeg | Tool::Pdftoppm | Tool::Xls2csv => {
                 continue;
             }
         };

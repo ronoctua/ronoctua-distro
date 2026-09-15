@@ -1857,7 +1857,12 @@ files-preview-empty = there is nothing inside this file
 files-preview-unreadable = this file could not be opened for reading
 files-preview-missing = { $program } is not installed, and it is what reads this format
 files-preview-too-big = too big for a preview ({ $amount })
-files-preview-failed = what came back was not a picture — the file may be damaged
+# NOT "a picture". This is every reader's failure, not the raster path's: a
+# Word document whose piece table does not add up, a presentation with no
+# records, a program that ran and answered nothing. The owner read it off the
+# screen against a `.doc` — a panel telling him a perfectly good document was
+# "not a picture" is a sentence about the wrong thing twice over.
+files-preview-failed = this file could not be read — it may be damaged
 files-preview-slow = it went past { $seconds } s and was stopped — not the size, something is stuck
 # NOT "damaged". The file is fine and this reader is not equipped for it, which
 # is a different thing to tell somebody: one sends them to repair a file that

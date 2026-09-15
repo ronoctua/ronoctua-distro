@@ -344,6 +344,51 @@ pub fn lines(
             if x + w >= columns {
                 break;
             }
+            // A DOT BETWEEN ONE ACTION AND THE NEXT, and it is the same dot
+            // the hint line has always drawn.
+            //
+            // THE DEFECT, in the owner's words, off a photograph of this very
+            // band: *"as várias ações ficam alinhadas, como esperado, porém
+            // acaba dando a impressão visual de que é uma grande linha de
+            // texto, em vez de várias ações separadas"*. Four labels in one
+            // tone with two cells between them read as one sentence — *Edit
+            // the image Open the image Open the folder Copy the path* — and
+            // an action's label IS a sentence, so nothing in the words
+            // themselves says where one ends.
+            //
+            // `mark.separator` in the separator's own tone, which is what the
+            // hint line means by a dot: a mark that is neither of the things
+            // it stands between, and quieter than both. Anything else — a
+            // bracket, a pipe, a box — would be a second vocabulary for the
+            // same job, and a box is refused outright (invariant 15).
+            //
+            // ONLY BETWEEN, never before the first: a dot with nothing on one
+            // side of it separates nothing, which is the argument
+            // `Piece::separator` already makes on the hint line.
+            //
+            // AND ONLY WHERE THEY ARE SIDE BY SIDE. The open record in the
+            // manager draws its actions one per ROW, and there the row is
+            // already the boundary — see `notifications::View::rows`, which
+            // does not come through here.
+            if i > 0 {
+                let mark = tokens::mark::SEPARATOR.to_string();
+                let mark_wide = layout::width(&mark);
+                if x + mark_wide + 1 + w >= columns {
+                    break;
+                }
+                pieces.push(Piece {
+                    at: x,
+                    text: mark,
+                    color: crate::chrome::Register::Separator.color(),
+                    // IT IS NOT AN ACTION, so the pointer finds nothing on it
+                    // and nothing is said about it. A click that ran the
+                    // action to its left because the dot belongs to it would
+                    // be a target the eye cannot see.
+                    hit: None,
+                    explain: None,
+                });
+                x += mark_wide + tokens::space::MODELINE_SEGMENTGAP;
+            }
             pieces.push(Piece {
                 at: x,
                 text,
@@ -629,8 +674,10 @@ mod tests {
         let s = shown(Show::Full, "corpo", 3);
         let out = lines(Some(&s), 120, Some(1.0), None, false, false, &w);
         let last = out.last().unwrap();
-        assert_eq!(last.pieces.len(), 3);
-        for (i, p) in last.pieces.iter().enumerate() {
+        // THREE ACTIONS AND THE TWO DOTS BETWEEN THEM.
+        let acts: Vec<_> = last.pieces.iter().filter(|p| !is_the_mark(p)).collect();
+        assert_eq!(acts.len(), 3);
+        for (i, p) in acts.iter().enumerate() {
             assert_eq!(p.hit, Some(Hit::Action(i)));
             assert!(
                 !p.text.starts_with('['),
@@ -643,6 +690,53 @@ mod tests {
                 p.text
             );
         }
+    }
+
+    /// Whether a drawn piece is the dot between two actions.
+    fn is_the_mark(p: &Piece) -> bool {
+        p.text.chars().eq(std::iter::once(tokens::mark::SEPARATOR))
+    }
+
+    /// FAILS IF: the actions go back to being one run of words.
+    ///
+    /// THE OWNER READ IT OFF A PHOTOGRAPH of this band: *"as várias ações
+    /// ficam alinhadas, como esperado, porém acaba dando a impressão visual
+    /// de que é uma grande linha de texto, em vez de várias ações
+    /// separadas"*. Four labels in one tone with two cells between them read
+    /// as one sentence, and an action's label IS a sentence — so nothing in
+    /// the words says where one ends.
+    #[test]
+    fn one_action_is_told_from_the_next() {
+        let t = words();
+        let w = Words { texts: &t };
+        let s = shown(Show::Full, "corpo", 3);
+        let out = lines(Some(&s), 120, Some(1.0), None, false, false, &w);
+        let last = out.last().unwrap();
+        // BETWEEN, AND NOT BEFORE THE FIRST: a dot with nothing on one side of
+        // it separates nothing.
+        let marks: Vec<usize> = last
+            .pieces
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| is_the_mark(p))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(marks, vec![1, 3], "the dots are not between the actions");
+        for at in marks {
+            let mark = &last.pieces[at];
+            // NEITHER OF THE THINGS IT STANDS BETWEEN, and quieter than both.
+            assert_ne!(mark.color, tokens::color::NOTIFICATION_ACTS);
+            assert_eq!(mark.color, crate::chrome::Register::Separator.color());
+            // AND NOT A TARGET: a click that ran the action to its left would
+            // be a target the eye cannot see.
+            assert_eq!(mark.hit, None);
+            assert_eq!(mark.explain, None);
+        }
+        // ONE ACTION NEEDS NO SEPARATOR AT ALL.
+        let alone = shown(Show::Full, "corpo", 1);
+        let out = lines(Some(&alone), 120, Some(1.0), None, false, false, &w);
+        let last = out.last().unwrap();
+        assert!(last.pieces.iter().all(|p| !is_the_mark(p)));
     }
 
     #[test]
