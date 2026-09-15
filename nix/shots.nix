@@ -29,6 +29,16 @@ let
   typography = import ../assets/tokens/typography.nix;
   linePx = builtins.ceil (typography.size.base * typography.lineHeight);
   footerPx = linePx * 2;
+  # HOW WIDE A CELL IS, in pixels, and NOT rounded.
+  #
+  # `LINE` above is a ceiling because it is only ever used to aim a row, and a
+  # row is 27 px tall either way. This one aims a COLUMN: the cell is 10,8 px,
+  # and a click is placed by multiplying it, so rounding it to 11 would walk
+  # the aim a fifth of a cell further right on every column counted. It is the
+  # same arithmetic `rails::Frame` does with the value the tokens give it
+  # (`size.base x cellWidthEm`), which is what makes a number measured here
+  # land on the cell the shell drew (invariant 9, reaching a screenshot).
+  cellPx = typography.size.base * typography.cellWidthEm;
 
   # THE TOKENS' VALUES, AS THE GENERATOR SOLVED THEM.
   #
@@ -192,6 +202,7 @@ pkgs.testers.runNixOSTest {
 
     FOOTER = ${toString footerPx}
     LINE = ${toString linePx}
+    CELL = ${toString cellPx}
     STRIP = ${toString (import ../assets/tokens/space.nix).files.stripLines}
     AIR = ${toString (import ../assets/tokens/space.nix).files.pictureAir}
 
@@ -1683,7 +1694,15 @@ pkgs.testers.runNixOSTest {
         )
         machine.sleep(1)
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 1")
-        machine.wait_until_succeeds("pgrep -f 'ronoctua-shell rescue'", timeout=30)
+        # THE BRACKET IS THE ASSERTION, and without it there is none: `pgrep -f`
+        # reads the command line of EVERY process, including the shell running
+        # the `pgrep`, whose line carries the pattern. `[b]in/…` is the same
+        # regex and is not the same text, so the only thing that can answer is
+        # a rescue console that really started (`tests/apps-vm.nix` writes the
+        # rule out, and the manager's own shot above already spells it).
+        machine.wait_until_succeeds(
+            "pgrep -f '[b]in/ronoctua-shell rescue'", timeout=30
+        )
 
         # AND THE KEYBOARD REACHES THEM TOO, by the key the line now draws.
         #
@@ -1691,8 +1710,18 @@ pkgs.testers.runNixOSTest {
         # that actually closes it. The surface takes the keyboard ON DEMAND — at
         # rest it takes it from nobody, which is what lets it appear over
         # somebody's work — so the click above is also what handed it over.
+        #
+        # AND IT STILL HAS THE KEYBOARD with the console open on top of it. That
+        # is niri's own precedence and not an accident: an on-demand layer
+        # surface on the TOP layer is asked for focus before the layout's
+        # windows are (`update_keyboard_focus`), and only another CLICK clears
+        # it. Which is the behaviour this line needs — the log one opens is the
+        # thing one reads while deciding what to do here.
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
         machine.wait_until_fails("systemctl is-active lifeline", timeout=30)
+
+        # AND THE CONSOLE IT OPENED IS PUT AWAY, because this subtest raised it.
+        machine.succeed("pkill -f '[b]in/ronoctua-shell rescue' || true")
 
 
   '';
