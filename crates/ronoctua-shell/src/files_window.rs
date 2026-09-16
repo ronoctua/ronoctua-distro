@@ -1248,21 +1248,19 @@ impl FilesWindow {
         // drawn: they appear under the pointer, and their CELLS are reserved
         // either way so nothing moves.
         //
-        // ASKED OF `band_row`, which does not need a FIELD — the shallow half
-        // of the resolution. Through the target it went `None` every time the
-        // pointer crossed the space to the right of a short filename, and the
-        // film's controls blinked out with it.
-        let pane = self
-            .line_under_pointer
-            .and_then(|line| {
-                self.view.band_row(
-                    self.columns,
-                    self.room(),
-                    line,
-                    self.cell_under_pointer.unwrap_or(0),
-                )
-            })
-            .map(|(pane, _)| pane);
+        // ASKED OF `pane_at`, which needs neither a field nor a ROW — it is
+        // arithmetic over the cell. `band_row` was the answer for one round and
+        // it refuses a row with no fields on it, so the pointer crossing the
+        // blank part of a panel said "nowhere" and every control that comes out
+        // under the hand went with it. See `files::View::pane_at`.
+        let pane = self.line_under_pointer.and_then(|line| {
+            self.view.pane_at(
+                self.columns,
+                self.room(),
+                line,
+                self.cell_under_pointer.unwrap_or(0),
+            )
+        });
         self.view.pointing(pane);
         // AND WHICH ROW OF THE LISTING, which is what decides whose name
         // walks: the owner asked for the hover to move a name too long for its
@@ -2508,29 +2506,39 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         ))
     });
 
-    // AND THE GLOBE, at the top of the info panel beside it.
+    // AND THE GLOBE, in the info panel beside it — across its top, or in the
+    // leftmost column of the expanded sheet.
     //
     // The same three steps the preview takes — measure the box, tell the view,
     // ask for the picture — because the picture that is DRAWN has to be the
-    // picture that was MEASURED. See `files::globe_px`.
-    let globe_lines = s.view.globe_lines();
+    // picture that was MEASURED. WHICH of the two shapes it is, is
+    // `View::globe_place`'s answer and not this door's. See `files::globe_px`.
     let (info_top, _) = crate::files::panel_band(
         s.geo.metric.first,
         strip_top - s.geo.metric.first,
         panes.strip,
     );
-    let globe = crate::files::globe_px(
-        panes,
-        margin,
-        s.geo.columns,
-        (cell, line_px, s.geo.metric.width),
-        info_top,
-        globe_lines,
-    );
+    let place = s.view.globe_place();
+    let globe = place.and_then(|(lines, cells, _)| {
+        crate::files::globe_px(
+            panes,
+            margin,
+            s.geo.columns,
+            (cell, line_px, s.geo.metric.width),
+            info_top,
+            (lines, cells),
+        )
+    });
     if let Some(area) = globe {
+        // AND HOW MUCH OF ITS TOP HAS SCROLLED AWAY, which is what keeps the
+        // map's SIZE as its rows leave. See `crate::globe::paint`.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let gone = (place.map_or(0, |(_, _, cut)| cut) as f32 * line_px) as u32;
+        // THE BOX THE PICTURE IS DRAWN IN, and not the box it was measured
+        // from — see `files::globe_texture`.
         s.view.measured_globe(
-            ((area.width.max(0.0)) as u32, (area.height.max(0.0)) as u32),
+            crate::files::globe_texture(area),
+            gone,
             ronoctua_tokens::theme::current().position(),
         );
     }

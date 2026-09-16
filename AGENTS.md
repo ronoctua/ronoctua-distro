@@ -191,7 +191,39 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   que é o custo de ter várias abertas), só se o observador não subir. Fechar DESCANSA o watch, e os
   dois lugares que largam a vista chamam — o segundo é perder o FOCO. A ficha ROLA (`C-.`, e a barra diz que cortou);
   permissão, dono e grupo nascem OCULTOS na listagem (`C-d`), e no painel de infos os campos são
-  os MESMOS da linha — mesma `Hit`, mesma máquina. **As DUAS metades de um fato explicam, e em DUAS
+  os MESMOS da linha — mesma `Hit`, mesma máquina. **E a ficha EXPANDE** (`C-W`, o par shiftado do
+  `C-w` da prévia): a região inteira vira a ficha, e lá os fatos se dividem em quantas COLUNAS a
+  largura couber — nunca mais do que eles precisam para caber nas linhas, senão uma coluna que
+  ninguém enche é espaço em branco com uma borda irregular no meio. **A coluna é
+  `space.view.labelCells + PANEL_FLOOR`** — onde toda lista do sistema começa o valor, mais a menor
+  largura em que um fato ainda se lê (`Dimensions 3024 × 4032`, 23 células). Medida contra o TETO
+  do painel ela dava quatro colunas de 43 na tela do dono, que leu e recusou: *"em vez de 4 colunas
+  pequenas … 3 colunas maiores, pois assim o conteúdo das labels e valores maiores aparecerão com
+  mais caracteres em tela"*. Colunas só na expandida: um painel ao lado da listagem já É uma coluna
+  de página. A ordem é POR COLUNA — enche a primeira de cima a baixo e então a seguinte —, que é o
+  que faz ler PARA BAIXO ser ler a ficha na ordem dela. O rótulo ganhou teto
+  (`space.view.labelCells`): um terço de duzentas células poria uma palavra a sessenta e seis
+  células do que ela nomeia. **E o GLOBO vira uma COLUNA ali**, a primeira, da altura do painel e
+  com o endereço na última linha dela; de faixa no topo ele seria uma tira da largura da tela com um
+  disco no meio e os fatos começando uma figura abaixo — o dono fotografou *"um enorme espaço em
+  branco disperdiçado acima das colunas de conteúdo"*, e o mapa nem aparecia, porque o rodapé media
+  o globo DENTRO da guarda do preview e com a região na ficha não há caixa de preview. Só vira
+  coluna se ainda sobrar coluna para os fatos. **A ÚLTIMA LINHA é uma linha em branco do CONTEÚDO,
+  nunca uma reserva do painel**: a ficha tem uma linha a mais do que tem fatos, e ela só entra em
+  cena depois que tudo o mais foi rolado — é aí que o botão do canto não cobre nada. A primeira
+  forma tirou a linha do PAINEL e o dono mediu o custo (*"você fez a coluna perder uma linha de
+  informação em um espaço que já é pequeno"*): reserva custa um fato em TODA tela, linha no fim
+  custa um só onde o botão cobriria algo. **E o hover do botão é a COLUNA INTEIRA, vãos inclusive**
+  (`View::pane_at`): as duas portas perguntavam a seção a uma resolução funda demais — o rodapé ao
+  `hit`, que exige um CAMPO, a janela ao `band_row`, que recusa linha sem campos —, e a ficha é
+  quase toda célula vazia, então a resposta virava "lugar nenhum" no caminho da mão e o ícone sumia
+  antes de ser alcançado. Agora é `Panes::section_at` mais a faixa da seção, e só os CAMPOS deixam
+  de ser consultados. A região é UMA — a outra tecla TOMA em vez de abrir um segundo painel largo —,
+  painel escondido RECUSA e diz por quê, e com a região dada não há régua vertical nenhuma,
+  **nem a do FOCO**: `Panes::rules` já recusava e o `files::focus_rule` era a segunda porta para a
+  linha em cell zero que o dono fotografou uma vez (*"no modo largo há uma linha vertical na esquerda
+  que continua aparecendo"*), porque os dois pintores desenham a régua da seção focada mesmo quando
+  `rules` não deu nenhuma. **As DUAS metades de um fato explicam, e em DUAS
   cores**: a legenda levava `explain: None` e o valor levava a frase inteira, e o dono leu uma
   legenda cortada e pediu as duas por completo no minibuffer *e distinguíveis*. Agora as duas levam a
   MESMA frase (uma só, construída uma vez — duas não teriam como divergir) e a linha de mensagem
@@ -313,9 +345,26 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   CORDA através do planeta (a África ganha um lado reto e lê-se como dado ruim), então cada aresta é
   cortada por bissecção no grande círculo e o caminho anda pelo ARO entre a saída e a entrada.
   **Zoom é escala e pan é centro** — o passo do pan divide pelo zoom e pelo `cos φ`, senão um globo
-  aproximado sai da tela num gesto. **A figura mora nas primeiras linhas do painel de infos**, pelo
-  `Section::above`, que já queria dizer exatamente isso ("quantas das primeiras linhas são chrome")
-  e já é honrado pelo `line_of` e pelo `bar_box`; o que faltava era o `hit` subtraí-lo. **A chave da
+  aproximado sai da tela num gesto. **A figura são as PRIMEIRAS LINHAS DO CONTEÚDO da ficha, e elas ROLAM.**
+  Eram `Section::above` — fixas, como o caminho e o cabeçalho da listagem —, e isso custou duas
+  coisas que o dono achou: banda fixa deixa o trilho do polegar (`Section::visible`) mais curto que o
+  painel enquanto o ARRASTO divide pelo painel (`Room::panel`), então pegar a barra num arquivo com
+  globo a jogava para longe da mão; e o globo custava seis das doze linhas do rodapé enquanto o
+  arquivo estivesse sob o cursor. Rolando, ele devolve as linhas — e foi isso que aposentou o `C-g`,
+  que era um segundo caminho para o que arrastar a barra já faz (*"nesse caso o atalho de exibir e
+  esconder o globo não precisaria existir"*). **E a figura MANTÉM O TAMANHO enquanto sai**, o que custou
+  DOIS consertos. Nada neste renderizador recorta — imagem meio fora do painel é desenhada POR CIMA
+  da listagem, não cortada —, então o corte tem de acontecer onde a figura é PINTADA: ela é sempre
+  projetada na altura inteira e o `tiny_skia` a assenta transladada de `−from`, recortando ao
+  pixmap. Só isso não bastou: a textura era pedida no tamanho da caixa COM o ar que o `picture_in`
+  cede nos quatro lados, e o `Area::centre` a reduzia para caber na caixa SEM ele — fator
+  `(h − 2·ar)/h`, dois por cento numa caixa alta e um terço numa baixa, invisível enquanto a caixa
+  não se mexia. Medido na sabotagem: 0,911 → 0,889 → 0,852 → 0,778 conforme as linhas saíam. A
+  subtração mora num lugar só (`files::globe_texture`), que é o que a prévia sempre fez
+  (`measured_preview`) e a porta do globo nunca fazia. **E o deslocamento da ficha é limitado na LEITURA** (`facts_offset`): o que
+  o torna grande demais não é uma escrita, é a GRADE mudando embaixo dele — `C-W` transforma uma
+  coluna de quarenta linhas em três de catorze —, e limitar na leitura ainda guarda o lugar para
+  quando a região voltar. **A chave da
   textura tem QUATRO partes** (dono, assunto, tamanho, tema): sem o dono, duas vistas com a mesma
   coordenada no mesmo tamanho e tema reescreveriam a textura uma da outra a cada quadro, sem nada em
   log nenhum — por isso o `Owner` existe com a segunda variante antes de ela ser alcançada. E o

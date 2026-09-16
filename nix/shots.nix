@@ -1901,6 +1901,231 @@ pkgs.testers.runNixOSTest {
             machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
             machine.sleep(2)
 
+    if wanted("facts-wide"):
+        with subtest("the facts given the whole region, in columns"):
+            # A FILE WITH A GREAT DEAL TO SAY, made here.
+            #
+            # The whole question is what the facts do when there are more of
+            # them than there are lines, and in real life that is a photograph
+            # — of which this repository may carry none (invariant 13). So
+            # every tag is written onto a picture ImageMagick draws, and every
+            # value in it was chosen by this test.
+            machine.succeed(
+                "${pkgs.imagemagick}/bin/magick -size 240x160 "
+                "gradient:'#3C6E9F-#D8B36A' /root/facts.jpg"
+            )
+            machine.succeed(
+                "${pkgs.exiftool}/bin/exiftool -overwrite_original "
+                "-Make=Ronoctua -Model='Test Camera' -Software=ronoctua-shots "
+                "-Artist=nobody -Copyright='public domain' "
+                "-ImageDescription='a gradient with a lot written on it' "
+                "-UserComment='every tag here was chosen by this test' "
+                "-DateTimeOriginal='2026:09:16 12:45:03' "
+                "-ExposureTime=1/125 -FNumber=2.8 -ISO=400 -FocalLength=35 "
+                "-LensModel='35mm f/2.8' -Orientation=1 -WhiteBalance=0 "
+                "-Flash=0 -MeteringMode=5 -ExposureProgram=3 -ColorSpace=1 "
+                "-SceneCaptureType=0 -Contrast=0 -Saturation=0 -Sharpness=0 "
+                "-XResolution=300 -YResolution=300 -ResolutionUnit=2 "
+                # AND WHERE IT WAS MADE, because the expanded sheet gives the
+                # globe a COLUMN of its own and that is half of what this scene
+                # is for. London, which `assets/world.nix` declares in the open.
+                "-GPSLatitude=51.51 -GPSLatitudeRef=N "
+                "-GPSLongitude=-0.13 -GPSLongitudeRef=W "
+                "/root/facts.jpg"
+            )
+            # AND A WINDOW OF ITS OWN, for the reason the globe's scene gives:
+            # two managers on screen is two panels in the crop, and the other
+            # one is at another directory.
+            machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
+            machine.sleep(2)
+            control("files-window")
+            machine.wait_until_succeeds(
+                "pgrep -f '[b]in/ronoctua-shell files'", timeout=60
+            )
+            machine.sleep(3)
+            control("window-maximize")
+            machine.sleep(2)
+            # TYPED AND NOT ENTERED: a letter is a QUERY and the cursor lands
+            # on the first match by itself, which is what puts the file in the
+            # panels. `Return` would open it.
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'facts'"
+            )
+            # LONG ENOUGH FOR EXIFTOOL, which is a child process per file.
+            machine.sleep(6)
+
+            w_f, h_f, x_f, y_f = niri_geometry()
+            # THE POINTER IN THE FACTS' OWN CORNER, and that cell is EMPTY.
+            #
+            # It is where the button is drawn and it is the one the owner could
+            # not reach: *"é impossível clicar no ícone, pois ele desaparece
+            # antes de o cursor conseguir chegar nele, porque você implementou o
+            # hover … apenas em partes do conteúdo, em vez de implementar na
+            # coluna como um todo (incluindo espaços vazios)"*. Aiming at the
+            # bottom-right of the panel is aiming at blank space, which is
+            # exactly what the old resolution answered `None` for.
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_f + w_f - 3 * CELL} {y_f + h_f - 2 * LINE}"
+            )
+            machine.sleep(2)
+            shot("43-the-facts-and-the-button-in-their-corner")
+
+            # THE THUMB FOLLOWS THE HAND, and over a file WITH a globe.
+            #
+            # The owner felt this one under his fingers: *"ao clicar e arrastar
+            # com o mouse uma scrollbar que tem o globo, a barra da scrollbar se
+            # desloca imediatamente muito abaixo da posição de onde está o
+            # cursor"*. The thumb was drawn from the panel MINUS the globe's
+            # pinned band and the drag divided by the whole panel, so the two
+            # disagreed by a picture's height — and only on a file that carries
+            # a coordinate, which is why no other scene could have caught it.
+            #
+            # DRAGGED TO THE MIDDLE and not to an end: at either end both
+            # arithmetics land in the same place, and the gap between them is
+            # widest half way down.
+            bar_x = x_f + w_f - 6
+            mid = y_f + h_f // 2
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            crop(f"{w_f // 4}x{h_f}+{x_f + 3 * (w_f // 4)}+{y_f}", into="/tmp/globe-before.png")
+            sea_before = has_colour(
+                "#" + token_hex("surface.atlas.ocean"),
+                at_least=0,
+                of="/tmp/globe-before.png",
+                fuzz=4,
+            )
+            # WHAT THIS SCENE DOES NOT PHOTOGRAPH is the globe HALF scrolled,
+            # and the reason is written here so nobody spends the runs again.
+            #
+            # It would not decide anything: the picture's box shrinks from the
+            # bottom whether the drawing is CUT at its top or SQUEEZED into what
+            # is left, so no edge of it tells the two apart — what differs is the
+            # scale of what is inside. `globe::tests::            # what_scrolled_away_is_cut_from_the_top_and_never_squeezed` is what
+            # decides it, by an arithmetic that cannot answer both ways: a band
+            # in the bottom half of a tall box FILLS a short box cut by half and
+            # is ABSENT from a short box that was not cut.
+            #
+            # And the state is hard to reach from here anyway: a turn of the
+            # wheel is several lines and carries the whole band off in one go,
+            # and a two-line drag of the thumb moved nothing at all. Measured,
+            # both, on this scene.
+
+            machine.succeed(
+                f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove {bar_x} {y_f + 3 * LINE}"
+            )
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousedown 1")
+            machine.succeed(
+                f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove {bar_x} {mid}"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mouseup 1")
+            machine.sleep(2)
+            shot("45-the-thumb-under-the-hand-over-a-globe")
+
+            # THE THUMB IS WHERE THE HAND LEFT IT: a line either side of the
+            # cursor, in the bar's own column.
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            crop(f"12x{3 * LINE}+{x_f + w_f - 12}+{mid - LINE}", into="/tmp/thumb.png")
+            has_colour(
+                "#" + token_hex("rule.strong"), at_least=10, of="/tmp/thumb.png", fuzz=4
+            )
+
+            # AND THE GLOBE GAVE ITS LINES BACK. Its rows scroll now, so half
+            # way down the sheet there is less map than there was — which is
+            # the other half of what he asked for: *"ao arrastar a scrollbar ele
+            # se move junto liberando espaço para linhas de conteúdo"*.
+            crop(f"{w_f // 4}x{h_f}+{x_f + 3 * (w_f // 4)}+{y_f}", into="/tmp/globe-after.png")
+            sea_after = has_colour(
+                "#" + token_hex("surface.atlas.ocean"),
+                at_least=0,
+                of="/tmp/globe-after.png",
+                fuzz=4,
+            )
+            print(f"facts-wide: sea in the narrow panel {sea_before} -> {sea_after}")
+            assert sea_before > 1000, (
+                f"the narrow panel had {sea_before} pixel(s) of sea before the "
+                "drag, so there was no globe to scroll"
+            )
+            assert sea_after < sea_before, (
+                f"the globe kept all {sea_after} pixel(s) of its sea after the "
+                "sheet was scrolled: its rows are pinned again"
+            )
+
+            # MEASURED IN BOTH STATES, which is the only way a pixel count
+            # means anything: what the key did is the DIFFERENCE, and a
+            # threshold picked without the other number is a threshold picked
+            # out of the air.
+            #
+            # THE LEFT HALF OF THE WINDOW, across the middle of it. Before the
+            # key that is the sidebar and the listing; after it, it can only be
+            # the facts and the globe, because there is nothing else left on
+            # screen.
+            half = f"{w_f // 2}x{8 * LINE}+{x_f}+{y_f + h_f // 2}"
+
+            def inks(into):
+                machine.succeed(
+                    "${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd"
+                )
+                crop(half, into=into)
+                return (
+                    has_colour(
+                        "#" + token_hex("text.dim"), at_least=0, of=into, fuzz=4
+                    ),
+                    # THE SEA, AND AT FOUR PER CENT. A disc is a filled region,
+                    # so a small fuzz is what makes the question unanswerable by
+                    # the antialiased edge of a letter — the trap this file has
+                    # fallen into once and `AGENTS.md` records.
+                    has_colour(
+                        "#" + token_hex("surface.atlas.ocean"),
+                        at_least=0,
+                        of=into,
+                        fuzz=4,
+                    ),
+                )
+
+            dim_before, sea_before = inks("/tmp/columns-before.png")
+
+            # AND THEN THE REGION IS GIVEN AWAY.
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+shift+w")
+            machine.sleep(3)
+            shot("44-the-facts-with-the-whole-region")
+            dim_after, sea_after = inks("/tmp/columns-after.png")
+            print(
+                f"facts-wide: left half dim {dim_before} -> {dim_after}, "
+                f"sea {sea_before} -> {sea_after}"
+            )
+
+            # THE KEY DID SOMETHING, and the two pictures say so.
+            def signature(path):
+                return machine.succeed(
+                    f"${pkgs.imagemagick}/bin/magick {path} -format '%#' info:"
+                ).strip()
+
+            assert signature("/tmp/columns-before.png") != signature(
+                "/tmp/columns-after.png"
+            ), "`C-W` drew the same pixels — the facts were not given the region"
+
+            # AND WHAT IT DID IS PUT FACTS OVER THERE. The labels' ink, in a
+            # half of the window that held none of it while the facts were a
+            # panel twenty-four cells wide on the other side of the screen.
+            assert dim_after > 200, (
+                f"the labels' ink went {dim_before} -> {dim_after} in the left "
+                "half: the facts did not reach it"
+            )
+
+            # AND THE GLOBE IS A COLUMN OF IT. The sea is a dark violet no text
+            # in this panel wears, and a disc of it is thousands of pixels — a
+            # number letters cannot reach. Before the key the globe was a band
+            # at the top of a narrow panel on the far right, so the same crop
+            # had none of it.
+            assert sea_after > 1000, (
+                f"the sea went {sea_before} -> {sea_after} in the left half: the "
+                "expanded sheet has no column with the map in it"
+            )
+
+            machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
+            machine.sleep(2)
+
     if wanted("geo"):
         with subtest("the regions, and the streets this machine does not have"):
             # THE SECOND HALF OF THE GLOBE, and the half a person drives: what

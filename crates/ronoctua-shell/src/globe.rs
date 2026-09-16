@@ -241,9 +241,31 @@ pub const fn ink_color(ink: Ink) -> tokens::Color {
 /// disc is each door's own surface, which is the argument `surface.mesh`
 /// already makes — one texture, two doors.
 #[must_use]
-pub fn paint(drawing: &ronoctua_atlas::Drawing, width: u32, height: u32) -> Option<Rgba> {
+/// `from` is how many pixels of the picture's TOP are cut away.
+///
+/// # Why a cut and not a smaller box
+///
+/// Because the globe's rows SCROLL, and a picture that answered a shorter box
+/// by being reprojected into it changes what it SHOWS — the owner read that off
+/// the screen as the map shrinking: *"conforme a scrollbar é arrastada para
+/// baixo, o globo vai encolhendo, não quero que isso ocorra; quero que o globo
+/// mantenha o tamanho"*.
+///
+/// So the drawing is projected at its FULL size, every time, and what moves is
+/// where it is put down: `tiny_skia` clips to the pixmap, so translating the
+/// path up by `from` keeps the scale and takes the top off. It is the crop this
+/// renderer has nowhere else — nothing downstream clips, which is why an image
+/// drawn half outside its panel is drawn over the listing rather than cut.
+pub fn paint(
+    drawing: &ronoctua_atlas::Drawing,
+    width: u32,
+    height: u32,
+    from: u32,
+) -> Option<Rgba> {
     use resvg::tiny_skia;
     let mut pixmap = tiny_skia::Pixmap::new(width.max(1), height.max(1))?;
+    #[allow(clippy::cast_precision_loss)]
+    let cut = tiny_skia::Transform::from_translate(0.0, -(from as f32));
     let stroke = tiny_skia::Stroke {
         width: f32::from(tokens::space::ATLAS_STROKE) / 10.0,
         ..tiny_skia::Stroke::default()
@@ -270,21 +292,9 @@ pub fn paint(drawing: &ronoctua_atlas::Drawing, width: u32, height: u32) -> Opti
             // EVEN-ODD, and it is the line that decides whether a lake is a
             // hole: nothing in the data tags an inner ring, so winding fill
             // would put land in the Caspian.
-            pixmap.fill_path(
-                &path,
-                &paint,
-                tiny_skia::FillRule::EvenOdd,
-                tiny_skia::Transform::identity(),
-                None,
-            );
+            pixmap.fill_path(&path, &paint, tiny_skia::FillRule::EvenOdd, cut, None);
         } else {
-            pixmap.stroke_path(
-                &path,
-                &paint,
-                &stroke,
-                tiny_skia::Transform::identity(),
-                None,
-            );
+            pixmap.stroke_path(&path, &paint, &stroke, cut, None);
         }
     }
     // STRAIGHT AND NOT PREMULTIPLIED. See the header.
@@ -312,8 +322,13 @@ pub struct Sight {
     pub at: Option<(f32, f32)>,
     /// Where it is pointed and how near.
     pub pose: Pose,
-    /// The box, in physical pixels.
+    /// The box, in physical pixels — what is SEEN, not what is drawn.
     pub size: (u32, u32),
+    /// How many pixels of the picture's top have scrolled away.
+    ///
+    /// The drawing is always projected at `size.1 + from` and then cut, so the
+    /// map keeps its size as its rows leave. See [`paint`].
+    pub from: u32,
     /// Which theme it is painted in — part of the texture's identity.
     pub theme: usize,
     /// Which language the address is wanted in.
@@ -332,18 +347,23 @@ impl Sight {
 
     /// The texture's name.
     ///
-    /// FOUR PARTS, and the fourth is new: owner, subject, size and theme.
+    /// FIVE PARTS: owner, subject, size, the cut and theme.
+    ///
     /// Without the OWNER two views showing one coordinate at one size in one
     /// theme resolve to a single key — and both are redrawn under it every
-    /// frame, so they would overwrite each other with nothing in any log.
+    /// frame, so they would overwrite each other with nothing in any log. And
+    /// without the CUT a globe scrolled by one row would be handed back the
+    /// picture of the row before it, because everything else about the two is
+    /// the same.
     #[must_use]
     pub fn texture_key(&self) -> String {
         format!(
-            "globe:{}:{}:{}x{}:{}",
+            "globe:{}:{}:{}x{}+{}:{}",
             self.owner.name(),
             self.key,
             self.size.0,
             self.size.1,
+            self.from,
             self.theme
         )
     }
@@ -506,11 +526,16 @@ pub fn stage(out: calloop::channel::Sender<Beat>) -> Option<Stage> {
                 };
                 held[slot] = Some((sight.clone(), address));
 
+                // THE WHOLE PICTURE IS PROJECTED, and only part of it is put
+                // down: `sight.from` is how much of the top has scrolled away,
+                // and a globe that answered the shorter box by being
+                // reprojected into it would change what it SHOWS. See `paint`.
+                let whole = (sight.size.1 + sight.from) as f32;
                 let drawing = ronoctua_atlas::project(
                     &atlas,
                     sight.pose,
                     sight.at.map(|(lat, lon)| Point { lat, lon }),
-                    (sight.size.0 as f32, sight.size.1 as f32),
+                    (sight.size.0 as f32, whole),
                     &[],
                     f32::from(tokens::space::ATLAS_DOTRADIUS) / 10.0,
                 );
@@ -520,7 +545,7 @@ pub fn stage(out: calloop::channel::Sender<Beat>) -> Option<Stage> {
                 if mine[slot].load(std::sync::atomic::Ordering::SeqCst) != now {
                     continue;
                 }
-                let Some(rgba) = paint(&drawing, sight.size.0, sight.size.1) else {
+                let Some(rgba) = paint(&drawing, sight.size.0, sight.size.1, sight.from) else {
                     continue;
                 };
                 if out
@@ -528,7 +553,18 @@ pub fn stage(out: calloop::channel::Sender<Beat>) -> Option<Stage> {
                         key: sight.key.clone(),
                         owner: sight.owner,
                         rgba,
-                        dot: drawing.dot,
+                        // IN THE PAINTED PICTURE'S OWN PIXELS, which is not
+                        // where the projection put it: the drawing is made at
+                        // full height and the top `from` of it is cut away, so
+                        // the mark moves up with everything else. A dot left in
+                        // the projection's coordinates is a mark the eye sees
+                        // in one place and the hand finds in another, which is
+                        // the rule this field exists to keep.
+                        #[allow(clippy::cast_precision_loss)]
+                        dot: drawing.dot.and_then(|(x, y)| {
+                            let y = y - sight.from as f32;
+                            (y >= 0.0 && y < sight.size.1 as f32).then_some((x, y))
+                        }),
                     })))
                     .is_err()
                 {
@@ -575,6 +611,7 @@ pub struct Globe {
     at: Option<(f32, f32)>,
     key: String,
     size: (u32, u32),
+    from: u32,
     theme: usize,
     portuguese: bool,
     frame: Option<Shown>,
@@ -596,6 +633,7 @@ impl Globe {
             at: None,
             key: String::new(),
             size: (0, 0),
+            from: 0,
             theme: 0,
             portuguese: false,
             frame: None,
@@ -615,6 +653,7 @@ impl Globe {
         at: Option<(f32, f32)>,
         key: &str,
         size: (u32, u32),
+        from: u32,
         theme: usize,
         portuguese: bool,
     ) {
@@ -632,6 +671,7 @@ impl Globe {
         }
         self.at = at;
         self.size = size;
+        self.from = from;
         self.theme = theme;
         self.portuguese = portuguese;
     }
@@ -646,6 +686,7 @@ impl Globe {
             at: self.at,
             pose: self.pose,
             size: self.size,
+            from: self.from,
             theme: self.theme,
             portuguese: self.portuguese,
         });
@@ -776,6 +817,60 @@ impl Globe {
 
 #[cfg(test)]
 mod tests {
+    /// FAILS IF: the rows that scrolled away are SQUEEZED out of the picture
+    /// instead of being CUT off its top.
+    ///
+    /// THE OWNER READ THE OTHER ANSWER OFF THE SCREEN: *"conforme a scrollbar é
+    /// arrastada para baixo, o globo vai encolhendo, não quero que isso ocorra;
+    /// quero que o globo mantenha o tamanho"*. A picture reprojected into a
+    /// shorter box shows LESS of the world at a smaller scale; a picture cut
+    /// shows less of the world at the SAME scale, which is what scrolling
+    /// something off the top of a panel looks like everywhere else.
+    ///
+    /// The subject is a band across the BOTTOM half of a tall box. Cut by half
+    /// the height it fills the short box completely; drawn into the short box
+    /// with no cut it is not there at all. Those two answers cannot both come
+    /// from one arithmetic, which is what makes this test worth having.
+    #[test]
+    fn what_scrolled_away_is_cut_from_the_top_and_never_squeezed() {
+        let band = ronoctua_atlas::Drawing {
+            shapes: vec![ronoctua_atlas::Shape {
+                ink: ronoctua_atlas::Ink::Land,
+                closed: true,
+                points: vec![(0.0, 10.0), (20.0, 10.0), (20.0, 20.0), (0.0, 20.0)],
+            }],
+            dot: None,
+            rim: 10.0,
+        };
+        // HOW MUCH OF THE BOX THE BAND COVERS, as a fraction of its pixels.
+        let covered = |height: u32, from: u32| {
+            let rgba = super::paint(&band, 20, height, from).expect("a pixmap");
+            let lit = rgba.pixels.chunks_exact(4).filter(|p| p[3] > 128).count();
+            lit as f32 / (20.0 * height as f32)
+        };
+        // THE WHOLE BOX: the band is its bottom half.
+        let whole = covered(20, 0);
+        assert!(
+            (whole - 0.5).abs() < 0.05,
+            "the fixture is not half a box of ink: {whole}"
+        );
+        // CUT BY TEN, the band is everything there is.
+        let cut = covered(10, 10);
+        assert!(
+            cut > 0.95,
+            "the picture was not cut at its top: {cut} of the short box is ink"
+        );
+        // AND WITH NO CUT the short box is above the band entirely — which is
+        // what a SQUEEZE could never answer, because a squeeze would put half
+        // the band in it whatever the box.
+        let none = covered(10, 0);
+        assert!(
+            none < 0.05,
+            "the drawing was scaled into the short box instead of being cut: \
+             {none} of it is ink"
+        );
+    }
+
     /// FAILS IF: the reader cannot open the table this build bakes.
     ///
     /// It is skipped when `RONOCTUA_ATLAS` is not set, which is the same shape

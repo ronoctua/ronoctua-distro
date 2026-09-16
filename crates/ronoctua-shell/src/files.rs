@@ -284,6 +284,42 @@ const SIDE_EJECT: u16 = ronoctua_tokens::space::FILES_SIDEBAREJECT;
 /// place.
 const PANEL_FLOOR: u16 = 24;
 
+/// A BLANK ROW AT THE END OF THE FACTS — CONTENT, and never a reserve.
+///
+/// The expand button is drawn in the panel's bottom-right corner, so scrolled
+/// to the last fact it would sit on top of one. The sheet therefore has one
+/// more ROW than it has facts and that row is empty: it comes into view only
+/// once everything else has been scrolled past, which is the owner's own
+/// requirement — *"uma linha em branco ao final do conteúdo, ou seja, uma
+/// linha em branco que apareça apenas após scroll down todo o conteúdo"*.
+///
+/// # The first shape of this took the line off the PANEL, and he read the cost
+///
+/// *"Você fez a coluna perder uma linha de informação em um espaço que já é
+/// pequeno e já mostra poucas linhas."* A reserve costs a fact on EVERY screen;
+/// a row at the end of the content costs one only where the button would
+/// otherwise have covered something. The two are one line of code apart and
+/// they are not the same promise.
+const BLANK: usize = 1;
+
+/// THE WIDTH ONE COLUMN OF THE EXPANDED FACTS IS MEASURED AGAINST.
+///
+/// `space.view.labelCells` is where every list in this system starts its value,
+/// and [`PANEL_FLOOR`] is the least room in which a fact still reads — the
+/// widest ordinary one is `Dimensions  3024 × 4032`, twenty-three cells. A
+/// column that holds both is a column where neither half is cut, and that is
+/// what expanding is FOR.
+///
+/// # The other answer was read off the screen
+///
+/// Measured against [`PANEL_CEILING`] alone, the owner's region came out as
+/// FOUR columns of forty-three: *"em vez de 4 colunas pequenas … seria melhor
+/// que tivesse sido dividido em 3 colunas maiores, pois assim o conteúdo das
+/// labels e valores maiores aparecerão com mais caracteres em tela, assim
+/// melhorando a leitura"*. At this width the same region is three columns of
+/// fifty-eight — five more cells of label and ten more of value on every row.
+const FACT_COLUMN: u16 = ronoctua_tokens::space::VIEW_LABELCELLS + PANEL_FLOOR;
+
 /// The widest a panel is ever given.
 ///
 /// Forty cells is some 340 px at the window's font — past the headroom
@@ -330,12 +366,18 @@ const NOTHING_TO_PLAY: &str = ronoctua_i18n::key::FILES_LIST_NOTHING;
 const LIST_AT_START: &str = ronoctua_i18n::key::FILES_LIST_AT_START;
 /// And at either end of one.
 const LIST_AT_END: &str = ronoctua_i18n::key::FILES_LIST_AT_END;
-/// The three the whole-region key says.
+/// What either whole-region key says with nothing under the cursor.
 const THEATRE_NOTHING: &str = ronoctua_i18n::key::FILES_THEATRE_NOTHING;
-/// The whole region, given.
+/// And what it says about a panel that is not on the screen to be expanded.
+const WIDE_HIDDEN: &str = ronoctua_i18n::key::FILES_WIDE_HIDDEN;
+/// The whole region, given to the preview.
 const THEATRE_ON: &str = ronoctua_i18n::key::FILES_THEATRE_ON;
 /// And given back.
 const THEATRE_OFF: &str = ronoctua_i18n::key::FILES_THEATRE_OFF;
+/// The whole region, given to the facts.
+const FACTS_WIDE_ON: &str = ronoctua_i18n::key::FILES_FACTS_WIDE_ON;
+/// And given back.
+const FACTS_WIDE_OFF: &str = ronoctua_i18n::key::FILES_FACTS_WIDE_OFF;
 
 /// How far one key moves along a film, in seconds.
 ///
@@ -1309,6 +1351,24 @@ pub fn focus_rule(panes: Panes, width: u16, pane: Pane) -> Option<u16> {
     if !matches!(pane, Pane::Preview | Pane::Info) {
         return None;
     }
+    // AND NOTHING AT ALL WITH THE REGION GIVEN AWAY.
+    //
+    // It is the argument [`Panes::rules`] already makes one type along: a rule
+    // separates two things, and with one panel filling the width there is
+    // nothing to its left to be separated from — `boxes` puts that panel at
+    // cell nought, so the rule would be drawn against the screen's own edge.
+    // The owner photographed that line once already: *"no modo largo há uma
+    // linha vertical na esquerda que continua aparecendo"*.
+    //
+    // `rules` refusing was not enough, and this is the second door into it:
+    // both painters draw the focused section's rule EVEN WHEN `rules` did not
+    // give them one, which is what puts the strip's first panel back on the
+    // screen. With the keyboard in the wide panel — which is the only place
+    // `Tab` can leave it, since `panes_on` has one stop — that arm drew the
+    // line at cell nought again.
+    if panes.whole {
+        return None;
+    }
     let want = if matches!(pane, Pane::Preview) {
         Panel::Preview
     } else {
@@ -1541,12 +1601,18 @@ pub fn section_px(
     }
 }
 
-/// WHERE THE GLOBE GOES: the info panel's first lines, minus the address.
+/// WHERE THE GLOBE GOES inside the info panel, minus the address.
 ///
 /// The same arithmetic the preview's box gets, one panel along — `panel_px` for
 /// the column and `panel_band` for the line — and then through `picture_in`, so
 /// the air and the SHRINK-NEVER-GROW rule hold for the globe exactly as they do
 /// for a photograph.
+///
+/// `place` is [`View::globe_place`]: how many LINES the picture was given and
+/// how many CELLS wide it is. Two shapes go through it — the band across the
+/// panel's top, which is the panel's whole width, and the leftmost COLUMN of
+/// the expanded sheet — and neither door decides which, because the picture
+/// that is drawn has to be the picture that was measured.
 #[must_use]
 pub fn globe_px(
     panes: Panes,
@@ -1557,9 +1623,10 @@ pub fn globe_px(
     // where a signature stops being read and starts being counted.
     px: (f32, f32, f32),
     top: u16,
-    lines: usize,
+    place: (usize, u16),
 ) -> Option<ronoctua_render::image::Area> {
     let (cell, line_px, edge) = px;
+    let (lines, cells) = place;
     if lines < 2 {
         return None;
     }
@@ -1569,9 +1636,40 @@ pub fn globe_px(
     Some(ronoctua_render::image::Area {
         x,
         y: f32::from(top) * line_px,
-        width: wide,
+        // AND NEVER WIDER THAN THE PANEL, whatever the cells say: `min` is what
+        // keeps a stale width from one frame ago inside the column it belongs
+        // to, and the band's own answer is the panel's width already.
+        width: wide.min(f32::from(cells) * cell),
         height: tall,
     })
+}
+
+/// THE SIZE THE GLOBE'S TEXTURE IS ASKED FOR, out of the box it is drawn in.
+///
+/// # Why it is not the box
+///
+/// Because [`picture_in`] gives up `space.files.pictureAir` on each of the four
+/// sides before anything is fitted into it, and `Area::centre` then SHRINKS
+/// whatever it is given to fit what is left. A texture asked for at the outer
+/// size is therefore always drawn a little smaller than it was painted — by
+/// `(h - 2·air) / h`, which is a per cent or two in a tall box and a third of
+/// the picture in a short one.
+///
+/// That is invisible while the box does not move and glaring when it does: the
+/// globe's rows SCROLL now, so the box gets shorter as they go, and the owner
+/// photographed the map changing size between two scroll positions — twice,
+/// because the first repair made the CUT right and left this alone.
+///
+/// The preview has always subtracted it (`measured_preview`); this is the same
+/// subtraction, in one place, for the door that forgot.
+#[must_use]
+pub fn globe_texture(space: ronoctua_render::image::Area) -> (u32, u32) {
+    let air = f32::from(ronoctua_tokens::space::FILES_PICTUREAIR) * 2.0;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    (
+        (space.width - air).max(0.0) as u32,
+        (space.height - air).max(0.0) as u32,
+    )
 }
 
 /// The preview's picture, centred in its box with air on all four sides.
@@ -1805,11 +1903,17 @@ pub enum Hit {
     /// is a device that is not mounted. As `Enter` does on a listing row, which
     /// is why it costs no key of its own.
     Sidebar(usize),
-    /// The button that gives the preview the whole region, or gives it back.
+    /// The button that gives a PANEL the whole region, or gives it back.
     ///
-    /// As `C-w`, and through the same code: the mouse never reaches anything
-    /// the keyboard cannot, and never by a second path.
-    Theatre,
+    /// As `C-w` on the preview and `C-W` on the facts, and through the same
+    /// code: the mouse never reaches anything the keyboard cannot, and never by
+    /// a second path.
+    ///
+    /// IT CARRIES WHICH PANEL, and it has to: there are two corners on screen
+    /// at once, so a button that only meant "expand" would expand whichever
+    /// panel the handler happened to name — and that is one variant with two
+    /// meanings, which is the shape this enum exists to refuse.
+    Theatre(Panel),
     /// The transport's play glyph: hold the film, or let it go on. As `C-;`.
     ///
     /// A DRAWN target and not a click anywhere on the picture, for the reason
@@ -3058,11 +3162,16 @@ pub struct View {
     /// a picture that was refused look the same on screen, and only one of them
     /// has a sentence — the rule the panels already keep.
     trouble: Option<crate::motion::Trouble>,
-    /// Whether the preview was asked for the whole region.
+    /// WHICH panel was asked for the whole region, if either was.
     ///
-    /// A wish and not a state: [`View::whole`] is what the doors read, and it
-    /// answers `false` the moment there is no film to give the region TO.
-    theatre: bool,
+    /// A wish and not a state: [`View::wide`] is what the doors read, and it
+    /// answers `None` the moment there is nothing to give the region TO.
+    ///
+    /// ONE FIELD AND NOT TWO FLAGS, because the region is one. A pair of
+    /// booleans can both say yes, and then the layout has to choose between
+    /// them — a third opinion about a question this shape answers by
+    /// construction.
+    theatre: Option<Panel>,
     /// Where a shape is being looked at from.
     ///
     /// Beside `transport` and for the same reason: it is what was ASKED for,
@@ -3151,6 +3260,18 @@ pub struct View {
     /// that depends on a width nine of its callers do not have. The layout is
     /// the one place that knows, so the layout writes it down.
     drawn_panel: std::cell::Cell<u16>,
+    /// How many CELLS wide the FACTS panel was last drawn in.
+    ///
+    /// Its own and not [`View::drawn_panel`], which is the PREVIEW's: the two
+    /// panels are different widths whenever only one of them is on, and with
+    /// the region given away one of them is not drawn at all. What depends on
+    /// this is [`View::info_grid`] — how many columns the facts are laid out in
+    /// — and a grid computed against the other panel's width is a grid the
+    /// painter and the scrollbar disagree about.
+    ///
+    /// The layout is the one place that knows, so the layout writes it down;
+    /// the same arrangement as the two cells above and for the same reason.
+    drawn_info: std::cell::Cell<u16>,
     /// The width the view was last laid out at.
     ///
     /// # Why the view remembers a width
@@ -3182,10 +3303,6 @@ pub struct View {
     /// inside `wheel` would be a second opinion about where the picture is —
     /// which is the whole of what `Panes::section_at` was written to end.
     pointing_at_the_globe: std::cell::Cell<bool>,
-    /// Whether the globe is drawn at all. On by default — the owner asked for
-    /// the picture whenever a file says where it was made — and `C-g` is what
-    /// buys the facts' lines back.
-    globe_shown: bool,
     /// THE LAST SHEET BUILT, and what it was built for.
     ///
     /// # Why this is not an optimisation to be weighed
@@ -3476,7 +3593,7 @@ impl View {
             told: None,
             holding: false,
             trouble: None,
-            theatre: false,
+            theatre: None,
             pose: ronoctua_inspect::solid::Pose::default(),
             turned: None,
             told_turn: None,
@@ -3497,9 +3614,9 @@ impl View {
             fold_shown: std::cell::Cell::new(false),
             drawn_lines: std::cell::Cell::new(0),
             drawn_panel: std::cell::Cell::new(0),
+            drawn_info: std::cell::Cell::new(0),
             pointing_row: std::cell::Cell::new(None),
             pointing_at_the_globe: std::cell::Cell::new(false),
-            globe_shown: true,
             remembered: std::cell::RefCell::new(None),
             globe: std::cell::RefCell::new(crate::globe::Globe::new(crate::globe::Owner::Files)),
             drawn_name: std::cell::Cell::new(0),
@@ -4060,15 +4177,15 @@ impl View {
         // layout: the preview keeps being the panel it was and is handed every
         // cell, which is what makes the picture, the bars, the transport and
         // the hit test carry on working without a case of their own.
-        if self.whole() {
+        if let Some(which) = self.wide() {
             return Panes {
                 sidebar: 0,
                 right: width,
                 strip: 0,
-                preview: true,
-                // AND THE FACTS STEP ASIDE. Two panels sharing the region would
-                // be half a region each, which is what one already had.
-                info: false,
+                // AND THE OTHER ONE STEPS ASIDE. Two panels sharing the region
+                // would be half a region each, which is what one already had.
+                preview: matches!(which, Panel::Preview),
+                info: matches!(which, Panel::Info),
                 whole: true,
             };
         }
@@ -4126,7 +4243,7 @@ impl View {
         self.info_on
     }
 
-    /// HOW MANY LINES OF THE INFO PANEL THE GLOBE TAKES, and the ONE place
+    /// HOW MANY ROWS OF THE FACTS' CONTENT THE GLOBE TAKES, and the ONE place
     /// that decides.
     ///
     /// Zero unless the panel is on, the focused file carries a coordinate and
@@ -4165,11 +4282,48 @@ impl View {
         if room < want + 2 { 0 } else { want }
     }
 
+    /// THE GLOBE'S ROWS ARE CONTENT, AND THEY SCROLL WITH IT.
+    ///
+    /// # Why they stopped being chrome
+    ///
+    /// They were `Section::above` — the panel's first lines, pinned, the
+    /// arrangement the listing's path and header have. Two things were wrong
+    /// with that and the owner found both.
+    ///
+    /// The first is arithmetic: a pinned band makes the bar's track shorter
+    /// than the panel (`Section::visible`) while the DRAG measured the panel
+    /// (`Room::panel`), so grabbing the thumb over a file with a globe threw it
+    /// far below the hand — *"a barra da scrollbar se desloca imediatamente
+    /// muito abaixo da posição de onde está o cursor"*. With the rows inside
+    /// the scroll there is no `above` to disagree about.
+    ///
+    /// The second is what he asked for next, and it is the better screen: the
+    /// globe costs six of the footer's twelve lines, and pinned it costs them
+    /// for as long as the file is under the cursor. Scrolling gives them back —
+    /// *"ao arrastar a scrollbar ele se move junto liberando espaço para linhas
+    /// de conteúdo"* — which is also what retired `C-g`.
+    ///
+    /// # And the PICTURE shrinks rather than sliding out
+    ///
+    /// Because nothing in this renderer clips: an image drawn half outside its
+    /// panel is drawn over the listing above it, not cut. So what the door is
+    /// given is the rows the globe still HAS — `globe_rows() - offset` — and
+    /// `Area::centre` fits the picture into them. The map gives its lines to
+    /// the facts from the bottom up, and at `offset >= globe_rows()` there is
+    /// no picture to ask a thread for at all.
+    #[must_use]
+    pub fn globe_rows(&self) -> usize {
+        if self.globe_columns() > 0 {
+            return 0;
+        }
+        self.globe_lines()
+    }
+
     /// Whether this file, on this machine, has a globe to draw at all.
     ///
-    /// THE SUBJECT AND NOTHING ELSE: what the file carries, whether the person
-    /// asked for it (`C-g`) and whether this build has the world table. Every
-    /// one of those is known before a single line is measured, which is what
+    /// THE SUBJECT AND NOTHING ELSE: what the file carries and whether this
+    /// build has the world table. Both are known before a single line is
+    /// measured, which is what
     /// lets the LAYOUT ask it — [`View::panes`] grows the strip by it, and a
     /// predicate that looked at the drawing would be the deadlock this file
     /// records one function up.
@@ -4181,14 +4335,174 @@ impl View {
     /// arrangement the preview has for a refusal: a refusal is a VALUE.
     #[must_use]
     pub fn wants_a_globe(&self) -> bool {
-        self.globe_shown
-            && self.looked.as_ref().is_some_and(|l| l.at.is_some())
-            && crate::globe::present()
+        self.looked.as_ref().is_some_and(|l| l.at.is_some()) && crate::globe::present()
     }
 
-    /// How many ROWS of facts the panel has room for, which is not its lines.
+    /// How many ROWS of content the panel has room for, which is all its lines.
+    ///
+    /// NOTHING IS SUBTRACTED ANY MORE, and that is the repair: the globe's rows
+    /// scroll with the facts (see [`View::globe_rows`]) and the blank row at the
+    /// end is content too (see [`BLANK`]). A number here that the DRAG did not
+    /// also subtract is the misalignment the owner reported.
     pub fn info_room(&self) -> usize {
-        usize::from(self.drawn_lines.get()).saturating_sub(self.globe_lines())
+        usize::from(self.drawn_lines.get())
+    }
+
+    /// The facts' offset, KEPT INSIDE WHAT THERE IS TO SCROLL.
+    ///
+    /// # Why it is clamped when it is read and not when it is written
+    ///
+    /// Because what makes it too big is not a write: it is the GRID changing
+    /// underneath it. `C-W` turns one column of forty rows into three of
+    /// fourteen, and an offset of thirty is then past the end — the owner read
+    /// exactly that off the screen: *"ao arrastar a scrollbar totalmente para
+    /// baixo no modo não expandido, e depois trocar para o modo expandido, todo
+    /// o conteúdo … sobe a ponto de sumir da tela"*.
+    ///
+    /// Clamping on READ also keeps the place: give the region back and the
+    /// stored offset is inside range again, so the sheet is where it was left.
+    fn facts_offset(&self, total: usize) -> usize {
+        self.info_offset
+            .min(total.saturating_sub(self.info_room().max(1)))
+    }
+
+    /// HOW MANY COLUMNS OF `FACT_COLUMN` THE PANEL'S WIDTH HOLDS, at least one.
+    ///
+    /// Measured against the panel's own width and not the content's, for the
+    /// reason `sections_of` writes out about the same cell: `content_room` is a
+    /// cell narrower when there is a scrollbar, and whether there IS one is the
+    /// question this answer decides.
+    fn fits_columns(&self) -> usize {
+        usize::from(self.drawn_info.get() / FACT_COLUMN).max(1)
+    }
+
+    /// HOW MANY COLUMNS THE GLOBE TAKES — one, or none at all.
+    ///
+    /// # Why it is a column there and a band here
+    ///
+    /// Beside the listing the facts are one narrow column, so the only place a
+    /// picture can go is across their top — that is [`View::globe_rows`], and
+    /// those rows SCROLL, which is what gives their lines back.
+    ///
+    /// With the region given away that is the wrong shape twice over: the band
+    /// is as wide as the screen and a disc never grows, so most of it is empty,
+    /// and the facts start a picture's height down the page. The owner
+    /// photographed exactly that — *"há um enorme espaço em branco
+    /// disperdiçado acima das colunas de conteúdo … não há uma coluna com o
+    /// mapa"*. So the globe becomes the FIRST COLUMN, the height of the panel,
+    /// and the facts fill the rest.
+    ///
+    /// **Only where the facts still have a column of their own.** A globe that
+    /// took the one column there was room for would leave the sheet nowhere to
+    /// be, which is a picture winning an argument against the thing it
+    /// annotates.
+    fn globe_columns(&self) -> usize {
+        if self.wide() != Some(Panel::Info) || !self.wants_a_globe() {
+            return 0;
+        }
+        usize::from(self.fits_columns() >= 2)
+    }
+
+    /// THE FACTS' GRID: how many columns the GLOBE takes, how many the FACTS
+    /// take, and how many ROWS that makes them. The ONE place that decides.
+    ///
+    /// `(0, 1, facts + 1)` in the ordinary panel, which is what it has always
+    /// been plus the blank row at the end (see [`BLANK`]). With the region
+    /// given away it becomes a newspaper: the facts fill the first column top
+    /// to bottom and then the next, so a ROW of the panel holds one fact out of
+    /// each column, and the globe — if there is one — has the leftmost column
+    /// to itself.
+    ///
+    /// # Why the columns arrive only with the region
+    ///
+    /// Because a panel beside the listing is already a column of a page, and a
+    /// second column inside it would be a second thing to read past in
+    /// twenty-four cells. The owner asked for the columns as the EXPANDED
+    /// view's own answer — *"ao expandir, todo o conteúdo seja dividido em
+    /// algumas colunas, dentro do espaço disponível"* — and nothing about the
+    /// narrow panel changes because of it.
+    ///
+    /// # Why the count comes from the width AND from the facts
+    ///
+    /// From the width, because that is the requirement in his own words — *"a
+    /// quantidade de colunas depende do tamanho disponível na tela"* — and
+    /// [`FACT_COLUMN`] is what a column is measured against.
+    ///
+    /// And from the facts, because a column nobody fills is white space with a
+    /// ragged edge down it: eight facts in five columns is one fact each and
+    /// four columns of nothing. Never more columns than the facts need in order
+    /// to fit the lines there are.
+    fn grid_of(&self, facts: usize) -> (usize, usize, usize) {
+        // THE BLANK ROW IS ONE OF THE SHEET'S, counted here so that every
+        // caller — the bar, the wheel, the paging key and the painter — gets
+        // the same answer about how far there is to scroll.
+        let all = facts.saturating_add(BLANK);
+        if self.wide() != Some(Panel::Info) {
+            return (0, 1, all);
+        }
+        let globe = self.globe_columns();
+        let lines = self.info_room().max(1);
+        let room = self.fits_columns().saturating_sub(globe).max(1);
+        let columns = room.min(all.div_ceil(lines).max(1));
+        (globe, columns, all.div_ceil(columns))
+    }
+
+    /// The same grid, asked without the sheet in hand.
+    ///
+    /// `sheet()` is remembered but it hands back a CLONE, so the painter —
+    /// which already holds the sheet — asks [`View::grid_of`] instead. This is
+    /// for the keys and the wheel, which arrive with nothing.
+    #[must_use]
+    pub fn info_grid(&self) -> (usize, usize, usize) {
+        self.grid_of(self.sheet().len())
+    }
+
+    /// HOW MANY ROWS OF CONTENT THE FACTS PANEL HAS: the globe's, then the
+    /// grid's. What the bar, the wheel, the paging key and the DRAG all
+    /// measure against, and the one place it is added up.
+    #[must_use]
+    pub fn info_total(&self) -> usize {
+        self.globe_rows().saturating_add(self.info_grid().2)
+    }
+
+    /// WHERE THE GLOBE GOES inside the facts panel: how many LINES it is given
+    /// and how many CELLS wide it is. `None` when there is none to draw.
+    ///
+    /// The one answer both doors ask, because the picture that is DRAWN has to
+    /// be the picture that was MEASURED — and there are two shapes now, the
+    /// band across the panel's top and the column of the expanded sheet.
+    #[must_use]
+    pub fn globe_place(&self) -> Option<(usize, u16, usize)> {
+        if self.globe_columns() > 0 {
+            let (globe, columns, _) = self.info_grid();
+            let wide = u16::try_from(globe + columns).unwrap_or(1).max(1);
+            // THE BAR'S CELL PAID FOR WHETHER OR NOT THERE IS ONE.
+            //
+            // The fields divide `content_room`, which is a cell narrower when
+            // the sheet scrolls; this divides the panel's own width, because
+            // the grid must not be measured against an answer that depends on
+            // it. Taking the cell off here makes the picture's column the
+            // narrower of the two in every case — a cell of air on a picture's
+            // right is invisible, and a cell of overlap is the picture touching
+            // the next column's first letter.
+            return Some((
+                usize::from(self.drawn_lines.get()),
+                self.drawn_info.get().saturating_sub(BAR) / wide,
+                // A COLUMN DOES NOT SCROLL, so none of it has gone.
+                0,
+            ));
+        }
+        // THE ROWS IT STILL HAS, and how many have gone.
+        //
+        // Its band SCROLLS, so `offset` rows of it are off the top — and the
+        // picture keeps its SIZE while they go, because what is cut is the
+        // DRAWING and not the box (`crate::globe::paint`). The owner read the
+        // other answer off the screen: *"o globo vai encolhendo … quero que o
+        // globo mantenha o tamanho"*.
+        let air = self.globe_rows();
+        let gone = self.facts_offset(air.saturating_add(self.info_grid().2));
+        let left = air.saturating_sub(gone);
+        (left > 0).then(|| (left, self.drawn_info.get(), gone.min(air)))
     }
 
     /// How many LINES the panels want, when they sit on the right.
@@ -4281,7 +4595,9 @@ impl View {
             } else {
                 0
             };
-            lines = lines.max(self.sheet().len().saturating_add(mine));
+            // AND THE BLANK ROW ON TOP OF BOTH, so a sheet that fits does not
+            // grow a scrollbar for the empty line at the end of it.
+            lines = lines.max(self.sheet().len().saturating_add(mine) + BLANK);
         }
         // AND THE TITLE IS A LINE THEY NEED. It does not scroll, so a panel
         // given exactly as many lines as it has to SAY would push its last row
@@ -4632,7 +4948,7 @@ impl View {
             .iter()
             .flat_map(|(which, at, room)| match which {
                 Panel::Preview => self.preview_fields(n, rows, *at, *room, texts),
-                Panel::Info => self.info_fields(n, *at, *room, sheet),
+                Panel::Info => self.info_fields(n, rows, *at, *room, sheet),
             })
             .collect()
     }
@@ -4799,20 +5115,37 @@ impl View {
                 at.saturating_add(room)
                     .saturating_sub(TRANSPORT_LEAD)
                     .saturating_sub(TRANSPORT_LEAD),
+                Panel::Preview,
             ),
         );
         out
     }
 
-    /// The button that gives the preview the whole region, and gives it back.
+    /// The button that gives a panel the whole region, and gives it back.
     ///
-    /// One field, drawn in two places — on the transport's row beside the
-    /// clock, and in the panel's bottom-right corner when there is no
-    /// transport. The GLYPH says which way it goes, which is the owner's own
-    /// requirement: *"um botão de expandir (e de reduzir, quando estiver
-    /// expandindo)"*.
-    fn theatre_field(&self, at: u16) -> Field {
-        let wide = self.whole();
+    /// One field, drawn in three places — on the transport's row beside the
+    /// clock, in the preview's bottom-right corner when there is no transport,
+    /// and in the facts' bottom-right corner. The GLYPH says which way it goes,
+    /// which is the owner's own requirement: *"um botão de expandir (e de
+    /// reduzir, quando estiver expandindo)"*.
+    ///
+    /// `which` is the panel whose corner this is, and it is carried rather than
+    /// derived: both corners can be on screen at the same moment, and a button
+    /// that only said "expand" would say nothing about what.
+    fn theatre_field(&self, at: u16, which: Panel) -> Field {
+        let wide = self.wide() == Some(which);
+        // THE SENTENCE NAMES THE PANEL, because with two of them "the whole
+        // region" no longer says which thing is about to fill it.
+        let (on, off) = match which {
+            Panel::Preview => (
+                ronoctua_i18n::key::FILES_THEATRE_ON,
+                ronoctua_i18n::key::FILES_THEATRE_OFF,
+            ),
+            Panel::Info => (
+                ronoctua_i18n::key::FILES_FACTS_WIDE_ON,
+                ronoctua_i18n::key::FILES_FACTS_WIDE_OFF,
+            ),
+        };
         Field {
             at,
             text: if wide {
@@ -4822,15 +5155,11 @@ impl View {
             }
             .to_string(),
             color: ronoctua_tokens::color::TEXT_PRIMARY,
-            hit: Hit::Theatre,
+            hit: Hit::Theatre(which),
             // AND IT SAYS WHICH WAY IT GOES on the line above, as every drawn
             // control in this manager does.
             explain: Some(Explanation {
-                key: if wide {
-                    ronoctua_i18n::key::FILES_THEATRE_OFF
-                } else {
-                    ronoctua_i18n::key::FILES_THEATRE_ON
-                },
+                key: if wide { off } else { on },
                 args: Vec::new(),
             }),
         }
@@ -4910,6 +5239,15 @@ impl View {
             })
     }
 
+    /// Whether the pointer is anywhere in the facts.
+    ///
+    /// ANYWHERE, as the preview's twin below reads it: `View::hit` resolves the
+    /// SECTION first, so resting on a value, on a label or on the air beside
+    /// them all keep the button out.
+    fn pointing_at_info(&self) -> bool {
+        self.pointing.get() == Some(Pane::Info)
+    }
+
     /// Whether the pointer is anywhere in the preview.
     ///
     /// ANYWHERE, which is the owner's word: the picture, the controls, the air
@@ -4966,7 +5304,7 @@ impl View {
             && room > 0
             && (!self.theatre_covers(rows) || self.pointing_at_preview())
         {
-            out.push(self.theatre_field(at.saturating_add(room).saturating_sub(1)));
+            out.push(self.theatre_field(at.saturating_add(room).saturating_sub(1), Panel::Preview));
         }
         out
     }
@@ -5184,7 +5522,7 @@ impl View {
         // diretório; mas apenas no modo preview largo"*. In the narrow panel
         // the name is a cell away in the listing; with the listing gone it is
         // nowhere, and a whole screen saying only "no preview" says nothing.
-        let named = self.whole();
+        let named = self.wide() == Some(Panel::Preview);
         if named && n == wrapped.len() {
             let entry = self.focused();
             let said = entry.map_or_else(String::new, |e| {
@@ -5355,18 +5693,104 @@ impl View {
         fields
     }
 
-    fn info_fields(&self, n: usize, at: u16, room: u16, sheet: &[Fact]) -> Vec<Field> {
+    /// ONE LINE OF THE FACTS PANEL: the globe — as a band's row or as a
+    /// column — one fact out of each of the other columns, and the expand
+    /// button where the line is the last one.
+    ///
+    /// One column in the ordinary panel, several with the region given away —
+    /// [`View::grid_of`] is what says which, and it is the only thing that
+    /// does. The line is a `Row` like any other, so `hit`, the hover band, a
+    /// click and a key all keep going through the machine that already exists.
+    fn info_fields(&self, n: usize, rows: usize, at: u16, room: u16, sheet: &[Fact]) -> Vec<Field> {
+        let (globe, columns, tall) = self.grid_of(sheet.len());
+        let wide = u16::try_from(globe + columns).unwrap_or(1).max(1);
+        let each = room / wide;
+        let mut out = Vec::new();
+        // THE GLOBE'S OWN COLUMN, and it is the same builder the band uses:
+        // one picture, one target, one address line, wherever it is put.
+        if globe > 0 {
+            out.extend(self.globe_fields(n, rows, at, each));
+        }
         // THE OFFSET IS THE PANEL'S OWN. The listing scrolls with the region
         // and the facts do not: they are about ONE entry, and there are more
         // of them than the region has lines. See `View::facts_bar`.
-        let Some(fact) = sheet.get(n.saturating_add(self.info_offset)) else {
-            return Vec::new();
-        };
+        let air = self.globe_rows();
+        let row = n.saturating_add(self.facts_offset(air.saturating_add(tall)));
+        if row < air {
+            // A ROW OF THE GLOBE'S BAND, which SCROLLS: it is content, not
+            // chrome. `air - offset` of them are left on screen and they are
+            // the panel's first lines, so the address stays at the picture's
+            // foot as the picture gives its lines back. See `View::globe_rows`.
+            out.extend(self.globe_fields(row, air, at, room));
+        } else {
+            for c in 0..columns {
+                // COLUMN-MAJOR, which is what "divided into columns" means: the
+                // facts fill the first column top to bottom and then the next,
+                // so reading DOWN a column is reading the sheet in its own
+                // order. Row by row would put the second fact beside the first,
+                // and a sheet one reads left to right is a table nobody wrote.
+                //
+                // PAST THE LAST FACT IS THE BLANK ROW, which `sheet.get`
+                // answers `None` for — see [`BLANK`].
+                let k = row - air;
+                let Some(fact) = sheet.get(c.saturating_mul(tall).saturating_add(k)) else {
+                    continue;
+                };
+                let mine = u16::try_from(globe + c).unwrap_or(0).saturating_mul(each);
+                // AND THE LAST COLUMN TAKES WHAT THE DIVISION LEFT OVER, which
+                // is the rule `Panes::boxes` already follows for the panels
+                // themselves: cells left at the right-hand end are cells
+                // nothing draws in, and the owner measured that once already.
+                let span = if c + 1 == columns {
+                    room.saturating_sub(mine)
+                } else {
+                    each
+                };
+                out.extend(self.fact_fields(fact, at.saturating_add(mine), span));
+            }
+        }
+        // AND THE EXPAND BUTTON, IN THE CORNER, on the panel's last line.
+        //
+        // OVER whatever that line holds, which is the rule the preview's own
+        // corner already follows and which the owner set there: a control that
+        // covers content while the hand is on it is a control one can reach,
+        // and scrolled to the end it covers the blank row instead of a fact.
+        //
+        // PUSHED LAST so that `lit_field` — an `rposition` — hands the cell to
+        // it rather than to the value underneath: what the eye sees lit is by
+        // construction what the click takes.
+        if rows > 0
+            && n + 1 == rows
+            && room > 0
+            && self.focused().is_some()
+            && self.pointing_at_info()
+        {
+            out.push(self.theatre_field(at.saturating_add(room).saturating_sub(1), Panel::Info));
+        }
+        out
+    }
+
+    /// ONE FACT, in the cells one column of the grid gives it.
+    ///
+    /// Its own function because the arithmetic below is written once and used
+    /// by every column: a label a third of the way across, a value after it,
+    /// and a cell at the end. Two copies of it would be two answers to "where
+    /// does this value start", which is the divergence this file is the record
+    /// of.
+    fn fact_fields(&self, fact: &Fact, at: u16, room: u16) -> Vec<Field> {
         // THE LABEL IS DIM AND THE VALUE IS NOT — hierarchy by colour, never by
         // size, which is what the two `nothing_*` rules already ask of every
         // buffer. The label gets a third of the panel and the value the rest:
         // the label is looked past and the value is read.
-        let for_label = (room / 3).max(1);
+        let for_label = (room / 3)
+            .max(1)
+            // AND NEVER WIDER THAN A LABEL IS. `space.view.labelCells` is the
+            // column every other list in this system starts its values at, and
+            // it is what the third has to answer to once the panel can be two
+            // hundred cells wide: a third of that is a one-word label sixty-six
+            // cells away from the value it names. In the narrow panel the third
+            // is the smaller of the two and nothing changes.
+            .min(ronoctua_tokens::space::VIEW_LABELCELLS.max(1));
         let value_at = at.saturating_add(for_label).saturating_add(1);
         // AND ONE CELL AT THE END IS THE BAR'S, always.
         //
@@ -7140,9 +7564,6 @@ pub enum Where {
     OnSound,
     /// Only over a playlist.
     OnAList,
-    /// Only where there is a globe — a file that says where it was made, on a
-    /// machine that has the world data to place it.
-    OnAPlace,
     /// Over EITHER, because the three zoom keys mean the same thing in both
     /// and one notation cannot carry two ids.
     ///
@@ -7172,7 +7593,6 @@ impl Where {
             Self::OnAFilm => v.film_here(),
             Self::OnSound => v.has_sound(),
             Self::OnAList => v.showing_list().is_some(),
-            Self::OnAPlace => v.globe_here(),
             Self::OnAShapeOrAPlace => v.shape_here() || v.globe_here(),
         }
     }
@@ -7351,6 +7771,17 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     // punctuation, because it is not about the film's time — `w` for the
     // window it becomes.
     ("C-w", "files-theatre", Where::OnAPreview),
+    // AND THE FACTS GET THE SAME KEY, SHIFTED. `C-W` is `C-w`'s pair the way
+    // `C-S` is `C-s`'s and `C-A` is `C-a`'s — two keys already here that read
+    // as "the same thing, the other way" — and a SHIFTED letter is safe for the
+    // reason the unshifted ones are: xkb has applied Shift before either door's
+    // `key_of` sees the keysym, so `w` and `W` are told apart.
+    //
+    // Expanded, the facts are not simply bigger: they are laid out in as many
+    // COLUMNS as the width allows, which is the owner's own requirement —
+    // *"ao expandir, todo o conteúdo seja dividido em algumas colunas, dentro
+    // do espaço disponível"*.
+    ("C-W", "files-facts-wide", Where::OnTheFacts),
     // TURNING A SHAPE HAS NO ROW OF ITS OWN ANY MORE, and that is not the same
     // as being unreachable: `S-<arrow>` resolves to these four whenever the
     // preview has the keyboard and there is a shape in it. `strong_meaning` is
@@ -7364,16 +7795,12 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     // and one notation cannot carry two ids. The two contexts cannot both be
     // in focus — a shape is in the preview panel and a globe is in the info
     // panel — so `zoom` and `reframe` dispatch on the focused pane.
-    // `C-g` FOR THE GLOBE, and it is the only new letter this feature takes.
-    //
-    // In a terminal `C-g` is cancel; on Wayland it is the keysym `g` and this
-    // shell's cancel is `Esc`, so nothing collides — but somebody will assume
-    // otherwise, which is why it is written here.
-    //
-    // It HIDES the globe rather than summoning it: the picture is there
-    // whenever the file says where it was made (the owner asked for that), and
-    // what this buys is the facts back when one wants to read them.
-    ("C-g", "files-globe", Where::OnAPlace),
+    // `C-g` HID THE GLOBE, AND IT IS GONE. What it bought was the facts back
+    // when one wanted to read them, and the globe's rows SCROLL now — so the
+    // key had become a second way to do what dragging the bar already does.
+    // The owner said so himself when he asked for the scrolling: *"nesse caso o
+    // atalho de exibir e esconder o globo não precisaria existir"*. It is the
+    // argument `C-o` and `LEADER f` died of, twice over.
     ("C-k", "files-zoom-in", Where::OnAShapeOrAPlace),
     ("C-j", "files-zoom-out", Where::OnAShapeOrAPlace),
     ("C-r", "files-reframe", Where::OnAShapeOrAPlace),
@@ -7734,10 +8161,6 @@ impl View {
             Some("files-zoom-in") => Self::stepped(self.zoom(ZOOM_STEP)),
             Some("files-zoom-out") => Self::stepped(self.zoom(1.0 / ZOOM_STEP)),
             Some("files-reframe") => Self::stepped(self.reframe()),
-            Some("files-globe") => {
-                self.globe_shown = !self.globe_shown;
-                Step::Changed
-            }
             // THE GLOBE'S FOUR, in degrees rather than in pixels: a key has no
             // distance, so it moves by a fixed step of the CURRENT view — a
             // tenth of the box, which reads the same near and far.
@@ -7757,7 +8180,8 @@ impl View {
             Some("files-sound") => self.hear(),
             Some("files-rewind") => self.seek_by(-SEEK_STEP),
             Some("files-forward") => self.seek_by(SEEK_STEP),
-            Some("files-theatre") => self.theatre(),
+            Some("files-theatre") => self.theatre(Panel::Preview),
+            Some("files-facts-wide") => self.theatre(Panel::Info),
             Some("files-pane-next") => self.cycle_pane(true),
             Some("files-pane-previous") => self.cycle_pane(false),
             Some("files-columns") => {
@@ -8124,7 +8548,7 @@ impl View {
             // keyboard cannot, and never by a second path.
             Hit::Play => self.play_pause(),
             Hit::Sound => self.hear(),
-            Hit::Theatre => self.theatre(),
+            Hit::Theatre(which) => self.theatre(*which),
             // THE GLOBE'S PICTURE ANSWERS NOTHING TO A CLICK, because a press
             // on it is the start of a DRAG — resolved before the row, exactly
             // as a press on a shape in the preview is. A click that also acted
@@ -8416,7 +8840,17 @@ impl View {
             // AND THE FACTS ARE ROWS, several of which DO something — the mode
             // bits, the owner, the size that has to be walked for. Until the
             // ring reached this panel they were the mouse's alone.
-            Pane::Info => (!self.sheet().is_empty()).then_some((Pane::Info, self.info_cursor)),
+            Pane::Info => {
+                // ONE READING OF THE SHEET, because `sheet()` hands back a
+                // CLONE and this runs on every painted frame: asking whether
+                // it is empty and then asking the grid about it was two.
+                let facts = self.sheet().len();
+                // THE CURSOR IS A FACT AND THE BAND IS A LINE, and with the
+                // facts in columns those are not the same number: what is lit
+                // is the ROW the fact sits in. In one column they are equal,
+                // which is every panel beside the listing.
+                (facts > 0).then(|| (Pane::Info, self.info_cursor % self.grid_of(facts).2.max(1)))
+            }
             // THE CONTROL HAS NO ROW: it is one glyph, and what says it has
             // the keyboard is its own colour.
             Pane::Fold => None,
@@ -8799,12 +9233,26 @@ impl View {
                 // would be asking the answer to decide the question.
                 if matches!(pane, Pane::Preview) {
                     self.drawn_panel.set(room);
+                } else {
+                    // AND THE FACTS' OWN, which is a different number whenever
+                    // only one of the two panels is on. `View::grid_of` is what
+                    // reads it, and a grid measured against the other panel's
+                    // width is a grid the painter and the scrollbar disagree
+                    // about.
+                    self.drawn_info.set(room);
                 }
                 if !wanted(pane) {
                     continue;
                 }
                 let total = if matches!(pane, Pane::Info) {
-                    sheet.len()
+                    // THE GLOBE'S ROWS AND THE GRID'S, which together are what
+                    // there is to scroll: a row of the grid carries one fact
+                    // out of every column, so the sheet is shorter down the
+                    // page than it is long. `View::info_total` is the one place
+                    // it is added up, and the bar, the wheel, the paging key
+                    // and the drag all ask it.
+                    self.globe_rows()
+                        .saturating_add(self.grid_of(sheet.len()).2)
                 } else {
                     self.preview_total()
                 };
@@ -8876,24 +9324,18 @@ impl View {
                 // real fields, so `hit`, `band_row`, a click and a key all keep
                 // going through the machine that already exists rather than
                 // through a fourth opinion about where the panel is.
-                let air = if matches!(which, Panel::Info) {
-                    self.globe_lines()
-                } else {
-                    0
-                };
+                // THE GLOBE'S ROWS ARE THE FACTS' OWN, built by the same
+                // builder as every other line of the panel. They used to be a
+                // band chained in FRONT of the content and marked `above`, and
+                // that is the pinning `View::globe_rows` records the two
+                // defects of.
                 let mut content: Vec<Row> = Vec::with_capacity(content_lines);
-                content.extend((0..air).map(|k| Row {
-                    fields: self.globe_fields(k, air, at, content_room),
-                    marked: false,
-                    foot: false,
-                    focused: false,
-                }));
-                content.extend((0..content_lines.saturating_sub(air)).map(|k| Row {
+                content.extend((0..content_lines).map(|k| Row {
                     fields: match which {
                         Panel::Preview => {
                             self.preview_fields(k, content_lines, at, content_room, texts)
                         }
-                        Panel::Info => self.info_fields(k, at, content_room, &sheet),
+                        Panel::Info => self.info_fields(k, content_lines, at, content_room, &sheet),
                     },
                     marked: false,
                     foot: false,
@@ -8935,18 +9377,22 @@ impl View {
                     top,
                     lines,
                     offset: if matches!(pane, Pane::Info) {
-                        self.info_offset
+                        // KEPT INSIDE WHAT THERE IS TO SCROLL. See
+                        // `View::facts_offset`: the GRID changes under a stored
+                        // offset, and nothing writes when it does.
+                        self.facts_offset(total)
                     } else {
                         self.preview_offset
                     },
                     total,
-                    // AND THOSE LINES DO NOT SCROLL, which is exactly what this
-                    // field already means — "how many of `content`'s first
-                    // lines are chrome". It was the listing's path and header
-                    // and nothing else; `Section::line_of` and
-                    // `Section::bar_box` already honour it, so the facts' own
-                    // scrollbar starts below the globe for free.
-                    above: air,
+                    // AND A PANEL HAS NO CHROME LINES AT ALL.
+                    //
+                    // The globe's were the one exception and they are gone: a
+                    // pinned band makes `Section::visible` shorter than the
+                    // panel while `Room::panel` — what the DRAG divides by — is
+                    // the panel, and the owner felt the two disagree under his
+                    // hand. See `View::globe_rows`.
+                    above: 0,
                     content,
                 });
             }
@@ -9033,6 +9479,46 @@ impl View {
             hit: f.hit.clone(),
             explain: f.explain.clone(),
         })
+    }
+
+    /// WHICH SECTION a point is in, and nothing at all about what is drawn
+    /// there.
+    ///
+    /// # Why this is shallower than `band_row`, which is already shallow
+    ///
+    /// Because it answers what the pointer is OVER and not what it is ON, and
+    /// those differ exactly where a section has empty cells — which is most of
+    /// a facts panel: the space past a short value, and every line below the
+    /// last fact.
+    ///
+    /// Both doors used to answer it from a deeper resolution — the footer from
+    /// the full `hit`, which needs a FIELD, and the window from `band_row`,
+    /// which refuses a row with no fields on it. So `View::pointing` went
+    /// `None` as the hand crossed the blank part of the column, and the expand
+    /// button in the corner vanished before anybody could reach it. The owner
+    /// reported precisely that: *"é impossível clicar no ícone, pois ele
+    /// desaparece antes de o cursor conseguir chegar nele, porque você
+    /// implementou o hover … apenas em partes do conteúdo, em vez de
+    /// implementar na coluna como um todo (incluindo espaços vazios)"*.
+    ///
+    /// `Panes::section_at` is arithmetic over a cell, so there is nothing for
+    /// an empty line to fail to answer.
+    ///
+    /// # And the LINE still has to be inside the section
+    ///
+    /// A cell says which COLUMN a point is in and it cannot say whether the
+    /// point is above or below the manager's own band — the modeline under the
+    /// panels sits in the same columns they do. So the band is asked as well,
+    /// through the same [`at_line`] `band_row` uses, and only the row's FIELDS
+    /// go unconsulted. `None` means the point is on no section at all.
+    #[must_use]
+    pub fn pane_at(&self, width: u16, room: usize, line: usize, cell: u16) -> Option<Pane> {
+        let panes = self.panes(width);
+        let in_strip = panes.strip > 0 && line >= room;
+        let which = panes.section_at(cell, width, in_strip);
+        let chrome = self.chrome_rows(width, &self.texts);
+        let sections = self.sections_of(&chrome, room, width, &self.texts, Some(which));
+        at_line(&sections, which, line).map(|(sec, _)| sec.pane)
     }
 
     /// Which ROW of which pane a point is on, with no field needed.
@@ -9244,7 +9730,13 @@ impl View {
         let total = match pane {
             Pane::Fold => return false,
             Pane::Sidebar => self.side.shown(self.hidden).len(),
-            Pane::Info => self.sheet().len(),
+            // THE GRID'S ROWS, which is what the BAR was drawn from: with the
+            // facts in columns a row holds one fact out of each, and the blank
+            // row at the end is one of them. A drag measured against the count
+            // of facts and a thumb drawn against the count of rows are two
+            // answers, and the owner has photographed that pair of them
+            // stopping short of the bottom once already.
+            Pane::Info => self.info_total(),
             // THE COLUMN'S OWN TOTAL — the modal's when one is up, the same
             // number its bar was drawn from. See `View::listing_total`.
             Pane::Listing => self.listing_total(),
@@ -9572,7 +10064,7 @@ impl View {
             //
             // Reading a long file that way is not lost: `C-,` pages the text
             // and comes back round, and `C-[`/`C-]` move the line sideways.
-            Pane::Preview if self.whole() => self.move_by(by),
+            Pane::Preview | Pane::Info if self.whole() => self.move_by(by),
             // AND A PLAYLIST HAS ENTRIES TO WALK, which is a cursor and not a
             // scroll: the owner asked for it in those words — *"ao abrir uma
             // playlist e ir para o preview clicando `Tab`, deveria ser possível
@@ -9730,8 +10222,11 @@ impl View {
         // onto a listing that is not drawn would put the cursor where nobody
         // can see it — the case `cycle_pane` already lands on the listing for,
         // read the other way round.
-        if panes.whole {
-            out.push(Pane::Preview);
+        if let Some(which) = self.wide() {
+            out.push(match which {
+                Panel::Preview => Pane::Preview,
+                Panel::Info => Pane::Info,
+            });
             return out;
         }
         if panes.sidebar > 0 {
@@ -9961,8 +10456,9 @@ impl View {
                 {
                     return true;
                 }
-                let total = self.sheet().len();
-                self.info_offset = slide(self.info_offset, by, total, self.info_room().max(1));
+                let total = self.info_total();
+                self.info_offset =
+                    slide(self.facts_offset(total), by, total, self.info_room().max(1));
                 true
             }
         }
@@ -11028,11 +11524,13 @@ impl View {
         // top and they do not scroll (`Section::above`), so paging by the
         // region's height would step past facts nobody has seen.
         let room = self.info_room();
-        let total = self.sheet().len();
+        // THE GRID'S ROWS, which is what one pages through: with the facts in
+        // columns the sheet is shorter down the page than it is long.
+        let total = self.info_total();
         if !self.panes(width).info || room == 0 || total <= room {
             return Step::Say(does(FACTS_ALL_SHOWN));
         }
-        self.info_offset = self.info_offset.saturating_add(room);
+        self.info_offset = self.facts_offset(total).saturating_add(room);
         if self.info_offset >= total {
             self.info_offset = 0;
         }
@@ -11287,20 +11785,38 @@ impl View {
         // overwrites the old one when it lands.
     }
 
-    /// Gives the preview the whole region, or gives it back. `C-w`.
+    /// Gives a panel the whole region, or gives it back. `C-w` and `C-W`.
     ///
-    /// It REFUSES when there is no film, and the refusal is the point: a
-    /// manager whose listing vanished because a key was pressed over a text
-    /// file is a manager that lost its listing.
-    fn theatre(&mut self) -> Step {
+    /// It REFUSES when there is nothing under the cursor, and the refusal is
+    /// the point: a manager whose listing vanished because a key was pressed
+    /// over an empty directory is a manager that lost its listing.
+    ///
+    /// **And it refuses for a panel that is HIDDEN**, which is not the same
+    /// refusal and does not deserve the same sentence. `C-v` and `C-i` take a
+    /// panel off the screen; handing the region to one of those was a key that
+    /// said "the panel has the whole region" and changed nothing at all — the
+    /// one outcome this project treats as a defect, because from the outside a
+    /// key that lies and a key that is dead look the same.
+    fn theatre(&mut self, which: Panel) -> Step {
         if self.focused().is_none() {
             return Step::Say(does(THEATRE_NOTHING));
         }
-        self.theatre = !self.theatre;
-        Step::Say(does(if self.theatre {
-            THEATRE_ON
+        if !self.panel_on(which) {
+            return Step::Say(does(WIDE_HIDDEN));
+        }
+        // THE OTHER KEY TAKES IT OVER rather than adding a second wide panel:
+        // the region is ONE, so the two keys are the two ends of one wish.
+        self.theatre = if self.theatre == Some(which) {
+            None
         } else {
-            THEATRE_OFF
+            Some(which)
+        };
+        let wide = self.theatre == Some(which);
+        Step::Say(does(match (which, wide) {
+            (Panel::Preview, true) => THEATRE_ON,
+            (Panel::Preview, false) => THEATRE_OFF,
+            (Panel::Info, true) => FACTS_WIDE_ON,
+            (Panel::Info, false) => FACTS_WIDE_OFF,
         }))
     }
 
@@ -11877,7 +12393,10 @@ impl View {
     /// already works: the picture that is drawn is the picture that was
     /// measured, and a second opinion about the size is a texture the GPU has
     /// at one size and the layout at another.
-    pub fn measured_globe(&self, size: (u32, u32), theme: usize) {
+    /// `from` is how many pixels of the picture's TOP have scrolled away — the
+    /// band's rows are content and they move, and the picture keeps its SIZE
+    /// while they do. See [`crate::globe::paint`].
+    pub fn measured_globe(&self, size: (u32, u32), from: u32, theme: usize) {
         let at = self.looked.as_ref().and_then(|l| l.at);
         let key = self
             .looked
@@ -11886,7 +12405,7 @@ impl View {
         let portuguese = self.texts.language().starts_with("pt");
         self.globe
             .borrow_mut()
-            .looking_at(at, &key, size, theme, portuguese);
+            .looking_at(at, &key, size, from, theme, portuguese);
     }
 
     /// What the globe wants drawn, when it is not what was last asked for.
@@ -11917,10 +12436,15 @@ impl View {
         self.globe.borrow().key()
     }
 
-    /// Whether there is a globe to draw at all.
+    /// Whether there is a globe on screen at all — as a band, or as the
+    /// expanded sheet's first column.
+    ///
+    /// BOTH SHAPES, because the keys that turn and frame it mean the same thing
+    /// in either: asking only about the band killed `C-k`, `C-j` and `C-r` in
+    /// the one place the picture is biggest.
     #[must_use]
     pub fn globe_here(&self) -> bool {
-        self.globe_lines() > 0
+        self.globe_rows() > 0 || self.globe_columns() > 0
     }
 
     /// Whether the pointer is resting on the globe, told by the door.
@@ -12126,15 +12650,44 @@ impl View {
     /// such case.
     #[must_use]
     pub fn whole(&self) -> bool {
-        // ANY PREVIEW, and not only a film. The owner asked for it: *"fazer o
-        // modo largo funcionar em todos os preview, de todos os arquivos"* —
-        // a photograph is exactly as worth a whole region as a film, and so is
-        // a page of code.
-        //
-        // What it still needs is something to BE a preview of: with no file
-        // under the cursor the region would be given to an empty panel, and
-        // `C-w` would have lost the listing for nothing.
-        self.theatre && self.preview_on && self.focused().is_some()
+        self.wide().is_some()
+    }
+
+    /// WHICH panel has the whole region, and `None` when neither has.
+    ///
+    /// # It is DERIVED, and that is what makes it undo itself
+    ///
+    /// Not a mode that is stored and switched off: the film ending, the cursor
+    /// moving, `C-v` hiding the preview — each of them would be a case somebody
+    /// has to remember to undo, and the one that gets forgotten leaves the
+    /// manager showing a blank region. Asking the question every frame has no
+    /// such case.
+    ///
+    /// ANY PREVIEW, and not only a film. The owner asked for it: *"fazer o
+    /// modo largo funcionar em todos os preview, de todos os arquivos"* — a
+    /// photograph is exactly as worth a whole region as a film, and so is a
+    /// page of code. And the FACTS are worth one too, which is what he asked
+    /// for next: expanded, they stop being a column twenty-four cells wide and
+    /// become as many columns as the screen can hold.
+    ///
+    /// What it still needs is something to BE about: with no file under the
+    /// cursor the region would be given to an empty panel, and the key would
+    /// have lost the listing for nothing. And the panel has to be ASKED for —
+    /// `C-v` and `C-i` hide them, and a hidden panel handed the region would be
+    /// a blank screen.
+    #[must_use]
+    pub fn wide(&self) -> Option<Panel> {
+        let which = self.theatre?;
+        (self.panel_on(which) && self.focused().is_some()).then_some(which)
+    }
+
+    /// Whether a panel was asked for at all — `C-v` and `C-i`.
+    #[must_use]
+    pub const fn panel_on(&self, which: Panel) -> bool {
+        match which {
+            Panel::Preview => self.preview_on,
+            Panel::Info => self.info_on,
+        }
     }
 
     /// Whether the cursor is on a film the preview is showing.
@@ -12658,8 +13211,7 @@ mod tests {
         }
     }
 
-    /// FAILS IF: a file that carries a coordinate reserves no lines for the
-    /// globe.
+    /// FAILS IF: a file that carries a coordinate gives the globe no rows.
     ///
     /// THIS IS A DEADLOCK, AND IT SHIPPED FOR A ROUND. `globe_lines` asked the
     /// globe component whether it was POINTED; what points it is
@@ -12712,14 +13264,19 @@ mod tests {
         v.drawn_at.set(200);
         v.drawn_lines.set(tall);
         assert_eq!(
-            v.globe_lines(),
+            v.globe_rows(),
             usize::from(ronoctua_tokens::space::ATLAS_LINES),
-            "the globe asked for no lines with a coordinate on screen"
+            "the globe asked for no rows with a coordinate on screen"
         );
+        // AND THE PANEL'S ROOM IS ALL OF ITS LINES, because the globe's rows
+        // are CONTENT. A number here that `Room::panel` — what the drag
+        // measures — does not also subtract is the misalignment the owner
+        // reported: *"a barra da scrollbar se desloca imediatamente muito
+        // abaixo da posição de onde está o cursor"*.
         assert_eq!(
             v.info_room(),
-            usize::from(tall) - usize::from(ronoctua_tokens::space::ATLAS_LINES),
-            "the facts did not get what the globe left"
+            usize::from(tall),
+            "the facts were charged for the globe's rows twice"
         );
         // AND THE ROWS ARE REAL ROWS, which is what keeps `hit`, the band and
         // the keys going through the machine that already exists.
@@ -12730,9 +13287,17 @@ mod tests {
             .find(|s| matches!(s.pane, Pane::Info))
             .expect("the info panel is a section");
         assert_eq!(
-            info.above,
-            usize::from(ronoctua_tokens::space::ATLAS_LINES),
-            "the globe's lines are not marked as the ones that do not scroll"
+            info.above, 0,
+            "the globe's rows are pinned again, and the bar's track and the \
+             drag's room disagree whenever they are"
+        );
+        // AND THE BAR AND THE DRAG MEASURE THE SAME BAND, which is the whole
+        // of the repair: `Section::visible` is what the thumb is drawn from
+        // and `Room::panel` is what `drag_to` divides by.
+        assert_eq!(
+            info.visible(),
+            v.info_room(),
+            "the thumb's track and the drag's room are different heights"
         );
         assert!(
             info.content[0]
@@ -12741,6 +13306,51 @@ mod tests {
                 .any(|f| matches!(f.hit, Hit::Globe)),
             "the panel's first row is not the globe"
         );
+        // AND THE GLOBE SCROLLS AWAY, giving its lines back to the facts. Two
+        // rows down, the picture has two fewer and the panel's first line is
+        // the globe's third.
+        //
+        // THE HEIGHT IS PUT BACK FIRST: `sections` above was asked for
+        // sixty-four lines and wrote that down, and `facts_offset` clamps
+        // against the panel's room — in a panel taller than the sheet there is
+        // nothing to scroll and the offset is rightly nought.
+        v.drawn_lines.set(tall);
+        v.info_offset = 2;
+        let (left, _, gone) = v.globe_place().expect("the globe still has a place");
+        // AND THE PICTURE KEEPS ITS SIZE: what was scrolled is CUT off its top,
+        // never squeezed out of it. *"Quero que o globo mantenha o tamanho."*
+        assert_eq!(
+            gone, 2,
+            "the rows that scrolled are not cut from the picture"
+        );
+        assert_eq!(
+            left,
+            usize::from(ronoctua_tokens::space::ATLAS_LINES) - 2,
+            "the picture kept its lines after the band was scrolled"
+        );
+        // AND IT CANNOT BE SCROLLED PAST WHAT THERE IS, which is the other
+        // half of `View::facts_offset` and the defect the owner met going from
+        // the narrow panel to the expanded one: *"o conteúdo sobe a ponto de
+        // sumir da tela"*. Asked for an offset far past the end, the sheet
+        // shows its LAST page and the picture has given back exactly the rows
+        // that were scrolled — no more.
+        v.info_offset = 999;
+        let most = v.info_total().saturating_sub(v.info_room());
+        assert!(
+            most > 0 && most < usize::from(ronoctua_tokens::space::ATLAS_LINES),
+            "this fixture needs a sheet that scrolls, but not past the globe"
+        );
+        let (left, _, gone) = v.globe_place().expect("the globe still has rows on screen");
+        assert_eq!(
+            gone, most,
+            "the cut and the offset disagree at the last page"
+        );
+        assert_eq!(
+            left,
+            usize::from(ronoctua_tokens::space::ATLAS_LINES) - most,
+            "the offset ran past the end of the sheet"
+        );
+        v.info_offset = 0;
 
         // AND A FILE WITHOUT ONE RESERVES NOTHING. The same answer again with
         // the coordinate taken out of it — `wants_look` has nothing left to
@@ -12767,6 +13377,206 @@ mod tests {
             at: None,
         });
         assert_eq!(v.globe_lines(), 0, "a file with no coordinate got a globe");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A VIEW WHOSE FOCUSED FILE SAYS WHERE IT WAS MADE, with the panels on.
+    ///
+    /// The coordinate is LONDON, which `assets/world.nix` already declares in
+    /// the open — nothing of the owner's goes into this repository
+    /// (invariant 13).
+    fn a_view_with_a_coordinate(name: &str) -> (View, std::path::PathBuf) {
+        let dir = scratch(name);
+        std::fs::write(dir.join("where.jpg"), b"not a real jpeg").expect("write the file");
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.info_on = true;
+        v.reread();
+        let ask = v.wants_look(512).expect("a file wants a look");
+        v.looked(Looked {
+            key: ask.key,
+            path: ask.path,
+            rgba: None,
+            moving: None,
+            list: None,
+            text: None,
+            why: None,
+            facts: Vec::new(),
+            mime: "image/jpeg",
+            turns: false,
+            outlined: 0,
+            at: Some((51.51, -0.13)),
+        });
+        assert!(
+            crate::globe::present(),
+            "RONOCTUA_ATLAS is unset or unreadable, so this test proves nothing"
+        );
+        (v, dir)
+    }
+
+    /// FAILS IF: the map's SCALE changes as its rows scroll away.
+    ///
+    /// THE OWNER PHOTOGRAPHED THIS TWICE, and the second time was mine: the
+    /// first repair made the CUT right — the drawing is projected whole and its
+    /// top is taken off — and left the picture being asked for at the box PLUS
+    /// its air, which `Area::centre` then shrinks to fit the box MINUS it. That
+    /// factor is `(h - 2·air) / h`: two per cent of a tall box and a third of a
+    /// short one, so it was invisible until the box began to move. *"O globo
+    /// continua mudando de tamanho ao mover a scrollbar."*
+    ///
+    /// # What is asserted, and why the obvious thing is not it
+    ///
+    /// The first version of this asserted that the PROJECTION's height does not
+    /// move with the offset — and that was true with the defect in place, so it
+    /// passed over it. The projection was never the problem: the cut already
+    /// kept it constant. What moved was the last step, `Area::centre`, which
+    /// SHRINKS the painted picture to fit a box the air has been taken out of.
+    ///
+    /// So the assertion is that step's own ratio: the height the picture is
+    /// DRAWN at over the height it was PAINTED at. One, at every scroll
+    /// position, is a map whose features keep their pixels — whatever the box
+    /// does.
+    #[test]
+    fn the_map_keeps_its_scale_as_its_rows_scroll_away() {
+        let (mut v, dir) = a_view_with_a_coordinate("globe-scale");
+        let texts = bundle();
+        let width = 200u16;
+        let lines = 12usize;
+        let _ = the_facts(&v, lines, width, &texts);
+        let air = usize::from(ronoctua_tokens::space::ATLAS_LINES);
+        assert!(v.globe_rows() == air, "the fixture has no globe band");
+        let cell = 10.0_f32;
+        let line_px = 27.0_f32;
+        let panes = v.panes(width);
+
+        // WHAT `Area::centre` DOES TO THE PAINTED PICTURE, one scroll position
+        // at a time.
+        let mut asked: Vec<f32> = Vec::new();
+        for gone in 0..air {
+            v.info_offset = gone;
+            let _ = the_facts(&v, lines, width, &texts);
+            let Some((left, cells, cut)) = v.globe_place() else {
+                break;
+            };
+            // AT MOST WHAT WAS ASKED FOR: a short sheet cannot be scrolled
+            // past its own end, and `facts_offset` is what says so.
+            assert!(
+                cut <= gone,
+                "the cut ran ahead of the offset: {cut} > {gone}"
+            );
+            let Some(area) = globe_px(
+                panes,
+                crate::chrome::FIELDS_LEAD,
+                width,
+                (cell, line_px, 2000.0),
+                0,
+                (left, cells),
+            ) else {
+                break;
+            };
+            if asked.len() > cut {
+                // THE SHEET HAS STOPPED MOVING, so the positions after this one
+                // are the same position again and say nothing.
+                break;
+            }
+            let (wide, tall) = globe_texture(area);
+            let drawn = picture_in(area, wide, tall);
+            #[allow(clippy::cast_precision_loss)]
+            asked.push(drawn.height / (tall.max(1) as f32));
+        }
+        assert!(
+            asked.len() > 2,
+            "this fixture has to scroll the band more than once: {asked:?}"
+        );
+        assert!(
+            asked.iter().all(|s| (s - 1.0).abs() < 0.02),
+            "the picture is not drawn at the size it was painted, so the map \
+             changes scale as its rows go: {asked:?}"
+        );
+        v.info_offset = 0;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the expanded facts keep the globe as a BAND across their top —
+    /// which is a picture's height of blank above the columns and a disc that
+    /// never grows to fill the width.
+    ///
+    /// THE OWNER PHOTOGRAPHED BOTH HALVES OF IT: *"há um enorme espaço em
+    /// branco disperdiçado acima das colunas de conteúdo, e além do mapa não
+    /// está aparecendo, não há uma coluna com o mapa"*. The picture was missing
+    /// because the door measured it inside the PREVIEW's guard, and with the
+    /// region given to the facts there is no preview box; the blank was the
+    /// lines `globe_lines` had reserved for a picture that was never drawn.
+    #[test]
+    fn the_expanded_facts_give_the_globe_a_column_and_not_a_band() {
+        let (mut v, dir) = a_view_with_a_coordinate("globe-column");
+        let texts = bundle();
+        let width = 200u16;
+        let lines = 12usize;
+        let _ = the_facts(&v, lines, width, &texts);
+        // A BAND WHILE IT IS A PANEL, which is what it has always been.
+        assert!(
+            v.globe_rows() > 0,
+            "the narrow panel stopped giving the globe its rows"
+        );
+
+        let _ = v.key(of_view("C-W"));
+        let info = the_facts(&v, lines, width, &texts);
+        assert_eq!(v.wide(), Some(Panel::Info), "`C-W` gave nothing away");
+        assert_eq!(
+            v.globe_rows(),
+            0,
+            "the expanded sheet still reserves rows at its top for the globe"
+        );
+        assert_eq!(info.above, 0, "the expanded sheet still has chrome lines");
+        assert_eq!(v.info_grid().0, 1, "the globe was given no column");
+
+        // THE PICTURE IS THE PANEL'S FULL HEIGHT AND ONE COLUMN WIDE, which is
+        // what `globe_place` hands the doors — and it is the answer the DOOR
+        // never got before, because it asked inside the preview's guard.
+        let (tall, cells, gone) = v.globe_place().expect("the globe has a place");
+        assert_eq!(
+            gone, 0,
+            "a column does not scroll, so none of it can be cut"
+        );
+        assert_eq!(tall, lines, "the globe did not get the panel's height");
+        let (globe, columns, _) = v.info_grid();
+        let wide = u16::try_from(globe + columns).unwrap_or(1);
+        assert!(
+            cells <= (info.to - info.from) / wide,
+            "the globe's column is wider than a column, so it runs into the facts"
+        );
+        assert!(
+            cells >= FACT_COLUMN - 1,
+            "the globe's column came out narrow"
+        );
+
+        // AND EVERY LINE OF IT IS THE PICTURE'S TARGET, which is what makes the
+        // drag work — the defect that cost a round was a field of NO width.
+        for (n, row) in info.content.iter().enumerate() {
+            let on_the_globe: Vec<&Field> = row
+                .fields
+                .iter()
+                .filter(|f| matches!(f.hit, Hit::Globe | Hit::GlobeMap))
+                .collect();
+            assert!(
+                !on_the_globe.is_empty(),
+                "line {n} of the globe's column answers nothing"
+            );
+            assert_eq!(
+                on_the_globe[0].at, info.from,
+                "the globe's column does not begin at the panel's own first cell"
+            );
+        }
+        // AND THE FACTS BEGIN AFTER IT, never underneath it.
+        let first = &info.content[0];
+        assert!(
+            first
+                .fields
+                .iter()
+                .any(|f| f.color == ronoctua_tokens::color::TEXT_DIM && f.at >= info.from + cells),
+            "no fact was drawn beside the globe: {first:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -12817,7 +13627,7 @@ mod tests {
         // THE ANSWER INSTALLED BY HAND, through the same `Beat` the thread
         // sends: the address is what turns the last line into a door, and a
         // test that only asked the empty case would pass with the door gone.
-        v.measured_globe((200, 100), 0);
+        v.measured_globe((200, 100), 0, 0);
         v.saw_globe(&crate::globe::Beat::Said {
             key,
             owner: crate::globe::Owner::Files,
@@ -14284,7 +15094,7 @@ mod tests {
         let buttons: Vec<&Field> = rows
             .iter()
             .flat_map(|r| r.fields.iter())
-            .filter(|f| f.hit == Hit::Theatre)
+            .filter(|f| f.hit == Hit::Theatre(Panel::Preview))
             .collect();
         assert_eq!(
             buttons.len(),
@@ -14307,7 +15117,7 @@ mod tests {
             .drawn(120, &b)
             .iter()
             .flat_map(|r| r.fields.iter())
-            .filter(|f| f.hit == Hit::Theatre)
+            .filter(|f| f.hit == Hit::Theatre(Panel::Preview))
             .count();
         assert_eq!(
             without, 0,
@@ -14318,9 +15128,418 @@ mod tests {
             .drawn(120, &b)
             .iter()
             .flat_map(|r| r.fields.iter())
-            .filter(|f| f.hit == Hit::Theatre)
+            .filter(|f| f.hit == Hit::Theatre(Panel::Preview))
             .count();
         assert_eq!(with, 1, "the pointer did not bring the button out");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A view whose sheet is LONG: `tags` names of the file's own on top of
+    /// what an `lstat` already says.
+    ///
+    /// A plain file carries seven or eight facts, and every question below is
+    /// about what happens when there are more of them than there are lines —
+    /// which in real life is a photograph, and a photograph of the owner's is
+    /// not something this repository may carry (invariant 13). So the tags are
+    /// built here, and a failure names the arithmetic rather than a file.
+    fn a_view_with_facts(name: &str, tags: usize) -> (View, std::path::PathBuf) {
+        let dir = scratch(name);
+        std::fs::write(dir.join("a.txt"), b"letters").expect("write the file");
+        let mut v = view_at(&dir);
+        v.reread();
+        with_panels(&mut v);
+        let ask = v.wants_look(512).expect("a look is due");
+        v.looked(Looked {
+            key: ask.key,
+            path: ask.path,
+            rgba: None,
+            moving: None,
+            list: None,
+            text: None,
+            why: None,
+            facts: (0..tags)
+                .map(|n| ronoctua_inspect::facts::Fact {
+                    label: ronoctua_inspect::facts::Label::Named(format!("Tag{n}")),
+                    value: ronoctua_inspect::facts::Value::Data(format!("value {n}")),
+                })
+                .collect(),
+            mime: "text/plain",
+            turns: false,
+            outlined: 0,
+            at: None,
+        });
+        (v, dir)
+    }
+
+    /// The facts panel of the last frame drawn at `width` in `lines` lines.
+    fn the_facts(v: &View, lines: usize, width: u16, texts: &ronoctua_i18n::Texts) -> Section {
+        v.sections(&[], lines, width, texts)
+            .into_iter()
+            .find(|s| matches!(s.pane, Pane::Info))
+            .expect("the facts are a section")
+    }
+
+    /// FAILS IF: the facts lose a line of the panel to the expand button, or
+    /// the blank row at the end of the sheet is not there once everything else
+    /// has been scrolled past.
+    ///
+    /// THE OWNER GAVE THE REASON AND THEN CORRECTED THE FIRST SHAPE OF IT. He
+    /// asked for *"uma linha em branco ao final do conteúdo, ou seja, uma linha
+    /// em branco que apareça apenas após scroll down todo o conteúdo"*, and the
+    /// round before took the line off the PANEL instead: *"você fez a coluna
+    /// perder uma linha de informação em um espaço que já é pequeno e já mostra
+    /// poucas linhas"*.
+    ///
+    /// So both halves are asserted here, and they are the two that pull against
+    /// each other: every line of the panel carries a fact, AND the last line is
+    /// empty at the end of the scroll.
+    #[test]
+    fn the_blank_line_is_at_the_end_of_the_facts_and_not_a_reserve() {
+        let (mut v, dir) = a_view_with_facts("facts-blank", 40);
+        let texts = bundle();
+        let width = 200u16;
+        let lines = 6usize;
+        let info = the_facts(&v, lines, width, &texts);
+        assert!(
+            info.total > lines,
+            "the fixture has to be longer than the panel to prove anything"
+        );
+        assert_eq!(
+            info.content.len(),
+            lines,
+            "the panel did not fill its lines"
+        );
+        // NOT ONE LINE OF THE PANEL IS SPARED, which is the half he read off
+        // the screen. `info_room` is what the paging key, the wheel and the
+        // cursor all measure by, so it has to be every line there is.
+        assert_eq!(
+            v.info_room(),
+            lines,
+            "the facts were charged a line for the button"
+        );
+        // AND THE SHEET IS ONE ROW LONGER THAN IT HAS FACTS.
+        assert_eq!(
+            info.total,
+            v.sheet().len() + BLANK,
+            "the blank row at the end of the content is not there"
+        );
+        // AT THE TOP OF THE SCROLL EVERY DRAWN LINE IS A FACT'S — there is no
+        // reserve, so the last line of the panel carries one.
+        assert!(
+            info.content
+                .last()
+                .expect("a last line")
+                .fields
+                .iter()
+                .any(|f| f.color == ronoctua_tokens::color::TEXT_DIM),
+            "the panel's last line has no fact on it at the top of the sheet"
+        );
+
+        // AND SCROLLED TO THE VERY END IT IS THE BLANK ROW, which is the only
+        // place the button covers nothing.
+        v.info_offset = info.total.saturating_sub(v.info_room().max(1));
+        let info = the_facts(&v, lines, width, &texts);
+        assert!(
+            info.content.last().expect("a last line").fields.is_empty(),
+            "the end of the sheet is not a blank row: {:?}",
+            info.content.last().expect("a last line").fields
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the expand button in the facts' corner is drawn with the
+    /// pointer elsewhere, is missing with the pointer anywhere in the column,
+    /// or is not in the bottom-right corner.
+    ///
+    /// THE SECOND HALF IS THE ONE HE COULD NOT CLICK: *"é impossível clicar no
+    /// ícone, pois ele desaparece antes de o cursor conseguir chegar nele,
+    /// porque você implementou o hover … apenas em partes do conteúdo, em vez
+    /// de implementar na coluna como um todo (incluindo espaços vazios)"*. So
+    /// the question asked here is the one the doors ask — `pane_at`, which is
+    /// arithmetic — on a cell with NOTHING drawn in it.
+    #[test]
+    fn the_button_comes_out_for_the_whole_column_and_not_for_its_ink() {
+        let (v, dir) = a_view_with_facts("facts-button", 4);
+        let texts = bundle();
+        let width = 200u16;
+        let lines = 12usize;
+        let info = the_facts(&v, lines, width, &texts);
+        assert!(
+            info.content.last().expect("a last line").fields.is_empty(),
+            "this fixture needs a panel taller than its sheet"
+        );
+
+        // THE EMPTY CORNER ANSWERS `Info`, and that is the whole repair: the
+        // resolutions the doors used before need a FIELD or a ROW WITH FIELDS,
+        // and there is neither here.
+        let last = info.to.saturating_sub(1);
+        assert_eq!(
+            v.pane_at(width, lines, lines - 1, last),
+            Some(Pane::Info),
+            "the panel's own empty corner does not answer as the panel"
+        );
+        // AND A LINE BELOW THE MANAGER'S BAND ANSWERS NOTHING. A cell says
+        // which COLUMN, never which side of the region's own floor — and the
+        // modeline sits in the same columns the panels do.
+        assert_eq!(
+            v.pane_at(width, lines, lines + 4, last),
+            None,
+            "a point past the region answered as a section of it"
+        );
+        assert!(
+            v.band_row(width, lines, lines - 1, last).is_none(),
+            "this assertion is only worth anything while the deeper resolution \
+             refuses that cell"
+        );
+
+        // AND WITH THE POINTER THERE THE BUTTON IS DRAWN, in the last cell the
+        // content gets — the scrollbar's own cell is the one past it.
+        v.pointing(Some(Pane::Info));
+        let info = the_facts(&v, lines, width, &texts);
+        let row = info.content.last().expect("a last line");
+        assert_eq!(
+            row.fields.len(),
+            1,
+            "the pointer brought out more than the button: {:?}",
+            row.fields
+        );
+        assert_eq!(
+            row.fields[0].hit,
+            Hit::Theatre(Panel::Info),
+            "what came out is not the button"
+        );
+        assert_eq!(
+            row.fields[0].at + 1,
+            info.to,
+            "the button is not in the panel's bottom-right corner"
+        );
+
+        // AND THE POINTER ELSEWHERE TAKES IT AWAY AGAIN.
+        v.pointing(Some(Pane::Listing));
+        assert!(
+            the_facts(&v, lines, width, &texts)
+                .content
+                .last()
+                .expect("a last line")
+                .fields
+                .is_empty(),
+            "the button stayed after the pointer left the panel"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the expanded facts stay one column where the width holds
+    /// several, or the ordinary panel beside the listing grows a second one.
+    ///
+    /// *"Ao expandir, todo o conteúdo seja dividido em algumas colunas, dentro
+    /// do espaço disponível … a quantidade de colunas depende do tamanho
+    /// disponível na tela."*
+    #[test]
+    fn the_expanded_facts_are_laid_out_in_columns() {
+        let (mut v, dir) = a_view_with_facts("facts-columns", 60);
+        let texts = bundle();
+        let width = 200u16;
+        let lines = 12usize;
+        // ONE COLUMN BESIDE THE LISTING, at any width: the columns are the
+        // expanded view's own answer and nothing about the narrow panel moves.
+        let _ = the_facts(&v, lines, width, &texts);
+        assert_eq!(
+            v.info_grid().1,
+            1,
+            "the ordinary panel grew a second column"
+        );
+
+        let _ = v.key(of_view("C-W"));
+        assert_eq!(
+            v.wide(),
+            Some(Panel::Info),
+            "the facts were not given the region"
+        );
+        let info = the_facts(&v, lines, width, &texts);
+        let (globe, columns, tall) = v.info_grid();
+        let all = v.sheet().len() + BLANK;
+        assert_eq!(
+            globe, 0,
+            "a file with no coordinate was given a globe column"
+        );
+        assert!(
+            columns > 1,
+            "{all} rows in {lines} lines across {width} cells came out as one column"
+        );
+        // AND A COLUMN IS AS WIDE AS A FACT NEEDS, which is what the owner
+        // asked for when he counted four of them on his own screen.
+        assert!(
+            info.to.saturating_sub(info.from) / u16::try_from(columns).unwrap_or(1) >= FACT_COLUMN,
+            "a column came out narrower than a label and a value"
+        );
+        assert_eq!(
+            tall,
+            all.div_ceil(columns),
+            "the rows are not the sheet divided by the columns"
+        );
+        // AND NO COLUMN IS EMPTY: one fewer would not have held them.
+        assert!(
+            columns.saturating_sub(1).saturating_mul(tall) < all,
+            "a column was opened that the sheet does not fill"
+        );
+        // AND THE SECOND COLUMN BEGINS WHERE THE FIRST ENDS, which is what
+        // column-major means and what reading DOWN one depends on.
+        let next = v.sheet()[tall].label.clone();
+        assert!(
+            next.len() < 10,
+            "this assertion needs a label short enough not to be elided"
+        );
+        let first = &info.content[0];
+        assert!(
+            first.fields.iter().any(|f| f.text == next),
+            "the top of the second column is not the fact after the first column's last: {first:?}"
+        );
+        // AND NOTHING LEAKS PAST THE PANEL, which is the one rule that never
+        // gives way.
+        assert!(
+            first
+                .fields
+                .iter()
+                .all(|f| f.at + width_of(&f.text) <= info.to),
+            "a column ran past the region's own edge: {first:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: dragging the facts' scrollbar over a file WITH a globe lands
+    /// somewhere other than the end.
+    ///
+    /// THE OWNER FELT THIS ONE UNDER HIS HAND: *"ao clicar e arrastar com o
+    /// mouse uma scrollbar que tem o globo, a barra da scrollbar se desloca
+    /// imediatamente muito abaixo da posição de onde está o cursor"*. The
+    /// thumb was drawn from `Section::visible` — the panel MINUS the globe's
+    /// pinned band — and the drag divided by `Room::panel`, the whole panel. A
+    /// picture's worth of lines between the two answers, and only on a file
+    /// that carries a coordinate.
+    #[test]
+    fn the_thumb_and_the_hand_measure_the_same_band_over_a_globe() {
+        let (mut v, dir) = a_view_with_a_coordinate("globe-drag");
+        let texts = bundle();
+        let width = 200u16;
+        let lines = 12usize;
+        let info = the_facts(&v, lines, width, &texts);
+        assert!(
+            v.globe_rows() > 0,
+            "the fixture has no globe to prove anything"
+        );
+        assert!(
+            info.total > lines,
+            "the fixture has to be longer than the panel to be dragged at all"
+        );
+        // THE TWO MEASUREMENTS, side by side. They are the pair that disagreed.
+        assert_eq!(
+            info.visible(),
+            lines,
+            "the thumb's track is shorter than the panel the drag divides by"
+        );
+        let room = Room {
+            list: lines,
+            panel: lines,
+        };
+        assert!(
+            v.drag_to(Pane::Info, Axis::Down, 1.0, width, room),
+            "the drag was refused"
+        );
+        assert_eq!(
+            v.info_offset,
+            info.total - lines,
+            "dragged to the end, the sheet stopped short of its last page"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: an offset from the narrow panel survives into the expanded one
+    /// and scrolls the sheet off the top.
+    ///
+    /// *"Ao arrastar a scrollbar totalmente para baixo no modo não expandido, e
+    /// depois trocar para o modo expandido, todo o conteúdo aparece como se um
+    /// longo scroll tivesse ocorrido também no modo expandido, para além do que
+    /// é possível fazer scroll nesse modo, fazendo assim o conteúdo subir a
+    /// ponto de sumir da tela."*
+    ///
+    /// One column of forty rows becomes three of fourteen, and the offset is
+    /// not a WRITE anybody made — which is why it is clamped where it is read.
+    #[test]
+    fn the_sheet_cannot_be_scrolled_past_its_end_when_the_grid_changes() {
+        let (mut v, dir) = a_view_with_facts("facts-keep-place", 60);
+        let texts = bundle();
+        let width = 200u16;
+        let lines = 12usize;
+        let narrow = the_facts(&v, lines, width, &texts);
+        // TO THE VERY BOTTOM OF THE NARROW PANEL, which is where he was.
+        v.info_offset = narrow.total.saturating_sub(lines);
+        assert!(v.info_offset > 0, "the fixture did not scroll at all");
+
+        let _ = v.key(of_view("C-W"));
+        let wide = the_facts(&v, lines, width, &texts);
+        assert!(
+            wide.total < narrow.total,
+            "the grid did not get shorter, so this proves nothing"
+        );
+        // THE SHEET SHOWS ITS LAST PAGE, and never a blank screen above it.
+        assert_eq!(
+            wide.offset,
+            wide.total.saturating_sub(lines),
+            "the expanded sheet was scrolled past its own end"
+        );
+        assert!(
+            wide.content[0]
+                .fields
+                .iter()
+                .any(|f| f.color == ronoctua_tokens::color::TEXT_DIM),
+            "the expanded sheet's first line is empty — the content scrolled away"
+        );
+        // AND GIVING THE REGION BACK PUTS IT WHERE IT WAS. The clamp is on the
+        // READ, so the stored offset is still the narrow panel's.
+        let _ = v.key(of_view("C-W"));
+        let back = the_facts(&v, lines, width, &texts);
+        assert_eq!(
+            back.offset,
+            narrow.total - lines,
+            "the narrow panel lost the place it was left at"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: both panels can hold the region at once, or expanding a panel
+    /// that is not on screen reports that it worked.
+    #[test]
+    fn the_region_is_one_and_a_hidden_panel_refuses_it() {
+        let (mut v, dir) = a_view_with_facts("facts-region", 10);
+        let _ = v.key(of_view("C-w"));
+        assert_eq!(v.wide(), Some(Panel::Preview), "`C-w` gave nothing away");
+        // THE OTHER KEY TAKES IT OVER rather than opening a second wide panel:
+        // the region is ONE.
+        let _ = v.key(of_view("C-W"));
+        assert_eq!(v.wide(), Some(Panel::Info), "`C-W` did not take the region");
+        assert!(
+            !v.panes(200).preview,
+            "two panels were given one region at once"
+        );
+        assert_eq!(
+            v.panes_on(200),
+            vec![Pane::Info],
+            "TAB could still walk onto a column nobody is drawing"
+        );
+        // AND THE SAME KEY GIVES IT BACK.
+        let _ = v.key(of_view("C-W"));
+        assert_eq!(v.wide(), None, "`C-W` did not give the region back");
+
+        // A PANEL THAT IS NOT ON SCREEN HAS NOTHING TO EXPAND, AND IT SAYS SO.
+        // From the outside a key that lies and a key that is dead look the
+        // same, which is the one outcome this project treats as a defect.
+        let _ = v.key(of_view("C-i"));
+        assert!(!v.info_showing(), "`C-i` did not hide the facts");
+        assert!(
+            matches!(v.key(of_view("C-W")), Step::Say(e) if e.key == WIDE_HIDDEN),
+            "expanding a hidden panel did not say why it could not"
+        );
+        assert_eq!(v.wide(), None, "a hidden panel was given the region");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -17396,6 +18615,21 @@ mod tests {
         for pane in [Pane::Listing, Pane::Sidebar, Pane::Fold] {
             assert_eq!(focus_rule(panes, w, pane), None, "{pane:?}");
         }
+        // AND NEITHER PANEL LIGHTS ONE WITH THE REGION GIVEN AWAY, which is
+        // the second door into a line the owner has photographed once: `rules`
+        // draws none, and both painters then draw the FOCUSED section's rule
+        // anyway — at cell nought, against the screen's own edge.
+        let _ = v.key(of_view("C-W"));
+        let alone = v.panes(w);
+        assert!(alone.whole, "`C-W` did not give the facts the region");
+        for pane in [Pane::Preview, Pane::Info] {
+            assert_eq!(
+                focus_rule(alone, w, pane),
+                None,
+                "a rule was lit against the screen's own edge for {pane:?}"
+            );
+        }
+        let _ = v.key(of_view("C-W"));
         assert_eq!(v.resting_line(w, 24), None, "the listing has the keyboard");
         assert_eq!(v.pane(), Pane::Listing);
 
@@ -19622,7 +20856,7 @@ mod tests {
             // panel whose last line is blank — which is the case this test
             // builds — and the question here is whether anything stands in for
             // the FILE, at the size of a picture. See `theatre_field`.
-            .filter(|f| f.hit != Hit::Theatre)
+            .filter(|f| f.hit != Hit::Theatre(Panel::Preview))
             .collect();
         assert_eq!(
             inside.len(),

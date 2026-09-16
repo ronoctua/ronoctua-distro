@@ -90,6 +90,13 @@
     id = "globe";
     needs = [ "manager-window" ];
   }
+  # THE FACTS GIVEN THE WHOLE REGION, which rides on the window door for the
+  # reason the three above do: what it photographs is a panel of the manager
+  # that scene opened, and alone it would photograph an empty desktop.
+  {
+    id = "facts-wide";
+    needs = [ "manager-window" ];
+  }
   # THE REGIONS' VIEW, which opens its own door: `geo-open` is a command, so
   # this scene needs nothing from the ones before it.
   { id = "geo"; }

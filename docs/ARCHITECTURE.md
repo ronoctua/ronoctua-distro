@@ -5180,8 +5180,16 @@ arrastar parece preso em vez de engrenado.
 `Section::above` quer dizer "quantas das primeiras linhas são chrome e não rolam", e era usado só
 pelo cabeçalho da listagem. O globo é exatamente isso virado para o outro lado: N linhas REAIS, com
 campos reais (o alvo do ponto, o endereço, o alvo do Google Maps), então `hit`, a faixa, o clique e
-a tecla continuam passando pela máquina que já existe. O `line_of` e o `bar_box` já honravam o
-campo; o que faltava era um braço no `hit`.
+a tecla continuam passando pela máquina que já existe.
+
+**E elas ROLAM.** Eram `Section::above` — fixas —, e isso custou duas coisas que o dono achou com a
+mão: banda fixa deixa o trilho do polegar (`Section::visible`) mais curto que o painel enquanto o
+ARRASTO divide pelo painel (`Room::panel`), então pegar a barra num arquivo com globo a jogava para
+longe do cursor; e a figura custava seis das doze linhas do rodapé enquanto o arquivo estivesse sob
+o cursor. Rolando, ela devolve as linhas, e foi isso que aposentou o `C-g` — a tecla que existia
+para comprar essas linhas de volta. **A figura ENCOLHE em vez de escorregar para fora**, porque
+nada neste renderizador recorta: imagem meio fora do painel é desenhada POR CIMA da listagem, não
+cortada. A porta recebe `globe_rows − offset` linhas e o `Area::centre` encaixa o que há nelas.
 
 **E `globe_lines` pergunta ao SUJEITO, nunca ao desenho.** Por uma rodada ele perguntou se o
 componente estava APONTADO, e isso é um impasse sem sintoma: quem aponta o componente é a porta,

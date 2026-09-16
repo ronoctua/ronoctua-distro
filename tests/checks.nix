@@ -6291,8 +6291,28 @@ let
                 "leader",
             )
         ]
+        # THE KEY BRANCH IS `took_a_key`, AND NOT `typed`.
+        #
+        # `typed` is a two-line wrapper now — take the key, then follow the
+        # cursor if the page moved — and the dispatch moved down into
+        # `took_a_key` on the day the scroll learned to follow a person's key.
+        # This check went on reading `typed`, found not one view named inside
+        # it, and reported all eighteen as missing: loud, but about the wrong
+        # thing, and it would have been just as loud on a tree with nothing
+        # wrong with it.
+        #
+        # So the DISPATCHER is named here and the wrapper is checked to still
+        # reach it. A third name would otherwise be the same drift again, and
+        # the next reader would be told eighteen lies instead of one truth.
+        wrapper = "\n".join(body_of("fn typed(&mut self, event: KeyEvent)"))
+        if "self.took_a_key(event)" not in wrapper:
+            wrong.append(
+                "`typed` no longer hands the key to `took_a_key`, so the branch "
+                "this check reads is not the one the keyboard drives"
+            )
+
         for signature, room in (
-            ("fn typed(&mut self, event: KeyEvent)", "the key branch"),
+            ("fn took_a_key(&mut self, event: KeyEvent)", "the key branch"),
             ("fn expansion(&self)", "the region"),
         ):
             lines = body_of(signature)
@@ -6324,7 +6344,7 @@ let
         #
         # A view with no branch in one of them is a view that is drawn and not
         # driven, or driven and not drawn — the same defect from the other side.
-        keys = code_of("\n".join(body_of("fn typed(&mut self, event: KeyEvent)")))
+        keys = code_of("\n".join(body_of("fn took_a_key(&mut self, event: KeyEvent)")))
         region = code_of("\n".join(body_of("fn expansion(&self)")))
         for view in order:
             if view == "NoneOf":

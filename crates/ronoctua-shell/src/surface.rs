@@ -4707,13 +4707,22 @@ impl PointerHandler for Footer {
                             Some(crate::files::Hit::Globe | crate::files::Hit::GlobeDot)
                         ));
                     }
-                    let over = aimed.as_ref().map(|t| t.pane);
                     let row = aimed
                         .as_ref()
                         .filter(|t| t.pane == crate::files::Pane::Listing && t.row != usize::MAX)
                         .map(|t| t.row);
+                    // WHICH SECTION, ASKED OF THE ARITHMETIC and not of the
+                    // target. A target needs a FIELD, and most of a facts panel
+                    // has none — the space past a short value, every line below
+                    // the last fact — so the pointer crossing those answered
+                    // "nowhere", and the expand button in the corner went out
+                    // before the hand could reach it. See `files::View::pane_at`.
+                    let where_ = self.row_under_pointer;
+                    let cell = self.cell_under_pointer.unwrap_or(0);
+                    let wide = self.screen_columns();
+                    let deep = self.grid().lines;
                     if let Some(v) = self.files.as_ref() {
-                        v.pointing(over);
+                        v.pointing(where_.and_then(|line| v.pane_at(wide, deep, line, cell)));
                         v.pointing_at(row);
                     }
                     // AND A SHAPE TURNS WITH THE HAND. The deltas are in
@@ -14987,30 +14996,61 @@ impl Footer {
                             ),
                         ));
                     }
+                }
 
-                    // AND THE GLOBE, at the top of the info panel beside it.
-                    // The same three steps: measure the box, tell the view, ask
-                    // for the picture — because the picture that is DRAWN has
-                    // to be the picture that was MEASURED.
-                    #[allow(clippy::cast_precision_loss)]
-                    let area = crate::files::globe_px(
+                // AND THE GLOBE, in the info panel beside it — across its top,
+                // or in the leftmost column of the expanded sheet.
+                //
+                // The same three steps: measure the box, tell the view, ask for
+                // the picture — because the picture that is DRAWN has to be the
+                // picture that was MEASURED. WHICH of the two shapes it is, is
+                // `View::globe_place`'s answer and not this door's.
+                //
+                // OUTSIDE THE PREVIEW'S GUARD, and that is a repair: this block
+                // sat inside `if let Some((at, room)) = panes.preview_box(…)`,
+                // so with the region given to the FACTS there was no preview
+                // box, the whole block was skipped, and the globe was never
+                // measured — the panel reserved a picture's height at its top
+                // and drew nothing into it. The owner photographed it: *"além
+                // do mapa não está aparecendo … há um enorme espaço em branco
+                // disperdiçado acima das colunas de conteúdo"*.
+                #[allow(clippy::cast_possible_truncation)]
+                let (top, _) =
+                    crate::files::panel_band(first_of_expansion, grid.lines as u16, panes.strip);
+                let cell = tokens::metrics::cell_width(tokens::text::size());
+                #[allow(clippy::cast_precision_loss)]
+                let place = v.globe_place();
+                #[allow(clippy::cast_precision_loss)]
+                let area = place.and_then(|(lines, cells, _)| {
+                    crate::files::globe_px(
                         panes,
                         crate::chrome::FIELDS_LEAD,
                         columns,
                         (cell, line_height, width as f32),
                         top,
-                        v.globe_lines(),
+                        (lines, cells),
+                    )
+                });
+                if let Some(a) = area {
+                    // AND HOW MUCH OF ITS TOP HAS SCROLLED AWAY, which is what
+                    // keeps the map's SIZE as its rows leave. See
+                    // `crate::globe::paint`.
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        clippy::cast_precision_loss
+                    )]
+                    let gone = (place.map_or(0, |(_, _, cut)| cut) as f32 * line_height) as u32;
+                    // THE BOX THE PICTURE IS DRAWN IN, and not the box it was
+                    // measured from — see `files::globe_texture`.
+                    v.measured_globe(
+                        crate::files::globe_texture(a),
+                        gone,
+                        tokens::theme::current().position(),
                     );
-                    if let Some(a) = area {
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                        v.measured_globe(
-                            (a.width.max(0.0) as u32, a.height.max(0.0) as u32),
-                            tokens::theme::current().position(),
-                        );
-                        if let (Some(key), Some(rgba)) = (v.globe_key(), v.globe_frame()) {
-                            file_globe =
-                                Some((key, crate::files::picture_in(a, rgba.width, rgba.height)));
-                        }
+                    if let (Some(key), Some(rgba)) = (v.globe_key(), v.globe_frame()) {
+                        file_globe =
+                            Some((key, crate::files::picture_in(a, rgba.width, rgba.height)));
                     }
                 }
             }
