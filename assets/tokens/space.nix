@@ -83,9 +83,12 @@
     # How many lines of the info panel the globe takes.
     #
     # SIX, and the reason is the panel and not the picture: the panel is
-    # twenty-four to forty cells wide and the region has a twelve-line ceiling
-    # in the footer, so a globe that took more would leave no facts. Below the
-    # disc there is one line for the address.
+    # twenty-four to forty cells wide and the region's ceiling in the footer was
+    # twelve lines when this was measured, so a globe that took more would leave
+    # no facts. The ceiling is fifteen now and six still holds: what a globe is
+    # worth does not change because there is more room under it, and the three
+    # lines the region gained are three more FACTS. Below the disc there is one
+    # line for the address.
     lines = 6;
     # Region borders are drawn only when the country's box is at least this
     # wide in pixels — below it they are mud.
@@ -300,13 +303,16 @@
 
     # HOW MANY LINES THE BOTTOM STRIP TAKES, when the panels are down there.
     #
-    # Four, and the number is the footer's own ceiling doing the arguing.
-    # `expansion.maxLines` is twelve; four leaves eight, which is the path, the
-    # header and six rows of listing — a page one can still work in. Three
+    # Four, and the number is the footer's own ceiling doing the arguing. It was
+    # measured against a region of twelve: four left eight, which is the path,
+    # the header and six rows of listing — a page one can still work in. Three
     # leaves a preview two lines tall once the file's name is on one of them,
     # and at that size a photograph is a smudge rather than a picture; five
     # leaves five rows, which is where the listing stops being the thing one
-    # opened.
+    # opened. The ceiling is fifteen now and the strip did not grow with it:
+    # what the strip needs is a picture's box, which does not change because
+    # there is more room above it — every line the region gained goes to the
+    # LISTING, which is what one opened the manager to read.
     #
     # The window door has no ceiling and pays the same four: the strip is a
     # glance, not a second view, and a strip that grew with the window would
@@ -591,10 +597,13 @@
   #
   # # Why five
   #
-  # The footer's region is twelve lines (`expansion.maxLines`), so a shelf is a
-  # little under half of it: enough to compare a handful of networks at a
-  # glance, and short enough that two shelves and the rows between them still
-  # fit on one page. It was six, and the owner asked for a little less.
+  # Measured against a region of twelve (`expansion.maxLines`, fifteen now), a
+  # shelf is a little under half of it: enough to compare a handful of networks
+  # at a glance, and short enough that two shelves and the rows between them
+  # still fit on one page. It was six, and the owner asked for a little less.
+  # The taller ceiling does not move it — a shelf is a fixed window onto a list,
+  # and a window that grew with the room would be the height-follows-content
+  # this block exists to refuse.
   #
   # ONE NUMBER FOR ALL FIVE. A shelf that was taller than its neighbours would
   # be saying something about its content that is not true — they are all the
@@ -640,8 +649,28 @@
   # And the percentage is of the WHOLE FOOTER, and not just the expansion: the two fixed
   # lines count for whoever is looking at the screen. Measuring only the expansion, 40% became 46%
   # of footer on an 800 px screen — within the number and outside what it means.
+  #
+  # # Why fifteen and not twelve
+  #
+  # It was twelve, and the owner asked for three more — *"quero aumentar um
+  # pouco o tamanho máximo alcançável pela região do rodapé … quero que esse
+  # aumento dê à coluna info do filemanager três linhas novas de dados"*. The
+  # facts column takes every line of the region the chrome does not
+  # (`View::info_room`), so the raise arrives there one for one; nothing else
+  # had to move for it.
+  #
+  # THE SECOND LIMIT IS WHAT MAKES THIS HONEST. Fifteen lines plus the two
+  # fixed ones are 443,7 px, which is 37% of a 1200 px panel and 41% of a
+  # 1080 px one — so the percentage keeps binding first exactly where it should,
+  # and on a small screen this number is not reached at all. It is a CEILING,
+  # not a height: raising it does not make any footer taller than invariant 14
+  # allows, it only stops that invariant from being the one thing standing
+  # between a person and three more facts on a screen with room for them.
+  # `the_ceiling_this_screen_was_raised_for_is_reachable` is what keeps the two
+  # numbers in step — raise this one far enough and the percentage swallows it
+  # in silence, which would be a token that no longer says what happens.
   expansion = {
-    maxLines = 12;
+    maxLines = 15;
     maxFooterPct = 40;
   };
 

@@ -8720,8 +8720,8 @@ let
   # EVERY VIEW'S PAGE FOLLOWS ITS OWN CURSOR, and the arithmetic is in one
   # place.
   #
-  # The footer's region is twelve lines and every view is longer than that, so a
-  # cursor that walks past the twelfth line without the page moving is a cursor
+  # The footer's region is capped in lines and every view is longer than that,
+  # so a cursor that walks past the last line without the page moving is a cursor
   # nobody can see — which reads as an arrow key that stopped working. It was
   # the state of THIRTEEN of the fifteen views: only the manager and the
   # clipboard called `follow_cursor`, each from inside its own errand handler,

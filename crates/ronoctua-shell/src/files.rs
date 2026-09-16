@@ -4,8 +4,8 @@
 //!
 //! This module holds STATE and produces [`Row`]s. It draws nothing, talks to no
 //! compositor and opens no process, which is what lets the same code serve the
-//! footer's expanded region (twelve lines, by `space.expansion`) and a window of
-//! its own with no ceiling at all. It is the shape the rescue console already
+//! footer's expanded region (capped in lines, by `space.expansion`) and a window
+//! of its own with no ceiling at all. It is the shape the rescue console already
 //! uses, and for the same reason: a manager that only works inside the footer
 //! is unusable for the job people open a file manager to do.
 //!
@@ -335,7 +335,7 @@ const THUMB_CELLS: [u16; 3] = [
 ///
 /// The middle one, which is what a WINDOW opens at. A footer does not: it steps
 /// down to what fits — see [`THUMB_SHELVES`] — so the door that is always there
-/// does not make every other door pay for its twelve lines.
+/// does not make every other door pay for its capped height.
 const THUMB_START: usize = 1;
 
 /// HOW MANY SHELVES A GRID IS WORTH.
@@ -4859,7 +4859,7 @@ impl View {
     /// the scroll there is no `above` to disagree about.
     ///
     /// The second is what he asked for next, and it is the better screen: the
-    /// globe costs six of the footer's twelve lines, and pinned it costs them
+    /// globe costs six of the footer's lines, and pinned it costs them
     /// for as long as the file is under the cursor. Scrolling gives them back —
     /// *"ao arrastar a scrollbar ele se move junto liberando espaço para linhas
     /// de conteúdo"* — which is also what retired `C-g`.
@@ -5075,15 +5075,15 @@ impl View {
     /// one line tall is not a picture — and the info panel asks for as many
     /// lines as it has facts.
     ///
-    /// **Asking is not getting.** The footer's region has a ceiling of twelve
-    /// lines (invariant 14) and a photograph has more facts than that, so what
-    /// the panel is GIVEN is the door's business and can be less than this.
+    /// **Asking is not getting.** The footer's region has a ceiling in lines
+    /// (invariant 14) and a photograph has more facts than that, so what the
+    /// panel is GIVEN is the door's business and can be less than this.
     /// What says so on screen is [`View::facts_bar`]; before it there was
     /// nothing, and the facts past the ceiling were simply not there.
     fn panel_lines(&self) -> usize {
         // NOTHING UNDER THE CURSOR, NOTHING TO ASK FOR. A query that matches no
-        // file leaves both panels with no subject, and a region that stayed
-        // twelve lines tall to hold two empty boxes is a region that stopped
+        // file leaves both panels with no subject, and a region that stayed at
+        // its ceiling to hold two empty boxes is a region that stopped
         // answering the person typing. `leader-vm` is what caught it: typing
         // `zzz` has to narrow the list, and with the panels on by default it
         // did not — 288 px before and 288 px after.
@@ -5098,8 +5098,8 @@ impl View {
         // `C-w` means "the whole region", so asking for a picture's four lines
         // would be the key contradicting itself: the footer's region grows to
         // what its panels ask for, and it stayed four lines tall. The ceiling
-        // still holds (invariant 14) — this is a request, and the door's
-        // twelve-line limit is what answers it.
+        // still holds (invariant 14) — this is a request, and the door's own
+        // limit in lines is what answers it.
         if self.whole() {
             return usize::from(ronoctua_tokens::space::EXPANSION_MAXLINES);
         }
@@ -13142,8 +13142,8 @@ impl View {
     /// The detail sheet for the focused entry.
     ///
     /// It replaces the listing while it is open, rather than sitting beside it:
-    /// the footer's region is twelve lines and a panel next to a listing would
-    /// give six lines to each. `Esc` closes it, and the listing is exactly
+    /// the footer's region is capped in lines and a panel next to a listing
+    /// would give half of them to each. `Esc` closes it, and the listing is exactly
     /// where it was.
     fn inspect(&mut self) -> Step {
         let Some(name) = self.focused().map(|e| e.name.clone()) else {
@@ -15308,7 +15308,20 @@ mod tests {
         // sixty-four lines and wrote that down, and `facts_offset` clamps
         // against the panel's room — in a panel taller than the sheet there is
         // nothing to scroll and the offset is rightly nought.
-        v.drawn_lines.set(tall);
+        //
+        // AND IT IS THE SHEET THAT SETS IT, not the footer's ceiling. This line
+        // read `tall`, and the day the ceiling grew past this fixture's sheet
+        // the panel stopped scrolling at all: `facts_offset` clamped 2 to 0 and
+        // the assertion below measured a picture nothing had scrolled off. The
+        // test says the precondition out loud two paragraphs down — *"this
+        // fixture needs a sheet that scrolls"* — and this line got there first.
+        let sheet = v.info_total();
+        let short = u16::try_from(sheet.saturating_sub(2)).expect("a panel of some lines");
+        assert!(
+            usize::from(short) >= usize::from(ronoctua_tokens::space::ATLAS_LINES),
+            "a panel of {short} lines has no place for the globe, so this proves nothing"
+        );
+        v.drawn_lines.set(short);
         v.info_offset = 2;
         let (left, _, gone) = v.globe_place().expect("the globe still has a place");
         // AND THE PICTURE KEEPS ITS SIZE: what was scrolled is CUT off its top,
@@ -20506,8 +20519,12 @@ mod tests {
         (v, bundle())
     }
 
-    /// The region both doors give the manager: twelve lines.
-    const ROOM: usize = 12;
+    /// The region the footer gives the manager, FROM THE TOKEN.
+    ///
+    /// Written as a literal it would go on measuring a ceiling the shell no
+    /// longer has the day the token moves, and every test below would keep
+    /// passing about a footer nobody gets.
+    const ROOM: usize = ronoctua_tokens::space::EXPANSION_MAXLINES as usize;
 
     /// A view of `files` files with the entries side by side.
     fn a_grid_of(name: &str, files: usize) -> (View, ronoctua_i18n::Texts) {
@@ -20741,14 +20758,15 @@ mod tests {
         // room as well as from below by the renderer's ceiling, and this is the
         // upper bound.
         let (v, b) = a_grid_of("grade-porta-baixa", 40);
-        // THE FOOTER WITH ITS PANELS PUT AWAY: twelve lines less the path.
+        // THE FOOTER WITH ITS PANELS PUT AWAY: the ceiling less the path.
         //
-        // WITH them the strip takes four more and seven are left, which two
-        // cells of four lines do not fit — a name takes two of those four, at
-        // the owner's word, and a picture of one line is not a picture. That
-        // door gets one shelf of the SMALLEST, which is nine files rather than
-        // five, and it is the most the arithmetic allows.
-        const FOOTER: usize = 12 - 1;
+        // WITH them the strip takes four more. At a ceiling of twelve that left
+        // seven, which two cells of four lines do not fit — a name takes two of
+        // those four, at the owner's word, and a picture of one line is not a
+        // picture — so that door got one shelf of the SMALLEST. The ceiling is
+        // fifteen now and ten are left, which two of the smallest DO fit: the
+        // three lines the region gained bought the second shelf back.
+        const FOOTER: usize = ROOM - 1;
         let sec = the_shelves(&v, FOOTER, 120, &b);
         let g = sec.grid.expect("the listing has a grid");
         assert!(
@@ -20759,11 +20777,16 @@ mod tests {
         );
         // AND THE SHORTER ONE TAKES THE SMALLEST, which is the most files it
         // can show — never the middle size with one shelf of five.
-        let tight = the_shelves(&v, 12 - 1 - 4, 120, &b)
-            .grid
-            .expect("a grid")
-            .step
-            .saturating_sub(ronoctua_design::GAP);
+        let tight = the_shelves(
+            &v,
+            ROOM - 1 - usize::from(ronoctua_tokens::space::FILES_STRIPLINES),
+            120,
+            &b,
+        )
+        .grid
+        .expect("a grid")
+        .step
+        .saturating_sub(ronoctua_design::GAP);
         assert_eq!(
             tight, THUMB_CELLS[0],
             "a door too short for two shelves did not take the size that shows most"
@@ -21190,10 +21213,84 @@ mod tests {
     }
 
     #[test]
+    fn every_line_the_region_gains_is_a_fact_the_column_shows() {
+        // THE OWNER'S ASK, AS ARITHMETIC: *"quero aumentar um pouco o tamanho
+        // máximo alcançável pela região do rodapé … quero que esse aumento dê à
+        // coluna info do filemanager três linhas novas de dados mostrados em
+        // tela."*
+        //
+        // Three things have to be true together for that sentence to come out
+        // right on a screen, and each of them can fail alone:
+        //
+        //  1. the panels ask for MORE than the ceiling, so the ceiling is what
+        //     decides — otherwise raising it changes nothing at all;
+        //  2. the ceiling is REACHABLE on the panel it was raised for, which is
+        //     `the_ceiling_this_screen_was_raised_for_is_reachable` next door;
+        //  3. every line the region gains is a FACT and not furniture, which is
+        //     this test.
+        let dir = scratch("regiao-mais-tres");
+        std::fs::write(dir.join("where.jpg"), b"not a real jpeg").expect("write the file");
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.info_on = true;
+        v.reread();
+        let ask = v.wants_look(512).expect("a file wants a look");
+        // A SHEET LONGER THAN ANY CEILING, which is what a photograph's is:
+        // shutter, aperture, focal length and twenty more. A fixture with a
+        // short sheet would pass this test by never reaching the ceiling.
+        let facts: Vec<_> = (0..64)
+            .map(|n| ronoctua_inspect::facts::Fact {
+                label: ronoctua_inspect::facts::Label::Named(format!("fact {n}")),
+                value: ronoctua_inspect::facts::Value::Data(format!("{n}")),
+            })
+            .collect();
+        v.looked(Looked {
+            key: ask.key,
+            path: ask.path,
+            rgba: None,
+            moving: None,
+            list: None,
+            text: None,
+            why: None,
+            facts,
+            mime: "image/jpeg",
+            turns: false,
+            outlined: 0,
+            at: None,
+        });
+        let ceiling = usize::from(ronoctua_tokens::space::EXPANSION_MAXLINES);
+        v.drawn_at.set(200);
+        v.drawn_lines
+            .set(ronoctua_tokens::space::EXPANSION_MAXLINES);
+        assert!(
+            v.panel_lines() > ceiling,
+            "the panels ask for {} lines, which the ceiling never has to cut —              raising it would buy nothing",
+            v.panel_lines()
+        );
+        // AND EACH LINE IS A ROW. Three more of region, three more of facts —
+        // never two, which is what a line spent on furniture would leave.
+        let rows_at = |v: &mut View, lines: usize| {
+            v.drawn_lines
+                .set(u16::try_from(lines).expect("a region of some lines"));
+            v.info_room()
+        };
+        let three = 3usize;
+        let before = rows_at(&mut v, ceiling - three);
+        let after = rows_at(&mut v, ceiling);
+        assert_eq!(
+            after,
+            before + three,
+            "a region {three} lines taller showed {} more facts",
+            after - before
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn nothing_names_the_columns_when_there_are_no_columns() {
         // THE DEFECT THIS CATCHES: the header row surviving into the grid. It
         // would head a size column and a date column that are not drawn, and it
-        // costs one of the footer's twelve lines to do it.
+        // costs one of the footer's few lines to do it.
         let (mut v, b) = a_grid_of("grade-cabecalho", 4);
         v.key(of_view("C-D"));
         assert!(v.header_shown(), "`C-D` did not ask for the names");
@@ -23645,7 +23742,7 @@ mod tests {
         // WHAT `leader-vm` CAUGHT, and it is the reason this test exists at
         // this level: typing narrows the list, and the region has to narrow
         // with it. With the panels on by default it stopped doing that — the
-        // preview asked for its twelve lines whether or not there was a file
+        // preview asked for the whole region whether or not there was a file
         // to draw in them, so `zzz` left the footer 288 px tall before and
         // 288 px after, and the person typing got no answer.
         let dir = scratch("query-nothing");

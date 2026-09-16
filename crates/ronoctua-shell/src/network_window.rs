@@ -2,7 +2,7 @@
 //!
 //! # Why there are two, and why they are one implementation
 //!
-//! The footer's expanded region has a twelve-line ceiling (`space.expansion`,
+//! The footer's expanded region has a ceiling in lines (`space.expansion`,
 //! invariant 14), and this view has four sections: a glance at what is
 //! connected fits the footer, reading every address, every resolver and every
 //! network in range does not. So this exists — and everything it knows lives

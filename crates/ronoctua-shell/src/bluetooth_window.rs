@@ -2,7 +2,7 @@
 //!
 //! # Why there are two, and why they are one implementation
 //!
-//! The footer's expanded region has a twelve-line ceiling (`space.expansion`,
+//! The footer's expanded region has a ceiling in lines (`space.expansion`,
 //! invariant 14), and one device carries thirty facts and a row per service:
 //! a glance at what is connected fits the footer, reading a device whole does
 //! not. So this exists — and everything it knows lives in

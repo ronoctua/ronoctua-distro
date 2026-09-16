@@ -2559,8 +2559,8 @@ impl View {
     /// It draws the filter and, in one line, what it does — not the eight
     /// knobs the sheet draws. The question here is "shall this go", and the
     /// answers have to be ON SCREEN with the sentence that explains them:
-    /// drawn whole, the two fell below the footer's twelve-line ceiling, which
-    /// is a question one has to scroll to answer.
+    /// drawn whole, the two fell below the footer's ceiling, which is a
+    /// question one has to scroll to answer.
     fn publish_rows(
         &self,
         id: &str,

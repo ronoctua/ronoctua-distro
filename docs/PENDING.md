@@ -104,13 +104,6 @@ pastas seria N². A pasta fica com o glifo dela.
 **Documento de escritório** (`.odt`, `.docx`, `.ppt`, `.odp`) — não há rasterizador para eles na
 árvore; só o PDF tem (`pdftoppm`). Ficam com o glifo do tipo.
 
-**Duas prateleiras no rodapé COM os painéis abertos.** O nome leva duas linhas, então a menor célula
-tem quatro (duas de figura, duas de nome) e a região do rodapé com a faixa dos painéis deixa sete —
-uma prateleira. Fechando os painéis (`C-v`, `C-i`) são onze linhas e duas prateleiras. O que faria as
-duas caberem é uma figura de UMA linha, que a 26 px não é uma figura.
-**Como saber que acabou:** o rodapé com os painéis abertos mostrando duas fileiras de miniaturas que
-ainda se reconhecem.
-
 **Cobertura da onda e da capa.** O que o shell PINTA fica no nosso cache e não no do freedesktop —
 a onda de um áudio e uma peça 3D mudam com o tema, e o padrão não tem onde dizer isso. A conta é
 feita pelo TIPO, antes de qualquer leitura, então a CAPA de um áudio (que é do arquivo e não muda com

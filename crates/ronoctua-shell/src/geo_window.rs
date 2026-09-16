@@ -2,7 +2,7 @@
 //!
 //! # Why there are two, and why they are one implementation
 //!
-//! The footer's expanded region has a twelve-line ceiling (`space.expansion`,
+//! The footer's expanded region has a ceiling in lines (`space.expansion`,
 //! invariant 14), and this view lists what is installed AND a catalogue of
 //! five hundred and thirty regions. Choosing one in the footer works; reading
 //! down the list does not. So this exists, and everything it KNOWS lives in

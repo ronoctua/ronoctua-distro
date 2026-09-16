@@ -2237,8 +2237,8 @@ pkgs.testers.runNixOSTest {
             shot("40-the-regions-and-their-streets", lines=12)
 
             # THE VIEW IS REALLY OPEN, asked OUTSIDE the picture: the footer
-            # resolves a layout every time its height changes, and twelve lines
-            # is this view asking for the region's ceiling. A crop cannot be
+            # resolves a layout every time its height changes, and a region this
+            # tall is this view asking for all the lines it can have. A crop cannot be
             # answered by the white mouse pointer; a height can be answered by
             # nothing else.
             said = machine.succeed(

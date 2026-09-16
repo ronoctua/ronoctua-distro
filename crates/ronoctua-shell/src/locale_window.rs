@@ -2,7 +2,7 @@
 //!
 //! # Why there are two, and why they are one implementation
 //!
-//! The footer's expanded region has a twelve-line ceiling (`space.expansion`,
+//! The footer's expanded region has a ceiling in lines (`space.expansion`,
 //! invariant 14), and this view has five sections — the languages, the clock
 //! and the date, the glance's places with four switches each, the two hosts,
 //! and what the system decides. A glance at the language fits the footer;

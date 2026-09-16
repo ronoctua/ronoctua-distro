@@ -131,8 +131,13 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   escritos deixa de ser resposta; cobra o `the-footer-draws-what-the-keyboard-drives`. A pergunta do
   minibuffer é a única exceção, e é deliberada — pergunta é LINHA, não região. O localizador (`a`)
   varre o XDG na PARTIDA em thread; a rede (`s n n`) lê o CACHE do NetworkManager.
-- **`LEADER .` é o gerenciador, e é um SUBMENU de duas portas** — `. .` no rodapé (teto de 12)
-  e `. w` em janela. O `LEADER f` MORREU a pedido do dono: uma coisa alcançável por três
+- **`LEADER .` é o gerenciador, e é um SUBMENU de duas portas** — `. .` no rodapé (teto de 15,
+  `space.expansion.maxLines`; eram 12, e o dono pediu três linhas a mais de FATOS: a coluna de infos
+  recebe toda linha da região que a chrome não leva, então o aumento chega lá uma a uma. O teto é um
+  `min` com `maxFooterPct`, e é ele que continua mandando em tela pequena — quem prova que o número
+  ainda quer dizer alguma coisa na tela para a qual foi levantado é o
+  `the_ceiling_this_screen_was_raised_for_is_reachable`, senão subir o token compraria zero em
+  silêncio) e `. w` em janela. O `LEADER f` MORREU a pedido do dono: uma coisa alcançável por três
   sequências, e a letra não dizia nada que o `.` não diga. E o `.` teve de deixar de ser comando
   para virar prefixo — o registro recusa as duas coisas na mesma sequência. UMA
   `files::View`; só o `ronoctua-files` toca o disco. **Letra é QUERY** e vai no FIM do caminho;
@@ -278,10 +283,12 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   diz quantas linhas atrás o bloco começou, e quem o desenha na entrelinha dele é o renderizador.
   `Stacked(px, 0)` é `Px(px)` exato, então nome de uma linha não se mexe, e a expressão vale nos dois
   sentidos: bloco MAIOR que a grade desce pela mesma conta.
-  **E DUAS LINHAS DE NOME CUSTAM UMA PRATELEIRA.** A menor célula passou a ter 4 linhas (2 de figura,
-  2 de nome) e o rodapé com os painéis abertos deixa 7 — que não cabem duas. Com os painéis fechados
-  (11 linhas) cabem. Onde não cabem, o degrau escolhido é o MENOR: uma prateleira de nove arquivos e
-  não de cinco.
+  **E DUAS LINHAS DE NOME CUSTAVAM UMA PRATELEIRA.** A menor célula passou a ter 4 linhas (2 de
+  figura, 2 de nome) e o rodapé com os painéis abertos deixava 7 — que não cabem duas. O teto da
+  região subiu de 12 para 15 e agora sobram 10, que cabem: as três linhas que o dono pediu para a
+  coluna de infos pagaram a segunda prateleira de passagem. Onde ainda não couberem — tela pequena,
+  em que a percentagem manda —, o degrau escolhido é o MENOR: uma prateleira de nove arquivos e não
+  de cinco.
   **E NUMA CÉLULA UM SOM SEM CAPA MOSTRA O GLIFO, não a onda.** A onda é uma figura de um SOM: lê-se
   num painel e é um borrão cinza em seis células. Quem diz isso é a AUSÊNCIA DE TINTA — o `wave` do
   pedido vai vazio, e o `pixels` recusa desenhar ondas sem ela. O painel continua passando a tinta e

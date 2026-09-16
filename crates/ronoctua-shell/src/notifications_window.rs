@@ -2,7 +2,7 @@
 //!
 //! # Why there are two, and why they are one implementation
 //!
-//! The footer's expanded region has a twelve-line ceiling (`space.expansion`,
+//! The footer's expanded region has a ceiling in lines (`space.expansion`,
 //! invariant 14) and it is right that it does: it is a footer. Twelve rows are
 //! enough to see what just happened and act on it, and not enough to read a
 //! fortnight of history or to go through every filter the distro ships with.

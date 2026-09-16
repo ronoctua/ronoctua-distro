@@ -512,7 +512,7 @@ pkgs.testers.runNixOSTest {
         # through niri, through the layer surface, with the leader's own
         # modifiers discounted. That is three of the causes `AGENTS.md` lists
         # under "nenhum atalho funciona", and they all look the same on screen.
-        # FEW FILES, ON PURPOSE. The region has a ceiling of twelve lines, and a
+        # FEW FILES, ON PURPOSE. The region has a ceiling in lines, and a
         # listing that hits it measures the same before and after — the height
         # would stop answering the question. With four visible and three hidden
         # (`.cache` and `.nix-channels` are already there), every state of this

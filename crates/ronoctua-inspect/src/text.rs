@@ -48,7 +48,7 @@ pub const BYTE_CEILING: u64 = 1024 * 1024;
 /// # Two thousand, and the argument is the SCROLLBAR
 ///
 /// Not memory. `ronoctua_design::Scroll` floors the thumb at one line, so at
-/// two thousand lines in a twelve-line panel the thumb is eight per cent of
+/// two thousand lines in a panel a dozen lines tall the thumb is eight per cent of
 /// the track — small, and still something a pointer can catch. At a hundred
 /// thousand it is a dot, and one detent of the wheel moves three lines out of
 /// a hundred thousand. A bar that cannot be used is a bar that lies about

@@ -2,7 +2,7 @@
 //!
 //! # Why there are two, and why they are one implementation
 //!
-//! The footer's expanded region has a twelve-line ceiling (`space.expansion`,
+//! The footer's expanded region has a ceiling in lines (`space.expansion`,
 //! invariant 14), and the power view has eight sections: a glance at the
 //! battery fits the footer, reading every fact and every switch does not. So
 //! this exists — and everything it knows lives in [`crate::power::View`],

@@ -1688,8 +1688,8 @@ fn grid_for(widths: &[Measure], screen_columns: u16, ceiling: usize, in_columns:
     }
     // THE WIDTH FIRST, and the height after.
     //
-    // A list of ten shortcuts in a region of twelve lines would fit in a single
-    // column — and it would be a narrow strip with the whole screen empty beside
+    // A list of ten shortcuts in a region a dozen lines tall would fit in a
+    // single column — and it would be a narrow strip with the whole screen empty beside
     // it. Using the columns that fit, the same ten become three lines.
     let columns = if in_columns && width > 0 {
         (usize::from(screen_columns) / usize::from(width)).max(1)
@@ -5234,7 +5234,7 @@ impl PointerHandler for Footer {
             // AND EACH SECTION SCROLLS INSIDE ITS OWN HEIGHT, which is what
             // the window door already did and this one did not. The ceiling
             // was handed to EVERY pane, so a panel in the four-line strip was
-            // paged twelve lines at a time — already wrong for the facts, and
+            // paged a whole region at a time — already wrong for the facts, and
             // it would have been wrong for the preview the same way.
             let ceiling = self.expansion_ceiling();
             let panel_room = if strip > 0 { strip } else { ceiling };
@@ -5907,8 +5907,8 @@ impl Footer {
             }
             // THE SECOND DOOR, in a window of its own — the same `View`, and
             // the same reason the file manager has two: the footer's region has
-            // a twelve-line ceiling (invariant 14), which is right for a footer
-            // and not for reading a fortnight of history.
+            // a ceiling in lines (invariant 14), which is right for a footer and
+            // not for reading a fortnight of history.
             "notif-window" => {
                 if let Ok(me) = std::env::current_exe() {
                     self.open_foreign(&me.to_string_lossy(), &["notifications".to_owned()], None);
@@ -6188,7 +6188,7 @@ impl Footer {
             //
             // A WINDOW AND NOT A SECOND IMPLEMENTATION: it re-execs this binary
             // with `files`, and what draws there is the same `files::View` this
-            // one uses. The footer's region has a twelve-line ceiling
+            // one uses. The footer's region has a ceiling in lines
             // (`space.expansion`, invariant 14) and that is right for a footer;
             // it is not right for the job people open a file manager to do.
             "files-window" => {
@@ -6247,8 +6247,8 @@ impl Footer {
                 // NOT OVER THE FOOTER'S MANAGER. Only the socket door can ask for
                 // it then (the leader cannot be typed while the manager grabs),
                 // and the region's height, grid and pointer maths are the
-                // manager's while it is open: two rows on top of a twelve-line
-                // region with the strip painted under them. The manager holds
+                // manager's while it is open: two rows on top of the region
+                // with the strip painted under them. The manager holds
                 // state a person built by hand; a cursor over a few rows can
                 // wait until it closes.
                 if !self.region_is_free("theme-open") {
@@ -7049,8 +7049,8 @@ impl Footer {
     /// # Why only the visible ones
     ///
     /// Because decoding four hundred SVGs costs seconds, and three hundred and
-    /// eighty of them are not on screen. What is seen is at most twelve lines —
-    /// the region's ceiling —, and scrolling asks for the next twelve. The cache
+    /// eighty of them are not on screen. What is seen is at most the region's
+    /// ceiling in lines, and scrolling asks for the next such page. The cache
     /// keeps what has already arrived, so scrolling back repeats nothing.
     fn request_visible_icons(&mut self) {
         let Some(queue) = self.icon_queue.clone() else {
@@ -7482,7 +7482,7 @@ impl Footer {
             self.network = Some(view);
         }
         // THE REGION FOLLOWS THE CURSOR, as it does for the power and the
-        // radio. Without this the cursor walked off the twelve lines and the
+        // radio. Without this the cursor walked off the region and the
         // page stayed on the first section: on this machine the view is some
         // eighty rows, and holding `<down>` past the eleventh drew the same
         // screen for ever — the ports, the neighbours and the monitor were
@@ -8583,7 +8583,7 @@ impl Footer {
     /// Before it, exactly two of the fifteen views scrolled with their own
     /// cursor — the manager and the clipboard, which call [`Self::follow_cursor`]
     /// inside their errand handlers. In the other thirteen the cursor walked
-    /// off the bottom of the twelve-line region and the page stayed where it
+    /// off the bottom of the capped region and the page stayed where it
     /// was, which reads as an arrow key that stopped working. The owner
     /// reported it from the regions' view and said what it is: *"isso precisa
     /// ser corrigido de forma global"*.
@@ -10421,8 +10421,8 @@ impl Footer {
     ///
     /// # Why two limits
     ///
-    /// The ceiling in lines is blind to the screen's size: twelve lines are a
-    /// third of a 1080 px monitor and more than half of a 600 px one. The
+    /// The ceiling in lines is blind to the screen's size: a dozen-odd lines
+    /// are a third of a 1080 px monitor and more than half of a 600 px one. The
     /// percentage puts the second limit, and the smaller of the two holds —
     /// measured on the SMALLEST screen, because the footer's height is the same
     /// on all of them (see `apply_geometry`).
@@ -13529,8 +13529,8 @@ impl Footer {
     /// Scrolls a whole PAGE.
     ///
     /// A page is what fits right now, and not a fixed number: on a short
-    /// screen the ceiling is smaller, and paging by twelve lines would skip
-    /// content that never got to show up.
+    /// screen the ceiling is smaller, and paging by the token's number would
+    /// skip content that never got to show up.
     fn page_by(&mut self, step: i32) -> bool {
         let per_page = i32::try_from(self.scroll_step()).unwrap_or(1);
         self.scroll_by(step.saturating_mul(per_page.max(1)))
@@ -18859,8 +18859,8 @@ impl Footer {
         // THE SURFACE FIRST, THEN THE CURSOR — see `region_resized`.
         self.region_resized();
         // THE REGION FOLLOWS THE CURSOR, as every list here does. Without
-        // this the cursor walked off the twelve lines and the page stayed
-        // on the battery: twenty-six presses, the same screen.
+        // this the cursor walked off the region and the page stayed on the
+        // battery: twenty-six presses, the same screen.
         self.follow_cursor();
         self.power_errand(errand);
     }
@@ -19577,6 +19577,36 @@ mod tests {
     }
 
     #[test]
+    fn the_ceiling_this_screen_was_raised_for_is_reachable() {
+        // THE DEFECT THIS CATCHES: raising `expansion.maxLines` and getting
+        // nothing, because `expansion.maxFooterPct` was already the binding
+        // limit. The two are a `min`, so the token that a person reads as "how
+        // tall the region may get" can stop meaning anything at all without one
+        // test going red — and the owner asked for THREE MORE LINES of facts,
+        // not for a number in a file.
+        //
+        // The screens are the ones this distro is installed on: a laptop panel
+        // and the desktops above it. 600 and 800 are deliberately NOT here —
+        // there the percentage SHOULD bind, and the test above is what says so.
+        let fixed = usize::from(FOOTER_LINES);
+        for height in [1200_u32, 1440, 2160] {
+            assert_eq!(
+                expansion_ceiling(Some(height), fixed),
+                usize::from(tokens::space::EXPANSION_MAXLINES),
+                "on a {height} px screen the percentage swallows the ceiling, so                  raising `expansion.maxLines` bought nothing"
+            );
+            // AND WITH THE BRAIN'S LINE UP TOO, because a third fixed line
+            // comes out of the expansion — a ceiling only reachable while
+            // nothing is happening is a ceiling that moves under the reader.
+            assert_eq!(
+                expansion_ceiling(Some(height), fixed + 1),
+                usize::from(tokens::space::EXPANSION_MAXLINES),
+                "on a {height} px screen the brain's line costs the region a line"
+            );
+        }
+    }
+
+    #[test]
     fn the_absolute_ceiling_holds_on_the_big_screen_and_the_percentage_on_the_small_one() {
         // Both limits exist because each one fails on its own: on a 2160 px
         // screen, 40% would give 33 lines (the footer would become the screen);
@@ -19652,9 +19682,9 @@ mod tests {
 
     #[test]
     fn the_shortcut_list_uses_the_width_before_the_height() {
-        // DOOM'S ARRANGEMENT. Ten shortcuts in a region of twelve lines would fit
-        // in a single column — a narrow strip with the whole screen empty beside
-        // it, and still paginating once they went past twelve. Using the columns
+        // DOOM'S ARRANGEMENT. Ten shortcuts in a region a dozen lines tall would
+        // fit in a single column — a narrow strip with the whole screen empty
+        // beside it, and still paginating once they ran out. Using the columns
         // that fit, the same ten become a few lines.
         let items: Vec<Measure> = std::iter::repeat_n(measurement(3, 8), 10).collect();
         let g = grid_for(&items, 200, 12, true);

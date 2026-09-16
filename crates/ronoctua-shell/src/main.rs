@@ -297,12 +297,12 @@ fn main() -> Result<()> {
         // `ronoctua-shell power` — the power view in a window of its own. The
         // SAME `power::View` the footer draws from.
         // THE RADIO'S SECOND DOOR, one device to a line and a fact to a
-        // row — the footer's twelve lines are a glance, not a reading.
+        // row — the footer's capped region is a glance, not a reading.
         Some("bluetooth") => {
             return bluetooth_window::host_it().context("host the bluetooth view");
         }
         // THE SCREENS' SECOND DOOR, one monitor to a sheet of eighteen rows —
-        // the footer's twelve lines are a glance, not a reading.
+        // the footer's capped region is a glance, not a reading.
         Some("display") => {
             return display_window::host_it().context("host the screens view");
         }

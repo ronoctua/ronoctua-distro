@@ -747,8 +747,8 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             label: key::CMD_FILES_OPEN,
         },
         // The SAME manager, in a window of its own. The footer's region has a
-        // twelve-line ceiling (`space.expansion`, invariant 14), which is right
-        // for a footer and not for the job.
+        // ceiling in lines (`space.expansion`, invariant 14), which is right for
+        // a footer and not for the job.
         Command {
             id: "files-window",
             label: key::CMD_FILES_WINDOW,
@@ -1289,8 +1289,8 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         },
         // The same manager in a window of its own — the same `View`, and the
         // same reason the file manager has two doors: the footer's region has a
-        // twelve-line ceiling (invariant 14), which is right for a footer and
-        // not for reading a fortnight of history.
+        // ceiling in lines (invariant 14), which is right for a footer and not
+        // for reading a fortnight of history.
         Command {
             id: "notif-window",
             label: key::CMD_NOTIF_WINDOW,
@@ -2029,7 +2029,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // with the one you choose.
         (". .", "files-open", None),
         // `w` for WINDOW — the same manager, in one of its own, because the
-        // footer's region has a twelve-line ceiling (`space.expansion`,
+        // footer's region has a ceiling in lines (`space.expansion`,
         // invariant 14) and that is right for a footer and not for the job
         // people open a manager to do.
         //

@@ -2,7 +2,7 @@
 //!
 //! # Why there are two, and why they are one implementation
 //!
-//! The footer's expanded region has a twelve-line ceiling (`space.expansion`,
+//! The footer's expanded region has a ceiling in lines (`space.expansion`,
 //! invariant 14), and one screen's sheet is eighteen rows: a glance at what is
 //! plugged in fits the footer, reading a monitor whole does not. So this
 //! exists — and everything it knows lives in [`crate::display::View`], which
