@@ -38,7 +38,7 @@ use ronoctua_niri::{Ask, Transform};
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 
-use crate::files::{Field, Hit as FilesHit};
+use crate::files::{Field, Hit as FilesHit, Ink};
 
 /// How long a change that could blind the screen stands before it goes back.
 ///
@@ -502,6 +502,7 @@ impl Builder<'_> {
             color,
             hit: FilesHit::Nothing,
             explain: None,
+            ink: Ink::Grid,
         }
     }
 

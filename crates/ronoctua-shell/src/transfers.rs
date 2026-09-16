@@ -30,7 +30,7 @@ use ronoctua_keymap::Key;
 use ronoctua_tokens as tokens;
 use ronoctua_transfers::{Ask, Job, Measure, Stage};
 
-use crate::files::{Field, Hit, Row};
+use crate::files::{Field, Hit, Ink, Row};
 
 /// The bar's width in cells, from the token.
 const BAR: u16 = tokens::space::TRANSFERS_BAR;
@@ -373,6 +373,7 @@ fn plain(at: u16, text: String, color: tokens::Color) -> Field {
         color,
         hit: Hit::Nothing,
         explain: None,
+        ink: Ink::Grid,
     }
 }
 

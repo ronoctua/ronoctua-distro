@@ -26,7 +26,7 @@ use ronoctua_atuin::options::{self, Scope, Setting};
 use ronoctua_options::Kind;
 use ronoctua_tokens as tokens;
 
-use crate::files::{Field, Hit, Row};
+use crate::files::{Field, Hit, Ink, Row};
 
 /// The keys this view answers to, and what the hint is generated from.
 pub const OF_THE_VIEW: &[(&str, &str)] = &[
@@ -722,6 +722,7 @@ fn piece(at: u16, text: String, color: tokens::Color) -> Field {
         color,
         hit: Hit::Nothing,
         explain: None,
+        ink: Ink::Grid,
     }
 }
 

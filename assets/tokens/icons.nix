@@ -278,6 +278,44 @@
   # utilizado em elementos de descolapsar/colapsar"*. This is not a drawer.
   theatre = "md-fullscreen";
   theatre-off = "md-fullscreen_exit";
+
+  # THE LISTING'S OTHER SHAPE: one thing per line, or all of them side by side
+  # in thumbnails. The owner asked for the mouse to reach it — *"será possível
+  # ativá-lo e desativá-lo por meio de um glifo clicável (que muda de acordo
+  # com o modo)"* — and it sits at the right-hand end of the path's line.
+  #
+  # A MATCHED PAIR, the third in this file, and the argument is the one written
+  # at `play`/`pause` and again at `theatre`: the two alternate in ONE cell, so
+  # a difference in weight between them is a glyph that twitches every time the
+  # mode changes. `md-view_list` and `md-view_grid` are the same family and the
+  # same designer.
+  #
+  # THE GLYPH SAYS WHERE IT GOES, not where it is — `theatre_field` already
+  # works that way, and a control that draws its current state is a control one
+  # has to press to find out what it does.
+  #
+  # NOT `md-dots_grid`, which is the obvious choice and is taken twice over: it
+  # is the reference glyph `nix/marksgen.nix` measures our own marks against,
+  # and `assets/icons/marks.nix` records the owner reading a uniform grid of
+  # dots off the screen as a MENU, which is what it is everywhere else on a
+  # desktop.
+  view-list = "md-view_list";
+  view-grid = "md-view_grid";
+
+  # HOW BIG THE THUMBNAILS ARE, as a glyph one clicks to ring through. The owner
+  # asked for it beside the one above — *"quero que apareça um novo glifo ao lado
+  # esquerdo do glifo trocador de modos, e esse glifo a cada clique altera as
+  # thumbnails para um outro tamanho"*.
+  #
+  # A DESIGNED TRIO from the same family as the pair above, and it is the same
+  # argument a third time: three glyphs that take turns in ONE cell must be the
+  # same weight, or the row twitches at every press. `md-image_size_select_*` are
+  # neighbours in Material's own sheet — a picture frame with a small, a medium
+  # and a large selection inside it — so the drawing itself says which of three
+  # it is, which no single "resize" glyph could.
+  view-small = "md-image_size_select_small";
+  view-medium = "md-image_size_select_actual";
+  view-large = "md-image_size_select_large";
   sync = "cod-sync";
 
   # SYNCTHING'S TWO, and they are neighbours in one face on purpose.

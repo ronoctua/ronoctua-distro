@@ -31,7 +31,7 @@
 //! this one. The bar comes from `chrome::meter`, which is the one bar in the
 //! system.
 
-use crate::files::{Field, Hit as FilesHit};
+use crate::files::{Field, Hit as FilesHit, Ink};
 use ronoctua_audio::{Direction, Kind, Order, Snapshot, prefs::Preferences};
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
@@ -873,6 +873,7 @@ impl Builder<'_> {
             color,
             hit: FilesHit::Nothing,
             explain: None,
+            ink: Ink::Grid,
         }
     }
 

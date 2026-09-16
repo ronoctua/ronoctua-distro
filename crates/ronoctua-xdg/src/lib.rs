@@ -12,7 +12,7 @@
 //! roots — not a dependency on whichever one happened to have them first"* —
 //! and the theme was the fourth caller. This is that crate.
 //!
-//! # Two lifetimes, two directories
+//! # Four lifetimes, four directories
 //!
 //! CONFIGURATION is what the person chose — filters, the sidebar, the brain's
 //! preferences, the theme. Hand-editable, small, theirs. It lives under
@@ -22,8 +22,18 @@
 //! Machine-written, growing, worthless to hand-edit. It lives under
 //! `$XDG_STATE_HOME/ronoctua`.
 //!
-//! Both are in `nix/modules/persist.nix`, so an impermanent root does not
-//! take them.
+//! DATA is what the person DOWNLOADED — a region's streets. Big, slow to get
+//! back, and not the machine's to throw away. `$XDG_DATA_HOME/ronoctua`.
+//!
+//! A CACHE is what can be deleted and made again from something that is still
+//! there: a decoded thumbnail of a file that is still on disk.
+//! `$XDG_CACHE_HOME/ronoctua`, and it is the one root a cleaning tool may
+//! empty without asking.
+//!
+//! The first three are in `nix/modules/persist.nix`, so an impermanent root
+//! does not take them. The fourth deliberately is NOT: a cache that survived a
+//! reboot of a machine whose whole root does not is a cache that has outlived
+//! its own argument.
 //!
 //! # The roots are PARAMETERS
 //!
@@ -83,6 +93,46 @@ pub fn data_dir() -> Option<PathBuf> {
             std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
         })?;
     Some(base.join(NAME))
+}
+
+/// `$XDG_CACHE_HOME/ronoctua`, or `~/.cache/ronoctua`. See [`config_dir`].
+///
+/// # Why a fourth root, and what belongs in it
+///
+/// Nothing in this tree had one until a thumbnail wanted one, and the reason is
+/// the definition: a cache is what can be DELETED and rebuilt from something
+/// else that still exists. State can be lost without anybody minding, but it
+/// cannot be rebuilt — the last notification is gone once it is gone. A
+/// decoded picture of a file can always be decoded again from the file.
+///
+/// The practical difference is who may sweep it. Everything under here is fair
+/// game for a disk-cleaning tool, for a full disk, and for a person with
+/// `rm -rf`; nothing under here may be the only copy of anything.
+#[must_use]
+pub fn cache_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+    Some(base.join(NAME))
+}
+
+/// `$XDG_CACHE_HOME`, or `~/.cache` — the root itself, with no name of ours on
+/// it.
+///
+/// # Why this one is not under `ronoctua/`
+///
+/// Because it is where SHARED layouts live, and a shared layout is not ours to
+/// namespace: the freedesktop Thumbnail Managing Standard says
+/// `$XDG_CACHE_HOME/thumbnails/`, and every file manager on the machine reads
+/// and writes exactly that. Putting it under a directory of our own would be a
+/// cache only we can use, which is the whole thing this is for.
+///
+/// [`cache_dir`] is still the right answer for anything of ours.
+#[must_use]
+pub fn cache_root() -> Option<PathBuf> {
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
 }
 
 /// Writes `bytes` to `dir/file`, whole and renamed over.

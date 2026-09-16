@@ -320,6 +320,197 @@ const BLANK: usize = 1;
 /// fifty-eight — five more cells of label and ten more of value on every row.
 const FACT_COLUMN: u16 = ronoctua_tokens::space::VIEW_LABELCELLS + PANEL_FLOOR;
 
+/// THE THREE WIDTHS A THUMBNAIL IS DRAWN AT, in cells, smallest first.
+///
+/// The ring `C-G` turns walks this, and [`View::grid_step`] is an index into
+/// it. Three because the sizes are a coarse choice — "about this big" — and a
+/// finer ring would be a decoded texture per step with nothing to show for it.
+const THUMB_CELLS: [u16; 3] = [
+    ronoctua_tokens::space::FILES_THUMBSMALL,
+    ronoctua_tokens::space::FILES_THUMBMEDIUM,
+    ronoctua_tokens::space::FILES_THUMBLARGE,
+];
+
+/// Which of [`THUMB_CELLS`] the grid opens at.
+///
+/// The middle one, which is what a WINDOW opens at. A footer does not: it steps
+/// down to what fits — see [`THUMB_SHELVES`] — so the door that is always there
+/// does not make every other door pay for its twelve lines.
+const THUMB_START: usize = 1;
+
+/// HOW MANY SHELVES A GRID IS WORTH.
+///
+/// Two. One shelf is a row of pictures, and a row of pictures with the rest of
+/// the region blank is a listing that has been made worse: no sense of a page,
+/// nothing to drop to, and a scroll that moves a screenful at a time. The owner
+/// photographed the footer showing one and said so — *"está mostrando apenas
+/// uma linha no meu laptop em vez de duas"*.
+///
+/// It is what makes [`View::thumb_item`] step DOWN as well as up: the
+/// renderer's ceiling bounds the size from below and this bounds it from above,
+/// and between them the grid fits the door it is in.
+const THUMB_SHELVES: u16 = 2;
+
+/// HOW MANY POINTS OF A FILM THE POINTER WALKS.
+///
+/// Four. What a thumbnail of a film has to answer is "what is in this", and the
+/// first frame answers it worst of all — a title card, a fade from black, a
+/// production logo. Four points evenly spread say more about ten minutes than
+/// any one of them does, and at `space.files.thumbClipTenths` each the whole
+/// tour takes ten seconds, which is about as long as a hand rests on a cell.
+///
+/// It is not a token because it is not a visual value: nothing about it is a
+/// colour, a size or a spacing. It is how many places to look.
+const THUMB_CLIPS: usize = 4;
+
+/// A film being toured under the pointer.
+///
+/// `Tour` and not `Clip`, which in this file already means something one is
+/// about to copy or move.
+#[derive(Debug, Clone, PartialEq)]
+struct Tour {
+    /// Which cell it belongs to.
+    row: usize,
+    /// The key its frames arrive under.
+    ///
+    /// The CELL's own key, so the frames replace that thumbnail's texture
+    /// rather than making a second one — the same rule the preview's film
+    /// follows about the panel's key.
+    key: String,
+    /// The file.
+    path: PathBuf,
+    /// How long it runs.
+    seconds: f64,
+    /// Which of [`THUMB_CLIPS`] is showing.
+    at: usize,
+    /// Where the film lives, when the cell is a PHOTOGRAPH that carries one.
+    ///
+    /// `Some` is the definition of a motion photo, and it changes two things:
+    /// the player is told where to read from, and the tour does not walk —
+    /// there is nothing to walk, because the film inside a photograph is a
+    /// second or three and the whole of it IS the clip.
+    inside: Option<ronoctua_inspect::motion::Inside>,
+}
+
+impl Tour {
+    /// Where in the film this clip begins, in seconds.
+    ///
+    /// Spread over the film and never from nought: the first frame is the one
+    /// that says least. The last point is at four fifths, so a clip has film
+    /// left to run rather than ending the moment it starts.
+    #[allow(clippy::cast_precision_loss)]
+    fn from(&self) -> f64 {
+        // A PHOTOGRAPH'S FILM IS PLAYED WHOLE. Spreading four points over three
+        // seconds would seek four times to show a fifth of a second each.
+        if self.inside.is_some() {
+            return 0.0;
+        }
+        let step = self.seconds / (THUMB_CLIPS as f64 + 1.0);
+        step * (self.at % THUMB_CLIPS) as f64 + step
+    }
+
+    /// How long one clip lasts, in seconds.
+    fn runs() -> f64 {
+        f64::from(ronoctua_tokens::space::FILES_THUMBCLIPTENTHS) / 10.0
+    }
+}
+
+/// HOW MANY LINES the name under a thumbnail takes.
+///
+/// Two, at the owner's word — *"deixe todos os nomes de arquivos e pastas com
+/// duas linhas, ou seja, o nome quebra para linha de baixo quando for muito
+/// grande"*. A cell is six to twenty cells wide, which is six to twenty
+/// characters of a filename, and the folders people keep photographs in are
+/// full of `PXL_20240225_070857585.RAW-01.MP.COVER.jpg`.
+///
+/// It COSTS a line of the cell, and in a short door that is a shelf — which is
+/// why the smallest step is as small as it is and why the name shrinks there
+/// as well (see [`Ink::Small`]). The three other ways to read a cut name are
+/// still there: the pointer puts it whole in the minibuffer, the cursor
+/// arriving on it echoes it, and it walks sideways on its own.
+const THUMB_NAME: u16 = 2;
+
+/// HOW WIDE ONE OF THE PATH LINE'S GLYPHS IS, in cells.
+///
+/// There are two of them while the entries are side by side — the shape's and
+/// the size's — and one otherwise. It is named rather than written because two
+/// places have to agree about it: `crumb_box` stops the path before the
+/// leftmost glyph and `layout_at`/`sizing_at` place them. Spelled twice they
+/// could drift, and the drift is a glyph underneath the last letter of a long
+/// path.
+const LAYOUT_CELL: u16 = 1;
+
+/// THE AIR BETWEEN THE TWO GLYPHS, in cells.
+///
+/// The owner read them off the screen with nothing between them: *"você colocou
+/// o glifo de mudar o tamanho das thumbnails colado no glifo de trocar de modo,
+/// mas obviamente é preciso colocar um pequeno espaço entre eles."* Two glyphs
+/// of one family and one weight in adjacent cells have no boundary to see, and
+/// a pair with no boundary reads as a single control.
+const LAYOUT_AIR: u16 = ronoctua_tokens::space::FILES_LAYOUTAIR;
+
+/// A ZERO HERE WOULD GLUE THEM BACK TOGETHER, and no test could see it: every
+/// assertion about the distance between the two glyphs is written in terms of
+/// this constant, so setting it to zero keeps them all green while the screen
+/// goes back to what the owner photographed. The compiler is the only reader
+/// that can refuse it.
+const _: () = assert!(
+    LAYOUT_AIR >= 1,
+    "the two path glyphs have no air between them"
+);
+
+/// HOW TALL A THUMBNAIL IS, in lines, for one `cells` wide.
+///
+/// # Why this is derived and not declared
+///
+/// Because the box wants to be SQUARE, and square is a statement about two
+/// axes measured in different units: a cell is `typography.cellWidthEm` of the
+/// font across and a line is `typography.lineHeight` of it down. Declaring the
+/// height beside the width in `space.nix` would be a second visual value that
+/// can drift from the first, and what the drift looks like is a picture that is
+/// not square — which nobody reads as "two tokens disagree".
+///
+/// The name's line is added after the square, never taken out of it: a
+/// thumbnail whose picture shrinks as the name grows is a grid whose rows do
+/// not line up.
+/// THE LONGEST SIDE a thumbnail's picture is decoded at, in pixels.
+///
+/// `cell` and `line` arrive already multiplied by the screen's scale, which is
+/// why this is pixels and not cells: `docs/PENDING.md` records that every
+/// texture in this tree is still born at the LOGICAL size and stretched by the
+/// compositor, and names `Stamp::key()` as the one that is already right
+/// because it carries the decoded step. Taking the target from physical pixels
+/// is what keeps a grid on a doubled screen sharp instead of joining that list.
+///
+/// It takes the GRID and not a `&View` so that whoever has just laid one out
+/// can ask about THAT one — see `View::wants_thumbs` for the frame this costs
+/// when it is asked of the last frame's instead.
+///
+/// And it gives up the air first, for the reason `files::globe_texture` was
+/// written: `picture_in` sheds `space.files.pictureAir` on all four sides and
+/// `Area::centre` then shrinks what it is handed to fit what is left, so a
+/// picture decoded at the box's size is always drawn a little smaller than it
+/// was decoded.
+fn thumb_side(g: ronoctua_design::Grid, cell: f32, line: f32) -> u32 {
+    let air = f32::from(ronoctua_tokens::space::FILES_PICTUREAIR) * 2.0;
+    let deep = usize::from(g.down).saturating_sub(usize::from(THUMB_NAME));
+    #[allow(clippy::cast_precision_loss)]
+    let wide = f32::from(g.step.saturating_sub(ronoctua_design::GAP)).mul_add(cell, -air);
+    #[allow(clippy::cast_precision_loss)]
+    let tall = (deep as f32).mul_add(line, -air);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let side = wide.max(tall).max(0.0) as u32;
+    side
+}
+
+fn thumb_lines(cells: u16) -> u16 {
+    let square = f32::from(cells) * ronoctua_tokens::font::CELL_WIDTH_EM
+        / ronoctua_tokens::font::LINE_HEIGHT;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let picture = (square.round() as u16).max(1);
+    picture + THUMB_NAME
+}
+
 /// The widest a panel is ever given.
 ///
 /// Forty cells is some 340 px at the window's font — past the headroom
@@ -1445,6 +1636,93 @@ pub fn band_for(
     }
 }
 
+/// A BAND'S RECTANGLE IN PIXELS, from the cells it covers.
+///
+/// The other half of [`band_for`]: that one answers for a whole SECTION, which
+/// is what a row of a list occupies, and this one for the part of a line a
+/// shelf's cell does. Both doors call one or the other and neither multiplies a
+/// cell width of its own — which is how the two of them came to disagree about
+/// where the listing's band ended, twice.
+/// HOW BIG A RUN IS DRAWN.
+///
+/// Three cases and not a number, because they are three different questions and
+/// a number cannot be asked which one it is: the ordinary size, a run standing
+/// in for a PICTURE, and a run that has to be read in a cell too small for the
+/// body size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Ink {
+    /// The size everything else in this manager is drawn at.
+    #[default]
+    Grid,
+    /// AS TALL AS THIS MANY LINES: a thumbnail's fallback glyph, standing where
+    /// a picture would have been.
+    Fills(u16),
+    /// SMALLER THAN THE BODY, from the one token that already means that.
+    ///
+    /// The name under a thumbnail at the smallest step: six cells is six
+    /// characters of a filename at the body size and a dozen at this one, and
+    /// the owner asked for it in those terms — *"além das duas linhas para o
+    /// nome, também reduza o tamanho da fonte para um tamanho bem pequeno"*.
+    ///
+    /// The number is WHICH LINE OF THE NAME it is, and it is here because a
+    /// name that wraps is one thing read downwards: leaded by the grid, its
+    /// two lines sit a quarter of a line further apart than the size they are
+    /// drawn in wants, and the owner read that off the screen too — *"a
+    /// distância entre as duas linhas dos nomes de arquivos e pastas está
+    /// muito grande"*. It is the door's answer because only the door knows the
+    /// two runs are one block; the renderer is told by [`Size::Stacked`].
+    Small(u16),
+}
+
+/// THE SIZE A RUN IS DRAWN AT.
+///
+/// `ink` is the field's own (see [`Field::ink`]), `base` the size text is drawn
+/// at, and `line` how tall one line is — both in the door's logical pixels.
+///
+/// # Why `OnTheCell`
+///
+/// Because a run bigger than the grid has to be CENTRED on the cells it
+/// occupies, or it hangs off the left of them: `Size::Px` shares a grid run's
+/// left edge, which is right for a title and wrong for a glyph standing in for
+/// a picture. It is the same variant the bell and the countdown already use,
+/// for the same reason.
+///
+/// # And the air is the picture's own
+///
+/// A fallback glyph stands where a picture would be, so it gives up the same
+/// `space.files.pictureAir` on both sides that `picture_in` sheds — otherwise
+/// the one cell that has no picture is the one whose ink touches its
+/// neighbour's.
+#[must_use]
+pub fn run_size(ink: Ink, base: f32, line: f32) -> ronoctua_render::Size {
+    match ink {
+        Ink::Grid => ronoctua_render::Size::Px(base),
+        // THROUGH THE ONE RESOLVER. `one-text-size` lets two files name a fixed
+        // size and this is not one of them — `paint::scale_in_px` is where the
+        // token is read and scaled, and asking it is how this moves with the
+        // size a person chose rather than pinning a second number.
+        // AND THE BLOCK IS LEADED BY ITSELF. `Size::Stacked` draws the nth line
+        // of a block where the block's own line height puts it rather than
+        // where the grid's would; the first line is `Size::Px` exactly, so
+        // nothing moves for a name that fits on one.
+        Ink::Small(nth) => ronoctua_render::Size::Stacked(
+            crate::paint::scale_in_px(ronoctua_protocol::Scale::Small),
+            nth,
+        ),
+        Ink::Fills(lines) => {
+            let air = f32::from(ronoctua_tokens::space::FILES_PICTUREAIR) * 2.0;
+            ronoctua_render::Size::OnTheCell((f32::from(lines) * line - air).max(base))
+        }
+    }
+}
+
+#[must_use]
+pub fn band_px(cells: (u16, u16), lead: u16, cell: f32) -> (f32, f32) {
+    let from = f32::from(lead.saturating_add(cells.0)) * cell;
+    let wide = f32::from(cells.1.saturating_sub(cells.0)) * cell;
+    (from, wide)
+}
+
 #[must_use]
 pub fn band_of(
     panes: Panes,
@@ -1919,6 +2197,22 @@ pub enum Hit {
     /// panel the handler happened to name — and that is one variant with two
     /// meanings, which is the shape this enum exists to refuse.
     Theatre(Panel),
+    /// The glyph at the end of the path's line: turn the entries over.
+    ///
+    /// As `C-g`, and through the same code — the mouse never reaches anything
+    /// the keyboard cannot, and never by a second path.
+    ///
+    /// IT CARRIES NOTHING, unlike [`Hit::Theatre`] beside it: there is one
+    /// listing and it has two shapes, so "turn it over" names the whole thing
+    /// without ambiguity. A variant that carried which shape to go TO would be
+    /// a second place to decide what the glyph already draws.
+    Layout,
+    /// The glyph beside it: ring the thumbnails' size.
+    ///
+    /// As `C-G`, and through the same code. It exists only while the entries
+    /// are side by side, because there is nothing to size otherwise — and the
+    /// cell it occupies is given up with it, so a path may use it again.
+    Sizing,
     /// The transport's play glyph: hold the film, or let it go on. As `C-;`.
     ///
     /// A DRAWN target and not a click anywhere on the picture, for the reason
@@ -1998,6 +2292,16 @@ pub enum Pane {
 /// One drawn piece of a row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
+    /// HOW BIG this run is drawn.
+    ///
+    /// # Why the FIELD and not the row
+    ///
+    /// It was the row for an hour, and the owner photographed what that costs:
+    /// the footer flattens all four sections' fields onto ONE line, so a
+    /// thumbnail's glyph asking for four lines made the sidebar's `trash` and
+    /// the facts' `owner:group` four lines tall beside it. A line in that door
+    /// is not one list's; a field always is.
+    pub ink: Ink,
     /// First cell.
     pub at: u16,
     /// What is drawn.
@@ -2103,6 +2407,27 @@ pub struct Section {
     /// How many of `content`'s first lines are CHROME — the listing's path and
     /// header, which do not scroll. Zero for every other section.
     pub above: usize,
+    /// The shelf geometry, when this section lays its rows out SIDE BY SIDE.
+    ///
+    /// `None` is one row per line, which is every section there is but the
+    /// listing in thumbnail mode — and it is what keeps the eighteen places
+    /// that turn a line into a row unchanged.
+    ///
+    /// # Why the whole grid and not a pair of numbers
+    ///
+    /// Because [`ronoctua_design::Grid`] is the one arithmetic this project has
+    /// for items side by side, and its own doc says why: the three icon
+    /// browsers each had their own, and *"the symptom was the click landing on
+    /// one item while the screen showed another"*. `Grid::at` and
+    /// `Grid::index_at` are the same sum in both directions, so
+    /// [`Section::line_of`] and [`Section::row_at`] cannot drift apart the way
+    /// the drawing and the hit test in this file already have, twice.
+    ///
+    /// `offset` and `total` stay in ENTRIES with a grid, not in shelves. That
+    /// is deliberate: the wheel, the drag, `follow_within` and
+    /// `scroll_listing_to` all speak entries, and giving them a second unit to
+    /// know about is how a number comes to mean two things.
+    pub grid: Option<ronoctua_design::Grid>,
     /// Its own lines, from `offset`, at most `lines` of them. The listing's
     /// chrome is the first of these and does not scroll.
     ///
@@ -2159,8 +2484,73 @@ impl Section {
     #[must_use]
     pub fn line_of(&self, row: usize) -> Option<usize> {
         let i = row.checked_sub(self.offset)?;
+        // SIDE BY SIDE: the shelf this row sits on, from the one arithmetic.
+        //
+        // `Grid::at` already answers "where does item `i` of the page go", and
+        // it answers `None` past the last one that fits — which is exactly
+        // "scrolled out of sight", the same thing the line below says. Working
+        // it out here with a division would be the second copy its own doc
+        // warns about.
+        if let Some(g) = self.grid {
+            let (line, _) = g.at(i)?;
+            let at = usize::from(line);
+            return (at < self.content.len()).then_some(self.top + at);
+        }
         let at = self.above.saturating_add(i);
         (at < self.content.len()).then_some(self.top + at)
+    }
+
+    /// WHICH ROW of this section a point is on — the other direction of
+    /// [`Section::line_of`], and the only one there is.
+    ///
+    /// `inside` counts from this section's own `top`; `cell` is absolute.
+    /// `None` means the point is on no row of this section: the listing's
+    /// chrome, a panel's reserve, the air past the last shelf of a grid, or
+    /// past the last entry.
+    ///
+    /// # Why the CELL is an argument, and was not
+    ///
+    /// Because with rows side by side the line alone cannot answer. [`View::hit`]
+    /// worked the row out as `offset + inside - chrome`, which is a sentence
+    /// with no cell in it — right for one row per line and wrong for every
+    /// other arrangement. A grid resolved that way would light the first
+    /// thumbnail of a shelf wherever on the shelf the pointer was.
+    ///
+    /// In one-row-per-line the cell is unused, and that is not a wasted
+    /// argument: it is what makes the two modes the same call, so no caller
+    /// has to know which one it is looking at.
+    #[must_use]
+    pub fn row_at(&self, inside: usize, cell: u16) -> Option<usize> {
+        if let Some(g) = self.grid {
+            let line = u16::try_from(inside).ok()?;
+            let i = g.index_at(line, cell.checked_sub(self.from)?)?;
+            let row = self.offset.checked_add(i)?;
+            return (row < self.total).then_some(row);
+        }
+        if inside < self.above {
+            return None;
+        }
+        let row = self.offset.checked_add(inside)?.checked_sub(self.above)?;
+        (row < self.total).then_some(row)
+    }
+
+    /// WHICH CELLS one row of this section occupies, when it is narrower than
+    /// the section itself.
+    ///
+    /// `None` with one row per line, and that is the answer rather than a
+    /// failure: a row of a list runs the whole width of its column, which every
+    /// band already knew. Only a shelf holds several rows side by side and so
+    /// only a shelf has to say which part of it a row is.
+    #[must_use]
+    pub fn cells_of(&self, row: usize) -> Option<(u16, u16)> {
+        let g = self.grid?;
+        let i = row.checked_sub(self.offset)?;
+        let (_, column) = g.at(i)?;
+        // THE WHOLE STEP, air included — the same claim `Grid::index_at` makes
+        // about which item a cell belongs to. A band narrower than the target
+        // says the wrong thing about where a click would land.
+        let at = self.from.saturating_add(column);
+        Some((at, at.saturating_add(g.step).min(self.to)))
     }
 
     /// THE SCROLLBAR'S RECTANGLE, in pixels — or none when nothing is cut.
@@ -2350,8 +2740,20 @@ impl Section {
     /// consegui ir mais para baixo"*. The keys reach them because they ask a
     /// different question — and in the footer they are right by CANCELLATION,
     /// their total carrying the same two lines their room does.
+    ///
+    /// # And with a grid it is still ENTRIES, not shelves
+    ///
+    /// `total` and `offset` are entries (see [`Section::grid`]), so the third
+    /// number of that scroll has to be one too, or the thumb measures a
+    /// fraction with two different units in it. A grid of four across and five
+    /// lines deep in a twenty-line band shows four shelves, which is sixteen
+    /// entries.
     pub const fn visible(&self) -> usize {
-        self.lines.saturating_sub(self.above)
+        let plain = self.lines.saturating_sub(self.above);
+        match self.grid {
+            Some(g) => (plain / g.down as usize) * g.across as usize,
+            None => plain,
+        }
     }
 
     pub const fn scroll(&self) -> ronoctua_design::Scroll {
@@ -2574,6 +2976,7 @@ fn text_fields(
         color: ronoctua_tokens::color::TEXT_PRIMARY,
         hit: target,
         explain: None,
+        ink: Ink::Grid,
     });
     out
 }
@@ -2623,6 +3026,7 @@ fn place(
         color,
         hit: target.clone(),
         explain: None,
+        ink: Ink::Grid,
     });
 }
 
@@ -2969,6 +3373,21 @@ pub struct View {
     entries: Vec<Entry>,
     /// The type of each entry, by NAME only — no file is opened to draw a list.
     types: Vec<&'static str>,
+    /// The type each entry OPENS AS, which differs only for a symlink.
+    ///
+    /// # Why the listing needs both
+    ///
+    /// Because the two answer different questions. The listing's GLYPH says
+    /// what the entry IS, and a link to a photograph is a link — that is the
+    /// one fact about it a listing must not leave out. Its THUMBNAIL says what
+    /// looking at it would show, and *"a symlink to a photograph is a
+    /// photograph when you look at it"*, which is the sentence `View::wants_look`
+    /// already carries about the preview.
+    ///
+    /// It costs one extra glob lookup per SYMLINK on a directory read, and
+    /// nothing at all for anything else — never per frame, which is what asking
+    /// this question in `thumb_key` would have been.
+    opens: Vec<&'static str>,
     /// Which rows survive the filter, as indices into `entries`.
     shown: Vec<usize>,
     cursor: usize,
@@ -3143,12 +3562,74 @@ pub struct View {
     /// keys that sort (`C-s`, `C-S`) reach the same thing without it, so
     /// nothing is unreachable while it is away.
     header_on: bool,
+    /// Whether the listing draws its entries SIDE BY SIDE, as pictures.
+    ///
+    /// Off to begin with, at the owner's word — *"esse novo modo não será o
+    /// padrão"*. `C-g` turns it over, and so does the glyph at the right-hand
+    /// end of the path's line, which is where he asked for it.
+    ///
+    /// It is one field and not a mode enum because there are two shapes and
+    /// there is no third: a list and a grid. What a third would want is a
+    /// different question — how much of each file is drawn — and that is
+    /// `details_on` and `header_on`, already here.
+    grid_on: bool,
+    /// Which of the three sizes a thumbnail is drawn at. `C-G` rings it.
+    ///
+    /// An index into [`THUMB_CELLS`] rather than a width, so the ring cannot
+    /// land between two steps and the size that reaches a texture key is one of
+    /// three rather than one of a hundred — a key per pixel width would fill
+    /// the GPU's cache with the same folder at forty sizes.
+    grid_step: usize,
+    /// Whether the size ring has been turned.
+    ///
+    /// Until it has, the layout picks a size that FITS the door — see
+    /// [`THUMB_SHELVES`]. Once somebody has asked for one, the asking wins: a
+    /// key that a short door quietly refuses is a key that does nothing, which
+    /// the owner reported — *"ao apertar Ctrl+Shift+g os tamanhos das
+    /// thumbnails não estão sendo alterados no modo rodapé"*.
+    ///
+    /// The renderer's picture ceiling still bounds it, because that one is not
+    /// taste: past it the pictures are dropped with nothing anywhere saying so.
+    grid_rung: bool,
+    /// The shelf geometry the LAST frame laid out, or `None` when that frame
+    /// was a list.
+    ///
+    /// A `Cell` for the reason [`View::drawn_lines`] is one, and it carries the
+    /// same argument: the keys and the wheel have to know how many entries fit
+    /// on a line, and the only place that knows is the layout — which runs with
+    /// `&self` and has the width. Handing the width to `follow`, `wheel`,
+    /// `drag_to` and `move_by` instead would be four more signatures that could
+    /// each be passed a different one.
+    drawn_grid: std::cell::Cell<Option<ronoctua_design::Grid>>,
+    /// The thumbnails already made, and the ones already asked about.
+    ///
+    /// Here and not in the door because a `View` is per-door already — each has
+    /// its own — and because everything that decides WHICH thumbnails are
+    /// wanted is here: the grid, the offset, the size. A cache in the door
+    /// would be a second opinion about what is on screen.
+    thumbs: crate::thumbs::Kept,
+    /// The pixel side the last frame decoded thumbnails at.
+    ///
+    /// A `Cell` for the reason [`View::drawn_grid`] is one: `shelf_rows` runs
+    /// with `&self` and needs the key of each cell, and the key carries the
+    /// size. The door is the only thing that knows a pixel.
+    drawn_side: std::cell::Cell<u32>,
+    /// The film being walked under the POINTER, in the grid.
+    ///
+    /// The pointer's and not the cursor's, which is what makes it a second
+    /// player and not a share of the preview's: one is about the entry the
+    /// keyboard is on and the panels describe, the other about the cell the
+    /// hand is over. `motion.rs` says a player is "about the focused entry and
+    /// there is one of those" — this is the other one.
+    tour: Option<Tour>,
+    /// What that player was last told, so an unchanged wish is not a respawn.
+    told_tour: Option<crate::motion::Reel>,
     /// What the tools said about the file the cursor was on.
     ///
     /// ONE, and not a map. The panels are about the focused entry and there is
     /// one of those; a cache of every file walked past would be the footer's
     /// memory, which is the argument `ronoctua_render::image` already makes
-    /// about its thirty-nine textures.
+    /// about the textures it keeps between frames.
     looked: Option<Looked>,
     /// The frame a moving file is showing right now.
     ///
@@ -3581,6 +4062,7 @@ impl View {
             where_: where_.to_path_buf(),
             entries: Vec::new(),
             types: Vec::new(),
+            opens: Vec::new(),
             shown: Vec::new(),
             cursor: 0,
             marks: BTreeSet::new(),
@@ -3629,6 +4111,14 @@ impl View {
             // without being asked is what one navigates by.
             details_on: false,
             header_on: false,
+            grid_on: false,
+            grid_step: THUMB_START,
+            grid_rung: false,
+            drawn_grid: std::cell::Cell::new(None),
+            thumbs: crate::thumbs::Kept::default(),
+            drawn_side: std::cell::Cell::new(0),
+            tour: None,
+            told_tour: None,
             looked: None,
             asked: None,
             drawn_at: std::cell::Cell::new(0),
@@ -3757,6 +4247,20 @@ impl View {
             .entries
             .iter()
             .map(|e| mime::of_path(&self.where_.join(&e.name), e.kind, false))
+            .collect();
+        // AND WHAT EACH ONE OPENS AS, which is the same answer for everything
+        // but a link. See `View::opens`.
+        self.opens = self
+            .entries
+            .iter()
+            .zip(&self.types)
+            .map(|(e, named)| {
+                if e.kind == e.opens_as() {
+                    *named
+                } else {
+                    mime::of_path(&self.where_.join(&e.name), e.opens_as(), false)
+                }
+            })
             .collect();
         // A mark on a name that is gone goes with it, rather than quietly
         // applying to whatever takes the name later.
@@ -3910,6 +4414,7 @@ impl View {
                     },
                     hit: Hit::Sort(*c),
                     explain: None,
+                    ink: Ink::Grid,
                 }];
                 if !mark.is_empty() {
                     // AND IT CARRIES THE SAME TARGET, because it is the same
@@ -3922,6 +4427,7 @@ impl View {
                         color: ronoctua_tokens::color::STATE_ACCENT,
                         hit: Hit::Sort(*c),
                         explain: None,
+                        ink: Ink::Grid,
                     });
                 }
                 out
@@ -4718,7 +5224,132 @@ impl View {
     fn crumb_box(&self, width: u16) -> (u16, u16) {
         let panes = self.panes(width);
         let from = panes.listing_from();
-        (from, width.saturating_sub(from).saturating_sub(panes.right))
+        // AND THE LAST CELL IS THE SHAPE'S, reserved rather than hoped for.
+        //
+        // Nothing was kept at the right-hand end of this row before, because
+        // nothing was drawn there: the path grows from the left and is elided
+        // to fit, and whatever is left over stays unpainted. A glyph put in the
+        // last cell without this subtraction is a glyph a long path writes over
+        // — and the path's own letters would make it unreadable rather than
+        // absent, which is worse.
+        // AND `EDGE_RIGHT` AS WELL, because the cell past the glyph is the
+        // scrollbar's. `layout_beside` already insets it for the rows; the path
+        // never did, because nothing was drawn out there — and the moment
+        // something is, a glyph one cell further right is a glyph under the
+        // thumb. `nothing_is_drawn_under_a_scrollbar` is what says so.
+        //
+        // AND THE SIZE'S CELL WITH IT — and the air beside it — while there is
+        // a size to ring. They are given back the moment the entries are one to
+        // a line, because a glyph that did nothing would still be holding a
+        // cell the path could use.
+        //
+        // WHERE THE PATH STOPS IS THE LEFTMOST GLYPH, whichever of the two that
+        // is, so the reserve is a subtraction from the SAME number the glyphs
+        // are placed against rather than a second sum that could disagree.
+        let stops = self
+            .sizing_at(width)
+            .unwrap_or_else(|| self.layout_at(width));
+        let room = stops.saturating_sub(from);
+        (from, room)
+    }
+
+    /// WHERE THE SHAPE'S GLYPH SITS: the last cell of the path's line.
+    ///
+    /// # AND IT DOES NOT MOVE WHEN THE MODE DOES
+    ///
+    /// It is anchored to the right-hand end and the size's glyph grows to its
+    /// LEFT, rather than the pair being right-aligned as a unit. A control that
+    /// slid a cell sideways the instant it was pressed would be gone from under
+    /// the pointer that pressed it — the manager has already shipped that defect
+    /// once, on the sheet's expand button, and the owner photographed it.
+    fn layout_at(&self, width: u16) -> u16 {
+        let panes = self.panes(width);
+        width
+            .saturating_sub(panes.right)
+            .saturating_sub(EDGE_RIGHT)
+            .saturating_sub(LAYOUT_CELL)
+    }
+
+    /// WHERE THE SIZE'S GLYPH SITS, and `None` when there is no size to ring.
+    ///
+    /// One glyph plus the air to the left of the shape's. `None` is what gives
+    /// the path those cells back.
+    fn sizing_at(&self, width: u16) -> Option<u16> {
+        self.grid_on.then(|| {
+            self.layout_at(width)
+                .saturating_sub(LAYOUT_AIR)
+                .saturating_sub(LAYOUT_CELL)
+        })
+    }
+
+    /// The glyph that rings the thumbnails' size, left of the one above.
+    ///
+    /// `None` while the entries are one to a line: there is nothing to size,
+    /// and a control that refuses is worth drawing only where the refusal is
+    /// the surprise. Here its absence IS the answer — the other glyph beside it
+    /// says which shape one is in.
+    ///
+    /// # It draws WHICH of three it is
+    ///
+    /// Unlike `layout_field` beside it, which draws where it GOES. A toggle has
+    /// somewhere to go; a ring of three does not — "the next one" is not a
+    /// picture — so what it can usefully say is where it IS. The three glyphs
+    /// are one family and one weight, which is what lets them take turns in one
+    /// cell without the row twitching.
+    fn sizing_field(&self, width: u16) -> Option<Field> {
+        if !self.grid_on {
+            return None;
+        }
+        let cells = self.thumb_cells();
+        Some(Field {
+            at: self.sizing_at(width)?,
+            text: if cells <= THUMB_CELLS[0] {
+                ronoctua_tokens::icon::VIEW_SMALL
+            } else if cells >= THUMB_CELLS[THUMB_CELLS.len() - 1] {
+                ronoctua_tokens::icon::VIEW_LARGE
+            } else {
+                ronoctua_tokens::icon::VIEW_MEDIUM
+            }
+            .to_string(),
+            color: ronoctua_tokens::color::TEXT_PRIMARY,
+            hit: Hit::Sizing,
+            explain: Some(Explanation {
+                key: ronoctua_i18n::key::FILES_GRID_BIGGER,
+                args: Vec::new(),
+            }),
+            ink: Ink::Grid,
+        })
+    }
+
+    /// The glyph that turns the entries over, at the end of the path's line.
+    ///
+    /// # It draws where it GOES, not where it is
+    ///
+    /// The same rule `View::theatre_field` already follows, and the owner's own
+    /// words ask for it here: *"um glifo clicável (que muda de acordo com o
+    /// modo)"*. A control that draws its current state is a control one has to
+    /// press to find out what it does.
+    fn layout_field(&self, width: u16) -> Field {
+        Field {
+            at: self.layout_at(width),
+            text: if self.grid_on {
+                ronoctua_tokens::icon::VIEW_LIST
+            } else {
+                ronoctua_tokens::icon::VIEW_GRID
+            }
+            .to_string(),
+            color: ronoctua_tokens::color::TEXT_PRIMARY,
+            hit: Hit::Layout,
+            explain: Some(Explanation {
+                key: if self.grid_on {
+                    ronoctua_i18n::key::FILES_GRID_OFF
+                } else {
+                    ronoctua_i18n::key::FILES_GRID_ON
+                },
+                args: Vec::new(),
+            }),
+            ink: Ink::Grid,
+        }
     }
 
     /// The path above, as clickable pieces.
@@ -4793,6 +5424,7 @@ impl View {
                 color: ronoctua_tokens::color::TEXT_DIM,
                 hit: Hit::Nothing,
                 explain: None,
+                ink: Ink::Grid,
             });
             at += 1;
         }
@@ -4813,6 +5445,7 @@ impl View {
                 color,
                 hit,
                 explain: None,
+                ink: Ink::Grid,
             });
             at += width;
         } else {
@@ -4824,6 +5457,7 @@ impl View {
                     color,
                     hit,
                     explain: None,
+                    ink: Ink::Grid,
                 });
                 at += width;
             }
@@ -4854,8 +5488,17 @@ impl View {
                 color: ronoctua_tokens::color::STATE_ACCENT,
                 hit: Hit::Nothing,
                 explain: None,
+                ink: Ink::Grid,
             });
         }
+        // AND THE SHAPE'S GLYPH LAST, in the cell `crumb_box` kept for it.
+        //
+        // Last because `lit_field` walks from the RIGHT: where two fields could
+        // claim one cell, the later one wins. The path is elided to leave this
+        // cell free, so nothing should reach it — and being last is what makes
+        // that a belt as well as a brace.
+        fields.extend(self.sizing_field(width));
+        fields.push(self.layout_field(width));
         fields
     }
 
@@ -4954,6 +5597,7 @@ impl View {
                 color: tone,
                 hit: Hit::Sidebar(n),
                 explain: None,
+                ink: Ink::Grid,
             },
             Field {
                 at: name_at,
@@ -4963,6 +5607,7 @@ impl View {
                 color: tone,
                 hit: Hit::Sidebar(n),
                 explain: Some(self.side_explanation(row, texts)),
+                ink: Ink::Grid,
             },
         ];
         if eject_room(row) > 0 {
@@ -4979,6 +5624,7 @@ impl View {
                     key: ronoctua_i18n::key::FILES_SIDEBAR_UNMOUNT,
                     args: vec![("name", name)],
                 }),
+                ink: Ink::Grid,
             });
         }
         lift_onto_a_band(&mut fields, n == self.side_cursor);
@@ -5082,6 +5728,7 @@ impl View {
             // between the buttons and the clock.
             hit: Hit::Play,
             explain: None,
+            ink: Ink::Grid,
         }];
         // AND NOTHING MORE WITHOUT THE POINTER — for a film. The row still
         // holds the panel's last line either way, so the picture does not move
@@ -5112,6 +5759,7 @@ impl View {
                 },
                 args: Vec::new(),
             }),
+            ink: Ink::Grid,
         });
         // AND THE SOUND, WHICH A SILENT FILM DOES NOT OFFER. A control that
         // does nothing where it is drawn is the shape `menu::Applies` exists to
@@ -5135,6 +5783,7 @@ impl View {
                     },
                     args: Vec::new(),
                 }),
+                ink: Ink::Grid,
             });
         }
         // AND THE CLOCK, at the right-hand end, in the file's own terms. A film
@@ -5157,6 +5806,7 @@ impl View {
                 color: ronoctua_tokens::color::TEXT_PRIMARY,
                 hit: Hit::Nothing,
                 explain: None,
+                ink: Ink::Grid,
             });
         }
         // AND THE EXPAND BUTTON, at the very end of the row.
@@ -5217,6 +5867,7 @@ impl View {
                 key: if wide { off } else { on },
                 args: Vec::new(),
             }),
+            ink: Ink::Grid,
         }
     }
 
@@ -5463,6 +6114,7 @@ impl View {
                     color: ronoctua_tokens::color::TEXT_DIM,
                     hit: target,
                     explain: None,
+                    ink: Ink::Grid,
                 }];
             }
             return vec![Field {
@@ -5471,6 +6123,7 @@ impl View {
                 color: ronoctua_tokens::color::TEXT_PRIMARY,
                 hit: target,
                 explain: None,
+                ink: Ink::Grid,
             }];
         }
         // A LIST OF THINGS TO PLAY, which is a list and not a picture and not
@@ -5490,6 +6143,7 @@ impl View {
                     color: ronoctua_tokens::color::TEXT_DIM,
                     hit: Hit::Nothing,
                     explain: None,
+                    ink: Ink::Grid,
                 }];
             }
             let Some(entry) = list.entries.get(row) else {
@@ -5518,6 +6172,7 @@ impl View {
                     color: ronoctua_tokens::color::TEXT_DIM,
                     hit: target,
                     explain: None,
+                    ink: Ink::Grid,
                 }];
             }
             let Some(line) = t.lines.get(row) else {
@@ -5601,6 +6256,7 @@ impl View {
                 color: ronoctua_tokens::color::TEXT_SECONDARY,
                 hit: target,
                 explain: None,
+                ink: Ink::Grid,
             }];
         }
         // AND NOTHING PAST THE SENTENCE: a line that does nothing must not look
@@ -5618,6 +6274,7 @@ impl View {
             color: ronoctua_tokens::color::TEXT_DIM,
             hit: target,
             explain: None,
+            ink: Ink::Grid,
         }]
     }
 
@@ -5688,6 +6345,7 @@ impl View {
                     key: ronoctua_i18n::key::FILES_EXPLAIN_GLOBE_ADDRESS,
                     args: vec![("value", said.clone())],
                 }),
+                ink: Ink::Grid,
             }];
         }
         // THE PICTURE'S OWN LINES: no text, a target, and the sentence that
@@ -5727,6 +6385,7 @@ impl View {
             color: ronoctua_tokens::color::TEXT_DIM,
             hit: Hit::Globe,
             explain: Some(does(ronoctua_i18n::key::FILES_EXPLAIN_GLOBE)),
+            ink: Ink::Grid,
         }];
         if let Some(where_) = dot {
             // AND THE DOT IS GRABBED WHERE IT IS DRAWN, which is a disc and not
@@ -5743,6 +6402,7 @@ impl View {
                 color: ronoctua_tokens::color::TEXT_DIM,
                 hit: Hit::GlobeDot,
                 explain: Some(does(ronoctua_i18n::key::FILES_EXPLAIN_GLOBE_DOT)),
+                ink: Ink::Grid,
             });
         }
         fields
@@ -5887,6 +6547,7 @@ impl View {
             color: ronoctua_tokens::color::TEXT_DIM,
             hit: Hit::Nothing,
             explain: Some(says.clone()),
+            ink: Ink::Grid,
         }];
         let acted = match fact.does {
             Doable::Mode => self.mode_fields(value_at, for_value),
@@ -5908,6 +6569,7 @@ impl View {
                 // halves of one fact cannot come to answer differently if
                 // there is only one answer.
                 explain: Some(says),
+                ink: Ink::Grid,
             });
         } else {
             fields.extend(acted);
@@ -5956,6 +6618,7 @@ impl View {
                 },
                 hit,
                 explain: Some(mode::explain(cell, entry.mode, &owner, &group)),
+                ink: Ink::Grid,
             });
         }
         // THE OCTAL, when there is room for it whole. Half of `(0644)` is not
@@ -5992,6 +6655,7 @@ impl View {
                 color: ronoctua_tokens::color::TEXT_DIM,
                 hit: Hit::Nothing,
                 explain: Some(whole.clone()),
+                ink: Ink::Grid,
             });
             let kind = mode::kind_word(entry.kind);
             for (i, digit) in number.chars().enumerate() {
@@ -6042,6 +6706,7 @@ impl View {
                             ("can", can),
                         ],
                     }),
+                    ink: Ink::Grid,
                 });
             }
             #[allow(clippy::cast_possible_truncation)]
@@ -6052,6 +6717,7 @@ impl View {
                 color: ronoctua_tokens::color::TEXT_DIM,
                 hit: Hit::Nothing,
                 explain: Some(whole),
+                ink: Ink::Grid,
             });
         }
         fields
@@ -6085,6 +6751,7 @@ impl View {
                 },
                 hit,
                 explain,
+                ink: Ink::Grid,
             });
             used += width;
         };
@@ -6128,6 +6795,7 @@ impl View {
                 key: ronoctua_i18n::key::FILES_EXPLAIN_MEASURE,
                 args: vec![("bytes", entry.bytes.to_string())],
             }),
+            ink: Ink::Grid,
         }]
     }
 
@@ -6187,6 +6855,842 @@ impl View {
         }
     }
 
+    /// THE KEY one entry's thumbnail is filed under, at `side` pixels.
+    ///
+    /// `ronoctua_inspect::Stamp` and not a path: the key carries the
+    /// modification time, the size and the decoded step, so a file that changed
+    /// under the manager is a different picture rather than a stale one. The
+    /// theme is on the end for the reason the preview's key already carries it
+    /// — a waveform is painted in a token's VALUE.
+    fn cell_key(
+        &self,
+        n: usize,
+        side: u32,
+    ) -> Option<(String, ronoctua_inspect::Stamp, &'static str)> {
+        let i = *self.shown.get(n)?;
+        let entry = self.entries.get(i)?;
+        // A DIRECTORY HAS NOTHING TO LOOK INTO, and neither has a broken link:
+        // asking would spawn a child to be told what `lstat` already said.
+        if !matches!(entry.opens_as(), Kind::File) || entry.broken() {
+            return None;
+        }
+        let path = self.where_.join(&entry.name);
+        let stamp = ronoctua_inspect::Stamp::new(path, entry.modified, entry.bytes, side);
+        Some((
+            // THROUGH THE ONE KEY FUNCTION, which lives beside the map it keys
+            // — see `thumbs::thumb_key`.
+            crate::thumbs::thumb_key(
+                &stamp,
+                &ronoctua_tokens::theme::current().position().to_string(),
+            ),
+            stamp,
+            // WHAT IT OPENS AS, and never what it is: a link to a film has a
+            // film's thumbnail. See `View::opens`.
+            self.opens.get(i).copied().unwrap_or(mime::UNKNOWN),
+        ))
+    }
+
+    /// The thumbnails the screen wants and does not have.
+    ///
+    /// # Only what is VISIBLE
+    ///
+    /// The precedent is literal — `Footer::request_visible_icons`, whose own
+    /// comment says decoding four hundred icons costs seconds and three hundred
+    /// and eighty of them are not on screen. Here it is worse by a factor: one
+    /// thumbnail is a child process, so a folder of five thousand asked about
+    /// at once is five thousand forks.
+    ///
+    /// `side` is the longest side of the picture box in PHYSICAL pixels — the
+    /// door works it out, because only the door knows the screen's scale.
+    pub fn wants_thumbs(
+        &mut self,
+        width: u16,
+        room: usize,
+        cell: f32,
+        line: f32,
+    ) -> Vec<crate::thumbs::Ask> {
+        // THE GRID THAT WAS JUST LAID OUT, and not the one the last frame
+        // wrote down.
+        //
+        // The difference is one frame and it is the difference between working
+        // and not: `turn_the_grid` clears what the last frame measured, because
+        // a key pressed after it must not move the cursor by a shelf of a grid
+        // that is no longer drawn. Asked through `View::grid_now`, the frame
+        // that first draws the grid asks for nothing, and nothing asks again —
+        // so the cells stay glyphs until something else happens to repaint.
+        let Some(sec) = self.the_listing(width, room) else {
+            return Vec::new();
+        };
+        let Some(g) = sec.grid else {
+            return Vec::new();
+        };
+        let side = thumb_side(g, cell, line);
+        if side == 0 {
+            return Vec::new();
+        }
+        // WRITTEN DOWN WHERE IT IS WORKED OUT, because `shelf_rows` needs each
+        // cell's KEY to ask whether its file moves, and a key carries the size.
+        // It runs with `&self` and has no pixel of its own — the same
+        // arrangement, and the same argument, as `drawn_grid` beside it.
+        self.drawn_side.set(side);
+        // NO INK, AND SO NO WAVEFORM.
+        //
+        // A sound with artwork shows it; one without shows the glyph for "this
+        // is music". The owner asked in those terms — *"para os áudios sem uma
+        // imagem de capa, em vez de mostrar a wave mostre apenas um glifo"* —
+        // and he is right about why: a waveform is a picture of a SOUND, which
+        // reads in a panel and is a grey smudge in a cell six cells wide. The
+        // preview panel still passes an ink and still gets its waves.
+        let wave = String::new();
+        // WHICH THEME'S INKS THESE ARE, for the disk cache — see
+        // `thumbs::Ask::tint`.
+        let tint = ronoctua_tokens::theme::current().position().to_string();
+        let mut asks = Vec::new();
+        let mut keys = Vec::new();
+        let mut alive = std::collections::HashSet::new();
+        for row in sec.offset..sec.total {
+            if sec.line_of(row).is_none() {
+                break;
+            }
+            let Some((key, stamp, mime)) = self.cell_key(row, side) else {
+                continue;
+            };
+            alive.insert(key.clone());
+            if self.thumbs.knows(&key) {
+                continue;
+            }
+            keys.push(key.clone());
+            asks.push(crate::thumbs::Ask {
+                // A FILM THAT MIGHT BELONG TO THIS PICTURE, out of the listing
+                // that is already in memory — the same candidate the preview's
+                // own ask carries, and for the same reason: only the view knows
+                // what else is in the directory.
+                beside: self.film_beside(&stamp.path),
+                stamp,
+                mime,
+                key,
+                wave: wave.clone(),
+                paint: Self::paint_of(),
+                tint: tint.clone(),
+            });
+        }
+        for key in keys {
+            self.thumbs.asking(key);
+        }
+        // AND WHAT IS NOT ON SCREEN GOES, but only over the ceiling.
+        //
+        // Here because this is the one place that has just worked out what IS
+        // on screen: a sweep anywhere else would be a second answer to that,
+        // and a second answer would eventually drop a picture that is being
+        // drawn. Under the ceiling it does nothing at all, so walking a folder
+        // that fits in memory never re-decodes.
+        self.thumbs.keep_only(&alive);
+        asks
+    }
+
+    /// Takes a thumbnail a worker made.
+    ///
+    /// Returns whether anything changed, so the door can ask for a frame only
+    /// when one is owed — the same question `View::saw_globe` answers.
+    pub fn thumbed(&mut self, made: crate::thumbs::Made) -> bool {
+        self.thumbs.took(made);
+        true
+    }
+
+    /// The picture for a key, for the door to upload.
+    #[must_use]
+    pub fn thumb_pixels(&self, key: &str) -> Option<&ronoctua_render::image::Rgba> {
+        self.thumbs.get(key)
+    }
+
+    /// THE KEYS OF EVERY THUMBNAIL THIS VIEW IS HOLDING.
+    ///
+    /// For the footer door, which lifts the pictures out of the view's borrow
+    /// before the GPU's begins — the arrangement its own comment calls for
+    /// beside the preview and the globe.
+    #[must_use]
+    pub fn thumb_keys(&self) -> Vec<String> {
+        self.thumbs.keys()
+    }
+
+    /// WHICH ROW a thumbnail key belongs to, when one does.
+    ///
+    /// Only the tests read it, and they have to: what a cell draws depends on
+    /// whether it has a picture, and there is no other way to say WHICH cell
+    /// was given one.
+    #[cfg(test)]
+    #[must_use]
+    pub fn cursor_of_key(&self, key: &str) -> Option<usize> {
+        let side = self.drawn_side.get();
+        (0..self.shown.len()).find(|n| self.cell_key(*n, side).is_some_and(|(k, _, _)| k == key))
+    }
+
+    /// Whether this key's file moves by itself.
+    ///
+    /// What the door asks before uploading: a still thumbnail goes up once, and
+    /// a moving one replaces its texture under the SAME key every frame.
+    #[must_use]
+    pub fn thumb_moves(&self, key: &str) -> bool {
+        self.thumbs.moves(key)
+    }
+
+    /// THE VISIBLE CELLS THAT MOVE BY THEMSELVES, in reading order.
+    ///
+    /// The whole set every time, because that is what the animator is told —
+    /// see `thumbs::Wind`. In reading order because that is which ones get a
+    /// slot when there are more than the ceiling allows: the top-left of the
+    /// screen is where the eye starts, and any other rule would be arbitrary.
+    #[must_use]
+    pub fn moving_thumbs(
+        &self,
+        width: u16,
+        room: usize,
+        cell: f32,
+        line: f32,
+    ) -> crate::thumbs::Wind {
+        let Some(sec) = self.the_listing(width, room) else {
+            return crate::thumbs::Wind(Vec::new());
+        };
+        let Some(g) = sec.grid else {
+            return crate::thumbs::Wind(Vec::new());
+        };
+        let side = thumb_side(g, cell, line);
+        let mut out = Vec::new();
+        for row in sec.offset..sec.total {
+            if sec.line_of(row).is_none() {
+                break;
+            }
+            let Some((key, stamp, mime)) = self.cell_key(row, side) else {
+                continue;
+            };
+            if !self.thumbs.moves(&key) {
+                continue;
+            }
+            out.push(crate::thumbs::Moving {
+                key,
+                path: stamp.path,
+                mime,
+                side,
+            });
+        }
+        crate::thumbs::Wind(out)
+    }
+
+    /// THE CELL THE POINTER IS OVER, and the film it starts walking.
+    ///
+    /// Called by the door on pointer motion. `None` means the hand has left the
+    /// grid, and that stops the child: a film playing for a cell nobody is
+    /// looking at is a process and a pipe for nothing.
+    ///
+    /// # Nothing here opens a file
+    ///
+    /// The length comes out of what the thumbnail worker already reported (see
+    /// `thumbs::Made::seconds`), so the pointer crossing a folder of films costs
+    /// no `ffprobe` on the event loop — which is the trap `View::wish` writes
+    /// out at length about a playlist's entries.
+    pub fn hover_thumb(&mut self, width: u16, room: usize, at: Option<(usize, u16)>) {
+        let found = at.and_then(|(line, cell)| {
+            let sec = self.the_listing(width, room)?;
+            sec.grid?;
+            let row = sec.row_at(line.checked_sub(sec.top)?, cell)?;
+            let (key, stamp, mime) = self.cell_key(row, self.drawn_side.get())?;
+            // A FILM, OR A PHOTOGRAPH WITH ONE IN IT.
+            //
+            // The second was missing and the owner reported it: *"as motion
+            // pictures não estão com animação ao deixar o cursor do mouse sobre
+            // a thumbnail"*. A motion photo is an `image/*` by every answer but
+            // one — `Moving::inside`, which the worker reads out of the file's
+            // own bytes — so a gate on the media type alone passes over every
+            // one of them.
+            let inside = self.thumbs.carries(&key).cloned();
+            if inside.is_none() && !mime.starts_with("video/") {
+                return None;
+            }
+            let seconds = self.thumbs.film(&key).unwrap_or_default();
+            // A FILM WITH NO LENGTH IS NOT ONE TO WALK. Nought would put every
+            // clip at the same instant, which is a respawn every two seconds
+            // for one frame. A photograph's film needs none: it is played
+            // whole.
+            (inside.is_some() || seconds > 1.0).then_some(Tour {
+                row,
+                key,
+                path: stamp.path,
+                seconds,
+                at: 0,
+                inside,
+            })
+        });
+        // THE SAME CELL KEEPS ITS PLACE IN ITS OWN TOUR. Rebuilding the clip on
+        // every motion event would restart the film at its first point each
+        // time the hand twitched.
+        if found.as_ref().map(|c| &c.key) != self.tour.as_ref().map(|c| &c.key) {
+            self.tour = found;
+        }
+    }
+
+    /// What the pointer's player should be doing. `None` when nothing changed.
+    ///
+    /// The shape of [`View::wants_motion`], and the same argument: one question,
+    /// one place, one comparison. Enumerating the ways a clip can need
+    /// restarting — the hand moved, the grid scrolled, the size rang, the clip
+    /// ran out — is how a case gets missed.
+    pub fn wants_tour(&mut self) -> Option<crate::motion::Ask> {
+        let side = self.drawn_side.get();
+        let want = self.tour.as_ref().and_then(|c| {
+            Some(crate::motion::Reel {
+                path: c.path.clone(),
+                key: c.key.clone(),
+                how: ronoctua_inspect::motion::Source::Ffmpeg,
+                show: ronoctua_inspect::motion::Show::Film,
+                #[allow(clippy::cast_precision_loss)]
+                fit: ronoctua_inspect::motion::Fit::of(side as f32, side as f32)?,
+                fps: ronoctua_inspect::facts::WAVES_FPS,
+                from: c.from(),
+                // NEVER, and it is not an omission: sound belongs to the file
+                // one has CHOSEN, and a hand crossing a folder is not a choice.
+                // A grid that spoke as the pointer passed over it would be the
+                // one thing in this system that makes a noise nobody asked for.
+                sound: false,
+                background: letterbox(),
+                wave: ink(ronoctua_tokens::color::SURFACE_WAVE),
+                wave_height: ronoctua_tokens::space::FILES_WAVEHEIGHT,
+                // NOTHING SITS AT A THUMBNAIL'S FOOT, unlike the panel's, whose
+                // controls are always on screen. A cell has no transport.
+                wave_foot: 0,
+                inside: c.inside.clone(),
+            })
+        });
+        if want == self.told_tour {
+            return None;
+        }
+        self.told_tour = want.clone();
+        Some(want.map_or(crate::motion::Ask::Stop, |w| {
+            crate::motion::Ask::Play(w, false)
+        }))
+    }
+
+    /// Takes a frame of the pointer's film. Returns whether the screen changed.
+    ///
+    /// # The frames are the clock
+    ///
+    /// A clip moves on when the film has run `Clip::runs` past where the clip
+    /// began, and what says how far it has run is the frame's own mark. No
+    /// timer was added to either door for this — the same arrangement the
+    /// player itself has, where a frame arriving is what wakes the loop.
+    pub fn played_tour(&mut self, beat: &crate::motion::Beat) -> bool {
+        let Some(tour) = self.tour.as_mut() else {
+            return false;
+        };
+        match beat {
+            crate::motion::Beat::Frame(f) if f.key == tour.key => {
+                if f.at - tour.from() >= Tour::runs() {
+                    tour.at = tour.at.wrapping_add(1);
+                }
+                let made = crate::thumbs::Made {
+                    key: f.key.clone(),
+                    rgba: Some(f.rgba.clone()),
+                    seconds: None,
+                    inside: None,
+                    // IT MOVES, so the door replaces the texture rather than
+                    // uploading once — the same flag the ambient animator sets.
+                    moves: true,
+                };
+                self.thumbs.took(made);
+                true
+            }
+            // THE FILM ENDED, which a clip near the end reaches: the next point
+            // comes round, and `wants_tour` respawns at it. A photograph's film
+            // loops on its own — the player puts the still back and starts
+            // again — so there is nothing to move on to.
+            crate::motion::Beat::Ended { key } if *key == tour.key => {
+                if tour.inside.is_none() {
+                    tour.at = tour.at.wrapping_add(1);
+                }
+                true
+            }
+            // AND THE PHOTOGRAPH ITSELF, which is what a motion photo shows
+            // between loops. Its own thumbnail is already on screen, so there
+            // is nothing to draw — but the beat is ACKNOWLEDGED, because
+            // answering `false` to a beat that belongs to this tour would make
+            // the door think a stranger's frame had arrived.
+            crate::motion::Beat::Still { key } if *key == tour.key => true,
+            _ => false,
+        }
+    }
+
+    /// Turns the entries over: side by side, or one to a line.
+    ///
+    /// The key and the glyph on the path's line both land here, which is what
+    /// keeps them one gesture with two affordances rather than two states.
+    fn turn_the_grid(&mut self) -> Step {
+        self.grid_on = !self.grid_on;
+        // WHAT THE LAST FRAME MEASURED IS NOT TRUE ANY MORE, and the very next
+        // thing a key does is ask. Left standing, one press of `C-g` would move
+        // the cursor by a shelf of a grid that is no longer drawn.
+        self.drawn_grid.set(None);
+        Step::Say(Explanation {
+            key: if self.grid_on {
+                ronoctua_i18n::key::FILES_GRID_ON
+            } else {
+                ronoctua_i18n::key::FILES_GRID_OFF
+            },
+            args: Vec::new(),
+        })
+    }
+
+    /// Turns the size ring one step, and comes round.
+    fn ring_the_size(&mut self) -> Step {
+        // A LIST HAS NO THUMBNAIL TO SIZE, and it says so rather than doing
+        // nothing. `Where` decides what the hint line TEACHES; a key that is
+        // pressed still runs, and the refusal belongs where the code is — with
+        // a sentence. `every_view_key_in_the_table_actually_does_something` is
+        // what holds every key in this table to that.
+        if !self.grid_on {
+            return Step::Say(Explanation {
+                key: ronoctua_i18n::key::FILES_GRID_NONE,
+                args: Vec::new(),
+            });
+        }
+        // IT STARTS FROM WHAT IS ON SCREEN, not from what was last asked for.
+        //
+        // Until the ring is turned the layout picks a size that FITS the door,
+        // which on a footer is the smallest. Advancing from the ASKED one there
+        // would step from the middle to the largest on the first press — the
+        // person sees small, presses once, and gets large. What a ring does is
+        // move one from where it is.
+        let from = THUMB_CELLS
+            .iter()
+            .position(|c| *c == self.thumb_cells())
+            .unwrap_or(self.grid_step);
+        self.grid_step = (from + 1) % THUMB_CELLS.len();
+        // AND FROM NOW ON THE ASKING WINS. See `View::grid_rung`.
+        self.grid_rung = true;
+        self.drawn_grid.set(None);
+        // AND IT NAMES THE STEP IT CHOSE, which on a very wide screen is not
+        // always the step that is drawn: `thumb_item` moves up when the screen
+        // would hold more pictures than the renderer draws at once. Naming the
+        // drawn one would need a width, and a key has none — so what is said
+        // here is the choice, and `about-files-grid-size` is where the skip is
+        // explained.
+        Step::Say(Explanation {
+            key: match self.grid_step.min(THUMB_CELLS.len() - 1) {
+                0 => ronoctua_i18n::key::FILES_GRID_SMALL,
+                1 => ronoctua_i18n::key::FILES_GRID_MEDIUM,
+                _ => ronoctua_i18n::key::FILES_GRID_LARGE,
+            },
+            args: Vec::new(),
+        })
+    }
+
+    /// How far one press of the vertical arrows moves, in ENTRIES.
+    ///
+    /// One while there is one entry per line; a whole shelf when there are
+    /// several, because what is below the file one is on is the file a shelf
+    /// further down and not the one beside it.
+    fn step_of(&self, by: i32) -> i32 {
+        match self.grid_now() {
+            Some(g) if matches!(self.pane, Pane::Listing) => {
+                by.saturating_mul(i32::from(g.across.max(1)))
+            }
+            _ => by,
+        }
+    }
+
+    /// What the two sideways arrows mean right now.
+    ///
+    /// Across the SECTIONS while the entries are one to a line, and across the
+    /// ENTRIES when they are side by side. `TAB` and `S-TAB` are untouched and
+    /// ring in both — *"atravessar é o anel do `Tab`, e só ele"* — so nothing
+    /// becomes unreachable either way.
+    ///
+    /// It reads the NOTATION and not the id because `<right>` and `TAB` carry
+    /// the same one, and only the arrow is meant to change.
+    fn grid_meaning(&self, t: Key, id: Option<&'static str>) -> Option<&'static str> {
+        if !self.grid_on || !matches!(self.pane, Pane::Listing) {
+            return id;
+        }
+        match notation_of(t).as_str() {
+            "<right>" => Some("files-grid-next"),
+            "<left>" => Some("files-grid-previous"),
+            _ => id,
+        }
+    }
+
+    /// Which of the three sizes the ring was left on, as an index.
+    ///
+    /// The ASKED one, which on a very wide screen is not always the one drawn —
+    /// see [`View::thumb_item`]. Only the tests read it, and they have to: what
+    /// the ring did is not visible in a number anywhere else.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn thumb_asked(&self) -> usize {
+        self.grid_step
+    }
+
+    /// THE SHELF GEOMETRY the last frame laid out, or `None` when it was a
+    /// list.
+    ///
+    /// Out of [`View::drawn_grid`], which is where the layout writes it down —
+    /// see that field for why the keys read it from there instead of being
+    /// handed a width they would each have to be given correctly.
+    #[must_use]
+    pub fn grid_now(&self) -> Option<ronoctua_design::Grid> {
+        self.drawn_grid.get()
+    }
+
+    /// Whether the entries are asked to be side by side. The STATE, which is
+    /// not the same as [`View::grid_now`]: that one is what was drawn, and with
+    /// the region given to a panel nothing was.
+    ///
+    /// Only the tests read it — everything in the shell that needs to know asks
+    /// a question whose answer already depends on it — and a toggle has to be
+    /// provable, which is the same reason [`View::header_shown`] exists.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn grid_shown(&self) -> bool {
+        self.grid_on
+    }
+
+    /// How wide one thumbnail is right now, in cells.
+    ///
+    /// The DRAWN width and not the asked one, which is what the size glyph has
+    /// to say: on a short door the layout steps down from what the ring was
+    /// left on, and a glyph showing the asked-for size there would be a control
+    /// disagreeing with the screen beside it.
+    #[must_use]
+    pub fn thumb_cells(&self) -> u16 {
+        self.grid_now().map_or_else(
+            || THUMB_CELLS[self.grid_step.min(THUMB_CELLS.len() - 1)],
+            |g| g.step.saturating_sub(ronoctua_design::GAP).max(1),
+        )
+    }
+
+    /// How many ENTRIES of the listing fit in `lines` lines.
+    ///
+    /// One per line while there is no grid, and a whole number of shelves when
+    /// there is. It is the ONE conversion between the two units: the wheel, the
+    /// drag and `follow` all come through here, and written out at each of them
+    /// it would be three chances to divide by the wrong number — which is the
+    /// shape of most of what this file records.
+    #[must_use]
+    pub fn listing_room(&self, lines: usize) -> usize {
+        match self.grid_now() {
+            Some(g) => (lines / usize::from(g.down.max(1))) * usize::from(g.across.max(1)),
+            None => lines,
+        }
+    }
+
+    /// HOW MANY CELLS the grid has to lay items in, between `from` and `to`.
+    ///
+    /// It begins at the section's own first cell and gives up only
+    /// `EDGE_RIGHT` — the cell the scrollbar lives in, which a shelf running
+    /// under would put a thumbnail behind the thumb.
+    ///
+    /// NO GUTTER, unlike the columns. `layout_beside` insets one cell on the
+    /// left so the mark has somewhere to go that is not on top of a name; here
+    /// the mark is in the cell's own corner, and a grid whose first column
+    /// began one cell in would make [`Section::row_at`] subtract a number only
+    /// the listing knows about. What gives a thumbnail its air is that its
+    /// glyph and its name are CENTRED in the item.
+    fn thumb_columns(from: u16, to: u16) -> u16 {
+        to.saturating_sub(from).saturating_sub(EDGE_RIGHT)
+    }
+
+    /// HOW WIDE A THUMBNAIL WOULD BE HERE, or `None` for one entry per line.
+    ///
+    /// # The size steps UP when the screen would hold too many
+    ///
+    /// `ronoctua_render::image` draws a bounded number of pictures in one frame
+    /// and **drops the rest with nothing in any log**; its own comment calls
+    /// that the one silent failure in the feature. So the ceiling is honoured
+    /// HERE, by asking for fewer and bigger cells rather than by handing the
+    /// renderer more than it draws. On a screen that already fits, nothing in
+    /// this loop runs; on a 4K panel at the small step it costs one step up,
+    /// which is bigger thumbnails and not missing ones.
+    ///
+    /// `take` is the door's own height and not the clamped one: how many
+    /// pictures a screen would hold is a fact about the screen, and the clamp
+    /// is worked out FROM this answer.
+    fn thumb_item(&self, from: u16, to: u16, above: usize, take: usize) -> Option<u16> {
+        if !self.grid_on || !self.plain() {
+            return None;
+        }
+        let columns = Self::thumb_columns(from, to);
+        let first = u16::try_from(above).ok()?;
+        let until = u16::try_from(take).ok()?;
+        if columns == 0 || until <= first {
+            return None;
+        }
+        let most = usize::from(ronoctua_tokens::space::FILES_THUMBMOST);
+        let laid = |cells: u16| {
+            ronoctua_design::Grid::fitted(columns, cells, first, until, thumb_lines(cells))
+        };
+        // AND THE ROOM BOUNDS IT FROM ABOVE, which the ceiling cannot.
+        //
+        // A short door — the footer, with seven lines left once the path and
+        // the strip have theirs — holds one shelf of the middle size and two of
+        // the smallest. One shelf is a listing made worse: no sense of a page,
+        // nothing to drop to, and a scroll that moves a screenful at a time. So
+        // the size steps DOWN to what the door can show before the ceiling is
+        // asked anything.
+        let start = self.grid_step.min(THUMB_CELLS.len() - 1);
+        let start = if self.grid_rung {
+            start
+        } else {
+            (0..=start)
+                .rev()
+                .find(|n| laid(THUMB_CELLS[*n]).rows >= THUMB_SHELVES)
+                .unwrap_or(0)
+        };
+        for cells in &THUMB_CELLS[start..] {
+            if laid(*cells).fit() <= most {
+                return Some(*cells);
+            }
+        }
+        // EVEN THE LARGEST DOES NOT FIT, which takes a screen nothing in this
+        // house has. It is still drawn — a grid that refused would be a mode
+        // that turns itself off — and the renderer's own ceiling bounds it.
+        Some(THUMB_CELLS[THUMB_CELLS.len() - 1])
+    }
+
+    /// How many thumbnails go across, and how many lines one is deep.
+    ///
+    /// Neither depends on the height: `across` is a question about the width
+    /// and `down` is [`thumb_lines`] of the item. It is what lets the number of
+    /// LINES the listing wants be worked out before the height is settled.
+    fn thumb_shape(&self, from: u16, to: u16, cells: u16) -> (u16, u16) {
+        let _ = self;
+        let down = thumb_lines(cells);
+        let across =
+            ronoctua_design::Grid::fitted(Self::thumb_columns(from, to), cells, 0, down, down)
+                .across;
+        (across, down)
+    }
+
+    /// The grid itself, for a thumbnail `cells` wide in the lines `above`
+    /// through `take`.
+    fn grid_at(
+        &self,
+        from: u16,
+        to: u16,
+        above: usize,
+        take: usize,
+        cells: u16,
+    ) -> ronoctua_design::Grid {
+        let _ = self;
+        ronoctua_design::Grid::fitted(
+            Self::thumb_columns(from, to),
+            cells,
+            u16::try_from(above).unwrap_or(0),
+            u16::try_from(take).unwrap_or(u16::MAX),
+            thumb_lines(cells),
+        )
+    }
+
+    /// The listing's rows with the entries SIDE BY SIDE.
+    ///
+    /// # It is still one `Row` per LINE
+    ///
+    /// A shelf `g.down` lines deep produces that many of them, and the entries
+    /// on it are fields at different cells of those lines. That is what keeps
+    /// [`Field`] without a line of its own, `expansion_window` flattening one
+    /// row per line, and both painters walking `content` exactly as they do —
+    /// the grid is a different arrangement of the same list, not a second one.
+    ///
+    /// `from` is the first cell a thumbnail may use, `first` the entry the page
+    /// starts at, and `take` the section's height.
+    fn shelf_rows(
+        &self,
+        g: ronoctua_design::Grid,
+        from: u16,
+        first: usize,
+        take: usize,
+        side: u32,
+    ) -> Vec<Row> {
+        let deep = take.saturating_sub(usize::from(g.first));
+        let mut rows: Vec<Row> = (0..deep)
+            .map(|_| Row {
+                fields: Vec::new(),
+                marked: false,
+                foot: false,
+                focused: false,
+            })
+            .collect();
+        let item = g.step.saturating_sub(ronoctua_design::GAP).max(1);
+        // HOW MANY MOVING CELLS HAVE COME BEFORE THIS ONE, which is what says
+        // whether this one gets a slot: the animator takes them in reading
+        // order and stops at the ceiling, so counting here is the same walk.
+        let mut animated = 0usize;
+        // WHAT A NAME IS GIVEN, written down for the key that asks whether the
+        // one under the cursor was cut — `View::cut_name` arrives without a
+        // width, exactly as it does for the columns. Both lines of it, because
+        // both are room the name got.
+        self.drawn_name.set(item.saturating_mul(THUMB_NAME));
+        for i in 0..g.fit() {
+            let n = first + i;
+            let Some(entry) = self.shown.get(n).and_then(|k| self.entries.get(*k)) else {
+                break;
+            };
+            let Some((line, column)) = g.at(i) else { break };
+            let top = usize::from(line).saturating_sub(usize::from(g.first));
+            let at = from.saturating_add(column);
+            let focused = matches!(self.pane, Pane::Listing) && n == self.cursor;
+            // THE PICTURE'S OWN LINES, and a glyph in the middle of them ONLY
+            // WHEN THERE IS NO PICTURE.
+            //
+            // The owner photographed both halves of this being wrong: a glyph
+            // *"minúsculo"* where a picture's worth of room was going spare, and
+            // the same glyph *"por cima das thumbnails"* on every cell that had
+            // one. Two mistakes, one line each — the cell is asked whether it
+            // has a picture, and the row is told how tall its runs are.
+            //
+            // AND IT IS NOT A SECOND OPINION ABOUT THE PICTURE: it asks the same
+            // map the door uploads from, so what is drawn and what is drawn
+            // INSTEAD cannot disagree.
+            let picture = usize::from(g.down).saturating_sub(usize::from(THUMB_NAME));
+            let drawn = self
+                .cell_key(n, side)
+                .is_some_and(|(k, _, _)| self.thumbs.get(&k).is_some());
+            if !drawn && let Some(row) = rows.get_mut(top + picture / 2) {
+                let glyph = entry.kind.icon().unwrap_or_else(|| {
+                    mime::icon_of(self.shown.get(n).map_or("", |k| self.opens[*k]))
+                });
+                row.fields.push(Field {
+                    at: at + item.saturating_sub(1) / 2,
+                    text: glyph.to_string(),
+                    color: glyph_colour_of(entry),
+                    hit: Hit::Name(n),
+                    explain: executable_hint(entry),
+                    // AND IT FILLS THE PICTURE'S ROOM. A glyph at the size of a
+                    // filename in a box four lines deep is not a small version
+                    // of the right answer — it is a cell that looks empty.
+                    ink: Ink::Fills(u16::try_from(picture).unwrap_or(1)),
+                });
+            }
+            // AND WHAT MOVES BUT IS HOLDING STILL SAYS SO.
+            //
+            // Only so many cells animate at once — `space.files.thumbAnimators`
+            // — and past that a file that moves shows its first frame. That is
+            // a refusal, and a refusal that is DRAWN is a refusal; one that is
+            // silent reads as a thumbnail that is simply broken. The ones that
+            // do animate get no mark: a glyph on top of a moving picture is
+            // noise about something the eye can already see.
+            if self
+                .cell_key(n, side)
+                .is_some_and(|(k, _, _)| self.thumbs.moves(&k))
+            {
+                animated += 1;
+                if animated > usize::from(ronoctua_tokens::space::FILES_THUMBANIMATORS)
+                    && let Some(row) = rows.get_mut(top)
+                {
+                    row.fields.push(Field {
+                        at: at + item.saturating_sub(1),
+                        text: ronoctua_tokens::icon::PLAY.to_string(),
+                        color: ronoctua_tokens::color::TEXT_DIM,
+                        hit: Hit::Name(n),
+                        explain: Some(Explanation {
+                            key: ronoctua_i18n::key::FILES_GRID_MOVES,
+                            args: Vec::new(),
+                        }),
+                        ink: Ink::Grid,
+                    });
+                }
+            }
+            // AND THE MARK IN THE CORNER, where it does not cover the picture.
+            //
+            // A glyph and not a colour, for the reason the listing's gutter
+            // already gives: colour is spent on the focus, and a marked row
+            // that only changed tone would be a second cursor.
+            if self.marks.contains(&entry.name)
+                && let Some(row) = rows.get_mut(top)
+            {
+                row.fields.push(Field {
+                    at,
+                    text: ronoctua_tokens::icon::SELECTION.to_string(),
+                    color: ronoctua_tokens::color::STATE_ACCENT,
+                    hit: Hit::Mark(n),
+                    explain: None,
+                    ink: Ink::Grid,
+                });
+            }
+            // THE NAME ON THE SHELF'S LAST LINES, centred under its picture.
+            //
+            // TWO OF THEM, and broken across rather than cut off: a cell is six
+            // to twenty cells wide, and the folders people keep photographs in
+            // are full of `PXL_20240225_070857585.RAW-01.MP.COVER.jpg`.
+            // `layout::wrap` breaks a word that has no spaces in it by CLUSTER,
+            // which is what a filename is.
+            let shown = match (&entry.target, entry.broken()) {
+                (Some(t), false) => format!("{} → {t}", entry.name),
+                (Some(t), true) => format!("{} ⇢ {t}", entry.name),
+                (None, _) => entry.name.clone(),
+            };
+            // AND AT THE SMALLEST STEP IT IS DRAWN SMALLER. Six cells is six
+            // characters of a filename at the body size and half as many again
+            // at this one, which is the difference between a name and a prefix.
+            let small = item == THUMB_CELLS[0];
+            // AND THE WRAP IS MEASURED IN THE SIZE IT WILL BE DRAWN IN.
+            //
+            // `wrap` counts CELLS, and a cell is the grid's — so wrapping a
+            // small run at the item's width leaves a fifth of every line empty.
+            // The ratio comes from the one resolver rather than from a second
+            // spelling of the token: `paint::scale_in_px` is where a fixed size
+            // is read and scaled, and both halves of this division come out of
+            // it moving together.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let room = if small {
+                let base = ronoctua_tokens::text::size();
+                let small = crate::paint::scale_in_px(ronoctua_protocol::Scale::Small).max(1.0);
+                ((f32::from(item) * base / small) as u16).max(item)
+            } else {
+                item
+            };
+            // TWO LINES AND NOT THREE.
+            //
+            // `layout::wrap` stops PUSHING at its ceiling and then keeps
+            // whatever is left in hand, so it answers with one more line than it
+            // was asked for — the owner saw the extra one land on the shelf
+            // below. The cut is here, and the last line it kept is elided so
+            // that what was dropped is visible as an ellipsis rather than as a
+            // name that simply stops.
+            let mut broken = ronoctua_render::layout::wrap(&shown, room, usize::from(THUMB_NAME));
+            let over = broken.len() > usize::from(THUMB_NAME);
+            if over {
+                // WHAT WAS DROPPED IS PUT BACK ON THE LAST LINE AND CUT THERE,
+                // so the ellipsis lands where the name stops. Truncating alone
+                // would end it mid-word with nothing saying there was more, and
+                // eliding a line that already fits cuts nothing at all.
+                let rest: String = broken.split_off(usize::from(THUMB_NAME) - 1).concat();
+                broken.push(ronoctua_render::layout::elide_end(&rest, room));
+            }
+            for (k, text) in broken.into_iter().enumerate() {
+                let Some(row) = rows.get_mut(top + picture + k) else {
+                    break;
+                };
+                let wide = ronoctua_render::layout::width(&text);
+                row.fields.push(Field {
+                    at: at + item.saturating_sub(wide) / 2,
+                    text,
+                    color: colour_of(entry, focused),
+                    hit: Hit::Name(n),
+                    // THE SENTENCE GOES ON THE FIRST LINE ONLY, because it is
+                    // one sentence about one name and the pointer resting on
+                    // either half would otherwise say it twice.
+                    explain: (k == 0 && over).then(|| Explanation {
+                        key: ronoctua_i18n::key::FILES_EXPLAIN_NAME,
+                        args: vec![("name", shown.clone())],
+                    }),
+                    ink: if small {
+                        Ink::Small(u16::try_from(k).unwrap_or(0))
+                    } else {
+                        Ink::Grid
+                    },
+                });
+            }
+        }
+        rows
+    }
+
     fn row_of(&self, n: usize, i: usize, layout: &Layout, mark: char) -> Row {
         let entry = &self.entries[i];
         let of_type = self.types[i];
@@ -6232,6 +7736,7 @@ impl View {
             color: ronoctua_tokens::color::STATE_ACCENT,
             hit: Hit::Mark(n),
             explain: None,
+            ink: Ink::Grid,
         });
 
         for (column, at, width) in &layout.columns {
@@ -6246,6 +7751,7 @@ impl View {
                         color: glyph_colour_of(entry),
                         hit: Hit::Mark(n),
                         explain: executable_hint(entry),
+                        ink: Ink::Grid,
                     });
                 }
                 Column::Name => {
@@ -6291,6 +7797,7 @@ impl View {
                             key: ronoctua_i18n::key::FILES_EXPLAIN_NAME,
                             args: vec![("name", shown.clone())],
                         }),
+                        ink: Ink::Grid,
                     });
                 }
                 Column::Perms => {
@@ -6314,6 +7821,7 @@ impl View {
                             },
                             hit,
                             explain: Some(mode::explain(cell, entry.mode, &owner, &group)),
+                            ink: Ink::Grid,
                         });
                     }
                 }
@@ -6329,6 +7837,7 @@ impl View {
                         key: ronoctua_i18n::key::FILES_EXPLAIN_OWNER,
                         args: vec![("who", owner.clone())],
                     }),
+                    ink: Ink::Grid,
                 }),
                 Column::Group => fields.push(Field {
                     at: *at,
@@ -6339,6 +7848,7 @@ impl View {
                         key: ronoctua_i18n::key::FILES_EXPLAIN_GROUP,
                         args: vec![("who", group.clone())],
                     }),
+                    ink: Ink::Grid,
                 }),
                 Column::Size => {
                     let measured = self
@@ -6372,6 +7882,7 @@ impl View {
                         color: ronoctua_tokens::color::TEXT_SECONDARY,
                         hit: Hit::Measure(n),
                         explain,
+                        ink: Ink::Grid,
                     });
                 }
                 Column::Modified => {
@@ -6411,6 +7922,7 @@ impl View {
                                 crate::chrome::when_long(entry.modified, &self.zone, &self.texts),
                             )],
                         }),
+                        ink: Ink::Grid,
                     });
                 }
             }
@@ -6479,6 +7991,7 @@ impl View {
                 color: ronoctua_tokens::color::TEXT_SECONDARY,
                 hit: Hit::Nothing,
                 explain: None,
+                ink: Ink::Grid,
             }],
             marked: false,
             foot: false,
@@ -6498,6 +8011,7 @@ impl View {
                             color: ronoctua_tokens::color::STATE_ACCENT,
                             hit: Hit::Menu(a.id),
                             explain: Some(does(a.does)),
+                            ink: Ink::Grid,
                         },
                         Field {
                             at: 7,
@@ -6516,6 +8030,7 @@ impl View {
                             },
                             hit: Hit::Menu(a.id),
                             explain: Some(does(a.does)),
+                            ink: Ink::Grid,
                         },
                     ],
                     marked: false,
@@ -6549,6 +8064,7 @@ impl View {
                 color,
                 hit: Hit::Nothing,
                 explain: None,
+                ink: Ink::Grid,
             }],
             marked: false,
             foot: false,
@@ -6598,6 +8114,7 @@ impl View {
                     color: ronoctua_tokens::color::STATE_ACCENT,
                     hit: Hit::SideMenu(a.id),
                     explain: Some(does(a.does)),
+                    ink: Ink::Grid,
                 },
                 Field {
                     at: 7,
@@ -6608,6 +8125,7 @@ impl View {
                     color: ronoctua_tokens::color::TEXT_PRIMARY,
                     hit: Hit::SideMenu(a.id),
                     explain: Some(does(a.does)),
+                    ink: Ink::Grid,
                 },
             ],
             marked: false,
@@ -7301,6 +8819,7 @@ fn picker_rows(picker: &Picker, width: u16, texts: &ronoctua_i18n::Texts) -> Vec
                 color: ronoctua_tokens::color::TEXT_SECONDARY,
                 hit: Hit::Nothing,
                 explain: None,
+                ink: Ink::Grid,
             }],
             marked: false,
             foot: false,
@@ -7313,6 +8832,7 @@ fn picker_rows(picker: &Picker, width: u16, texts: &ronoctua_i18n::Texts) -> Vec
                 color: ronoctua_tokens::color::TEXT_PRIMARY,
                 hit: Hit::Nothing,
                 explain: None,
+                ink: Ink::Grid,
             }],
             marked: false,
             foot: false,
@@ -7334,6 +8854,7 @@ fn picker_rows(picker: &Picker, width: u16, texts: &ronoctua_i18n::Texts) -> Vec
                 },
                 hit: Hit::Choice(n),
                 explain: None,
+                ink: Ink::Grid,
             }],
             marked: false,
             foot: false,
@@ -7619,6 +9140,16 @@ pub enum Where {
     OnSound,
     /// Only over a playlist.
     OnAList,
+    /// Only while the entries are laid out SIDE BY SIDE.
+    ///
+    /// The pair of [`Where::OnALine`], and the two exist because `<left>` and
+    /// `<right>` mean different things in the two shapes: crossing to the next
+    /// SECTION when there is one entry per line, and walking to the next ENTRY
+    /// when there are several. Teaching both at once would be one notation with
+    /// two words beside it on the same line.
+    OnTheGrid,
+    /// Only while the entries are one to a line. See [`Where::OnTheGrid`].
+    OnALine,
     /// Over EITHER, because the three zoom keys mean the same thing in both
     /// and one notation cannot carry two ids.
     ///
@@ -7648,6 +9179,8 @@ impl Where {
             Self::OnAFilm => v.film_here(),
             Self::OnSound => v.has_sound(),
             Self::OnAList => v.showing_list().is_some(),
+            Self::OnTheGrid => v.grid_on,
+            Self::OnALine => !v.grid_on,
             Self::OnAShapeOrAPlace => v.shape_here() || v.globe_here(),
         }
     }
@@ -7677,14 +9210,29 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     //
     // The arrow comes FIRST in the pair because the first notation of an id is
     // the one the line teaches.
-    ("<right>", "files-pane-next", Where::Anywhere),
+    // AND THE TWO SIDEWAYS ARROWS SAY WHICH SHAPE THEY ARE IN.
+    //
+    // `TAB` keeps the ring in both — *"atravessar é o anel do `Tab`, e só
+    // ele"* — and the arrows follow the entries: across the SECTIONS while
+    // there is one entry per line, and across the ENTRIES when there are
+    // several. `View::grid_meaning` is the one place that swaps them, and it
+    // reads the notation because `<right>` and `TAB` share an id here.
+    ("<right>", "files-pane-next", Where::OnALine),
     ("TAB", "files-pane-next", Where::Anywhere),
     // AND BACKWARDS. `S-TAB` is not "Shift plus Tab" as far as anything here
     // is concerned, it is the keysym `ISO_Left_Tab`, which is what xkb
     // produces for it — the same "xkb has already applied it" both doors'
     // `key_of` rely on when they refuse to count Shift.
-    ("<left>", "files-pane-previous", Where::Anywhere),
+    ("<left>", "files-pane-previous", Where::OnALine),
     ("S-TAB", "files-pane-previous", Where::Anywhere),
+    // AND THEY COME AFTER THE TWO ROWS ABOVE, which is not tidiness:
+    // `of_the_view` takes the FIRST row with a notation and `Where` does not
+    // enter into it, so a grid row in front of a pane row would make the arrow
+    // mean a cell in both shapes. What swaps them is `View::grid_meaning`,
+    // which reads the mode; these rows are here so the hint line has something
+    // to teach and `every-hint-key-explains-itself` has something to check.
+    ("<right>", "files-grid-next", Where::OnTheGrid),
+    ("<left>", "files-grid-previous", Where::OnTheGrid),
     // THE FOUR THAT CHANGE MEANING WITH THE SECTION.
     //
     // The owner's answer to a collision he was shown: `S-<left>` and
@@ -7859,6 +9407,17 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("C-k", "files-zoom-in", Where::OnAShapeOrAPlace),
     ("C-j", "files-zoom-out", Where::OnAShapeOrAPlace),
     ("C-r", "files-reframe", Where::OnAShapeOrAPlace),
+    // THE LISTING'S OTHER SHAPE, and the size it is drawn at.
+    //
+    // The shifted pair this manager already uses three times over — `C-d`/`C-D`
+    // below, `C-s`/`C-S` and `C-w`/`C-W`: the plain key turns the thing on, the
+    // shifted one varies it. `C-g` is free, and free because `files-globe` was
+    // taken out of this table when the map learned to scroll.
+    //
+    // The size ring is taught only where there is something to size, which is
+    // the same rule the film's transport keys follow.
+    ("C-g", "files-grid", Where::Anywhere),
+    ("C-G", "files-grid-size", Where::OnTheGrid),
     // THE FOUR COLUMNS ONE LOOKS UP, hidden until asked for.
     //
     // THE DATE JOINED THEM at the owner's word — *"não quero mais que a coluna
@@ -8147,9 +9706,14 @@ impl View {
             Some(d) => self.strong_meaning(d),
             None => id,
         });
+        // AND THE TWO SIDEWAYS ARROWS FOLLOW THE SHAPE, the way the shifted
+        // four already follow the focused section. It reads the NOTATION and
+        // not the id because `<right>` and `TAB` share one, and only the arrow
+        // changes meaning: the ring is the ring in both shapes.
+        let id = self.grid_meaning(t, id);
         match id {
-            Some("files-down") => self.step_by(1),
-            Some("files-up") => self.step_by(-1),
+            Some("files-down") => self.step_by(self.step_of(1)),
+            Some("files-up") => self.step_by(self.step_of(-1)),
             Some("files-enter") => self.open_here(),
             Some("files-parent") => {
                 self.up();
@@ -8261,6 +9825,14 @@ impl View {
                 self.header_on = !self.header_on;
                 Step::Changed
             }
+            Some("files-grid") => self.turn_the_grid(),
+            Some("files-grid-size") => self.ring_the_size(),
+            // THE TWO SIDEWAYS ARROWS, where the entries are side by side. One
+            // entry along, which is one cell along — and at the end of a shelf
+            // that is the first cell of the next, which is what makes a grid
+            // walk in reading order rather than stopping at its own edge.
+            Some("files-grid-next") => self.move_by(1),
+            Some("files-grid-previous") => self.move_by(-1),
             _ => Step::Nothing,
         }
     }
@@ -8622,6 +10194,17 @@ impl View {
             Hit::Play => self.play_pause(),
             Hit::Sound => self.hear(),
             Hit::Theatre(which) => self.theatre(*which),
+            // THE SAME CALL THE KEY MAKES, which is what keeps the glyph and
+            // `C-g` one gesture with two affordances rather than two states.
+            Hit::Layout => {
+                let _ = row;
+                self.turn_the_grid()
+            }
+            // THE SAME CALL `C-G` MAKES. One gesture, two affordances.
+            Hit::Sizing => {
+                let _ = row;
+                self.ring_the_size()
+            }
             // THE GLOBE'S PICTURE ANSWERS NOTHING TO A CLICK, because a press
             // on it is the start of a DRAG — resolved before the row, exactly
             // as a press on a shape in the preview is. A click that also acted
@@ -9000,6 +10583,18 @@ impl View {
     #[must_use]
     pub fn visual_cursor(&self) -> Option<usize> {
         if self.plain() {
+            // AND SIDE BY SIDE IT IS THE SHELF'S LINE, not the entry's.
+            //
+            // `cursor + chrome` adds an ENTRY index to a count of LINES, which
+            // is exactly true while there is one entry per line and exactly
+            // wrong otherwise — the twentieth file of a grid four across is on
+            // the fifth shelf, not the twentieth line.
+            if let Some(g) = self.grid_now() {
+                let across = usize::from(g.across.max(1));
+                return Some(
+                    self.cursor / across * usize::from(g.down.max(1)) + self.chrome_lines(),
+                );
+            }
             return Some(self.cursor + self.chrome_lines());
         }
         self.modal_cursor()
@@ -9023,7 +10618,10 @@ impl View {
         }];
         // AND THE COLUMNS' NAMES ONLY WHEN THEY ARE ASKED FOR. See
         // `View::header_shown`.
-        if self.header_on {
+        // AND NOTHING NAMES THE COLUMNS WHEN THERE ARE NONE. Side by side
+        // there is no size column and no date column to head, and a row of
+        // headings over a grid of pictures names nothing that is under it.
+        if self.header_on && !self.grid_on {
             rows.push(self.header(width, texts));
         }
         debug_assert_eq!(
@@ -9120,6 +10718,7 @@ impl View {
                 offset: first,
                 total: all.len(),
                 above: 0,
+                grid: None,
                 content: all.into_iter().skip(first).take(room).collect(),
             });
             return out;
@@ -9141,10 +10740,37 @@ impl View {
         // So the ceiling is what EXISTS: the longest column, chrome included.
         // Anything past that is a line nobody would draw.
         let chrome_lines = chrome.len();
-        let most = self
-            .shown
-            .len()
-            .saturating_add(chrome_lines)
+        // AND SIDE BY SIDE IT IS SHELVES, not entries.
+        //
+        // This asked how many LINES the listing wants and answered with its
+        // number of entries, which is the same question only while a row is a
+        // line. Thirty-one files four across are eight shelves — and at eight
+        // lines each that is sixty-four lines, not thirty-one. Answered the old
+        // way, `take` was clamped to thirty-two and the grid was cut in half
+        // with nothing on screen saying why.
+        //
+        // The SIZE is decided against the door's full height, before this clamp
+        // narrows it: the step that fits the renderer's ceiling is a fact about
+        // the screen, and deciding it against a height this sum has not worked
+        // out yet would make the two answers depend on each other.
+        let listing_to = if panes.right > 0 {
+            width.saturating_sub(panes.right)
+        } else {
+            width
+        };
+        let item = self.thumb_item(panes.listing_from(), listing_to, chrome_lines, take);
+        let wants = match item {
+            Some(cells) => {
+                let (across, down) = self.thumb_shape(panes.listing_from(), listing_to, cells);
+                self.shown
+                    .len()
+                    .div_ceil(usize::from(across.max(1)))
+                    .saturating_mul(usize::from(down.max(1)))
+                    .saturating_add(chrome_lines)
+            }
+            None => self.shown.len().saturating_add(chrome_lines),
+        };
+        let most = wants
             .max(if panes.sidebar == 0 { 0 } else { side.len() })
             // ONLY WHEN THEY SIT BESIDE THE LISTING. Down in the strip the
             // panels take lines OF THEIR OWN and none of the region's — the
@@ -9196,6 +10822,7 @@ impl View {
                 offset: first,
                 total: side.len(),
                 above: 0,
+                grid: None,
                 content: (0..take)
                     .map(|k| Row {
                         fields: side
@@ -9219,12 +10846,30 @@ impl View {
         // hits the preview should have.
         let above = chrome_lines.min(take);
         if wanted(Pane::Listing) && !panes.whole {
-            let layout = layout_beside(width, panes.listing_from(), panes.right, self.details_on);
-            let first = self.list_offset;
-            let listing_to = if panes.right > 0 {
-                width.saturating_sub(panes.right)
-            } else {
-                width
+            let lead = panes.listing_from();
+            // THE SHELF GEOMETRY, MEASURED WHERE THE BOX IS DECIDED, at the size
+            // `most` above already settled — one decision, used twice.
+            //
+            // And written down, because the keys and the wheel need it and have
+            // no width to work it out from — the same arrangement, and the same
+            // argument, as `drawn_lines` and `drawn_panel`.
+            let the_grid = item.map(|cells| self.grid_at(lead, listing_to, above, take, cells));
+            self.drawn_grid.set(the_grid);
+            // AND THE OFFSET IS SNAPPED TO A WHOLE SHELF, on the way OUT.
+            //
+            // Clamped on READ, which is the arrangement `facts_offset` already
+            // has and for the same reason: what puts the offset between two
+            // shelves is not a write but the GRID changing under it — a window
+            // resized, or the size ring turned — and a write-side fix would
+            // have to be made in the four places that move it. Snapping here
+            // keeps `list_offset` an entry index everywhere else, which is what
+            // lets the wheel, the drag and `follow` go on speaking entries.
+            let first = match the_grid {
+                Some(g) => {
+                    let across = usize::from(g.across.max(1));
+                    self.list_offset / across * across
+                }
+                None => self.list_offset,
             };
             let mut rows: Vec<Row> = chrome.to_vec();
             // NOTHING WALKS UNTIL A ROW SAYS IT DOES. Cleared here, once, and
@@ -9232,29 +10877,44 @@ impl View {
             // decay on its own it would keep the door's clock armed over a
             // listing whose long name has been scrolled away.
             self.slide_over.set(0);
-            for k in above..take {
-                let n = first + k - above;
-                rows.push(self.shown.get(n).map_or_else(
-                    || Row {
-                        fields: Vec::new(),
-                        marked: false,
-                        foot: false,
-                        focused: false,
-                    },
-                    |i| self.row_of(n, *i, &layout, texts.decimal_mark()),
-                ));
+            if let Some(g) = the_grid {
+                rows.extend(self.shelf_rows(g, lead, first, take, self.drawn_side.get()));
+            } else {
+                let layout = layout_beside(width, lead, panes.right, self.details_on);
+                for k in above..take {
+                    let n = first + k - above;
+                    rows.push(self.shown.get(n).map_or_else(
+                        || Row {
+                            fields: Vec::new(),
+                            marked: false,
+                            foot: false,
+                            focused: false,
+                        },
+                        |i| self.row_of(n, *i, &layout, texts.decimal_mark()),
+                    ));
+                }
             }
             // "NOTHING HERE" IS A FIELD OF THE LISTING, on its own first row
-            // — the first one that is not the way out.
+            // — the first one that is not the way out. With the entries side by
+            // side there is no way out to skip: `..` is a thumbnail like any
+            // other, and the first line of the grid is where the eye starts.
             if self.is_empty()
-                && let Some(row) = rows.get_mut(above + self.first_row())
+                && let Some(row) = rows.get_mut(
+                    above
+                        + if the_grid.is_some() {
+                            0
+                        } else {
+                            self.first_row()
+                        },
+                )
             {
                 row.fields.push(Field {
-                    at: layout.from + GUTTER,
+                    at: lead + GUTTER,
                     text: texts.t(ronoctua_i18n::key::FILES_NOTHING_HERE),
                     color: ronoctua_tokens::color::TEXT_DIM,
                     hit: Hit::Nothing,
                     explain: None,
+                    ink: Ink::Grid,
                 });
             }
             out.push(Section {
@@ -9266,13 +10926,14 @@ impl View {
                 time: None,
                 transport: None,
                 clock: 0,
-                from: panes.listing_from(),
+                from: lead,
                 to: listing_to,
                 top: 0,
                 lines: take,
                 offset: first,
                 total: self.shown.len(),
                 above,
+                grid: the_grid,
                 content: rows,
             });
         }
@@ -9472,6 +11133,7 @@ impl View {
                     // the panel, and the owner felt the two disagree under his
                     // hand. See `View::globe_rows`.
                     above: 0,
+                    grid: None,
                     content,
                 });
             }
@@ -9536,6 +11198,28 @@ impl View {
         // residue (see `transport_band`); this is the same decision for the
         // pointer, so what is drawn there is what answers there.
         let (sec, inside) = at_line(&sections, which, line)?;
+        // SIDE BY SIDE, THE CELL ANSWERS WHEREVER THE POINTER IS INSIDE IT.
+        //
+        // A thumbnail is almost all empty cells — a picture the door draws over
+        // them, and two fields — so asking for a FIELD first would answer
+        // "nowhere" over most of every cell. That is the defect the owner
+        // reported about the expand button one panel along, and a grid is that
+        // defect sixty times per screen.
+        //
+        // `Section::row_at` is arithmetic, so there is nothing for an empty
+        // line to fail to answer; the field is still consulted, because the
+        // name that was CUT carries the sentence that says it whole.
+        if sec.grid.is_some()
+            && let Some(row) = sec.row_at(inside, cell)
+        {
+            let f = sec.content.get(inside).and_then(|r| r.field_at(cell));
+            return Some(Target {
+                pane: sec.pane,
+                row,
+                hit: f.map_or(Hit::Name(row), |f| f.hit.clone()),
+                explain: f.and_then(|f| f.explain.clone()),
+            });
+        }
         let f = sec.content.get(inside)?.field_at(cell)?;
         // WHICH ROW OF ITS OWN LIST. The listing's chrome is not one of them —
         // `usize::MAX` is what both doors already spell for the header — and
@@ -9620,6 +11304,22 @@ impl View {
         let which = panes.section_at(cell, width, in_strip);
         let sections = self.sections_of(&chrome, room, width, &self.texts, Some(which));
         let (sec, inside) = at_line(&sections, which, line)?;
+        // AND NO BAND AT ALL OVER A GRID.
+        //
+        // The rule is older than this mode and `band_belongs` already states
+        // it: a band says which LINE OF A LIST the pointer is on, and a
+        // photograph is not a list. Side by side the whole region is
+        // photographs, so there is no line for it to be about — the owner
+        // photographed what drawing one anyway looks like: *"a linha do hover
+        // do mouse aparece e está enorme. Porém não deveria aparecer nenhuma
+        // linha"*.
+        //
+        // What still says where the pointer is, is the FIELD it lights — the
+        // name under the cell — and that is the same answer a picture in the
+        // preview panel gets.
+        if sec.grid.is_some() {
+            return None;
+        }
         // A LINE WITH NOTHING ON IT IS NOT A ROW. Past the last entry the
         // listing pads with empty rows and the sidebar with its gaps; lighting
         // those would promise a click on nothing.
@@ -9635,6 +11335,150 @@ impl View {
             return None;
         }
         Some((sec.pane, sec.top + inside))
+    }
+
+    /// THE LISTING'S SECTION as it stands right now.
+    ///
+    /// Laid out rather than remembered: everything about where a row is lives
+    /// in `Section`, and asking it is how the two doors came to agree. The cost
+    /// is one column's worth of rows, which is what `sections_of`'s `only`
+    /// argument exists to make cheap.
+    fn the_listing(&self, width: u16, room: usize) -> Option<Section> {
+        let chrome = self.chrome_rows(width, &self.texts);
+        self.sections_of(&chrome, room, width, &self.texts, Some(Pane::Listing))
+            .into_iter()
+            .find(|s| s.pane == Pane::Listing)
+    }
+
+    /// WHERE EACH VISIBLE THUMBNAIL'S PICTURE GOES, by key.
+    ///
+    /// `lead` is the door's own left margin in cells, `cell` and `line` its
+    /// pixel sizes, and `top` the pixel where the region's first line begins —
+    /// the same four the bands already take.
+    ///
+    /// # The texture is asked for at the size it will be DRAWN
+    ///
+    /// Which is the lesson `files::globe_texture` was written for and whose
+    /// absence the owner photographed twice: `picture_in` gives up
+    /// `space.files.pictureAir` on all four sides and `Area::centre` then
+    /// SHRINKS whatever it is handed to fit what is left. A picture decoded at
+    /// the box's size is therefore always drawn a little smaller than it was
+    /// decoded — invisible until the box moves, and then a picture that changes
+    /// size as it scrolls.
+    #[must_use]
+    pub fn grid_pictures(
+        &self,
+        width: u16,
+        room: usize,
+        lead: u16,
+        cell: f32,
+        line: f32,
+        top: f32,
+    ) -> Vec<(String, ronoctua_render::image::Area)> {
+        let Some(sec) = self.the_listing(width, room) else {
+            return Vec::new();
+        };
+        let Some(g) = sec.grid else {
+            return Vec::new();
+        };
+        let side = thumb_side(g, cell, line);
+        self.drawn_side.set(side);
+        let deep = usize::from(g.down).saturating_sub(usize::from(THUMB_NAME));
+        let mut out = Vec::new();
+        for row in sec.offset..sec.total {
+            let Some(at) = sec.line_of(row) else { break };
+            let Some((from, to)) = sec.cells_of(row) else {
+                continue;
+            };
+            let Some((key, _, _)) = self.cell_key(row, side) else {
+                continue;
+            };
+            let Some(rgba) = self.thumbs.get(&key) else {
+                continue;
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let space = ronoctua_render::image::Area {
+                x: f32::from(lead.saturating_add(from)) * cell,
+                y: top + at as f32 * line,
+                // THE ITEM AND NOT THE STEP: the air between two cells belongs
+                // to neither picture, and a picture drawn across it would touch
+                // its neighbour.
+                width: f32::from(to.saturating_sub(from).saturating_sub(ronoctua_design::GAP))
+                    * cell,
+                height: deep as f32 * line,
+            };
+            out.push((key, picture_in(space, rgba.width, rgba.height)));
+        }
+        out
+    }
+
+    /// HOW MANY LINES A BAND COVERS.
+    ///
+    /// One, until a thumbnail wanted several. Both doors ask; neither works it
+    /// out, because a band that is one line where the cell is five is a
+    /// highlight that lights a fifth of what the click would take.
+    #[must_use]
+    pub fn band_lines(&self) -> usize {
+        self.grid_now().map_or(1, |g| usize::from(g.down.max(1)))
+    }
+
+    /// WHICH CELLS the band under a point covers, or `None` for the section's
+    /// own width.
+    ///
+    /// `None` is the answer a list gives and it is not a failure: a row of a
+    /// list runs the whole width of its column, which is what `band_of` and
+    /// `panel_px` already work out and what both doors still call. Only a shelf
+    /// puts several rows on one line, so only a shelf has a narrower answer —
+    /// and this is the one place that gives it.
+    #[must_use]
+    pub fn band_cells_at(
+        &self,
+        width: u16,
+        room: usize,
+        line: usize,
+        cell: u16,
+    ) -> Option<(u16, u16)> {
+        let chrome = self.chrome_rows(width, &self.texts);
+        let panes = self.panes(width);
+        let in_strip = panes.strip > 0 && line >= room;
+        let which = panes.section_at(cell, width, in_strip);
+        let sections = self.sections_of(&chrome, room, width, &self.texts, Some(which));
+        let (sec, inside) = at_line(&sections, which, line)?;
+        sec.cells_of(sec.row_at(inside, cell)?)
+    }
+
+    /// The same, for the row the KEYBOARD is on. See [`View::band_cells_at`].
+    #[must_use]
+    pub fn band_cells_of(
+        &self,
+        width: u16,
+        room: usize,
+        pane: Pane,
+        row: usize,
+    ) -> Option<(u16, u16)> {
+        let chrome = self.chrome_rows(width, &self.texts);
+        self.sections_of(&chrome, room, width, &self.texts, Some(pane))
+            .into_iter()
+            .find(|s| s.pane == pane)?
+            .cells_of(row)
+    }
+
+    /// The cells the FOCUS band covers, or `None` for the section's width.
+    ///
+    /// The pane and the row come from `focused_here`, which is what
+    /// [`View::focus_line`] already asks — so the band's line and the band's
+    /// cells cannot name two different rows.
+    #[must_use]
+    pub fn focus_cells(&self, width: u16, room: usize) -> Option<(u16, u16)> {
+        let (pane, row) = self.focused_here()?;
+        self.band_cells_of(width, room, pane, row)
+    }
+
+    /// The cells the RESTING band covers. Always the listing's cursor, which
+    /// is what [`View::resting_line`] draws.
+    #[must_use]
+    pub fn resting_cells(&self, width: u16, room: usize) -> Option<(u16, u16)> {
+        self.band_cells_of(width, room, Pane::Listing, self.cursor)
     }
 
     /// The listing's column's first visible row.
@@ -9683,7 +11527,12 @@ impl View {
     #[must_use]
     pub const fn chrome_lines(&self) -> usize {
         if self.plain() {
-            CHROME + if self.header_on { 1 } else { 0 }
+            CHROME
+                + if self.header_on && !self.grid_on {
+                    1
+                } else {
+                    0
+                }
         } else {
             0
         }
@@ -9725,6 +11574,25 @@ impl View {
     /// reset that one door performs and the other does not.
     pub fn follow(&mut self, room: usize) {
         if self.plain() {
+            // SIDE BY SIDE IT FOLLOWS SHELVES, and lands on one.
+            //
+            // Working in entries and snapping afterwards is the tempting shape
+            // and it is wrong: snapping the offset DOWN moves the bottom of the
+            // page up with it, so the cursor `follow_within` had just brought
+            // into view can end up below it again. In shelves the answer is
+            // exact, and multiplying back out is what lands on a whole one.
+            if let Some(g) = self.grid_now() {
+                let across = usize::from(g.across.max(1));
+                let shelves = self.amount().div_ceil(across);
+                let at = follow_within(
+                    self.list_offset / across,
+                    self.cursor / across,
+                    shelves,
+                    usize::from(g.rows.max(1)),
+                );
+                self.list_offset = at * across;
+                return;
+            }
             let total = self.amount();
             self.list_offset = follow_within(self.list_offset, self.cursor, total, room);
             return;
@@ -9820,7 +11688,12 @@ impl View {
             // and really does show every line of it. Only the listing has
             // something pinned at its top, and only the view knows whether it
             // is there. See `Section::visible`.
-            Pane::Listing => room.list.saturating_sub(self.chrome_lines()),
+            // AND SIDE BY SIDE THE BAND HOLDS SEVERAL ENTRIES PER LINE, which
+            // is what `View::listing_room` converts — the thumb was drawn from
+            // `Section::visible`, which counts entries too, and a drag measured
+            // in lines against a thumb measured in entries is the pair of
+            // answers the owner has already caught disagreeing once.
+            Pane::Listing => self.listing_room(room.list.saturating_sub(self.chrome_lines())),
             Pane::Sidebar => room.list,
         };
         let total = match pane {
@@ -10498,6 +12371,25 @@ impl View {
                 // one question. (`chrome_lines` is nought with a modal up, so
                 // the modal gets the whole region — which is what it covers.)
                 let room = room.saturating_sub(self.chrome_lines());
+                // AND A DETENT IS A SHELF, never a line.
+                //
+                // `by` arrives in LINES, which is the right unit while a row is
+                // one of them. Handed straight to a grid five lines deep, a
+                // slow gesture would round to nothing and a fast one would fly
+                // five times too far — so it is divided first, and the floor of
+                // one is what keeps the slowest gesture moving.
+                if let Some(g) = self.grid_now() {
+                    let across = usize::from(g.across.max(1));
+                    let step = by.signum() * (by.abs() / i64::from(g.down.max(1))).max(1);
+                    let at = slide(
+                        self.list_offset() / across,
+                        step,
+                        total.div_ceil(across),
+                        room / usize::from(g.down.max(1)),
+                    );
+                    self.scroll_listing_to(at * across);
+                    return true;
+                }
                 self.scroll_listing_to(slide(self.list_offset(), by, total, room));
                 true
             }
@@ -11304,6 +13196,7 @@ impl View {
                         color: ronoctua_tokens::color::TEXT_DIM,
                         hit: Hit::Nothing,
                         explain: None,
+                        ink: Ink::Grid,
                     },
                     Field {
                         at: widest + 2,
@@ -11314,6 +13207,7 @@ impl View {
                         color: ronoctua_tokens::color::TEXT_PRIMARY,
                         hit: Hit::Nothing,
                         explain: None,
+                        ink: Ink::Grid,
                     },
                 ],
                 marked: false,
@@ -12128,7 +14022,7 @@ impl View {
         // the key present and upload nothing: the panel would hold the film's
         // last frame for ever, and the feature would work once.
         //
-        // Two keys, two slots out of thirty-nine. Not a key per frame, which is
+        // Two keys, two slots of the renderer's ceiling. Not a key per frame, which is
         // what would fill the cache with one file's film.
         if self.frame.as_ref().is_some_and(|f| f.key == l.key)
             || self.turned.as_ref().is_some_and(|f| f.key == l.key)
@@ -12964,6 +14858,7 @@ impl View {
             color: colour,
             hit: Hit::Track(row),
             explain: None,
+            ink: Ink::Grid,
         }];
         if row == self.playing && here {
             out.push(Field {
@@ -12972,6 +14867,7 @@ impl View {
                 color: colour,
                 hit: Hit::Track(row),
                 explain: None,
+                ink: Ink::Grid,
             });
         }
         out.push(Field {
@@ -13009,6 +14905,7 @@ impl View {
                     }
                 },
             }),
+            ink: Ink::Grid,
         });
         if tail > 0 {
             out.push(Field {
@@ -13017,6 +14914,7 @@ impl View {
                 color: ronoctua_tokens::color::TEXT_DIM,
                 hit: Hit::Track(row),
                 explain: None,
+                ink: Ink::Grid,
             });
         }
         out
@@ -14923,6 +16821,7 @@ mod tests {
             offset: 0,
             total: 10,
             above: 0,
+            grid: None,
             content: Vec::new(),
         };
         let foot = Foot {
@@ -16319,6 +18218,7 @@ mod tests {
             color: ronoctua_tokens::color::TEXT_PRIMARY,
             hit: Hit::Nothing,
             explain: None,
+            ink: Ink::Grid,
         };
         let b = Field {
             at: 5,
@@ -16720,12 +18620,13 @@ mod tests {
             plain.len() + 1,
             "the query did not become a field of the path"
         );
-        let last = typed.last().expect("the path has fields");
+        // THE GLYPH IS LAST AND IS NOT THE PATH — see `View::layout_field`.
+        let last = typed[typed.len() - 2].clone();
         assert_eq!(last.text, "rel");
         // A DIFFERENT COLOUR IS THE WHOLE FORMATTING: no box, no separator
         // (invariants 14 and 15). It has to differ from the piece before it,
         // which is the directory one is in.
-        let before = &typed[typed.len() - 2];
+        let before = &typed[typed.len() - 3];
         assert_ne!(
             last.color, before.color,
             "the query came out in the same colour as the path"
@@ -17559,8 +19460,13 @@ mod tests {
         let v = view_at(Path::new("/usr/share"));
         let crumbs = v.crumbs(120);
         assert!(crumbs.len() >= 3);
+        // THE SHAPE'S GLYPH IS NOT A CRUMB, and it is drawn after them — see
+        // `View::layout_field`, which goes last so that `lit_field`'s walk from
+        // the right cannot give its cell to the path.
+        assert_eq!(crumbs.last().unwrap().hit, Hit::Layout);
+        let path: Vec<&Field> = crumbs.iter().filter(|f| f.hit != Hit::Layout).collect();
         // The last piece is where one IS, and is not a place to go.
-        assert_eq!(crumbs.last().unwrap().hit, Hit::Nothing);
+        assert_eq!(path.last().unwrap().hit, Hit::Nothing);
         assert_eq!(v.crumb_target(0), Some(PathBuf::from("/")));
         assert_eq!(v.crumb_target(1), Some(PathBuf::from("/usr")));
     }
@@ -18603,6 +20509,765 @@ mod tests {
     /// The region both doors give the manager: twelve lines.
     const ROOM: usize = 12;
 
+    /// A view of `files` files with the entries side by side.
+    fn a_grid_of(name: &str, files: usize) -> (View, ronoctua_i18n::Texts) {
+        let dir = scratch(name);
+        for n in 0..files {
+            std::fs::write(dir.join(format!("f{n:03}.txt")), b"x").unwrap();
+        }
+        let mut v = view_at(&dir);
+        v.reread();
+        v.key(of_view("C-g"));
+        assert!(v.grid_shown(), "`C-g` did not turn the entries over");
+        (v, bundle())
+    }
+
+    /// The listing's section, laid out.
+    fn the_shelves(v: &View, room: usize, width: u16, b: &ronoctua_i18n::Texts) -> Section {
+        let chrome = v.chrome_rows(width, b);
+        v.sections(&chrome, room, width, b)
+            .into_iter()
+            .find(|s| s.pane == Pane::Listing)
+            .expect("the listing is a section")
+    }
+
+    /// How tall the region has to be for several shelves to fit.
+    const TALL: usize = 40;
+
+    #[test]
+    fn the_glyph_at_the_end_of_the_path_turns_the_entries_over() {
+        // THE DEFECT THIS CATCHES: a glyph drawn where the path is allowed to
+        // write. `crumb_box` kept nothing at the right-hand end of that row
+        // before this, because nothing was drawn there — so a long path plus a
+        // typed query would run over the control rather than stop before it,
+        // and what one would see is a letter, not a missing glyph.
+        let (mut v, b) = a_grid_of("grade-glifo", 4);
+        // Back to a list, so the glyph is asked to point the OTHER way.
+        v.key(of_view("C-g"));
+        assert!(!v.grid_shown());
+        let width = 120;
+        let row = &v.chrome_rows(width, &b)[0];
+        let last = *row
+            .fields
+            .iter()
+            .map(|f| f.at)
+            .max()
+            .as_ref()
+            .expect("the path's row has fields");
+        let glyph = row.fields.last().expect("the glyph is the last field");
+        assert_eq!(glyph.at, last, "something is drawn past the glyph");
+        assert_eq!(glyph.hit, Hit::Layout);
+        assert_eq!(
+            glyph.text,
+            ronoctua_tokens::icon::VIEW_GRID.to_string(),
+            "the glyph draws where it IS instead of where it goes"
+        );
+        // AND NOTHING ELSE CLAIMS ITS CELL — which is what the reserve is for.
+        assert_eq!(
+            row.field_index_at(glyph.at),
+            Some(row.fields.len() - 1),
+            "the path reaches the cell the glyph was given"
+        );
+        // AND CLICKING IT IS THE KEY. One gesture, two affordances.
+        let step = v.click(usize::MAX, &Hit::Layout);
+        assert!(matches!(step, Step::Say(_)));
+        assert!(v.grid_shown(), "the glyph did not turn the entries over");
+        let turned = &v.chrome_rows(width, &b)[0];
+        assert_eq!(
+            turned.fields.last().expect("still there").text,
+            ronoctua_tokens::icon::VIEW_LIST.to_string(),
+            "the glyph did not change with the mode"
+        );
+    }
+
+    #[test]
+    fn a_long_path_stops_before_the_shape_glyph() {
+        // THE DEFECT THIS CATCHES: the reserve and the placement drifting. They
+        // are one subtraction apart (`LAYOUT_CELL`), and if either forgets it
+        // the glyph sits under the last letter of the path.
+        let deep = scratch("grade-caminho-longo")
+            .join("um-nome-de-pasta-bem-comprido")
+            .join("e-outro-ainda-mais-comprido")
+            .join("e-mais-um-para-garantir");
+        std::fs::create_dir_all(&deep).unwrap();
+        let mut v = view_at(&deep);
+        v.reread();
+        let b = bundle();
+        // IN BOTH SHAPES, because side by side there are TWO glyphs out there
+        // and the path has to stop before the LEFTMOST of them — the air
+        // between the pair included, or the last letter lands in the gap that
+        // separates them.
+        for side_by_side in [false, true] {
+            if v.grid_shown() != side_by_side {
+                v.key(of_view("C-g"));
+            }
+            assert_eq!(v.grid_shown(), side_by_side);
+            for width in [40_u16, 60, 80, 120, 200] {
+                let row = &v.chrome_rows(width, &b)[0];
+                let glyphs = if side_by_side { 2 } else { 1 };
+                let first = row.fields[row.fields.len() - glyphs].at;
+                for f in &row.fields[..row.fields.len() - glyphs] {
+                    let ends = f.at + ronoctua_render::layout::width(&f.text);
+                    assert!(
+                        ends <= first,
+                        "at {width} cells the path runs to {ends} and the glyphs start at {first}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_size_ring_walks_the_three_steps_and_comes_round() {
+        // THE DEFECT THIS CATCHES: a ring that stops at the end, which is a key
+        // that does nothing on the third press — and a ring that changes the
+        // number without changing the grid.
+        let (mut v, b) = a_grid_of("grade-anel", 60);
+        // A DOOR WHERE ALL THREE FIT. The size is bounded at BOTH ends — the
+        // renderer's picture ceiling from below and `THUMB_SHELVES` from above —
+        // so a very wide or very short one has fewer than three answers, and
+        // that is the feature rather than a failure. `a_short_door_steps_down`
+        // and `a_wide_screen_gets_bigger_thumbnails_rather_than_missing_ones`
+        // are what hold those two ends.
+        let (room, width) = (20_usize, 60_u16);
+        let mut seen = Vec::new();
+        for _ in 0..THUMB_CELLS.len() + 1 {
+            let sec = the_shelves(&v, room, width, &b);
+            let g = sec.grid.expect("a grid");
+            seen.push(g.step.saturating_sub(ronoctua_design::GAP));
+            assert!(matches!(v.key(of_view("C-G")), Step::Say(_)));
+        }
+        // FOUR PRESSES, THREE SIZES, AND BACK WHERE IT STARTED.
+        assert_eq!(
+            seen[0],
+            seen[THUMB_CELLS.len()],
+            "the ring did not come round"
+        );
+        let mut sorted = seen[..THUMB_CELLS.len()].to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            THUMB_CELLS.len(),
+            "the ring showed {} sizes and there are {}: {seen:?}",
+            sorted.len(),
+            THUMB_CELLS.len()
+        );
+    }
+
+    #[test]
+    fn a_cell_with_a_picture_draws_no_glyph_and_one_without_fills_its_room() {
+        // THE TWO DEFECTS THIS CATCHES, both photographed in one screenshot:
+        // *"os glifos dos itens que não tem thumbnail aparecem minúsculos em vez
+        // de adaptar o tamanho"* and *"os glifos estão aparecendo por cima das
+        // thumbnails, mas não deveriam se quer estar aparecendo quando há
+        // thumbnail"*.
+        //
+        // They are one question asked twice: does this cell have a picture. The
+        // answer decides whether a glyph is drawn at all, and the room the
+        // picture would have had decides how big it is.
+        let (mut v, b) = a_grid_of("grade-glifo-e-figura", 6);
+        let (width, room) = (120_u16, TALL);
+        // THE SIZES THE DOOR WOULD HAND OVER — a cell and a line, in pixels.
+        let asks = v.wants_thumbs(width, room, 10.8, 26.1);
+        let ask = asks.first().expect("the grid wants thumbnails").clone();
+        // A PICTURE FOR EXACTLY ONE OF THEM, under the key the view asked with.
+        v.thumbed(crate::thumbs::Made {
+            key: ask.key.clone(),
+            rgba: ronoctua_render::image::Rgba::new(4, 4, vec![9; 64]),
+            seconds: None,
+            inside: None,
+            moves: false,
+        });
+        let sec = the_shelves(&v, room, width, &b);
+        let g = sec.grid.expect("a grid");
+        let deep = u16::try_from(usize::from(g.down) - usize::from(THUMB_NAME)).unwrap();
+
+        let mut with_picture = 0;
+        let mut without = 0;
+        for row in sec.offset..sec.total {
+            let Some(line) = sec.line_of(row) else { break };
+            let (from, to) = sec.cells_of(row).expect("a drawn row has cells");
+            // THE PICTURE'S OWN LINES, which is every line of the cell but the
+            // name's — the one place a glyph may be.
+            let glyphs: Vec<&Field> = (line..line + usize::from(deep))
+                .filter_map(|l| sec.content.get(l))
+                .flat_map(|r| r.fields.iter())
+                .filter(|f| (from..to).contains(&f.at))
+                .collect();
+            if Some(row) == sec.row_at(line, from) && has_a_picture(&v, &ask.key, &sec, row) {
+                with_picture += 1;
+                assert!(
+                    glyphs.is_empty(),
+                    "the cell with a picture drew {} field(s) over it",
+                    glyphs.len()
+                );
+            } else {
+                without += 1;
+                let glyph = glyphs.first().expect("a cell with no picture shows one");
+                assert_eq!(
+                    glyph.ink,
+                    Ink::Fills(deep),
+                    "the glyph does not fill a picture's room of {deep}"
+                );
+            }
+        }
+        assert_eq!(
+            with_picture, 1,
+            "the picture was not put on exactly one cell"
+        );
+        assert!(
+            without >= 2,
+            "only {without} cells were left to draw a glyph"
+        );
+    }
+
+    /// Whether THIS row is the one the picture was given to.
+    fn has_a_picture(v: &View, key: &str, sec: &Section, row: usize) -> bool {
+        let _ = sec;
+        v.thumb_pixels(key).is_some() && v.cursor_of_key(key) == Some(row)
+    }
+
+    #[test]
+    fn a_short_door_gets_two_shelves_rather_than_one_big_one() {
+        // THE DEFECT THIS CATCHES, and the owner photographed it: the footer
+        // showing ONE row of thumbnails. *"A versão de rodapé na região do
+        // minibuffer está mostrando apenas uma linha no meu laptop em vez de
+        // duas."*
+        //
+        // A row of pictures with the rest of the region blank is a listing made
+        // worse — no sense of a page, nothing to drop to, and a scroll that
+        // moves a screenful at a time. The size is bounded from ABOVE by the
+        // room as well as from below by the renderer's ceiling, and this is the
+        // upper bound.
+        let (v, b) = a_grid_of("grade-porta-baixa", 40);
+        // THE FOOTER WITH ITS PANELS PUT AWAY: twelve lines less the path.
+        //
+        // WITH them the strip takes four more and seven are left, which two
+        // cells of four lines do not fit — a name takes two of those four, at
+        // the owner's word, and a picture of one line is not a picture. That
+        // door gets one shelf of the SMALLEST, which is nine files rather than
+        // five, and it is the most the arithmetic allows.
+        const FOOTER: usize = 12 - 1;
+        let sec = the_shelves(&v, FOOTER, 120, &b);
+        let g = sec.grid.expect("the listing has a grid");
+        assert!(
+            g.rows >= THUMB_SHELVES,
+            "a {FOOTER}-line door got {} shelf/shelves of {} lines each",
+            g.rows,
+            g.down
+        );
+        // AND THE SHORTER ONE TAKES THE SMALLEST, which is the most files it
+        // can show — never the middle size with one shelf of five.
+        let tight = the_shelves(&v, 12 - 1 - 4, 120, &b)
+            .grid
+            .expect("a grid")
+            .step
+            .saturating_sub(ronoctua_design::GAP);
+        assert_eq!(
+            tight, THUMB_CELLS[0],
+            "a door too short for two shelves did not take the size that shows most"
+        );
+        // AND A TALL DOOR IS NOT MADE TO PAY FOR IT: with room to spare the
+        // size the ring was left on is the size that is drawn.
+        let tall = the_shelves(&v, 40, 120, &b)
+            .grid
+            .expect("a grid")
+            .step
+            .saturating_sub(ronoctua_design::GAP);
+        let short = g.step.saturating_sub(ronoctua_design::GAP);
+        assert!(
+            tall > short,
+            "the tall door came out at {tall} cells and the short one at {short}: \
+             every door is paying for the shortest"
+        );
+    }
+
+    #[test]
+    fn the_size_key_refuses_in_a_list_and_says_why() {
+        // THE DEFECT THIS CATCHES: `Step::Nothing`. `Where` decides what the
+        // hint line TEACHES; a key that is pressed still runs, and a key that
+        // runs and does nothing at all is a key one presses twice wondering.
+        let dir = scratch("grade-anel-lista");
+        std::fs::write(dir.join("a.txt"), b"x").unwrap();
+        let mut v = view_at(&dir);
+        v.reread();
+        assert!(!v.grid_shown());
+        match v.key(of_view("C-G")) {
+            Step::Say(e) => assert_eq!(e.key, ronoctua_i18n::key::FILES_GRID_NONE),
+            other => panic!("the size key said nothing in a list: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_wide_screen_gets_bigger_thumbnails_rather_than_missing_ones() {
+        // THE DEFECT THIS CATCHES: handing the renderer more pictures than it
+        // draws. `Images::prepare` takes what fits and DROPS the rest with
+        // nothing in any log — its own comment calls that the one silent
+        // failure in the feature — so the ceiling is honoured from this end,
+        // by asking for fewer and bigger cells.
+        let (mut v, b) = a_grid_of("grade-teto", 4);
+        // The smallest step, which is the one a wide screen overflows.
+        while v.thumb_asked() != 0 {
+            v.key(of_view("C-G"));
+        }
+        let most = usize::from(ronoctua_tokens::space::FILES_THUMBMOST);
+        let mut stepped = 0;
+        for width in [120_u16, 400, 900, 2000] {
+            let sec = the_shelves(&v, 400, width, &b);
+            let g = sec.grid.expect("a grid");
+            assert!(
+                g.fit() <= most,
+                "{width} cells wide asks for {} pictures and the renderer draws {most}",
+                g.fit()
+            );
+            if g.step.saturating_sub(ronoctua_design::GAP) > THUMB_CELLS[0] {
+                stepped += 1;
+            }
+        }
+        assert!(
+            stepped > 0,
+            "no width was wide enough to make the size step up; this proves nothing"
+        );
+    }
+
+    #[test]
+    fn the_entries_go_side_by_side_and_a_shelf_is_several_lines() {
+        // THE DEFECT THIS CATCHES: a grid that is a list with wider rows. Every
+        // number below would be right for one entry per line, and the whole
+        // feature is that they are not.
+        let (v, b) = a_grid_of("grade-lado-a-lado", 30);
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let g = sec.grid.expect("the listing has a grid");
+        assert!(g.across > 1, "a grid one across is a list: {g:?}");
+        assert!(
+            g.down > 1,
+            "a shelf one line deep has no room for a picture"
+        );
+        // THE LINES ARE STILL LINES, which is what keeps both painters and
+        // `expansion_window` untouched.
+        //
+        // ITS OWN height and not the door's: a short listing gives back the
+        // lines it does not use, which is what `sections_of`'s `most` is for and
+        // is older than this mode.
+        assert_eq!(
+            sec.content.len(),
+            sec.lines,
+            "a section draws its own height"
+        );
+        assert!(sec.lines > usize::from(g.down), "one shelf proves nothing");
+        // THE WAY OUT IS AN ENTRY LIKE ANY OTHER, so it is thirty-one.
+        assert_eq!(sec.total, v.amount(), "the total is ENTRIES, never shelves");
+        assert!(
+            sec.total > usize::from(g.across),
+            "one shelf proves nothing"
+        );
+        // AND A SHELF HOLDS `across` OF THEM: the tenth entry is not on the
+        // tenth line.
+        let far = usize::from(g.across);
+        assert_eq!(sec.line_of(0), sec.line_of(far.saturating_sub(1)));
+        assert_ne!(sec.line_of(0), sec.line_of(far));
+    }
+
+    #[test]
+    fn where_a_thumbnail_is_drawn_is_where_the_pointer_takes_it() {
+        // THE DEFECT THIS CATCHES: the drawing and the click disagreeing, which
+        // is the one `ronoctua_design::Grid` was written to stop — its own doc
+        // records the symptom as "the click landing on one item while the screen
+        // showed another". Here it is asked of the SECTION, which is the half
+        // the grid does not do: the offset and the chrome are ours.
+        let (v, b) = a_grid_of("grade-ida-e-volta", 60);
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let g = sec.grid.expect("the listing has a grid");
+        let mut seen = 0;
+        for row in 0..sec.total {
+            let Some(line) = sec.line_of(row) else {
+                continue;
+            };
+            let (from, to) = sec.cells_of(row).expect("a drawn row has cells");
+            // EVERY CELL OF IT, air included — the whole step belongs to the
+            // item, which is what makes a target one does not miss.
+            for cell in from..to {
+                assert_eq!(
+                    sec.row_at(line - sec.top, cell),
+                    Some(row),
+                    "row {row} is drawn on line {line} and cell {cell} answers elsewhere"
+                );
+            }
+            // AND EVERY LINE OF IT, not only the one the name is on.
+            for deep in 0..usize::from(g.down) {
+                assert_eq!(
+                    sec.row_at(line - sec.top + deep, from),
+                    Some(row),
+                    "row {row} does not answer on its own line {deep} down"
+                );
+            }
+            seen += 1;
+        }
+        assert!(seen >= usize::from(g.across), "only {seen} rows were drawn");
+    }
+
+    #[test]
+    fn a_thumbnail_answers_over_the_cells_it_draws_nothing_on() {
+        // THE DEFECT THIS CATCHES: `View::hit` ending in `field_at(cell)?`. A
+        // thumbnail is a picture the door paints over cells the view left
+        // empty, so asking for a FIELD first answers "nowhere" over most of
+        // every cell — and the owner has already reported that exact shape one
+        // panel along: *"é impossível clicar no ícone, pois ele desaparece
+        // antes de o cursor conseguir chegar nele"*.
+        let (v, b) = a_grid_of("grade-vao", 20);
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let g = sec.grid.expect("the listing has a grid");
+        let (from, _) = sec.cells_of(1).expect("the second entry is drawn");
+        let line = sec.line_of(1).expect("the second entry is on screen");
+        // THE TOP LINE OF THE CELL, which is picture and carries no field at
+        // all unless the entry is marked.
+        assert!(
+            sec.content[line].fields.iter().all(|f| f.at != from),
+            "this line has a field at the cell's first column, so it proves nothing"
+        );
+        let got = v.hit(120, TALL, line, from, &b).expect("the cell answers");
+        assert_eq!(got.pane, Pane::Listing);
+        assert_eq!(got.row, 1, "the empty part of a cell named another entry");
+        assert!(matches!(got.hit, Hit::Name(1)));
+        // AND THE MIDDLE OF THE PICTURE TOO, not only its corner.
+        let middle = line + usize::from(g.down) / 2;
+        assert_eq!(
+            v.hit(120, TALL, middle, from + 1, &b).map(|t| t.row),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn the_pointer_over_a_grid_lights_no_band_at_all() {
+        // THE DEFECT THIS CATCHES, and the owner photographed it: *"a linha do
+        // hover do mouse aparece e está enorme. Porém não deveria aparecer
+        // nenhuma linha."* A band the width of the listing and as deep as a
+        // shelf, drawn to say the pointer is on ONE of the six files under it.
+        //
+        // The rule is older than this mode — `band_belongs` already says a band
+        // is about a LINE OF A LIST and a photograph is not a list — and side
+        // by side the whole region is photographs.
+        let (v, b) = a_grid_of("grade-sem-faixa", 20);
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let (from, to) = sec.cells_of(2).expect("the third entry is drawn");
+        let line = sec.line_of(2).expect("the third entry is on screen");
+        for cell in [from, (from + to) / 2, to - 1] {
+            assert_eq!(
+                v.band_row(120, TALL, line, cell),
+                None,
+                "a band was offered over the picture at cell {cell}"
+            );
+        }
+        // AND THE CURSOR STILL HAS ONE, because that is not the pointer: it is
+        // where the keyboard is, and a grid with nothing lit is a grid one
+        // cannot walk.
+        assert!(
+            v.focus_cells(120, TALL).is_some(),
+            "the cursor's own band went with the pointer's"
+        );
+    }
+
+    #[test]
+    fn the_size_ring_answers_on_a_short_door_too() {
+        // THE DEFECT THIS CATCHES, reported: *"ao apertar Ctrl+Shift+g os
+        // tamanhos das thumbnails não estão sendo alterados no modo rodapé do
+        // filemanager, apenas no modo janela."*
+        //
+        // The layout picks a size that FITS a short door, and until the ring is
+        // turned that is right. Once somebody has asked, the asking wins — a
+        // key a door quietly refuses is a key that does nothing.
+        let (mut v, b) = a_grid_of("grade-anel-porta-baixa", 40);
+        const FOOTER: usize = 12 - 4;
+        let cells = |v: &View| {
+            the_shelves(v, FOOTER, 120, &b)
+                .grid
+                .expect("a grid")
+                .step
+                .saturating_sub(ronoctua_design::GAP)
+        };
+        let opened = cells(&v);
+        assert_eq!(opened, THUMB_CELLS[0], "a short door did not open small");
+        v.key(of_view("C-G"));
+        let rung = cells(&v);
+        assert!(
+            rung > opened,
+            "the ring left a short door at {opened} cells, where it opened"
+        );
+        // AND IT WALKS FROM WHAT IS ON SCREEN, not from what was last asked
+        // for: the second step of three, and not the third.
+        assert_eq!(rung, THUMB_CELLS[1], "the ring skipped a size");
+    }
+
+    #[test]
+    fn the_size_glyph_sits_beside_the_shape_glyph_and_rings() {
+        // THE OWNER ASKED FOR IT: *"quero que apareça um novo glifo ao lado
+        // esquerdo do glifo trocador de modos, e esse glifo a cada clique
+        // altera as thumbnails para um outro tamanho."*
+        let (mut v, b) = a_grid_of("grade-glifo-tamanho", 20);
+        let row = &v.chrome_rows(120, &b)[0];
+        let shape = row.fields.last().expect("the shape's glyph is last");
+        let size = &row.fields[row.fields.len() - 2];
+        assert_eq!(shape.hit, Hit::Layout);
+        assert_eq!(size.hit, Hit::Sizing);
+        // AND THERE IS AIR BETWEEN THEM. The owner read them off the screen
+        // glued together: *"você colocou o glifo de mudar o tamanho das
+        // thumbnails colado no glifo de trocar de modo, mas obviamente é
+        // preciso colocar um pequeno espaço entre eles."* Two glyphs of one
+        // family in adjacent cells read as one control.
+        assert_eq!(
+            size.at + LAYOUT_CELL + LAYOUT_AIR,
+            shape.at,
+            "the two glyphs are not one glyph and one gap apart"
+        );
+        // AND NOTHING IS DRAWN IN THE GAP — air that something else fills is
+        // not air. It is the cell the two glyphs are asked about, not the cell
+        // the POINTER is: `Field::covers` hands the gap after a field to that
+        // field on purpose, so the air lights the size's glyph, which is what
+        // makes it a cell wide for the hand without being a cell wide for the
+        // eye.
+        assert!(
+            row.fields.iter().all(|f| f.at != size.at + LAYOUT_CELL),
+            "something was drawn in the air between the two glyphs"
+        );
+        let (_, narrow) = v.crumb_box(120);
+        // AND CLICKING IT IS THE KEY.
+        let was = the_shelves(&v, TALL, 120, &b).grid.expect("a grid").step;
+        assert!(matches!(v.click(usize::MAX, &Hit::Sizing), Step::Say(_)));
+        let now = the_shelves(&v, TALL, 120, &b).grid.expect("a grid").step;
+        assert_ne!(was, now, "the click did not change the size");
+        // AND IT IS GONE WHEN THERE IS NOTHING TO SIZE, giving its cells back.
+        v.key(of_view("C-g"));
+        assert!(!v.grid_shown());
+        let plain = &v.chrome_rows(120, &b)[0];
+        assert!(
+            plain.fields.iter().all(|f| f.hit != Hit::Sizing),
+            "a list drew a control for a size it has not got"
+        );
+        // AND THE SHAPE'S GLYPH DID NOT MOVE. It is the one under the pointer
+        // that pressed it: a control that slides sideways the instant it acts
+        // is a control the hand has to chase, which is the defect the sheet's
+        // expand button already shipped once.
+        assert_eq!(
+            plain.fields.last().expect("the shape's glyph").at,
+            shape.at,
+            "turning the entries over moved the glyph that turned them"
+        );
+        // AND THE PATH GOT THE ROOM BACK, which is what "given back" means:
+        // the glyph's cell AND the air beside it, and not one of the two.
+        let (_, wide) = v.crumb_box(120);
+        assert_eq!(
+            wide,
+            narrow + LAYOUT_CELL + LAYOUT_AIR,
+            "the path kept paying for a control that is gone"
+        );
+    }
+
+    #[test]
+    fn a_long_name_takes_two_lines_and_says_where_it_stopped() {
+        // THE OWNER ASKED FOR IT: *"deixe todos os nomes de arquivos e pastas
+        // com duas linhas, ou seja, o nome quebra para linha de baixo quando
+        // for muito grande."*
+        //
+        // AND NEVER THREE. `layout::wrap` stops PUSHING at its ceiling and then
+        // keeps what is left in hand, so it answers with one line more than it
+        // was asked for — which lands on the shelf below.
+        let dir = scratch("grade-nome-longo");
+        std::fs::write(dir.join("PXL_20240225_070857585.RAW-01.MP.COVER.jpg"), b"x").unwrap();
+        let mut v = view_at(&dir);
+        v.reread();
+        v.key(of_view("C-g"));
+        let b = bundle();
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let g = sec.grid.expect("a grid");
+        let row = sec.total - 1;
+        let line = sec.line_of(row).expect("the file is on screen");
+        let (from, to) = sec.cells_of(row).expect("it has cells");
+        let mine = |l: usize| -> Vec<&Field> {
+            sec.content[l]
+                .fields
+                .iter()
+                .filter(|f| (from..to).contains(&f.at))
+                .collect()
+        };
+        let deep = usize::from(g.down) - usize::from(THUMB_NAME);
+        assert_eq!(mine(line + deep).len(), 1, "the first name line");
+        assert_eq!(mine(line + deep + 1).len(), 1, "the second name line");
+        // AND NOTHING ON THE SHELF BELOW, which is where a third would land.
+        if let Some(next) = sec.content.get(line + usize::from(g.down)) {
+            assert!(
+                next.fields
+                    .iter()
+                    .filter(|f| (from..to).contains(&f.at))
+                    .count()
+                    <= 1,
+                "the name spilled onto the shelf below"
+            );
+        }
+        // AND THE LAST LINE SAYS IT STOPPED.
+        let last = mine(line + deep + 1)[0].text.clone();
+        assert!(
+            last.ends_with('…'),
+            "a name that did not fit ended without an ellipsis: {last:?}"
+        );
+    }
+
+    #[test]
+    fn the_two_name_lines_of_a_small_cell_are_leaded_by_their_own_size() {
+        // THE OWNER READ IT OFF THE SCREEN: *"no menor dos tamanhos de
+        // thumbnail a distância entre as duas linhas dos nomes de arquivos e
+        // pastas está muito grande e precisa ser reduzida."*
+        //
+        // The name is drawn at three quarters of the body size and the two runs
+        // were a whole GRID line apart, so a quarter of a line of nothing sat
+        // between them — a gap the size a person chose never reaches, because
+        // the grid's leading belongs to the grid's size.
+        let dir = scratch("grade-nome-entrelinha");
+        std::fs::write(dir.join("PXL_20240225_070857585.RAW-01.MP.COVER.jpg"), b"x").unwrap();
+        let mut v = view_at(&dir);
+        v.reread();
+        v.key(of_view("C-g"));
+        let b = bundle();
+        // THE SMALLEST STEP, which is the one the sentence is about. A short
+        // door opens there on its own; the ring is what gets a tall one there.
+        while v.thumb_cells() != THUMB_CELLS[0] {
+            v.key(of_view("C-G"));
+            assert_ne!(v.thumb_cells(), 0, "the ring never reached the smallest");
+        }
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let g = sec.grid.expect("a grid");
+        let row = sec.total - 1;
+        let line = sec.line_of(row).expect("the file is on screen");
+        let (from, to) = sec.cells_of(row).expect("it has cells");
+        let deep = usize::from(g.down) - usize::from(THUMB_NAME);
+        let name = |l: usize| -> Ink {
+            sec.content[l]
+                .fields
+                .iter()
+                .find(|f| (from..to).contains(&f.at) && f.hit == Hit::Name(row))
+                .expect("a name line")
+                .ink
+        };
+        // EACH LINE KNOWS WHICH LINE IT IS, which is the whole of the door's
+        // half: only the door knows the two runs are one block.
+        assert_eq!(name(line + deep), Ink::Small(0));
+        assert_eq!(name(line + deep + 1), Ink::Small(1));
+
+        // AND THE SECOND ONE ASKS TO BE PULLED UP BY THE WHOLE DIFFERENCE
+        // between the grid's leading and its own, so the pair reads as one
+        // name. The first does not move at all — a name that fits on one line
+        // draws exactly where it always did.
+        let base = ronoctua_tokens::text::size();
+        let leading = base * ronoctua_tokens::font::LINE_HEIGHT;
+        let first = run_size(name(line + deep), base, leading).stacked(leading);
+        let second = run_size(name(line + deep + 1), base, leading).stacked(leading);
+        assert!(first.abs() < f32::EPSILON, "the first line moved: {first}");
+        assert!(second < 0.0, "the second line was not pulled up: {second}");
+        let own = crate::paint::scale_in_px(ronoctua_protocol::Scale::Small)
+            * ronoctua_tokens::font::LINE_HEIGHT;
+        assert!(
+            ((leading + second) - own).abs() < 0.001,
+            "the two lines sit {} apart and the size they are drawn in wants {own}",
+            leading + second
+        );
+        assert!(
+            own < leading,
+            "the small size is not smaller, so this test proves nothing"
+        );
+
+        // AND A BIGGER STEP IS UNTOUCHED: there the name IS the grid's size, so
+        // the grid's leading is its own and nothing may move.
+        v.key(of_view("C-G"));
+        assert_ne!(v.thumb_cells(), THUMB_CELLS[0]);
+        let wide = the_shelves(&v, TALL, 120, &b);
+        assert!(
+            wide.content
+                .iter()
+                .flat_map(|r| &r.fields)
+                .all(|f| !matches!(f.ink, Ink::Small(_))),
+            "a big cell drew a small name, which the grid's own leading fits"
+        );
+    }
+
+    #[test]
+    fn nothing_names_the_columns_when_there_are_no_columns() {
+        // THE DEFECT THIS CATCHES: the header row surviving into the grid. It
+        // would head a size column and a date column that are not drawn, and it
+        // costs one of the footer's twelve lines to do it.
+        let (mut v, b) = a_grid_of("grade-cabecalho", 4);
+        v.key(of_view("C-D"));
+        assert!(v.header_shown(), "`C-D` did not ask for the names");
+        assert_eq!(
+            v.chrome_lines(),
+            CHROME,
+            "the names are drawn over a grid that has none"
+        );
+        let sec = the_shelves(&v, TALL, 120, &b);
+        assert_eq!(sec.above, CHROME);
+        // AND IT COMES BACK the moment the entries are one to a line again.
+        v.key(of_view("C-g"));
+        assert_eq!(v.chrome_lines(), CHROME + 1);
+    }
+
+    #[test]
+    fn the_arrows_walk_a_shelf_down_and_one_file_across() {
+        // THE DEFECT THIS CATCHES: `<down>` moving one ENTRY in a grid, which
+        // is the file beside this one — so the cursor crawls along a shelf
+        // while the eye expects it to drop.
+        let (mut v, b) = a_grid_of("grade-setas", 40);
+        // The layout has to have happened for the keys to know the shape.
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let across = usize::from(sec.grid.expect("a grid").across);
+        assert!(across > 1, "one across proves nothing");
+        // WHERE IT STARTS IS THE VIEW'S BUSINESS — what this is about is how
+        // far each press MOVES.
+        let start = v.cursor();
+        v.key(of_view("<down>"));
+        assert_eq!(
+            v.cursor(),
+            start + across,
+            "`<down>` did not drop a whole shelf"
+        );
+        v.key(of_view("<right>"));
+        assert_eq!(
+            v.cursor(),
+            start + across + 1,
+            "`<right>` did not walk one file"
+        );
+        v.key(of_view("<left>"));
+        assert_eq!(v.cursor(), start + across);
+        v.key(of_view("<up>"));
+        assert_eq!(v.cursor(), start, "`<up>` did not climb a whole shelf");
+    }
+
+    #[test]
+    fn a_dragged_grid_lands_on_a_whole_shelf() {
+        // THE DEFECT THIS CATCHES: an offset between two shelves. The top row
+        // would be drawn cut — part of one shelf and part of the next — and
+        // every cell's line arithmetic would be off by the remainder.
+        let (mut v, b) = a_grid_of("grade-arrasto", 100);
+        let across = usize::from(the_shelves(&v, TALL, 120, &b).grid.expect("a grid").across);
+        for at in [0.13_f64, 0.37, 0.61, 0.88, 1.0] {
+            assert!(v.drag_to(
+                Pane::Listing,
+                Axis::Down,
+                at,
+                120,
+                Room {
+                    list: TALL,
+                    panel: 0
+                }
+            ));
+            let sec = the_shelves(&v, TALL, 120, &b);
+            assert_eq!(
+                sec.offset % across,
+                0,
+                "dragging to {at} left the page {} entries into a shelf",
+                sec.offset % across
+            );
+        }
+    }
+
     #[test]
     fn a_menu_taller_than_the_region_is_a_section_with_a_bar_of_its_own() {
         // THE DEFECT THIS CATCHES: a modal drawn past the sections. It had no
@@ -19294,7 +21959,9 @@ mod tests {
         // THE RULE THE WHOLE KEYBOARD WAS REBUILT AROUND: in a list of names
         // the letter is text. A pane that swallowed letters would break it in
         // the one place nobody would think to test.
-        let query = v.crumbs(120).last().expect("the path has fields").clone();
+        let crumbs = v.crumbs(120);
+        // THE GLYPH IS LAST AND IS NOT THE QUERY — see `View::layout_field`.
+        let query = crumbs[crumbs.len() - 2].clone();
         assert_eq!(query.text, "a");
         assert_eq!(query.color, ronoctua_tokens::color::STATE_ACCENT);
         assert!(v.filtering());
@@ -21523,11 +24190,12 @@ mod tests {
             v.key(press(c));
         }
         let crumbs = v.crumbs(w);
-        let last = crumbs.last().expect("the path has fields");
+        // THE GLYPH IS LAST AND IS NOT THE QUERY — see `View::layout_field`.
+        let last = &crumbs[crumbs.len() - 2];
         assert_eq!(
             last.color,
             ronoctua_tokens::color::STATE_ACCENT,
-            "the last field should be the query: {crumbs:?}"
+            "the last field before the glyph should be the query: {crumbs:?}"
         );
         assert!(!last.text.is_empty(), "the query went away");
         let _ = std::fs::remove_dir_all(&dir);
@@ -22144,6 +24812,7 @@ mod tests {
                 offset,
                 total,
                 above: 0,
+                grid: None,
                 content: Vec::new(),
             };
             let (_, y, _, tall) = sec
@@ -22292,17 +24961,42 @@ mod tests {
         v.preview_on = false;
         v.info_on = false;
         let bare = hint_keys(&v, &b);
+        let mut proved = 0;
         for (notation, id, w) in OF_THE_VIEW {
             if *w == Where::Anywhere {
                 continue;
             }
+            // A CONTEXT THAT HOLDS IN THE BARE STATE IS STILL A CONTEXT, and
+            // there is nothing for this half to prove about it: the entries are
+            // one to a line here, so `Where::OnALine` is satisfied and its keys
+            // SHOULD be taught. The other half of the test — below — is what
+            // covers a context arriving.
+            if w.shown(&v) {
+                continue;
+            }
+            // AND A NOTATION TWO ROWS SPELL is drawn by whichever one's context
+            // holds. `<left>` is the sections' ring while the entries are one to
+            // a line and one cell along when they are side by side; the hint
+            // line draws `←` once either way, so the key alone cannot say which
+            // row put it there.
             let t = Key::parse(notation).expect("a notation in the table");
             let drawn = crate::chrome::key_text(&t);
+            if OF_THE_VIEW
+                .iter()
+                .any(|(k, other, w2)| k == notation && other != id && w2.shown(&v))
+            {
+                continue;
+            }
+            proved += 1;
             assert!(
                 !bare.contains(&drawn),
                 "`{drawn}` ({id}) is taught with no context for it: {bare:?}"
             );
         }
+        assert!(
+            proved >= 8,
+            "only {proved} gated keys were provable; the sweep has stopped reaching them"
+        );
 
         // AND WITH A FILM UNDER IT, the film's own keys arrive — and in the
         // guest's register, which is the other half of the report.

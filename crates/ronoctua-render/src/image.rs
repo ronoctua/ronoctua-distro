@@ -124,18 +124,32 @@ struct Instance {
 /// panel, and the globe's, at the top of the info panel beside it. A second
 /// view could be showing a globe of its own.
 ///
+/// # AND A GRID OF THUMBNAILS ON TOP OF THAT
+///
+/// With the entries side by side every cell on screen is a picture, so the
+/// ceiling has to hold a screenful of them. `space.files.thumbMost` is that
+/// number, and the manager honours it from the other end as well: rather than
+/// handing this more than it draws, it steps the thumbnail SIZE up until the
+/// screen holds no more than this — see `files::View::thumb_item`. The two
+/// have to name the same token, which is what
+/// `the-grid-never-drops-a-picture` proves.
+///
 /// THIS IS THE ONE NUMBER IN THE FEATURE THAT FAILS SILENTLY. `prepare` takes
 /// what fits and DROPS the rest with no error anywhere — so a ceiling one too
 /// low means the globe simply never reaches the GPU on a full region, and
 /// nothing on screen or in any log says why. `files-panels-have-two-pictures`
 /// is what keeps it honest.
-const CEILING: usize =
-    tokens::space::EXPANSION_MAXLINES as usize + 1 + crate::image::MANAGER_PICTURES;
+const CEILING: usize = tokens::space::EXPANSION_MAXLINES as usize
+    + 1
+    + crate::image::MANAGER_PICTURES
+    + tokens::space::FILES_THUMBMOST as usize;
 
 /// How many pictures the file manager can have on screen at once.
 ///
 /// The preview's and the globe's. It is named rather than inlined because the
 /// ceiling above has to be able to say WHY it is not just the region's rows.
+/// The thumbnails are counted separately, by their own token — they come and go
+/// with a mode, and these two do not.
 pub const MANAGER_PICTURES: usize = 2;
 
 /// How many textures stay on the GPU between frames.
@@ -143,7 +157,26 @@ pub const MANAGER_PICTURES: usize = 2;
 /// More than one frame's ceiling, so scrolling the list back does not re-pay the
 /// transfer; and bounded, because the clipboard's preview is **33 MB** of
 /// RGBA per screenshot — an unbounded cache would become the footer's memory.
-const TEXTURE_CEILING: usize = CEILING * 3;
+///
+/// # Why it is no longer a multiple of the frame's ceiling
+///
+/// It was `CEILING * 3`, and that was a fine sum while a frame held fifteen
+/// pictures: forty-five of them, at the 512 px `space.files.panelPixels`
+/// allows, is 47 MiB. With a grid the frame's ceiling holds a hundred and
+/// twenty, and three times THAT is four hundred textures — which at the same
+/// size is 400 MiB of file manager.
+///
+/// So the two numbers stopped being one. A frame's ceiling is about what the
+/// renderer DRAWS; this is about what it KEEPS, and what bounds it is memory.
+/// One grid's worth of slack on top of the frame is what makes scrolling back
+/// free without paying for two screenfuls that are not on screen.
+///
+/// Half a grid's worth of slack on top of the frame's ceiling, and half because
+/// the whole of it would be a bound nobody wants to pay: a 4K screen's medium
+/// step draws two hundred pictures of 256 px, so keeping two screenfuls of them
+/// is a hundred mebibytes of file manager. Half is a screenful either side of
+/// where the list is, which is what makes scrolling back free.
+const TEXTURE_CEILING: usize = CEILING + tokens::space::FILES_THUMBMOST as usize / 2;
 
 /// A texture already on the GPU.
 struct Upload {

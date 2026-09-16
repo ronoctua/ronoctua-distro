@@ -33,7 +33,7 @@ use ronoctua_clipboard::{Entry, Queue};
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 
-use crate::files::{Field, Hit, Row};
+use crate::files::{Field, Hit, Ink, Row};
 
 /// The keys this view answers to, and what the hint line is generated from.
 ///
@@ -891,6 +891,7 @@ fn piece(at: u16, text: String, color: tokens::Color) -> Field {
         color,
         hit: Hit::Nothing,
         explain: None,
+        ink: Ink::Grid,
     }
 }
 

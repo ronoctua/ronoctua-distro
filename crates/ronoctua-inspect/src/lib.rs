@@ -36,6 +36,13 @@
 // WHAT A DOCUMENT SAYS — the office formats, which are zips of XML, and the
 // three old ones, which need a program.
 // A WORD 97 DOCUMENT, read out of the piece table that says where its text is.
+/// Thumbnails kept on disk between sessions.
+///
+/// It touches the filesystem, which this crate already does — what it does NOT
+/// do is draw, translate or run a thread, and that is the contract at the top
+/// of this file. A cache of decoded pictures is an answer about a file, filed
+/// under the answer's own [`Stamp`].
+pub mod cache;
 pub mod doc;
 pub mod document;
 pub mod facts;
@@ -289,9 +296,10 @@ pub fn settled<'a>(named: &'a str, sniffed: Option<&'a str>) -> &'a str {
 /// sixty times a second, each one a child process. Rounding up to the next
 /// step means a drag re-decodes at most twice.
 ///
-/// The ceiling is 512 and the arithmetic is the texture cache's:
-/// `ronoctua_render::image` keeps 39 textures, and 512 px of RGBA is 1 MiB
-/// each — 41 MiB. The same 39 at 1200 px would be 224 MiB of footer.
+/// The ceiling is 512 and the arithmetic is the texture cache's: a picture at
+/// 512 px of RGBA is 1 MiB, and `ronoctua_render::image` keeps a bounded number
+/// of them between frames. At 1200 px the same cache would be five times that,
+/// which is why the biggest step is not the biggest a panel could hold.
 ///
 /// It is NOT a token, and that is deliberate: what the panel *asks for* is a
 /// visual value and comes from `space.files.panelPixels` (invariant 9); what

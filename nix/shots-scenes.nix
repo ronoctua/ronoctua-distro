@@ -97,6 +97,13 @@
     id = "facts-wide";
     needs = [ "manager-window" ];
   }
+  # THE LISTING'S OTHER SHAPE. It rides on the window the manager's scene
+  # opened, like the three above it, and it makes its own folder: the picture it
+  # counts pixels of has to be one this repository does not carry (invariant 13).
+  {
+    id = "thumbnails";
+    needs = [ "manager-window" ];
+  }
   # THE REGIONS' VIEW, which opens its own door: `geo-open` is a command, so
   # this scene needs nothing from the ones before it.
   { id = "geo"; }

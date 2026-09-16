@@ -150,6 +150,24 @@
     sidebarGutter = 0;
     sidebarEject = 1;
 
+    # THE AIR BETWEEN THE TWO GLYPHS at the right-hand end of the path's line,
+    # in CELLS.
+    #
+    # There are two of them side by side while the entries are thumbnails — the
+    # one that rings the SIZE and the one that turns the SHAPE over — and with
+    # nothing between them the owner read them off the screen as one control:
+    # *"você colocou o glifo de mudar o tamanho das thumbnails colado no glifo
+    # de trocar de modo, mas obviamente é preciso colocar um pequeno espaço
+    # entre eles."* Two glyphs of the same family and weight in adjacent cells
+    # have no boundary to see; the air IS the boundary, and it is the same
+    # argument this file already makes four times about a glyph flush against a
+    # border reading as a glyph that was cut.
+    #
+    # One cell, which is what `sidebarEject` chose for the same job. Two would
+    # cost the path a second letter and start to read as two separate controls
+    # rather than a pair.
+    layoutAir = 1;
+
     # THE AIR AROUND THE PREVIEW'S PICTURE, in PIXELS and not in cells — the
     # fourth block in this file measured that way, and for the same reason
     # `panelPixels` two paragraphs down is: it is the size of a PICTURE, and a
@@ -182,9 +200,9 @@
     # `font.size.base`, so 512 is headroom and not appetite.
     #
     # It is also what bounds the GPU, and that is the half that is arithmetic
-    # rather than taste. `ronoctua-render`'s image pipeline keeps thirty-nine
-    # textures between frames; 512 px of RGBA is 1 MiB each, so 41 MiB. At
-    # 1200 px the same thirty-nine would be 224 MiB of footer.
+    # rather than taste. `ronoctua-render`'s image pipeline keeps a bounded
+    # number of textures between frames, and 512 px of RGBA is 1 MiB each. At
+    # 1200 px the same cache would be five times that.
     #
     # The decoder quantises what it is asked for to 128, 256 or 512, so that
     # dragging a window's edge does not decode a phone photograph again on
@@ -313,6 +331,127 @@
     # where it is drawn: the highlighter's ranges are byte offsets into the
     # text, and expanding tabs afterwards would move every one of them.
     tabWidth = 4;
+
+    # HOW WIDE ONE THUMBNAIL IS, in cells, at each of the three steps the size
+    # key rings through.
+    #
+    # THREE NUMBERS AND NOT SIX. Only the width is declared; the height comes
+    # out of it in `files::thumb_lines`, as the same box measured on the other
+    # axis — a cell is `typography.cellWidthEm` of the font and a line is
+    # `typography.lineHeight` of it, so a square picture is
+    # `cells x 0.600 / 1.45` lines, and the name's line is added after. Writing
+    # the height here as well would be a second visual value that could drift
+    # from the first, and the drift is a picture that is not square.
+    #
+    # WHY THESE THREE. `small` is the smallest at which a photograph is still a
+    # photograph rather than a smear: ten cells is six ems across, four lines of
+    # picture, and at 100% on this machine that is 108 px — the size the
+    # freedesktop thumbnail standard calls `normal`, arrived at independently
+    # and a reassurance rather than a reason. `large` is twenty-four because at
+    # 14,4 ems a 1920 px window still holds eleven of them across, and a step
+    # that shows six items is a preview panel with extra steps. `medium` is the
+    # one in between and is where the ring starts.
+    #
+    # They are CELLS and not pixels, unlike `panelPixels` above, and the
+    # difference is which question is being answered: `panelPixels` bounds what
+    # the DECODER is asked for, which is pixels because a texture is pixels;
+    # this is how much of the text grid one item occupies, which is what every
+    # other layout number in this block is.
+    # WHY THESE THREE, AND WHY THE SMALLEST IS THIS SMALL.
+    #
+    # `small` is what a FOOTER can hold. The footer gives the manager twelve
+    # lines; one is the path and four are the strip the two panels sit in when
+    # they are down there, which leaves seven. A cell is its picture plus the
+    # name's line, and the picture is as many lines as the width is ems — six
+    # cells is 3,6 em across, which is three lines with the name. Seven lines
+    # hold two of those; at ten cells they hold one, and the owner photographed
+    # exactly that: *"a versão de rodapé … está mostrando apenas uma linha no
+    # meu laptop em vez de duas"*.
+    #
+    # `large` is twenty because at twelve ems a 1920 px window still holds nine
+    # of them across, and a step that shows six items is a preview panel with
+    # extra steps. `medium` is the one in between and is where the ring starts —
+    # a WINDOW opens there, and `files::View::thumb_item` steps DOWN to what a
+    # short door can hold rather than making every door pay for the shortest.
+    thumbSmall = 6;
+    thumbMedium = 12;
+    thumbLarge = 20;
+
+    # HOW MANY THUMBNAILS MAY BE ON SCREEN AT ONCE.
+    #
+    # It is the GPU's number, and it is here because it is the one that decides
+    # the grid: `ronoctua_render::image` keeps one texture and one draw call per
+    # picture, and `prepare` DROPS what does not fit **with nothing in any log**
+    # — the one silent failure in this feature. So the grid never asks for more
+    # cells than this: on a screen that would hold more, the size steps up until
+    # it fits, which on a 4K panel is bigger thumbnails and not missing ones.
+    #
+    # TWO HUNDRED AND FIFTY-SIX, and the number is the two screens this has to
+    # work on doing the arguing. Counted out at the base font:
+    #
+    #   1920x1080  small 16x8 = 128   medium 10x5 =  50   large 7x3 = 21
+    #   3840x2160  small 32x16 = 512  medium 20x10 = 200  large 14x7 = 98
+    #
+    # So 256 lets the smallest step be reachable on a 1080p screen — which a
+    # ceiling of 120 would NOT, and the ring would have had two usable steps
+    # out of three — and steps 4K's smallest up to its medium, which is the
+    # right answer anyway: five hundred pictures at once is a contact sheet, not
+    # a folder.
+    #
+    # The memory is the other half. A small thumbnail decodes to 128 px, which
+    # is 64 KiB of RGBA, so a 1080p screenful is 8 MiB; a medium one decodes to
+    # 256 px and 4K's two hundred of those are 50 MiB — against the 41 MiB
+    # `panelPixels` above already argues is acceptable for the panels alone.
+    thumbMost = 256;
+
+    # HOW MANY THUMBNAILS ANIMATE BY THEMSELVES.
+    #
+    # An animated GIF, an animated WebP and an APNG all decode frame by frame
+    # IN PROCESS, so one of them costs a file descriptor and a frame — never a
+    # child process, which is what the pointer's clips cost and why those are
+    # one at a time.
+    #
+    # Twelve, and it is measured rather than chosen. One frame of a
+    # four-hundred-pixel GIF composited and scaled to a thumbnail is 2,35 ms on
+    # this machine, and the decoder holds the full-size canvas it composites
+    # into — 625 KiB for that file. Twelve at ten frames a second is 28% of one
+    # core and about 7,5 MiB. The number that is NOT acceptable is the one this
+    # ceiling exists to refuse: fifty GIFs with their frames decoded up front
+    # is 215 MiB, measured on the owner's own sample.
+    #
+    # Above the ceiling a cell shows its still frame and says so with a mark. A
+    # refusal that is drawn is a refusal; one that is silent is a bug.
+    thumbAnimators = 12;
+
+    # HOW MANY MEBIBYTES OF DECODED THUMBNAIL ARE KEPT IN MEMORY.
+    #
+    # Sixty-four. The host's cache is what stops a folder being decoded again
+    # every time it is scrolled back to, and without a ceiling it is what the
+    # icon cache already is — unbounded — except that an icon is a few kibibytes
+    # and a thumbnail at the large step is 256. Four hundred of those is a
+    # hundred mebibytes of file manager, which is the argument
+    # `image::TEXTURE_CEILING` already makes about the clipboard's screenshots.
+    #
+    # Over the ceiling the policy is the coarse one `Images::dump` already uses:
+    # keep what is on screen and let the rest go. A true LRU would need a clock
+    # and a sort per frame to save a memcpy the disk cache has already made
+    # cheap.
+    thumbMemory = 64;
+
+    # HOW LONG ONE CLIP OF A FILM LASTS under the pointer, in tenths of a
+    # second.
+    #
+    # Twenty-five, so two and a half seconds. The pointer's preview walks a film
+    # rather than playing it from the start: it seeks to a handful of evenly
+    # spaced points and shows a little of each, which says what is IN the film
+    # in a way the first frame — a title card, or black — never does.
+    #
+    # Tenths because this block is integers and a second is too coarse: one
+    # second reads as a stutter and four is long enough that nobody waits for
+    # the second clip. Measured: seeking anywhere in a ten-minute film and
+    # decoding costs 137-143 ms, so the cut between clips is a fifth of what is
+    # shown, which reads as a cut rather than a stall.
+    thumbClipTenths = 25;
   };
 
   # The TRANSFER queue's row, in cells.

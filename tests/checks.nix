@@ -11410,6 +11410,305 @@ let
     END
   '';
 
+  # THE GRID IS ONE ARITHMETIC, and it is not this crate's.
+  #
+  # `ronoctua_design::Grid` exists because the three icon browsers each had
+  # their own placement sum, and its own header records the symptom: "the click
+  # landing on one item while the screen showed another". The manager's grid is
+  # a fourth caller, and a fourth copy would be that defect a fourth time — on
+  # the one screen where a mis-click deletes a file rather than picking an icon.
+  the-grid-is-one-arithmetic = mkCheck "the-grid-is-one-arithmetic" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    files = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
+    grid = pathlib.Path("${../crates/ronoctua-design/src}/grid.rs").read_text()
+    bad = []
+
+    # THE DEFINITION STILL DEFINES. A check that only forbids would pass on the
+    # day somebody deleted the pair and went back to hand.
+    for name in ("pub fn at(", "pub fn index_at(", "pub const fn fitted("):
+      if name not in grid:
+        bad.append(f"ronoctua-design's Grid no longer has `{name}`")
+
+    # AND THE MANAGER GOES THROUGH IT, in both directions.
+    for name, why in (
+      ("g.at(i)", "places a row"),
+      ("g.index_at(", "finds the row a cell is on"),
+      ("Grid::fitted(", "works out how many fit"),
+    ):
+      if name not in files:
+        bad.append(f"files.rs no longer asks `{name}` to be what {why}")
+
+    # AND NOBODY WORKS A SHELF OUT BY HAND.
+    #
+    # `across` is the number a second arithmetic would divide by. The places
+    # that legally do are the ones converting BETWEEN units — entries to
+    # shelves and back — and they are NAMED here, so a sixth one has to be
+    # argued for rather than appear.
+    #
+    # THE PROSE IS CUT FIRST. The first shape of this read `/// … a band across
+    # it` as a division, because a doc comment begins with a slash and this
+    # file is mostly doc comments — a check that fires on its own explanations
+    # teaches nothing.
+    #
+    # AND THE TESTS ARE CUT OFF, for the reason every other sweep of this file
+    # cuts them: a test that PROVES the offset lands on a whole shelf has to do
+    # the arithmetic to say so, and refusing it would be refusing the proof.
+    # `files.rs` has a `#[cfg(test)]` inside a doc comment, so the LAST one is
+    # the module.
+    cut = [m.start() for m in re.finditer(r"^#\[cfg\(test\)\]", files, re.M)]
+    files = files[: cut[-1]] if cut else files
+    code = "\n".join(
+      re.sub(r"\s*//.*", "", l) for l in files.split("\n") if not l.strip().startswith("//")
+    )
+    named = ("listing_room", "visual_cursor", "follow", "wheel", "thumb_shape",
+             "shelf_rows", "moving_thumbs", "grid_pictures", "wants_thumbs",
+             "sections_of")
+    walls = [(m.start(), m.group(1)) for m in re.finditer(r"\n\s*(?:pub )?fn (\w+)", code)]
+    seen = 0
+    for m in re.finditer(r"[/%]\s*(?:usize::from\()?\s*(?:g\.)?across\b", code):
+      seen += 1
+      whose = "nothing"
+      for at, name in walls:
+        if at < m.start():
+          whose = name
+        else:
+          break
+      if whose not in named:
+        line = code[: m.start()].count("\n") + 1
+        bad.append(f"`{whose}` divides by `across` and is not one of the named "
+                   "conversions; that is a second grid arithmetic")
+    if seen == 0:
+      bad.append("no conversion between entries and shelves was found at all; "
+                 "the sweep has stopped reaching them")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        print("       `ronoctua_design::Grid` is the one placement sum this", file=sys.stderr)
+        print("       project has, and `at`/`index_at` are the same sum in both", file=sys.stderr)
+        print("       directions on purpose. See its own header.", file=sys.stderr)
+        sys.exit(1)
+    print("OK: the manager's grid is ronoctua-design's, in both directions")
+    END
+  '';
+
+  # BOTH DOORS DRAW THUMBNAILS, because there are two and the view is one.
+  #
+  # This feature shipped once with the WINDOW wired and the footer not, and the
+  # owner photographed the difference: *"a versão de rodapé não carrega as
+  # thumbnails"*. Nothing failed — the footer drew glyphs, which is what a cell
+  # with no picture is supposed to draw — so the half that was missing looked
+  # exactly like a folder of documents.
+  #
+  # `every-list-window-has-a-bar` is the same shape, and it found its fifth
+  # window by itself.
+  both-doors-draw-thumbnails = mkCheck "both-doors-draw-thumbnails" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    bad = []
+
+    # WHAT A DOOR HAS TO DO to draw a grid, and what each one is for. A door
+    # that did five of the six would look like a folder of documents.
+    OWED = {
+      "thumbs::pool(": "start the workers that make thumbnails",
+      "wants_thumbs(": "ask for the ones on screen",
+      "grid_pictures(": "work out where each one goes",
+      "thumb_pixels(": "upload them",
+      "thumbs::animator(": "start the thread that walks what moves",
+      "hover_thumb(": "start a film under the pointer",
+    }
+    for door in ("files_window.rs", "surface.rs"):
+      body = (shell / door).read_text()
+      for call, why in OWED.items():
+        if call not in body:
+          bad.append(f"{door} does not `{call}` — it cannot {why}")
+
+    # AND THE VIEW STILL OFFERS THEM, so a check that only reads the doors
+    # cannot be satisfied by deleting the feature.
+    files = (shell / "files.rs").read_text()
+    for name in ("pub fn wants_thumbs", "pub fn grid_pictures", "pub fn hover_thumb",
+                 "pub fn moving_thumbs", "pub fn thumb_pixels"):
+      if name not in files:
+        bad.append(f"files.rs no longer has `{name}`")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        print("       ONE view, TWO doors: what one of them draws the other", file=sys.stderr)
+        print("       draws. A half-wired door shows glyphs, which is what a", file=sys.stderr)
+        print("       cell with no picture is meant to show — so the missing", file=sys.stderr)
+        print("       half looks exactly like a folder of documents.", file=sys.stderr)
+        sys.exit(1)
+    print("OK: both doors make, place, upload and animate thumbnails")
+    END
+  '';
+
+  # THE GRID NEVER HANDS THE RENDERER MORE PICTURES THAN IT DRAWS.
+  #
+  # `Images::prepare` takes what fits and DROPS the rest with nothing in any log
+  # — its own comment calls that the one silent failure in the feature. So the
+  # ceiling is honoured from BOTH ends: the renderer counts a screenful of
+  # thumbnails into its ceiling, and the manager steps the thumbnail SIZE up
+  # rather than asking for more cells than that. The two have to name one token
+  # or the promise is a coincidence.
+  the-grid-never-drops-a-picture = mkCheck "the-grid-never-drops-a-picture" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    image = pathlib.Path("${../crates/ronoctua-render/src}/image.rs").read_text()
+    files = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
+    bad = []
+
+    ceiling = re.search(r"const CEILING: usize =(.*?);", image, re.S)
+    if ceiling is None or "FILES_THUMBMOST" not in ceiling.group(1):
+      bad.append("the renderer's ceiling does not count a screenful of "
+                 "thumbnails; a grid would draw the first few and drop the rest "
+                 "with nothing anywhere saying so")
+
+    # AND THE INSTANCE BUFFER IS SIZED BY THE SAME NUMBER, or the ceiling is a
+    # promise the vertex buffer cannot keep.
+    if "size_of::<Instance>() * CEILING" not in image.replace("std::mem::", ""):
+      bad.append("the instance buffer is no longer sized by CEILING")
+
+    # AND THE MANAGER REFUSES TO ASK FOR MORE.
+    item = re.search(r"fn thumb_item\(.*?\n    \}", files, re.S)
+    if item is None:
+      bad.append("files.rs no longer chooses the thumbnail size in `thumb_item`")
+    else:
+      body = item.group(0)
+      if "FILES_THUMBMOST" not in body:
+        bad.append("thumb_item does not bound itself by `space.files.thumbMost`; "
+                   "a wide screen would ask for pictures the renderer drops")
+      if ".fit()" not in body:
+        bad.append("thumb_item does not count how many would fit")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print("OK: both ends of the picture ceiling name one token")
+    END
+  '';
+
+  # A THUMBNAIL IS ASKED FOR AT THE SIZE IT IS DRAWN.
+  #
+  # `picture_in` gives up `space.files.pictureAir` on all four sides and
+  # `Area::centre` then SHRINKS whatever it is handed to fit what is left — so a
+  # picture decoded at the box's outer size is always drawn a little smaller
+  # than it was decoded. The owner photographed exactly that twice, as a map
+  # that changed size between two scroll positions, and `files::globe_texture`
+  # is where the subtraction was put so it could not be forgotten again.
+  a-thumbnail-is-asked-at-the-size-it-is-drawn =
+    mkCheck "a-thumbnail-is-asked-at-the-size-it-is-drawn" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+
+        files = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
+        bad = []
+
+        side = re.search(r"fn thumb_side\(.*?\n\}", files, re.S)
+        if side is None:
+          bad.append("files.rs no longer works out a thumbnail's decode size in "
+                     "`thumb_side`")
+        else:
+          body = side.group(0)
+          if "FILES_PICTUREAIR" not in body:
+            bad.append("thumb_side does not give up the air `picture_in` sheds, so "
+                       "every thumbnail is decoded larger than it is drawn and "
+                       "`Area::centre` shrinks it — the defect `globe_texture` "
+                       "exists to stop")
+          if "* 2.0" not in body:
+            bad.append("thumb_side gives up the air on two sides and not four")
+
+        # AND THE GLOBE'S OWN SUBTRACTION IS STILL THERE, which is what this one
+        # was copied from: a check that only guards the copy would pass the day
+        # the original went.
+        if "pub fn globe_texture(" not in files:
+          bad.append("files.rs no longer has `globe_texture`")
+
+        if bad:
+            for b in bad:
+                print("ERROR: " + b, file=sys.stderr)
+            sys.exit(1)
+        print("OK: a thumbnail is decoded at the size it is drawn at")
+        END
+      '';
+
+  # ONLY WHAT IS ON SCREEN IS ASKED ABOUT.
+  #
+  # One thumbnail costs a CHILD PROCESS — 109 ms for a 22 KB JPEG and 167 for a
+  # 355 MB video, measured, because what is paid for is the process. A folder of
+  # five thousand asked about at once is five thousand forks. The precedent is
+  # literal: `Footer::request_visible_icons`, whose own comment says four
+  # hundred icons cost seconds and three hundred and eighty are not on screen.
+  only-visible-cells-are-asked-for = mkCheck "only-visible-cells-are-asked-for" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    files = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
+    bad = []
+
+    for name in ("wants_thumbs", "moving_thumbs", "grid_pictures"):
+      fn = re.search(r"fn " + name + r"\(.*?\n    \}", files, re.S)
+      if fn is None:
+        bad.append(f"files.rs no longer has `{name}`")
+        continue
+      body = fn.group(0)
+      # THE WALK STOPS WHERE THE SCREEN DOES. `Section::line_of` answers `None`
+      # past the last shelf that fits, which is the one place that knows.
+      if "line_of(" not in body:
+        bad.append(f"{name} does not ask `line_of` where the screen ends; it "
+                   "would walk the whole directory")
+      if "break" not in body:
+        bad.append(f"{name} does not stop walking when the screen ends")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print("OK: the grid asks only about the cells on screen")
+    END
+  '';
+
+  # AN ANIMATOR HOLDS ONE FRAME, never the film.
+  #
+  # Measured on the owner's own sample: a forty-four-frame GIF decoded whole at
+  # a thumbnail's size is 4,3 MiB, so fifty of them is 215 MiB — which is what
+  # he asked this feature not to cost, in those words. Held one frame at a time
+  # through `image`'s lazy iterator it is 2,35 ms and a decoder's canvas.
+  an-animator-holds-one-frame = mkCheck "an-animator-holds-one-frame" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    thumbs = pathlib.Path("${../crates/ronoctua-shell/src}/thumbs.rs").read_text()
+    bad = []
+
+    if "image::Frames<'static>" not in thumbs:
+      bad.append("the animator no longer holds a lazy frame iterator")
+    # WHAT WOULD BREAK IT: materialising the frames.
+    for m in re.finditer(r"frames[^\n]*\.collect\(\)|collect::<Vec<[^>]*Frame", thumbs):
+      line = thumbs[: m.start()].count("\n") + 1
+      bad.append(f"thumbs.rs:{line} collects a film's frames; fifty animated "
+                 "GIFs would be 215 MiB, measured")
+    # AND THE CEILING ON HOW MANY MOVE AT ONCE.
+    tune = re.search(r"fn retune\(.*?\n\}", thumbs, re.S)
+    if tune is None or "FILES_THUMBANIMATORS" not in tune.group(0):
+      bad.append("the animator does not stop at `space.files.thumbAnimators`; "
+                 "a folder of sixty GIFs would open sixty decoders")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print("OK: the animator holds one frame per cell, and only so many cells")
+    END
+  '';
+
   # A PANEL'S RESERVED LINES ARE NOT ITS ROWS.
   #
   # `Section::above` used to be the listing's alone — the path and the header.
@@ -12273,20 +12572,56 @@ let
       # The shell is the whole scope on purpose: a wasm buffer cannot ask for a
       # size in px (invariant 11 gives it a Scale, and the host resolves it), so
       # every chrome glyph in the system is drawn from here.
-      # BOTH SPELLINGS OF THE ONE ANSWER. `surface::chrome_size` takes the
-      # run's text and `chrome_size_of` takes a `char` — the two chevrons hold
-      # one already, and making them build a `String` for it to be taken apart
-      # again was a cost per frame. They are the same measurement; what this
-      # refuses is a size that came from anywhere else.
-      loose=$(grep -rn "Size::OnTheCell(" ${../crates/ronoctua-shell/src} | grep -vE "chrome_size(_of)?\(" || true)
-      if [ -n "$loose" ]; then
-        echo "ERROR: a glyph centred in the cell with a size outside the measurement:" >&2
-        echo "$loose" >&2
-        echo "      The chrome's size has ONE rule: font.size.icon as the ceiling, and" >&2
-        echo "      icon::chrome_size for what the glyph generator measured." >&2
-        exit 1
-      fi
-      echo "OK: every glyph centred in a cell uses the measured size"
+      python3 - <<'PY'
+      import pathlib, re, sys
+
+      shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+      # BOTH SPELLINGS OF THE ONE ANSWER. `surface::chrome_size` takes the run's
+      # text and `chrome_size_of` takes a `char` — the two chevrons hold one
+      # already, and making them build a `String` for it to be taken apart again
+      # was a cost per frame. They are the same measurement.
+      MEASURED = re.compile(r"chrome_size(_of)?\(")
+
+      # AND ONE EXCEPTION, NAMED, because it is not a chrome glyph at all.
+      #
+      # `files::run_size` is the size of a run standing in for a PICTURE: the
+      # glyph a thumbnail shows when the file has none. Its size is the room the
+      # picture would have had, not the digit's height, and holding it to the
+      # digit's height is what the owner photographed — *"os glifos dos itens
+      # que não tem thumbnail aparecem minúsculos em vez de adaptar o tamanho"*.
+      #
+      # It is centred for the reason every other `OnTheCell` is: a run bigger
+      # than the grid has to be centred on the cells it covers or it hangs off
+      # their left. And it is ONE function, so this exception is one line rather
+      # than a hole: anything else that wants a loose size is still refused.
+      EXCEPT = "run_size"
+
+      loose = []
+      for f in sorted(shell.rglob("*.rs")):
+          body = f.read_text()
+          walls = [(m.start(), m.group(1)) for m in re.finditer(r"\n\s*(?:pub )?fn (\w+)", body)]
+          for m in re.finditer(r"Size::OnTheCell\(", body):
+              line = body[: m.start()].count("\n") + 1
+              tail = body[m.start() : body.find("\n", m.start() + 200) + 1]
+              if MEASURED.search(tail):
+                  continue
+              whose = next(
+                  (name for at, name in reversed(walls) if at < m.start()), "nothing"
+              )
+              if whose == EXCEPT:
+                  continue
+              loose.append(f"{f.name}:{line} (in `{whose}`)")
+
+      if loose:
+          print("ERROR: a glyph centred in the cell with a size outside the measurement:")
+          for l in loose:
+              print("       " + l)
+          print("      The chrome's size has ONE rule: font.size.icon as the ceiling, and")
+          print("      icon::chrome_size for what the glyph generator measured.")
+          print(f"      The one exception is `{EXCEPT}`, and it is named in this check.")
+          sys.exit(1)
+      print("OK: every glyph centred in a cell uses the measured size")
+      PY
     '';
 
   # The guard of section 6.3: the Nerd Fonts version comes from the FILE ITSELF
@@ -13073,7 +13408,10 @@ let
             # THE OTHER ANSWER, AND IT IS THE ONE THE FOOTER USES NOW: the key
             # carries the side. A file that builds its keys through such a
             # function needs no reaction to hang a clear on.
-            keyed = "pixmap_key(" in without_prose or "svg_key(" in without_prose
+            keyed = any(
+                name in without_prose
+                for name in ("pixmap_key(", "svg_key(", "thumb_key(")
+            )
             if at == -1 and not keyed:
                 wrong.append(
                     f"{f.name} caches a rasterised pixmap, does not build its "
@@ -17638,6 +17976,12 @@ let
       globe-keys-are-unique-per-owner
       files-panels-have-two-pictures
       files-panel-rows-skip-the-reserve
+      the-grid-is-one-arithmetic
+      both-doors-draw-thumbnails
+      the-grid-never-drops-a-picture
+      a-thumbnail-is-asked-at-the-size-it-is-drawn
+      only-visible-cells-are-asked-for
+      an-animator-holds-one-frame
       footer-logs-to-file
       dev-exits-clean
       english-names
@@ -17734,6 +18078,12 @@ let
       globe-keys-are-unique-per-owner
       files-panels-have-two-pictures
       files-panel-rows-skip-the-reserve
+      the-grid-is-one-arithmetic
+      both-doors-draw-thumbnails
+      the-grid-never-drops-a-picture
+      a-thumbnail-is-asked-at-the-size-it-is-drawn
+      only-visible-cells-are-asked-for
+      an-animator-holds-one-frame
       footer-logs-to-file
       dev-exits-clean
       # The two GPU-independent gates of section 9.3, which protect this

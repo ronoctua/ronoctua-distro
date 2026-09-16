@@ -1895,6 +1895,7 @@ pub fn field_pair(
         color,
         hit: crate::files::Hit::Nothing,
         explain: None,
+        ink: crate::files::Ink::Grid,
     };
     let from = left;
     let mut out: Vec<crate::files::Field> = Vec::with_capacity(2);

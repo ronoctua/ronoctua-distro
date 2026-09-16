@@ -510,6 +510,40 @@ pub fn input_url(path: &Path, inside: &Inside) -> std::ffi::OsString {
 /// `image`'s frame iterator is lazy, so asking for two decodes two. Composing
 /// all forty-four of the owner's own sample costs seven hundred milliseconds,
 /// and this is asked while a cursor walks a directory. Measured at 41 ms.
+/// WHETHER THIS FILE MOVES AND CAN BE MOVED IN PROCESS.
+///
+/// The three web animation formats — GIF, animated WebP and APNG — all have a
+/// LAZY frame iterator inside the `image` crate, so playing one costs a file
+/// descriptor and a frame. Everything else that moves costs a CHILD PROCESS,
+/// and that is the whole line the file manager's grid draws between what
+/// animates by itself and what animates under the pointer: a screenful of the
+/// first is twelve descriptors, a screenful of the second is sixty ffmpegs.
+///
+/// It reads TWO frames and stops. A one-frame GIF is a picture, and starting an
+/// animator for it would be a slot and a clock for a still — the same argument
+/// [`moving`] already makes.
+#[must_use]
+pub fn animates(path: &Path, mime: &str) -> bool {
+    use image::AnimationDecoder;
+
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let file = std::io::BufReader::new(file);
+    let two = |frames: image::Frames<'_>| frames.take(2).filter(Result::is_ok).count() > 1;
+    match mime {
+        "image/gif" => {
+            image::codecs::gif::GifDecoder::new(file).is_ok_and(|d| two(d.into_frames()))
+        }
+        "image/webp" => image::codecs::webp::WebPDecoder::new(file)
+            .is_ok_and(|d| d.has_animation() && two(d.into_frames())),
+        "image/png" | "image/apng" => image::codecs::png::PngDecoder::new(file)
+            .and_then(image::codecs::png::PngDecoder::apng)
+            .is_ok_and(|d| two(d.into_frames())),
+        _ => false,
+    }
+}
+
 fn gif_frames(path: &Path) -> Option<(usize, u32)> {
     use image::AnimationDecoder;
 

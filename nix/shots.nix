@@ -193,6 +193,12 @@ pkgs.testers.runNixOSTest {
       pkgs.libnotify
       pkgs.xdotool
       pkgs.xwininfo
+      # AND `xwd`, which every crop in this file starts with. It is on the PATH
+      # rather than spelled as a store path for the reason written at the head
+      # of `testScript`: a single environment string may not pass the kernel's
+      # 128 KiB, and this battery is close enough to it that one more scene was
+      # what crossed the line.
+      pkgs.xwd
       # THE SCREENSHOT'S EDITOR. Without it the `edit` action is not offered —
       # `usable_actions` drops what the machine cannot carry out — and the scene
       # would show three actions where a full install shows four.
@@ -222,6 +228,19 @@ pkgs.testers.runNixOSTest {
     services.dbus.enable = true;
   };
 
+  # THE THREE TOOLS THIS SCRIPT USES ARE CALLED BY NAME, not by store path.
+  #
+  # `xdotool`, `magick` and `xwd` are in `environment.systemPackages` above, so
+  # the VM has them on its PATH — and the difference is not tidiness. A store
+  # path is some sixty characters and this script spells those three a hundred
+  # and twenty-seven times between them; the expansion was seven kibibytes.
+  #
+  # THE CEILING IS THE KERNEL'S. A single argument or environment string may not
+  # pass `MAX_ARG_STRLEN`, which is 128 KiB, and the driver hands this script
+  # over as one. Crossing it does not say so: the build dies with
+  # `executing '…/bash': Argument list too long`, which reads like a broken
+  # derivation. Measured the day a scene of four kibibytes was added and the
+  # whole battery stopped building.
   testScript = ''
     import json as _json
 
@@ -292,14 +311,14 @@ pkgs.testers.runNixOSTest {
         whole niri window, which is what the manager's screenshots want.
         """
         w, h, x, y = niri_geometry()
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+        machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
         if lines is None:
             crop = f"{w}x{h}+{x}+{y}"
         else:
             tall = LINE * lines
             crop = f"{w}x{tall}+{x}+{y + h - tall}"
         machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {crop} +repage "
+            f"magick /tmp/screen.xwd -crop {crop} +repage "
             f"/tmp/{name}.png"
         )
         machine.copy_from_vm(f"/tmp/{name}.png", "")
@@ -317,7 +336,7 @@ pkgs.testers.runNixOSTest {
         assertion passed on an error message.
         """
         machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {box} +repage {into}"
+            f"magick /tmp/screen.xwd -crop {box} +repage {into}"
         )
 
 
@@ -342,7 +361,7 @@ pkgs.testers.runNixOSTest {
         """
         n = int(
             machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick {of} -fuzz {fuzz}% "
+                f"magick {of} -fuzz {fuzz}% "
                 f"-fill '#000000' +opaque '{hex_value}' -fill '#FFFFFF' "
                 f"-opaque '{hex_value}' -format '%[fx:int(mean*w*h+0.5)]' info:"
             ).strip()
@@ -367,7 +386,7 @@ pkgs.testers.runNixOSTest {
         chooser's own headings and failing about the wrong thing."""
         n = int(
             machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick {of} -fuzz {fuzz}% "
+                f"magick {of} -fuzz {fuzz}% "
                 f"-fill '#000000' +opaque '{hex_value}' -fill '#FFFFFF' "
                 f"-opaque '{hex_value}' -format '%[fx:int(mean*w*h+0.5)]' info:"
             ).strip()
@@ -379,7 +398,7 @@ pkgs.testers.runNixOSTest {
         """How many rows of pixels in `box` have anything drawn on them."""
         crop(box, "/tmp/ink.png")
         out = machine.succeed(
-            "${pkgs.imagemagick}/bin/magick /tmp/ink.png -resize 1x! "
+            "magick /tmp/ink.png -resize 1x! "
             "-threshold 6% -format '%[fx:int(mean*h+0.5)]' info:"
         )
         return int(out.strip())
@@ -461,7 +480,7 @@ pkgs.testers.runNixOSTest {
                 "history; the sections were drawn somewhere else"
             )
             focus_niri()
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
 
     if wanted("history"):
@@ -493,7 +512,7 @@ pkgs.testers.runNixOSTest {
                 of="/tmp/32-shell-history.png",
             )
             focus_niri()
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
 
     if wanted("tor"):
@@ -523,16 +542,16 @@ pkgs.testers.runNixOSTest {
             machine.sleep(1)
             shot("31a-network-list", lines=12)
             focus_niri()
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
 
             control("network-tor-open")
             shot("31-tor-stopped", lines=12)
             list_shot = machine.succeed(
-                "${pkgs.imagemagick}/bin/magick /tmp/31a-network-list.png -format '%#' info:"
+                "magick /tmp/31a-network-list.png -format '%#' info:"
             ).strip()
             sheet_shot = machine.succeed(
-                "${pkgs.imagemagick}/bin/magick /tmp/31-tor-stopped.png -format '%#' info:"
+                "magick /tmp/31-tor-stopped.png -format '%#' info:"
             ).strip()
             assert list_shot != sheet_shot, (
                 "`network-tor-open` drew the same screen as `network-open`: "
@@ -548,7 +567,7 @@ pkgs.testers.runNixOSTest {
                 "the Tor sheet came out mostly blank"
             )
             focus_niri()
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
 
     if wanted("footer"):
@@ -567,7 +586,7 @@ pkgs.testers.runNixOSTest {
             # key with nowhere to go is a key that changes nothing.
             focus_niri()
             for _ in range(8):
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+                machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
             shot("1-footer-at-rest", lines=2)
 
@@ -626,10 +645,10 @@ pkgs.testers.runNixOSTest {
             # THE LEFT HALF OF THE LINE: the chevron that opens it lives at the
             # right edge and is a target with a meaning of its own.
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_f + w_f // 3} {top + LINE + LINE // 2}"
             )
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 1")
+            machine.succeed("DISPLAY=:99 xdotool click 1")
             machine.sleep(2)
             opened = footer_height()
             assert opened > at_rest, (
@@ -639,7 +658,7 @@ pkgs.testers.runNixOSTest {
             shot("37-the-minibuffer-clicked", lines=2)
             # AND `Esc` PUTS IT BACK, which is what makes this a toggle and not
             # a trap: the scenes after this one all begin with nothing open.
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(2)
             # SMALLER THAN IT WAS OPEN, and not equal to what it was at rest:
             # the brain's line comes and goes on a clock of its own, so the
@@ -691,7 +710,7 @@ pkgs.testers.runNixOSTest {
             # system token: nothing in the design system says "screen capture".
             machine.succeed("mkdir -p /root/Pictures")
             machine.succeed(
-                "${pkgs.imagemagick}/bin/magick -size 320x200 canvas:gray30 "
+                "magick -size 320x200 canvas:gray30 "
                 "'/root/Pictures/Screenshot 2026-08-22.png'"
             )
             for _ in range(8):
@@ -742,12 +761,12 @@ pkgs.testers.runNixOSTest {
             focus_niri()
             # TAB twice: what happened, what was suppressed, what is configured.
             for _ in (1, 2):
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Tab")
+                machine.succeed("DISPLAY=:99 xdotool key Tab")
                 machine.sleep(1)
             shot("7-distro-catalogue")
             # And one entry's sheet, which is where "use the distro's default or
             # customise" is actually done.
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.succeed("DISPLAY=:99 xdotool key Return")
             machine.sleep(1)
             shot("8-adjustment-sheet")
             control("notif-open")
@@ -765,7 +784,7 @@ pkgs.testers.runNixOSTest {
             # machine that has no media group at all.
             machine.succeed("mkdir -p /root/shots")
             machine.succeed(
-                "${pkgs.imagemagick}/bin/magick -size 480x320 "
+                "magick -size 480x320 "
                 # TWO LIGHT COLOURS on purpose: a gradient that fades into the
                 # background makes the picture's own edge unmeasurable, and the
                 # air below it then reads as forty pixels that are not there.
@@ -777,14 +796,14 @@ pkgs.testers.runNixOSTest {
             # deterministic: typing narrows to the one file rather than depending on
             # where the cursor happened to land.
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'shot'"
+                "DISPLAY=:99 xdotool type --delay 40 'shot'"
             )
             machine.sleep(1)
             # AND INTO THE DIRECTORY. Filtering alone leaves the cursor on
             # `shots/` — which is a folder, and a folder has no picture inside
             # it, so the panel correctly drew the type's glyph. The file is one
             # level down.
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.succeed("DISPLAY=:99 xdotool key Return")
             machine.sleep(1)
             # AND NOTHING IS PRESSED FOR THE PANELS. They used to need `C-v` and
             # `C-i`; the owner asked for them to be on from the start, so pressing
@@ -796,7 +815,7 @@ pkgs.testers.runNixOSTest {
             # with the pointer parked outside cannot show it at all.
             w_g, h_g, x_g, y_g = niri_geometry()
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_g + 300} {y_g + h_g - 3 * LINE}"
             )
             machine.sleep(1)
@@ -808,7 +827,7 @@ pkgs.testers.runNixOSTest {
             # screen here is a band inside the facts' own column and NOTHING lit in
             # the listing.
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_g + w_g - 120} {y_g + h_g - 4 * LINE}"
             )
             machine.sleep(1)
@@ -825,14 +844,14 @@ pkgs.testers.runNixOSTest {
             # the picture then has exactly one bar in it or the defect is back.
             machine.succeed("mkdir -p /root/many && touch /root/many/f-{01..40}.txt")
             for _ in range(8):
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+                machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
             control("files-open")
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'many'"
+                "DISPLAY=:99 xdotool type --delay 40 'many'"
             )
             machine.sleep(1)
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.succeed("DISPLAY=:99 xdotool key Return")
             machine.sleep(2)
             shot("16-footer-listing-cut")
             # `files-open` OPENS — it does not toggle, so asking twice reopened it.
@@ -842,7 +861,7 @@ pkgs.testers.runNixOSTest {
             # came out as a file listing and no one noticed — green is not proof,
             # and neither is a screenshot nobody opened.
             for _ in range(8):
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+                machine.succeed("DISPLAY=:99 xdotool key Escape")
             # TWO DIGITS IS THE ASSERTION, and not a number of my own: the footer
             # sums a fractional line height and comes to 53 where `LINE` — which
             # ceils, because a crop cannot take half a pixel — would say 54. What
@@ -872,15 +891,15 @@ pkgs.testers.runNixOSTest {
             # picture in it: the window opens at HOME, where every entry is a
             # directory and the preview correctly says there is none.
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'shots'"
+                "DISPLAY=:99 xdotool type --delay 40 'shots'"
             )
             machine.sleep(1)
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.succeed("DISPLAY=:99 xdotool key Return")
             machine.sleep(2)
             # SAME REASON as the footer's: the band needs the pointer.
             w_w, h_w, x_w, y_w = niri_geometry()
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_w + 300} {y_w + 4 * LINE}"
             )
             machine.sleep(1)
@@ -896,7 +915,7 @@ pkgs.testers.runNixOSTest {
             # The facts sit to the right of the strip's rule; the third of them is
             # three lines below the strip's top.
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_w + 450} {y_w + h_w - 3 * LINE - 6}"
             )
             machine.sleep(1)
@@ -926,7 +945,7 @@ pkgs.testers.runNixOSTest {
                     ),
                 )
 
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             here = sentence_inks("/tmp/two-inks-here.png")
 
             # AND THE SAME LINE OVER ANOTHER FACT, because two inks ALONE prove
@@ -941,13 +960,13 @@ pkgs.testers.runNixOSTest {
             # the ink they cover differs. The hint would give the same two
             # numbers twice.
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_w + 450} {y_w + h_w - 5 * LINE - 6}"
             )
             machine.sleep(1)
             # A FRESH FRAME, because `crop` cuts the LAST screenshot and the
             # pointer has moved since it was taken.
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             there = sentence_inks("/tmp/two-inks-there.png")
 
             assert here != there, (
@@ -966,7 +985,7 @@ pkgs.testers.runNixOSTest {
             # completo no minibuffer"*. The pointer goes on the LABEL column,
             # which is the left third of the panel.
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_w + 340} {y_w + h_w - 5 * LINE - 6}"
             )
             machine.sleep(1)
@@ -983,7 +1002,7 @@ pkgs.testers.runNixOSTest {
             # what has to be true in the picture is that the thumb's bottom and the
             # window's bottom are the same pixel.
             for _ in range(12):
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 5")
+                machine.succeed("DISPLAY=:99 xdotool click 5")
             machine.sleep(2)
             shot("17-facts-scrolled-to-the-end")
 
@@ -996,23 +1015,23 @@ pkgs.testers.runNixOSTest {
             # facts' box. What has to be true in this picture is the opposite of
             # the one above: the thumb's bottom is the strip's rule, not the
             # window's bottom edge.
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
+            machine.succeed("DISPLAY=:99 xdotool key BackSpace")
             machine.sleep(1)
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'many'"
+                "DISPLAY=:99 xdotool type --delay 40 'many'"
             )
             machine.sleep(1)
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.succeed("DISPLAY=:99 xdotool key Return")
             machine.sleep(2)
             # THE POINTER OVER THE LISTING and not over a panel: the wheel moves
             # the section it is on, which is the whole point of the four sections.
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_w + 200} {y_w + 6 * LINE}"
             )
             machine.sleep(1)
             for _ in range(60):
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 5")
+                machine.succeed("DISPLAY=:99 xdotool click 5")
             machine.sleep(2)
             shot("18-window-listing-scrolled-to-the-end")
 
@@ -1038,7 +1057,7 @@ pkgs.testers.runNixOSTest {
             # wherever they appear. Writing this very comment closed it once. A
             # file the store already holds has none of those levels.
             machine.succeed("cp ${sampleCode} /root/shots/code/sample.nix")
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
+            machine.succeed("DISPLAY=:99 xdotool key BackSpace")
             machine.sleep(1)
             control("files-window")
             machine.wait_until_succeeds(
@@ -1048,16 +1067,16 @@ pkgs.testers.runNixOSTest {
             )
             machine.sleep(3)
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'shots'"
+                "DISPLAY=:99 xdotool type --delay 40 'shots'"
             )
             machine.sleep(1)
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.succeed("DISPLAY=:99 xdotool key Return")
             machine.sleep(1)
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'code'"
+                "DISPLAY=:99 xdotool type --delay 40 'code'"
             )
             machine.sleep(1)
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.succeed("DISPLAY=:99 xdotool key Return")
             machine.sleep(2)
             shot("19-preview-of-a-file-of-text")
 
@@ -1096,7 +1115,7 @@ pkgs.testers.runNixOSTest {
             has_colour("#" + token_hex("syntax.keyword"), at_least=20)
 
             # AND IT SCROLLS. `C-,` pages the preview and the bar follows.
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+comma")
+            machine.succeed("DISPLAY=:99 xdotool key ctrl+comma")
             machine.sleep(2)
             shot("20-preview-of-text-paged")
 
@@ -1112,7 +1131,7 @@ pkgs.testers.runNixOSTest {
                 """The absolute y where the ink inside `box` ends."""
                 crop(box, "/tmp/col.png")
                 got = machine.succeed(
-                    "${pkgs.imagemagick}/bin/magick /tmp/col.png -threshold 20% -trim "
+                    "magick /tmp/col.png -threshold 20% -trim "
                     "-format '%[fx:page.y+h]' info: 2>/dev/null || echo 0"
                 ).strip()
                 return at_y + int(got)
@@ -1148,7 +1167,7 @@ pkgs.testers.runNixOSTest {
                 probe = f"4x{LINE}+{box.split('+')[1]}+{box.split('+')[2]}"
                 return int(
                     machine.succeed(
-                        f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {probe} +repage "
+                        f"magick /tmp/screen.xwd -crop {probe} +repage "
                         f"-fuzz 6% -fill white -opaque '#{token_hex('rule.strong')}' -fill black "
                         "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
                     ).strip()
@@ -1161,10 +1180,10 @@ pkgs.testers.runNixOSTest {
             )
             for _ in range(6):
                 machine.succeed(
-                    "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+bracketright"
+                    "DISPLAY=:99 xdotool key ctrl+bracketright"
                 )
             machine.sleep(2)
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             after_left = thumb_over_the_left(foot)
             assert after_left < before_left, (
                 f"the sideways thumb covered {before_left} pixels of the left edge "
@@ -1176,7 +1195,7 @@ pkgs.testers.runNixOSTest {
             # AND IT IS MEASURED TOO: the panel's own pixels changed. Restoring
             # `total: 1` leaves the key with nothing to move and this fails.
             machine.succeed(
-                "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
+                "magick /tmp/screen.xwd -crop "
                 f"{panel} +repage /tmp/after.png"
             )
             # BY SIGNATURE, and not by `compare`.
@@ -1192,7 +1211,7 @@ pkgs.testers.runNixOSTest {
             # compare EQUAL, so the assertion below fails rather than passes.
             def signature(path):
                 return machine.succeed(
-                    f"${pkgs.imagemagick}/bin/magick {path} -format '%#' info:"
+                    f"magick {path} -format '%#' info:"
                 ).strip()
 
             assert signature("/tmp/panel-before.png") != signature("/tmp/after.png"), (
@@ -1221,7 +1240,7 @@ pkgs.testers.runNixOSTest {
             w_x, h_x, x_x, y_x = niri_geometry()
             listing = f"{w_x}x{h_x - 2 * LINE}+{x_x}+{y_x + 2 * LINE}"
             green = "#" + token_hex("state.success")
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             crop(listing, "/tmp/before-chmod.png")
             before = has_colour(green, at_least=0, of="/tmp/before-chmod.png")
 
@@ -1230,7 +1249,7 @@ pkgs.testers.runNixOSTest {
             # is an inotify watch on the open directory. The sleep is the burst
             # the watcher absorbs, not a guess.
             machine.sleep(3)
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             crop(listing, "/tmp/after-chmod.png")
             after = has_colour(green, at_least=0, of="/tmp/after-chmod.png")
             assert after >= before + 8, (
@@ -1270,20 +1289,20 @@ pkgs.testers.runNixOSTest {
             # `/root/shots/code`; `papers` is its sibling, so a second `BackSpace`
             # would leave the manager at `/root`, where the filter finds nothing
             # and the panel photographs an empty directory.
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
+            machine.succeed("DISPLAY=:99 xdotool key BackSpace")
             machine.sleep(1)
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'papers'"
+                "DISPLAY=:99 xdotool type --delay 40 'papers'"
             )
             machine.sleep(1)
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.succeed("DISPLAY=:99 xdotool key Return")
             machine.sleep(3)
             shot("33-preview-of-a-document")
 
             w_d, h_d, x_d, y_d = niri_geometry()
             # THE SAME BOX THE TEXT PREVIEW IS MEASURED IN, and for its reasons.
             paper = f"{w_d // 4 - 70}x{h_d - 4 * LINE}+{w_d // 2 + 10}+{2 * LINE}"
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             drawn = rows_with_ink(paper)
             # A REFUSED PANEL DRAWS ONE DIM LINE. Two paragraphs draw more, and
             # taking `document::of` out of the chain brings this straight back to a
@@ -1326,14 +1345,14 @@ pkgs.testers.runNixOSTest {
             machine.succeed("pgrep -f '[b]in/ronoctua-shell files'")
             FILM = ["#FF00FF", "#00FFFF", "#FFFF00", "#FF6000"]
             machine.succeed(
-                "${pkgs.imagemagick}/bin/magick -delay 20 -loop 0 -size 240x180 "
+                "magick -delay 20 -loop 0 -size 240x180 "
                 + " ".join(f"xc:'{c}'" for c in FILM)
                 + " /root/shots/moving.gif"
             )
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
+            machine.succeed("DISPLAY=:99 xdotool key BackSpace")
             machine.sleep(1)
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'moving'"
+                "DISPLAY=:99 xdotool type --delay 40 'moving'"
             )
             machine.sleep(3)
             shot("22-miniplayer")
@@ -1346,10 +1365,10 @@ pkgs.testers.runNixOSTest {
             def panel_now(name):
                 """Crops the preview out of a fresh capture."""
                 machine.succeed(
-                    "${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd"
+                    "xwd -display :99 -root -out /tmp/screen.xwd"
                 )
                 machine.succeed(
-                    "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
+                    "magick /tmp/screen.xwd -crop "
                     f"{pane} +repage /tmp/{name}.png"
                 )
                 return f"/tmp/{name}.png"
@@ -1358,7 +1377,7 @@ pkgs.testers.runNixOSTest {
                 """How many pixels of one of the film's colours the panel holds."""
                 return int(
                     machine.succeed(
-                        f"${pkgs.imagemagick}/bin/magick {path} -fuzz 4% "
+                        f"magick {path} -fuzz 4% "
                         f"-fill white -opaque '{colour}' -fill black +opaque white "
                         "-format '%[fx:int(mean*w*h+0.5)]' info:"
                     ).strip()
@@ -1415,7 +1434,7 @@ pkgs.testers.runNixOSTest {
             # DETERMINISTIC — the same frame every time — and it proves the
             # transport rather than the decoder.
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+semicolon"
+                "DISPLAY=:99 xdotool key ctrl+semicolon"
             )
             machine.sleep(2)
             held = []
@@ -1442,7 +1461,7 @@ pkgs.testers.runNixOSTest {
             # box measured from the STILL, so the picture came out a band of roughly
             # sixteen to one.
             box = machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick /tmp/held-0.png -fuzz 4% "
+                f"magick /tmp/held-0.png -fuzz 4% "
                 f"-fill white -opaque '{FILM[held[0]]}' -fill black +opaque white "
                 "-trim -format '%[fx:w] %[fx:h]' info:"
             ).split()
@@ -1474,14 +1493,14 @@ pkgs.testers.runNixOSTest {
             def glyph_pixels(box):
                 return int(
                     machine.succeed(
-                        f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {box} "
+                        f"magick /tmp/screen.xwd -crop {box} "
                         f"+repage -fuzz 12% -fill white -opaque '#{token_hex('text.primary')}' "
                         "-fill black +opaque white "
                         "-format '%[fx:int(mean*w*h+0.5)]' info:"
                     ).strip()
                 )
 
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             cold = glyph_pixels(foot)
             assert cold == 0, (
                 f"the transport row has {cold} pixels of glyph with the pointer "
@@ -1496,18 +1515,18 @@ pkgs.testers.runNixOSTest {
             # where this pointer went the first time, and the controls correctly did
             # not arrive — the assertion was right and the aim was wrong.
             spot = machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick /tmp/held-0.png -fuzz 4% "
+                f"magick /tmp/held-0.png -fuzz 4% "
                 f"-fill white -opaque '{FILM[held[0]]}' -fill black +opaque white "
                 "-trim -format '%[fx:page.x] %[fx:page.y] %[fx:w] %[fx:h]' info:"
             ).split()
             px, py, pw, ph = (int(v) for v in spot)
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_m + (w_m // 2 + 10) + px + pw // 2} "
                 f"{y_m + (2 * LINE) + py + ph // 2}"
             )
             machine.sleep(2)
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             warm = glyph_pixels(foot)
             shot("24-miniplayer-controls")
             assert warm > 0, (
@@ -1524,14 +1543,14 @@ pkgs.testers.runNixOSTest {
             # eating a line.
             def film_box(path, colour):
                 got = machine.succeed(
-                    f"${pkgs.imagemagick}/bin/magick {path} -fuzz 4% "
+                    f"magick {path} -fuzz 4% "
                     f"-fill white -opaque '{colour}' -fill black +opaque white "
                     "-trim -format '%[fx:w] %[fx:h]' info:"
                 ).split()
                 return int(got[0]), int(got[1])
 
             machine.succeed(
-                "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
+                "magick /tmp/screen.xwd -crop "
                 f"{pane} +repage /tmp/with-controls.png"
             )
             held_w, held_h = film_box("/tmp/held-0.png", FILM[held[0]])
@@ -1577,7 +1596,7 @@ pkgs.testers.runNixOSTest {
             def band_pixels(path):
                 return int(
                     machine.succeed(
-                        f"${pkgs.imagemagick}/bin/magick {path} -crop {pane} +repage "
+                        f"magick {path} -crop {pane} +repage "
                         f"-fuzz 2% -fill white -opaque '#{token_hex('surface.selection')}' -fill black "
                         "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
                     ).strip()
@@ -1598,7 +1617,7 @@ pkgs.testers.runNixOSTest {
             # still there under the controls. Opaque, the row would be a strip of
             # chrome across the picture — which is what invariant 14 is about.
             strip = machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {foot} +repage "
+                f"magick /tmp/screen.xwd -crop {foot} +repage "
                 f"-fuzz 18% -fill white -opaque '{FILM[held[0]]}' -fill black "
                 "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
             ).strip()
@@ -1612,7 +1631,7 @@ pkgs.testers.runNixOSTest {
             #
             # `C-w` gives the preview the region. Three of the defects he
             # photographed only exist here, so this is where they are pinned.
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+w")
+            machine.succeed("DISPLAY=:99 xdotool key ctrl+w")
             # LONG ENOUGH FOR THE RESPAWN. Giving the region away changes the box,
             # which changes the frame's shape, which is a kill and a new child —
             # 108 to 242 ms measured, and this machine is a software-rendered VM.
@@ -1620,7 +1639,7 @@ pkgs.testers.runNixOSTest {
             # box, letterboxed into the new one, which is a true picture of a
             # transient and a false picture of the layout.
             machine.sleep(4)
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             shot("25-miniplayer-whole")
 
             # A RULE AGAINST THE SCREEN'S OWN EDGE. With one panel filling the
@@ -1631,7 +1650,7 @@ pkgs.testers.runNixOSTest {
             edge = f"2x{h_m - 4 * LINE}+{x_m}+{y_m + 2 * LINE}"
             rule_ink = int(
                 machine.succeed(
-                    f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {edge} +repage "
+                    f"magick /tmp/screen.xwd -crop {edge} +repage "
                     f"-fuzz 2% -fill white -opaque '#{token_hex('rule.strong')}' -fill black "
                     "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
                 ).strip()
@@ -1653,9 +1672,9 @@ pkgs.testers.runNixOSTest {
             # comes back at another frame; asking for the OLD colour then measures
             # whatever stray pixels match it. What is being asserted here is the
             # SHAPE of the picture, so which frame is showing is not the question.
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             machine.succeed(
-                "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
+                "magick /tmp/screen.xwd -crop "
                 f"{w_m}x{h_m}+{x_m}+{y_m} +repage /tmp/whole.png"
             )
             # THE LARGEST CONNECTED RUN OF THE COLOUR, and not its bounding box.
@@ -1668,7 +1687,7 @@ pkgs.testers.runNixOSTest {
             # asked, which is "how big is the picture".
             def biggest_blob(path, colour):
                 out = machine.succeed(
-                    f"${pkgs.imagemagick}/bin/magick {path} -fuzz 2% "
+                    f"magick {path} -fuzz 2% "
                     f"-fill white -opaque '{colour}' -fill black +opaque white "
                     "-define connected-components:verbose=true "
                     "-define connected-components:area-threshold=2000 "
@@ -1708,7 +1727,7 @@ pkgs.testers.runNixOSTest {
             )
 
             # AND `C-w` GIVES THE REGION BACK.
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+w")
+            machine.succeed("DISPLAY=:99 xdotool key ctrl+w")
             machine.sleep(2)
 
             # AND IT GOES, or it stands in front of every shot after it. The bracket
@@ -1731,7 +1750,7 @@ pkgs.testers.runNixOSTest {
             # picture ImageMagick draws, and the coordinate is LONDON — which
             # `assets/world.nix` already declares in the open.
             machine.succeed(
-                "${pkgs.imagemagick}/bin/magick -size 240x160 "
+                "magick -size 240x160 "
                 "gradient:'#3C6E9F-#D8B36A' /root/where.jpg"
             )
             machine.succeed(
@@ -1766,7 +1785,7 @@ pkgs.testers.runNixOSTest {
             # would OPEN it, and an image viewer over the window is not this
             # picture.
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'where'"
+                "DISPLAY=:99 xdotool type --delay 40 'where'"
             )
             # LONG ENOUGH FOR THE THREAD TO ANSWER: exiftool runs, the atlas is
             # read once (six megabytes, on the first coordinate of the session)
@@ -1805,7 +1824,7 @@ pkgs.testers.runNixOSTest {
             machine.sleep(3)
             w_g, h_g, x_g, y_g = niri_geometry()
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_g + 300} {y_g + 4 * LINE}"
             )
             machine.sleep(2)
@@ -1865,24 +1884,24 @@ pkgs.testers.runNixOSTest {
                 crop(f"{w_g // 4}x{h_g}+{x_g + 3 * (w_g // 4)}+{y_g}", into=into)
 
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_g + 3 * (w_g // 4) + w_g // 8} {y_g + 3 * LINE}"
             )
             machine.sleep(1)
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousedown 1")
+            machine.succeed("DISPLAY=:99 xdotool mousedown 1")
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove_relative -- 60 20"
+                "DISPLAY=:99 xdotool mousemove_relative -- 60 20"
             )
             machine.sleep(1)
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mouseup 1")
+            machine.succeed("DISPLAY=:99 xdotool mouseup 1")
             machine.sleep(2)
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             picture_of("/tmp/turned.png")
             shot("42-the-globe-turned-by-the-hand")
 
             def signature(path):
                 return machine.succeed(
-                    f"${pkgs.imagemagick}/bin/magick {path} -format '%#' info:"
+                    f"magick {path} -format '%#' info:"
                 ).strip()
 
             assert signature("/tmp/globe.png") != signature("/tmp/turned.png"), (
@@ -1911,7 +1930,7 @@ pkgs.testers.runNixOSTest {
             # every tag is written onto a picture ImageMagick draws, and every
             # value in it was chosen by this test.
             machine.succeed(
-                "${pkgs.imagemagick}/bin/magick -size 240x160 "
+                "magick -size 240x160 "
                 "gradient:'#3C6E9F-#D8B36A' /root/facts.jpg"
             )
             machine.succeed(
@@ -1949,7 +1968,7 @@ pkgs.testers.runNixOSTest {
             # on the first match by itself, which is what puts the file in the
             # panels. `Return` would open it.
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'facts'"
+                "DISPLAY=:99 xdotool type --delay 40 'facts'"
             )
             # LONG ENOUGH FOR EXIFTOOL, which is a child process per file.
             machine.sleep(6)
@@ -1965,7 +1984,7 @@ pkgs.testers.runNixOSTest {
             # bottom-right of the panel is aiming at blank space, which is
             # exactly what the old resolution answered `None` for.
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_f + w_f - 3 * CELL} {y_f + h_f - 2 * LINE}"
             )
             machine.sleep(2)
@@ -1986,7 +2005,7 @@ pkgs.testers.runNixOSTest {
             # widest half way down.
             bar_x = x_f + w_f - 6
             mid = y_f + h_f // 2
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             crop(f"{w_f // 4}x{h_f}+{x_f + 3 * (w_f // 4)}+{y_f}", into="/tmp/globe-before.png")
             sea_before = has_colour(
                 "#" + token_hex("surface.atlas.ocean"),
@@ -2011,20 +2030,20 @@ pkgs.testers.runNixOSTest {
             # both, on this scene.
 
             machine.succeed(
-                f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove {bar_x} {y_f + 3 * LINE}"
+                f"DISPLAY=:99 xdotool mousemove {bar_x} {y_f + 3 * LINE}"
             )
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousedown 1")
+            machine.succeed("DISPLAY=:99 xdotool mousedown 1")
             machine.succeed(
-                f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove {bar_x} {mid}"
+                f"DISPLAY=:99 xdotool mousemove {bar_x} {mid}"
             )
             machine.sleep(1)
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mouseup 1")
+            machine.succeed("DISPLAY=:99 xdotool mouseup 1")
             machine.sleep(2)
             shot("45-the-thumb-under-the-hand-over-a-globe")
 
             # THE THUMB IS WHERE THE HAND LEFT IT: a line either side of the
             # cursor, in the bar's own column.
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             crop(f"12x{3 * LINE}+{x_f + w_f - 12}+{mid - LINE}", into="/tmp/thumb.png")
             has_colour(
                 "#" + token_hex("rule.strong"), at_least=10, of="/tmp/thumb.png", fuzz=4
@@ -2064,7 +2083,7 @@ pkgs.testers.runNixOSTest {
 
             def inks(into):
                 machine.succeed(
-                    "${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd"
+                    "xwd -display :99 -root -out /tmp/screen.xwd"
                 )
                 crop(half, into=into)
                 return (
@@ -2086,7 +2105,7 @@ pkgs.testers.runNixOSTest {
             dim_before, sea_before = inks("/tmp/columns-before.png")
 
             # AND THEN THE REGION IS GIVEN AWAY.
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+shift+w")
+            machine.succeed("DISPLAY=:99 xdotool key ctrl+shift+w")
             machine.sleep(3)
             shot("44-the-facts-with-the-whole-region")
             dim_after, sea_after = inks("/tmp/columns-after.png")
@@ -2098,7 +2117,7 @@ pkgs.testers.runNixOSTest {
             # THE KEY DID SOMETHING, and the two pictures say so.
             def signature(path):
                 return machine.succeed(
-                    f"${pkgs.imagemagick}/bin/magick {path} -format '%#' info:"
+                    f"magick {path} -format '%#' info:"
                 ).strip()
 
             assert signature("/tmp/columns-before.png") != signature(
@@ -2121,6 +2140,84 @@ pkgs.testers.runNixOSTest {
             assert sea_after > 1000, (
                 f"the sea went {sea_before} -> {sea_after} in the left half: the "
                 "expanded sheet has no column with the map in it"
+            )
+
+            machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
+            machine.sleep(2)
+
+    if wanted("thumbnails"):
+        with subtest("the entries side by side, as pictures"):
+            # A FOLDER MADE HERE, because this repository carries no pictures
+            # (invariant 13) and the whole question is what a picture looks like
+            # in a cell.
+            #
+            # THE COLOUR IS CHOSEN TO BE UNANSWERABLE BY TEXT. Every assertion
+            # below counts pixels of it, and `AGENTS.md` records what happens
+            # when that colour is near a token's: the glyphs answer. Magenta is
+            # in none of the nine themes — they are greys, greens, cyans, a navy
+            # and a red — and a filled rectangle of it at four per cent fuzz is
+            # a question no antialiased letter can answer.
+            machine.succeed("mkdir -p /root/thumbs")
+            for name in ("a-picture.png", "b-picture.png"):
+                machine.succeed(
+                    "magick -size 200x200 "
+                    f"xc:'#FF00AA' /root/thumbs/{name}"
+                )
+            machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
+            machine.sleep(2)
+            control("files-window")
+            machine.wait_until_succeeds(
+                "pgrep -f '[b]in/ronoctua-shell files'", timeout=60
+            )
+            machine.sleep(3)
+            control("window-maximize")
+            machine.sleep(2)
+            machine.succeed(
+                "DISPLAY=:99 xdotool type --delay 40 'thumbs'"
+            )
+            machine.sleep(2)
+            machine.succeed("DISPLAY=:99 xdotool key Return")
+            machine.sleep(4)
+
+            w_t, h_t, x_t, y_t = niri_geometry()
+            # THE LISTING'S OWN COLUMN, which is where a thumbnail may appear
+            # and the panels beside it may not: the preview draws the SAME
+            # picture, and a crop that held both would pass with the grid
+            # turned off.
+            listing = f"{w_t // 2}x{h_t - 4 * LINE}+{x_t}+{y_t + 2 * LINE}"
+
+            def pink(into):
+                machine.succeed(
+                    "xwd -display :99 -root -out /tmp/screen.xwd"
+                )
+                crop(listing, into=into)
+                return has_colour("#FF00AA", at_least=0, of=into, fuzz=4)
+
+            before = pink("/tmp/thumbs-list.png")
+            shot("46-the-listing-one-thing-to-a-line")
+
+            # AND THEN THE ENTRIES GO SIDE BY SIDE.
+            machine.succeed("DISPLAY=:99 xdotool key ctrl+g")
+            # LONG ENOUGH FOR THE WORKERS, which are child processes: the
+            # measurement that sized the pool is 109 ms for the smallest file
+            # there is, and this machine has no GPU and a software rasteriser.
+            machine.sleep(8)
+            after = pink("/tmp/thumbs-grid.png")
+            shot("47-the-entries-side-by-side-as-pictures")
+            print(f"thumbnails: the picture's own colour {before} -> {after}")
+
+            # THE LISTING HELD NONE OF IT ONE THING TO A LINE. A row is a glyph
+            # and a name; there is nowhere for a picture to be.
+            assert before == 0, (
+                f"the listing already had {before} pixel(s) of the picture's own "
+                "colour before the key, so this crop is not the listing alone"
+            )
+            # AND A SCREENFUL OF IT AFTER. Two cells of two hundred pixels
+            # scaled into a thumbnail is thousands, which is a number no glyph
+            # reaches.
+            assert after > 2000, (
+                f"the grid drew {after} pixel(s) of the picture: the cells are "
+                "still glyphs"
             )
 
             machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
@@ -2161,7 +2258,7 @@ pkgs.testers.runNixOSTest {
             crop(f"{w_r}x{12 * LINE}+{x_r}+{y_r + h_r - 12 * LINE}", into="/tmp/geo.png")
             has_colour("#" + token_hex("text.answer"), at_least=20, of="/tmp/geo.png")
 
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
 
     if wanted("brain"):
@@ -2260,7 +2357,7 @@ pkgs.testers.runNixOSTest {
                 has_colour(first_accent, at_least=20, of="/tmp/26-theme-chooser.png")
                 lacks_colour(second_accent, of="/tmp/26-theme-chooser.png", fuzz=6)
 
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Down")
+                machine.succeed("DISPLAY=:99 xdotool key Down")
                 machine.sleep(1)
                 shot("27-theme-preview", lines=2 + CHOOSER_ROWS)
                 has_colour(second_accent, at_least=20, of="/tmp/27-theme-preview.png")
@@ -2283,7 +2380,7 @@ pkgs.testers.runNixOSTest {
                 has_colour(second_accent, at_least=20, of="/tmp/window-during-preview.png")
                 lacks_colour(first_accent, of="/tmp/window-during-preview.png", fuzz=6)
 
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+                machine.succeed("DISPLAY=:99 xdotool key Return")
                 machine.sleep(2)
                 machine.succeed("grep -q '\"${second}\"' /root/.config/ronoctua/theme.json")
                 shot("28-theme-applied")
@@ -2313,8 +2410,8 @@ pkgs.testers.runNixOSTest {
                 # `themes-have-fragments` proves niri accepts and merges it.
                 second_desk = "#" + token_hex("surface.backdrop", SECOND)
                 control("theme-open")
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Right")
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Up")
+                machine.succeed("DISPLAY=:99 xdotool key Right")
+                machine.succeed("DISPLAY=:99 xdotool key Up")
                 machine.sleep(1)
                 shot("29-theme-desk", lines=2 + CHOOSER_ROWS)
                 # THE MOVE IS UPWARDS NOW. The cursor opens on the answer in
@@ -2334,7 +2431,7 @@ pkgs.testers.runNixOSTest {
                 # looking at a list may not give a machine a choice it never made.
                 # Here a pair WAS committed, so what comes back is that pair —
                 # `View::chosen_before`, asked once when the chooser opened.
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+                machine.succeed("DISPLAY=:99 xdotool key Escape")
                 machine.sleep(2)
                 machine.succeed("grep -q '\"backdrop\":\"theme\"' /root/.config/ronoctua/theme.json")
                 machine.succeed(
@@ -2343,9 +2440,9 @@ pkgs.testers.runNixOSTest {
                 )
                 # AND NOW FOR REAL: the same three keys, and `RET` at the end.
                 control("theme-open")
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Right")
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Up")
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+                machine.succeed("DISPLAY=:99 xdotool key Right")
+                machine.succeed("DISPLAY=:99 xdotool key Up")
+                machine.succeed("DISPLAY=:99 xdotool key Return")
                 machine.sleep(2)
                 machine.succeed("grep -q '\"backdrop\":\"black\"' /root/.config/ronoctua/theme.json")
                 machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
@@ -2367,14 +2464,14 @@ pkgs.testers.runNixOSTest {
             # opened drawer and the brain's line, so a shot that knew where it was
             # would be photographing a listing row the day any of them appears.
             for _ in range(8):
-                machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+                machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
             control("files-open")
             machine.sleep(2)
             w_p, h_p, x_p, y_p = niri_geometry()
             for n in range(1, 16):
                 machine.succeed(
-                    "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                    "DISPLAY=:99 xdotool mousemove "
                     f"{x_p + 200} {y_p + h_p - n * LINE}"
                 )
                 # A SECOND ON EACH, because what killed it was not the motion but
@@ -2419,7 +2516,7 @@ pkgs.testers.runNixOSTest {
             # AND IT IS MEASURED. Two rows of ink where the footer used to be — with
             # the footer gone there is nothing else down there that could draw them.
             w_l, h_l, x_l, y_l = niri_geometry()
-            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             band = f"{w_l}x{2 * LINE}+{x_l}+{y_l + h_l - 2 * LINE}"
             drawn = rows_with_ink(band)
             assert drawn >= 2, (
@@ -2444,11 +2541,11 @@ pkgs.testers.runNixOSTest {
             # what makes the click visible from out here.
             options_row = y_l + h_l - LINE + LINE // 2
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_l + int(3.5 * CELL)} {options_row}"
             )
             machine.sleep(1)
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 1")
+            machine.succeed("DISPLAY=:99 xdotool click 1")
             # THE BRACKET IS THE ASSERTION, and without it there is none: `pgrep -f`
             # reads the command line of EVERY process, including the shell running
             # the `pgrep`, whose line carries the pattern. `[b]in/…` is the same
@@ -2481,12 +2578,12 @@ pkgs.testers.runNixOSTest {
             # would — put the keyboard back on the line they are reading.
             first_row = y_l + h_l - 2 * LINE + LINE // 2
             machine.succeed(
-                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                "DISPLAY=:99 xdotool mousemove "
                 f"{x_l + int(3.5 * CELL)} {first_row}"
             )
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 1")
+            machine.succeed("DISPLAY=:99 xdotool click 1")
             machine.sleep(1)
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.wait_until_fails("systemctl is-active lifeline", timeout=30)
 
             # AND THE CONSOLE IT OPENED IS PUT AWAY, because this subtest raised it.

@@ -141,6 +141,26 @@ pub enum Size {
     /// For a chrome glyph sitting inline with text at the base size — the bell,
     /// the transfer arrows, the countdown. See `font.size.icon`.
     OnTheCell(f32),
+    /// Another size, and the `n`th line of a BLOCK leaded by that size.
+    ///
+    /// # Why a block is not `n` runs of [`Size::Px`]
+    ///
+    /// Because the grid's leading belongs to the grid's size. A name that wraps
+    /// onto a second line is one thing read downwards, and at three quarters of
+    /// the body size two of its lines a whole grid line apart have a quarter of
+    /// a line of nothing between them — the owner read it off the file
+    /// manager's smallest thumbnails: *"a distância entre as duas linhas dos
+    /// nomes … está muito grande"*.
+    ///
+    /// The run still NAMES the grid line it would have occupied, so the door
+    /// keeps one row per line and every hit test, band and elision is
+    /// untouched; `n` says how many lines back the block began, and the
+    /// renderer draws it at the block's own leading instead of the grid's.
+    /// `Stacked(px, 0)` is [`Size::Px`] exactly.
+    ///
+    /// It works in both directions: a block LARGER than the grid is pushed
+    /// down by the same expression, which is the only honest way to write it.
+    Stacked(f32, u16),
 }
 
 impl Size {
@@ -149,7 +169,7 @@ impl Size {
     pub const fn px(self) -> Option<f32> {
         match self {
             Self::Grid => None,
-            Self::Px(v) | Self::OnTheCell(v) => Some(v),
+            Self::Px(v) | Self::OnTheCell(v) | Self::Stacked(v, _) => Some(v),
         }
     }
 
@@ -165,6 +185,23 @@ impl Size {
             Self::Grid => Self::Grid,
             Self::Px(v) => Self::Px(v * scale),
             Self::OnTheCell(v) => Self::OnTheCell(v * scale),
+            Self::Stacked(v, n) => Self::Stacked(v * scale, n),
+        }
+    }
+
+    /// How far DOWN from the line it names a stacked run is drawn, in px.
+    ///
+    /// Zero for everything else, and zero for the first line of a block. For
+    /// the rest it is the whole difference between the two leadings — the
+    /// block's own and the grid's — taken `n` times, which is what moves the
+    /// run from where the GRID would have put it to where the BLOCK does. It
+    /// comes out negative whenever the block is smaller than the grid, which
+    /// is every case there is today.
+    #[must_use]
+    pub fn stacked(self, grid: f32) -> f32 {
+        match self {
+            Self::Stacked(v, n) => f32::from(n) * v.mul_add(tokens::font::LINE_HEIGHT, -grid),
+            _ => 0.0,
         }
     }
 
@@ -342,7 +379,7 @@ pub struct Span {
 pub fn line_box(size: Size, grid: f32) -> f32 {
     match size {
         Size::Grid | Size::OnTheCell(_) => grid,
-        Size::Px(px) => px * tokens::font::LINE_HEIGHT,
+        Size::Px(px) | Size::Stacked(px, _) => px * tokens::font::LINE_HEIGHT,
     }
 }
 
@@ -866,7 +903,9 @@ impl Text {
             // A WHOLE LINE AT ANOTHER SIZE takes that size's line height too:
             // with the renderer's, a large run would be clipped top and bottom
             // by the line box.
-            Size::Px(px) => glyphon::Metrics::new(px, px * tokens::font::LINE_HEIGHT),
+            Size::Px(px) | Size::Stacked(px, _) => {
+                glyphon::Metrics::new(px, px * tokens::font::LINE_HEIGHT)
+            }
             // A GLYPH CENTRED ON ITS CELL KEEPS THE GRID'S LINE HEIGHT — see
             // [`line_box`], which is the same rule and the only place it is
             // written. Two expressions of it are how the box and the metric
@@ -933,12 +972,18 @@ impl Text {
                     // COUNTED UP FROM THE BOTTOM when the run is anchored
                     // there — see `Span::foot`, and `Span::edge` for the same
                     // decision on the other axis.
-                    top: if t.foot {
-                        (down - f32::from(t.line)).mul_add(-lh, height as f32)
-                            + (*top - f32::from(t.line) * lh)
-                    } else {
-                        *top
-                    },
+                    // AND A STACKED RUN LEAVES ITS LINE — see `Size::stacked`,
+                    // which is zero for every other size and for the first line
+                    // of a block. It is added to whichever anchor applies,
+                    // because "which line" and "how far from it" are different
+                    // questions.
+                    top: t.size.times(scale).stacked(lh)
+                        + if t.foot {
+                            (down - f32::from(t.line)).mul_add(-lh, height as f32)
+                                + (*top - f32::from(t.line) * lh)
+                        } else {
+                            *top
+                        },
                     scale: 1.0,
                     bounds: glyphon::TextBounds {
                         left: 0,
@@ -1106,6 +1151,49 @@ mod tests {
         assert!((rasterised_at(0) - 1.0).abs() < f32::EPSILON);
         assert!((rasterised_at(-4) - 1.0).abs() < f32::EPSILON);
         assert!((rasterised_at(i32::MAX) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_block_of_small_runs_is_leaded_by_itself_and_not_by_the_grid() {
+        // THE DEFECT THIS CATCHES: a name that wraps onto a second line drawn a
+        // whole GRID line below the first while its letters are three quarters
+        // of the grid's size. The owner read it off the file manager's smallest
+        // thumbnails: *"a distância entre as duas linhas dos nomes de arquivos
+        // e pastas está muito grande"*.
+        let grid = tokens::font::SIZE_BASE * tokens::font::LINE_HEIGHT;
+        let small = tokens::font::SIZE_SMALL;
+        let own = small * tokens::font::LINE_HEIGHT;
+
+        // THE FIRST LINE OF A BLOCK DOES NOT MOVE: it is `Size::Px` exactly, so
+        // a name that fits on one line draws where it always did.
+        assert!(Size::Stacked(small, 0).stacked(grid).abs() < f32::EPSILON);
+        assert!(Size::Px(small).stacked(grid).abs() < f32::EPSILON);
+        assert!(Size::Grid.stacked(grid).abs() < f32::EPSILON);
+
+        // AND THE SECOND IS PULLED UP BY THE WHOLE DIFFERENCE, which is what
+        // makes the pair sit at the small size's own leading.
+        let shift = Size::Stacked(small, 1).stacked(grid);
+        assert!(shift < 0.0, "the second line was not pulled up: {shift}");
+        assert!(
+            ((grid + shift) - own).abs() < 0.001,
+            "the block is leaded at {} and its own leading is {own}",
+            grid + shift
+        );
+
+        // AND THE BOX IS THE BLOCK'S, not the grid's — a stacked run answers
+        // `line_box` exactly as the `Size::Px` it continues, so `aligned_tops`
+        // cannot move a line it shares with anything else.
+        let boxed = line_box(Size::Stacked(small, 1), grid) - line_box(Size::Px(small), grid);
+        assert!(boxed.abs() < f32::EPSILON);
+
+        // AND IT SCALES. On a screen of scale 2 the block and the grid are both
+        // twice as big, so the lift doubles rather than staying put — the same
+        // promise `Size::nudge` makes on the other axis.
+        let twice = Size::Stacked(small, 1).times(2.0).stacked(grid * 2.0);
+        assert!(
+            (twice - shift * 2.0).abs() < 0.001,
+            "the lift did not scale: {twice}"
+        );
     }
 
     #[test]

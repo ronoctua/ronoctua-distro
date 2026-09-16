@@ -29,7 +29,7 @@ use ronoctua_power::{Action, Can, Keep, Order, Profile, Snapshot, State};
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 
-use crate::files::{Field, Hit as FilesHit};
+use crate::files::{Field, Hit as FilesHit, Ink};
 
 /// The keys this view answers to, and the hint line is generated from it —
 /// see `chrome::hint_of`. Bare letters are free here (nothing is typed), but
@@ -957,6 +957,7 @@ impl Builder<'_> {
             color,
             hit: FilesHit::Nothing,
             explain: None,
+            ink: Ink::Grid,
         }
     }
 

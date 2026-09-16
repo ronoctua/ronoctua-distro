@@ -280,6 +280,37 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the globe channel: {e}"))?;
 
+    // AND THE POINTER'S FILM, on a fifth.
+    //
+    // Its own and not the preview player's, for the reason `View::tour` gives:
+    // the two answer different questions — what the keyboard is ON and what the
+    // hand is OVER — and a `Beat` that reached both would make one cell's frame
+    // drop the other's.
+    let (tours_sender, tours) = channel::channel::<crate::motion::Beat>();
+    handle
+        .insert_source(tours, |event, (), state: &mut FilesWindow| {
+            if let channel::Event::Msg(b) = event
+                && state.view.played_tour(&b)
+            {
+                state.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the tour channel: {e}"))?;
+
+    // AND THE THUMBNAILS', on a fourth. A folder opening answers dozens of
+    // times in a second, and none of them is news about a directory, a film or
+    // a shape.
+    let (thumbs_sender, thumbs) = channel::channel::<crate::thumbs::Made>();
+    handle
+        .insert_source(thumbs, |event, (), state: &mut FilesWindow| {
+            if let channel::Event::Msg(m) = event
+                && state.view.thumbed(m)
+            {
+                state.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the thumbnail channel: {e}"))?;
+
     let texts = std::rc::Rc::new(crate::language::texts());
     // The catalogue is swept HERE and not inherited: this is a process of its
     // own, and `open with` needs to know who declares a type. 128 entries in
@@ -330,6 +361,14 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         playing: crate::motion::player(frames_sender),
         turning: crate::stage::stage(turns_sender),
         spinning_globe: crate::globe::stage(globes_sender),
+        thumbing: crate::thumbs::pool(
+            thumbs_sender.clone(),
+            ronoctua_xdg::cache_dir(),
+            ronoctua_xdg::cache_root(),
+        ),
+        winding: crate::thumbs::animator(thumbs_sender),
+        touring: crate::motion::player(tours_sender),
+        wound: crate::thumbs::Wind(Vec::new()),
         sender,
         under_pointer: None,
         dragging: None,
@@ -452,6 +491,25 @@ struct FilesWindow {
     looking: Option<std::sync::mpsc::Sender<crate::files::Ask>>,
     /// The thread that follows a moving file, when there is one to follow.
     playing: Option<crate::motion::Player>,
+    /// The hands that make thumbnails, when the entries are side by side.
+    ///
+    /// `None` when not one could be raised: the grid then draws its glyphs and
+    /// nothing else, which is honest — the same shape `looking` has above.
+    thumbing: Option<std::sync::mpsc::Sender<crate::thumbs::Ask>>,
+    /// The thread that walks the frames of what moves by itself.
+    winding: Option<std::sync::mpsc::Sender<crate::thumbs::Wind>>,
+    /// The player that tours the film under the POINTER.
+    ///
+    /// A second one, and the second child process this manager will ever have
+    /// running at once. Both are bounded: one cell has the keyboard and one has
+    /// the hand.
+    touring: Option<crate::motion::Player>,
+    /// What it was last told to animate.
+    ///
+    /// Kept so an unchanged screen costs no message: the set is worked out from
+    /// the layout every frame, and sending it every frame would wake a thread
+    /// sixty times a second to be told nothing had changed.
+    wound: crate::thumbs::Wind,
     /// WHAT IS UNDER THE POINTER, resolved by `files::View::hit`.
     ///
     /// One answer and not three numbers: the section, the row inside it and
@@ -637,8 +695,53 @@ impl FilesWindow {
         {
             let _ = queue.send(ask);
         }
+        self.thumbs_again();
         self.follow_the_motion();
         self.follow_the_turn();
+    }
+
+    /// Asks for the thumbnails on screen that are not in hand yet.
+    ///
+    /// Beside `wants_look` and for the same reason: the cursor and the offset
+    /// can move a dozen ways, and enumerating them is how a case gets missed.
+    /// `wants_thumbs` answers with nothing when everything visible is already
+    /// known, so this is a cheap call rather than a decision made here.
+    fn thumbs_again(&mut self) {
+        let Some(queue) = self.thumbing.clone() else {
+            return;
+        };
+        let size = tokens::text::size();
+        // THE SCALE IS PART OF IT, and that is the whole point of taking the
+        // target from here. `docs/PENDING.md` records that every texture in
+        // this tree is still decoded at the LOGICAL size and stretched by the
+        // compositor — sharp letters beside a soft picture — and names
+        // `Stamp::key()` as the one already carrying the step it needs. A grid
+        // decoded in physical pixels is one path off that list rather than one
+        // more on it.
+        #[allow(clippy::cast_precision_loss)]
+        let scale = self.scale as f32;
+        let cell = tokens::metrics::cell_width(size) * scale;
+        let line = tokens::metrics::line_height(size) * scale;
+        let geo = self.geometry();
+        let (columns, room) = (geo.columns, geo.room());
+        for ask in self.view.wants_thumbs(columns, room, cell, line) {
+            let _ = queue.send(ask);
+        }
+        // AND THE POINTER'S FILM, which is a wish like the preview's: asked
+        // once a frame and answered `None` when nothing changed.
+        if let Some(player) = self.touring.as_mut()
+            && let Some(ask) = self.view.wants_tour()
+        {
+            player.tell(ask);
+        }
+        // AND WHAT MOVES, when the set has changed.
+        if let Some(wind) = self.winding.as_ref() {
+            let now = self.view.moving_thumbs(columns, room, cell, line);
+            if now != self.wound {
+                let _ = wind.send(now.clone());
+                self.wound = now;
+            }
+        }
     }
 
     /// Starts, or stops, the player that follows a moving file.
@@ -1244,6 +1347,10 @@ impl FilesWindow {
         let at = self.line_and_cell(x, y);
         self.cell_under_pointer = at.map(|(_, c)| c);
         self.line_under_pointer = at.map(|(l, _)| l);
+        // AND WHICH THUMBNAIL, so a film under the hand starts its tour. It
+        // opens no file — see `View::hover_thumb`.
+        let geo = self.geometry();
+        self.view.hover_thumb(geo.columns, geo.room(), at);
         // AND WHICH SECTION, which is what decides the film's two buttons are
         // drawn: they appear under the pointer, and their CELLS are reserved
         // either way so nothing moves.
@@ -1581,8 +1688,8 @@ impl FilesWindow {
                 // "only when it is missing" belongs where it can be made once.
                 //
                 // A MOVING FILE REPLACES THE TEXTURE UNDER THE SAME KEY, every
-                // frame — which is what keeps an animation to ONE of the
-                // thirty-nine slots. A key per frame would fill the cache with
+                // frame — which is what keeps an animation to ONE slot of the
+                // renderer's ceiling. A key per frame would fill the cache with
                 // one file's film and evict every icon. The globe is the same
                 // kind of picture: it is redrawn as the hand moves.
                 if preview_key.as_deref() == Some(key.as_str()) {
@@ -1600,6 +1707,19 @@ impl FilesWindow {
                     && let Some(rgba) = self.view.globe_frame()
                 {
                     im.upload_it(&gpu.device, &gpu.queue, key, &rgba);
+                } else if (im.missing(key) || self.view.thumb_moves(key))
+                    // A STILL THUMBNAIL ONLY WHEN IT IS MISSING, for the reason
+                    // the still preview gives: the key carries the file, the
+                    // size and the theme, so the same key is the same picture.
+                    // A screenful of them re-uploaded every frame would be tens
+                    // of mebibytes a second across the bus for nothing.
+                    //
+                    // AND A MOVING ONE EVERY TIME, under the SAME key — which
+                    // is what keeps an animation to one slot of the renderer's
+                    // ceiling instead of filling the cache with one file's film.
+                    && let Some(rgba) = self.view.thumb_pixels(key)
+                {
+                    im.upload_it(&gpu.device, &gpu.queue, key, rgba);
                 }
             }
             im.prepare(&gpu.queue, logical_w, logical_h, &pictures);
@@ -2162,19 +2282,29 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         let y = s.geo.metric.first + line as u16;
         let cell = tokens::metrics::cell_width(size);
         #[allow(clippy::cast_precision_loss)]
-        let (at, wide) = crate::files::band_for(
-            panes_now,
-            pane,
-            margin,
-            s.geo.columns,
-            cell,
-            s.geo.metric.width,
+        // AND SIDE BY SIDE IT IS THE CELL and not the column. `band_cells_of`
+        // answers `None` for a list, which is every band there was, so this is
+        // the same rectangle it always drew until there is a shelf.
+        let (at, wide) = s.view.focus_cells(s.geo.columns, s.geo.room()).map_or_else(
+            || {
+                crate::files::band_for(
+                    panes_now,
+                    pane,
+                    margin,
+                    s.geo.columns,
+                    cell,
+                    s.geo.metric.width,
+                )
+            },
+            |c| crate::files::band_px(c, margin, cell),
         );
+        #[allow(clippy::cast_precision_loss)]
+        let tall = line_px * s.view.band_lines() as f32;
         quads.push(ronoctua_render::quad::Quad {
             x: at,
             y: f32::from(y) * line_px,
             width: wide,
-            height: line_px,
+            height: tall,
             color: tokens::color::SURFACE_SELECTION,
         });
     }
@@ -2186,19 +2316,29 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         let y = s.geo.metric.first + line as u16;
         let cell = tokens::metrics::cell_width(size);
         #[allow(clippy::cast_precision_loss)]
-        let (at, wide) = crate::files::band_for(
-            panes_now,
-            crate::files::Pane::Listing,
-            margin,
-            s.geo.columns,
-            cell,
-            s.geo.metric.width,
-        );
+        let (at, wide) = s
+            .view
+            .resting_cells(s.geo.columns, s.geo.room())
+            .map_or_else(
+                || {
+                    crate::files::band_for(
+                        panes_now,
+                        crate::files::Pane::Listing,
+                        margin,
+                        s.geo.columns,
+                        cell,
+                        s.geo.metric.width,
+                    )
+                },
+                |c| crate::files::band_px(c, margin, cell),
+            );
+        #[allow(clippy::cast_precision_loss)]
+        let tall = line_px * s.view.band_lines() as f32;
         quads.push(ronoctua_render::quad::Quad {
             x: at,
             y: f32::from(y) * line_px,
             width: wide,
-            height: line_px,
+            height: tall,
             color: tokens::color::SURFACE_HOVER,
         });
     }
@@ -2269,11 +2409,24 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
                 s.geo.metric.width,
             ),
         };
+        let (at, wide) = s
+            .line_under_pointer
+            .and_then(|line| {
+                s.view.band_cells_at(
+                    s.geo.columns,
+                    s.geo.room(),
+                    line,
+                    s.cell_under_pointer.unwrap_or(0),
+                )
+            })
+            .map_or((at, wide), |c| crate::files::band_px(c, margin, cell));
+        #[allow(clippy::cast_precision_loss)]
+        let tall = line_px * s.view.band_lines() as f32;
         quads.push(ronoctua_render::quad::Quad {
             x: at,
             y: f32::from(y) * line_px,
             width: wide,
-            height: line_px,
+            height: tall,
             // THE WEAKER OF THE TWO. Two rows, two colours, and which is
             // which is legible; one row, and only the focus is drawn.
             color: tokens::color::SURFACE_HOVER,
@@ -2301,7 +2454,11 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
                 // box — invariant 15.
                 let under = alight == Some(which);
                 spans.push(ronoctua_render::Span {
-                    size: ronoctua_render::Size::Px(size),
+                    // THE ROW'S OWN SIZE, through the one function that turns
+                    // lines into one — see `files::run_size`. Nought is the
+                    // ordinary size, which is every row but a thumbnail's
+                    // fallback glyph.
+                    size: crate::files::run_size(f.ink, size, line_px),
                     text: f.text.clone(),
                     column: margin + f.at,
                     line: y,
@@ -2547,8 +2704,22 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         let rgba = s.view.globe_frame()?;
         Some((key, crate::files::picture_in(area, rgba.width, rgba.height)))
     });
-    let pictures: Vec<(String, ronoctua_render::image::Area)> =
-        picture.into_iter().chain(globe_picture).collect();
+    // AND EVERY THUMBNAIL ON SCREEN. `Painted::pictures` has been a batch since
+    // the globe joined the preview; this is the same batch, longer.
+    #[allow(clippy::cast_precision_loss)]
+    let thumbnails = s.view.grid_pictures(
+        s.geo.columns,
+        s.geo.room(),
+        margin,
+        cell,
+        line_px,
+        f32::from(s.geo.metric.first) * line_px,
+    );
+    let pictures: Vec<(String, ronoctua_render::image::Area)> = picture
+        .into_iter()
+        .chain(globe_picture)
+        .chain(thumbnails)
+        .collect();
 
     // THE FILM'S CONTROLS, LAST AND ON TOP.
     //

@@ -869,6 +869,15 @@ struct Footer {
     files_turning: Option<crate::stage::Stage>,
     /// The thread that draws the globe. One per DOOR — see the window's twin.
     files_globe: Option<crate::globe::Stage>,
+    /// The hands that make thumbnails, when the entries are side by side.
+    files_thumbing: Option<std::sync::mpsc::Sender<crate::thumbs::Ask>>,
+    /// The thread that walks the frames of what moves by itself.
+    files_winding: Option<std::sync::mpsc::Sender<crate::thumbs::Wind>>,
+    /// What it was last told to animate, so an unchanged screen costs no
+    /// message.
+    files_wound: crate::thumbs::Wind,
+    /// The player that tours the film under the POINTER.
+    files_touring: Option<crate::motion::Player>,
     /// Where the pointer was when it last moved a shape.
     ///
     /// A gesture of the door's own and NOT a fourth `Axis`: `drag_to` inverts
@@ -2220,6 +2229,10 @@ pub fn run() -> Result<()> {
         walk_armed: false,
         files_turning: None,
         files_globe: None,
+        files_thumbing: None,
+        files_winding: None,
+        files_wound: crate::thumbs::Wind(Vec::new()),
+        files_touring: None,
         spinning: None,
         dragging_globe: None,
         // Read ONCE, at startup. Neither answer changes while a listing is on
@@ -2461,6 +2474,44 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the globe channel: {e}"))?;
+
+    // AND THE THUMBNAILS', on a fourth. A folder opening answers dozens of
+    // times in a second, and none of them is news about a directory, a film or
+    // a shape.
+    let (thumbs_sender, thumbs) = channel::channel::<crate::thumbs::Made>();
+    state.files_thumbing = crate::thumbs::pool(
+        thumbs_sender.clone(),
+        ronoctua_xdg::cache_dir(),
+        ronoctua_xdg::cache_root(),
+    );
+    state.files_winding = crate::thumbs::animator(thumbs_sender);
+    handle
+        .insert_source(thumbs, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(m) = event
+                && state.files.as_mut().is_some_and(|v| v.thumbed(m))
+            {
+                state.owes_paint = true;
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the thumbnail channel: {e}"))?;
+
+    // AND THE POINTER'S FILM, on a fifth.
+    //
+    // Its own and not the preview player's, for the reason `View::tour` gives:
+    // the two answer different questions — what the keyboard is ON and what the
+    // hand is OVER — and a `Beat` that reached both would make one cell's frame
+    // drop the other's.
+    let (tours_sender, tours) = channel::channel::<crate::motion::Beat>();
+    state.files_touring = crate::motion::player(tours_sender);
+    handle
+        .insert_source(tours, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(b) = event
+                && state.files.as_mut().is_some_and(|v| v.played_tour(&b))
+            {
+                state.owes_paint = true;
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the tour channel: {e}"))?;
 
     // THE END OF A RADIO SCAN.
     //
@@ -4648,6 +4699,9 @@ impl PointerHandler for Footer {
                     self.under_pointer = true;
                     self.row_under_pointer = self.row_at(e.position.0, e.position.1);
                     self.cell_under_pointer = self.cell_at(e.position.0);
+                    // AND WHICH THUMBNAIL, so a film under the hand starts its
+                    // tour. It opens no file — see `View::hover_thumb`.
+                    self.hover_a_thumbnail();
                     self.segment_under_pointer = self.segment_at(e.position.0, e.position.1);
                     // WHAT THE BAND'S CONTROL SAYS, on the message line and
                     // never in a tooltip — the precedent the file manager set,
@@ -4777,6 +4831,12 @@ impl PointerHandler for Footer {
                     }
                 }
                 PointerEventKind::Leave { .. } => {
+                    // AND THE HAND LEAVING STOPS THE FILM, which is the other
+                    // half of starting it: a child process for a cell nobody is
+                    // over is a pipe for nothing.
+                    self.cell_under_pointer = None;
+                    self.row_under_pointer = None;
+                    self.hover_a_thumbnail();
                     // THE CLOCK GOES ON. A pointer that leaves the surface
                     // sends no motion event on the way out, so without this a
                     // notification held at the edge would stay held until the
@@ -8406,8 +8466,88 @@ impl Footer {
         {
             let _ = queue.send(ask);
         }
+        self.thumbs_again();
         self.follow_the_motion();
         self.follow_the_turn();
+    }
+
+    /// Tells the view which thumbnail the pointer is over.
+    ///
+    /// The window door does this inline; here it is a method because the
+    /// footer's pointer arrives in three places — entering, moving and leaving
+    /// — and three copies of two lines is how two of them come to disagree.
+    fn hover_a_thumbnail(&mut self) {
+        let columns = self.screen_columns();
+        let room = self.grid().lines;
+        let at = self
+            .row_under_pointer
+            .map(|line| (line, self.cell_under_pointer.unwrap_or(0)));
+        if let Some(view) = self.files.as_mut() {
+            view.hover_thumb(columns, room, at);
+        }
+    }
+
+    /// THE SHARPEST SCREEN'S SCALE, of however many this footer is drawn on.
+    ///
+    /// # Why the largest and not each one's own
+    ///
+    /// Because a thumbnail is decoded ONCE and drawn on every surface: the key
+    /// carries the size, so two sizes would be two decodes of one file and two
+    /// textures of it on the GPU. Decoding for the sharpest screen and letting
+    /// the others draw it smaller costs pixels nobody sees; the other way round
+    /// costs a soft picture on the screen somebody is looking at.
+    ///
+    /// One is the floor, so a footer that has not been configured yet asks for
+    /// what a plain screen would want rather than for nothing.
+    fn scale_now(&self) -> f32 {
+        #[allow(clippy::cast_precision_loss)]
+        let most = self
+            .screens
+            .iter()
+            .map(|s| s.scale)
+            .max()
+            .unwrap_or(1)
+            .max(1) as f32;
+        most
+    }
+
+    /// Asks for the thumbnails on screen that are not in hand yet, and tells the
+    /// animator what moves.
+    ///
+    /// The window door's twin, and beside `wants_look` for the same reason: the
+    /// cursor and the offset can move a dozen ways, and enumerating them is how
+    /// a case gets missed. Both answer with nothing when nothing changed.
+    fn thumbs_again(&mut self) {
+        let Some(queue) = self.files_thumbing.clone() else {
+            return;
+        };
+        let columns = self.screen_columns();
+        let room = self.grid().lines;
+        let size = tokens::text::size();
+        // THE SCALE IS PART OF IT — see `files::thumb_side`, and the entry in
+        // `docs/PENDING.md` it keeps this path off.
+        let scale = self.scale_now();
+        let cell = tokens::metrics::cell_width(size) * scale;
+        let line = tokens::metrics::line_height(size) * scale;
+        let Some(view) = self.files.as_mut() else {
+            return;
+        };
+        for ask in view.wants_thumbs(columns, room, cell, line) {
+            let _ = queue.send(ask);
+        }
+        let now = view.moving_thumbs(columns, room, cell, line);
+        let tour = view.wants_tour();
+        if now != self.files_wound
+            && let Some(wind) = self.files_winding.as_ref()
+        {
+            let _ = wind.send(now.clone());
+            self.files_wound = now;
+        }
+        if let Some(ask) = tour
+            && let Some(player) = self.files_touring.as_mut()
+        {
+            player.tell(ask);
+        }
     }
 
     /// Starts, or stops, the player that follows a moving file.
@@ -10827,6 +10967,10 @@ impl Footer {
             .map(|n| {
                 let mut fields = Vec::new();
                 let mut listing_has_something = false;
+                // AND HOW TALL THE RUNS ON THIS LINE ARE. The listing's, because
+                // it is the only section that ever asks for more than one line
+                // — a thumbnail's fallback glyph — and the panels beside it draw
+                // ordinary text on the same line.
                 for sec in &region {
                     let Some(line) = sec.content.get(n) else {
                         continue;
@@ -10834,6 +10978,12 @@ impl Footer {
                     if matches!(sec.pane, crate::files::Pane::Listing) {
                         listing_has_something = !line.fields.is_empty();
                     }
+                    // AND A FIELD CARRIES ITS OWN SIZE, which is why four
+                    // sections' runs can be poured into one line at all: the
+                    // sidebar's `trash` and the facts' `owner:group` sit beside
+                    // a thumbnail's glyph without becoming four lines tall
+                    // because of it. The owner photographed that the other way
+                    // round.
                     fields.extend(line.fields.iter().cloned());
                 }
                 ExpansionRow {
@@ -13764,6 +13914,26 @@ impl Footer {
             .files
             .as_ref()
             .and_then(crate::files::View::globe_frame);
+        // AND EVERY THUMBNAIL ON SCREEN, by reference and for the same reason
+        // as the three above: the upload happens where `self` is already
+        // borrowed by `screens.get_mut`.
+        //
+        // WHERE they go is worked out below, where the geometry is; this is
+        // only what they are made of, and whether each one MOVES — a still one
+        // goes up once and a moving one replaces its texture every frame.
+        let files_thumbs: Vec<(String, &ronoctua_render::image::Rgba, bool)> = self
+            .files
+            .as_ref()
+            .map(|v| {
+                v.thumb_keys()
+                    .into_iter()
+                    .filter_map(|k| {
+                        let moves = v.thumb_moves(&k);
+                        v.thumb_pixels(&k).map(|r| (k, r, moves))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let segments = self.segments_now();
         let mini_at_rest = crate::minibuffer_at_rest();
@@ -14768,7 +14938,19 @@ impl Footer {
                     for (which, f) in line.fields.iter().enumerate() {
                         let under = alight == Some(which);
                         spans.push(ronoctua_render::Span {
-                            size: ronoctua_render::Size::Grid,
+                            // THE ROW'S OWN SIZE, through the one function that
+                            // turns lines into one — see `files::run_size`.
+                            // `Size::Grid` means the renderer's own, which is
+                            // what nought resolves to here.
+                            size: if f.ink == crate::files::Ink::Grid {
+                                ronoctua_render::Size::Grid
+                            } else {
+                                crate::files::run_size(
+                                    f.ink,
+                                    tokens::text::size(),
+                                    tokens::metrics::line_height(tokens::text::size()),
+                                )
+                            },
                             text: f.text.clone(),
                             // AND THE CONTENT'S LEAD, which this path did not
                             // pay and every other one did. It is the whole of
@@ -14907,6 +15089,20 @@ impl Footer {
             // image or the panel.
             let mut file_preview: Option<(String, ronoctua_render::image::Area)> = None;
             let mut file_globe: Option<(String, ronoctua_render::image::Area)> = None;
+            // WHERE EVERY THUMBNAIL GOES, out of the one function that knows —
+            // the same call the window door makes, so the two cannot place a
+            // cell differently.
+            #[allow(clippy::cast_precision_loss)]
+            let file_thumbs = self.files.as_ref().map_or_else(Vec::new, |v| {
+                v.grid_pictures(
+                    columns,
+                    grid.lines,
+                    crate::chrome::FIELDS_LEAD,
+                    tokens::metrics::cell_width(tokens::text::size()),
+                    line_height,
+                    f32::from(first_of_expansion) * line_height,
+                )
+            });
             if let Some(v) = self.files.as_ref() {
                 let panes = v.panes(columns);
                 // WHERE THE PANELS' OWN ROWS BEGIN, and it is NOT the top of
@@ -15338,11 +15534,28 @@ impl Footer {
                         )
                     },
                 );
+                // AND SIDE BY SIDE IT IS THE CELL, not the column. The reader
+                // answers `None` for a list, which is every band there was, so
+                // nothing about a listing's band changes here.
+                let (band_at, band_wide) = self
+                    .files
+                    .as_ref()
+                    .and_then(|v| {
+                        v.focus_cells(columns, grid.lines)
+                            .map(|c| crate::files::band_px(c, crate::chrome::FIELDS_LEAD, cell))
+                    })
+                    .unwrap_or((band_at, band_wide));
+                #[allow(clippy::cast_precision_loss)]
+                let tall = line_height
+                    * self
+                        .files
+                        .as_ref()
+                        .map_or(1, crate::files::View::band_lines) as f32;
                 backgrounds.push(ronoctua_render::quad::Quad {
                     x: band_at,
                     y: f32::from(first_of_expansion + grid_y) * line_height,
                     width: band_wide,
-                    height: line_height,
+                    height: tall,
                     color: tokens::color::SURFACE_SELECTION,
                 });
             }
@@ -15362,11 +15575,25 @@ impl Footer {
                         )
                     },
                 );
+                let (band_at, band_wide) = self
+                    .files
+                    .as_ref()
+                    .and_then(|v| {
+                        v.resting_cells(columns, grid.lines)
+                            .map(|c| crate::files::band_px(c, crate::chrome::FIELDS_LEAD, cell))
+                    })
+                    .unwrap_or((band_at, band_wide));
+                #[allow(clippy::cast_precision_loss)]
+                let tall = line_height
+                    * self
+                        .files
+                        .as_ref()
+                        .map_or(1, crate::files::View::band_lines) as f32;
                 backgrounds.push(ronoctua_render::quad::Quad {
                     x: band_at,
                     y: f32::from(first_of_expansion + grid_y) * line_height,
                     width: band_wide,
-                    height: line_height,
+                    height: tall,
                     color: tokens::color::SURFACE_HOVER,
                 });
             }
@@ -15415,6 +15642,26 @@ impl Footer {
                     band_wide,
                     cell,
                 );
+                let (band_at, band_wide) = self
+                    .files
+                    .as_ref()
+                    .zip(self.row_under_pointer)
+                    .and_then(|(v, line)| {
+                        v.band_cells_at(
+                            columns,
+                            grid.lines,
+                            line,
+                            self.cell_under_pointer.unwrap_or(0),
+                        )
+                        .map(|c| crate::files::band_px(c, crate::chrome::FIELDS_LEAD, cell))
+                    })
+                    .unwrap_or((band_at, band_wide));
+                #[allow(clippy::cast_precision_loss)]
+                let tall = line_height
+                    * self
+                        .files
+                        .as_ref()
+                        .map_or(1, crate::files::View::band_lines) as f32;
                 backgrounds.push(ronoctua_render::quad::Quad {
                     x: band_at,
                     y: f32::from(first_of_expansion + grid_y) * line_height,
@@ -15422,7 +15669,7 @@ impl Footer {
                     // with the shortcut list in three columns, a full-screen band
                     // would light the three neighboring lines together.
                     width: band_wide,
-                    height: line_height,
+                    height: tall,
                     color: tokens::color::SURFACE_HOVER,
                 });
             }
@@ -15720,7 +15967,7 @@ impl Footer {
                 if let Some((key, area)) = file_preview {
                     // A MOVING FILE REPLACES THE TEXTURE UNDER THE SAME KEY,
                     // every frame — which is what keeps an animation to ONE of
-                    // the thirty-nine slots. A key per frame would fill the
+                    // one slot of the renderer's ceiling. A key per frame would fill the
                     // cache with one file's film and evict every icon.
                     if let Some(frame) = files_frame {
                         im.upload_it(&gpu.device, &gpu.queue, &key, frame);
@@ -15736,6 +15983,18 @@ impl Footer {
                 // one number in this feature that would have failed silently.
                 if let Some((key, area)) = file_globe {
                     if let Some(rgba) = files_globe_pixels.as_ref() {
+                        im.upload_it(&gpu.device, &gpu.queue, &key, rgba);
+                    }
+                    batch.push((key, area));
+                }
+                // AND EVERY THUMBNAIL, by the same rule as the preview: a still
+                // one only when it is missing — a screenful re-uploaded every
+                // frame would be tens of mebibytes a second across the bus —
+                // and a moving one every time, under the SAME key.
+                for (key, area) in file_thumbs {
+                    if let Some((_, rgba, moves)) = files_thumbs.iter().find(|(k, _, _)| *k == key)
+                        && (*moves || im.missing(&key))
+                    {
                         im.upload_it(&gpu.device, &gpu.queue, &key, rgba);
                     }
                     batch.push((key, area));

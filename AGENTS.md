@@ -190,6 +190,144 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   para NFS, que o inotify não vê —; a janela não ganhou relógio (em repouso não acorda NENHUMA vez,
   que é o custo de ter várias abertas), só se o observador não subir. Fechar DESCANSA o watch, e os
   dois lugares que largam a vista chamam — o segundo é perder o FOCO. A ficha ROLA (`C-.`, e a barra diz que cortou);
+  **A LISTAGEM TEM DUAS FORMAS, e a segunda são MINIATURAS** (`C-g`, e o glifo clicável no fim da
+  linha do caminho — o dono pediu as duas). Nasce desligada. A grade é a `ronoctua_design::Grid`, a
+  mesma dos três navegadores de ícones, e não uma segunda: o `at`/`index_at` dela é a MESMA soma nos
+  dois sentidos, e o sintoma que ela existe para impedir está escrito no topo dela — *"o clique cair
+  num item enquanto a tela mostrava outro"*, que numa listagem apaga o arquivo errado. `Section`
+  ganhou UM campo (`grid`) e duas conversões (`line_of`, `row_at`), e `offset`/`total` continuam em
+  ENTRADAS: a roda, o arrasto, o `follow` e o `scroll_listing_to` já falam entradas, e dar a eles uma
+  segunda unidade é como um número passa a significar duas coisas. **A célula responde no VÃO**,
+  porque uma miniatura é quase toda célula vazia e `View::hit` acabava em `field_at` — o mesmo
+  defeito do botão de expandir, sessenta vezes por tela. **E a faixa é o RETÂNGULO da célula**, não a
+  linha inteira: uma faixa de largura total sobre uma prateleira acende sete arquivos para dizer que
+  o ponteiro está em um. A linha dos nomes some na grade (não há coluna para nomear) e `C-G` gira
+  três tamanhos — `space.files.thumbSmall/Medium/Large`, em CÉLULAS, com a altura DERIVADA da largura
+  pela razão célula/linha da fonte: declarar as duas seria um segundo valor visual que pode divergir
+  do primeiro, e a divergência é uma figura que não é quadrada.
+  **UM FORMATO É O QUE `pixels::how` RESPONDE**, e isso é uma prova e não uma diligência: as seis
+  rasterizadas em processo, SVG, RAW pelo exiftool, todo vídeo (pôster), todo áudio (capa, e a onda
+  quando não há capa), PDF, e todo o resto de `image/*` pelo ffmpeg. **A PEÇA 3D é DESENHADA** no
+  trabalhador (`mesh::read` + `solid::draw`, 18–44 ms medidos) — o `stage.rs` existe para GIRAR uma
+  peça e guarda o corpo para isso, e sessenta corpos seriam a memória do gerenciador. O que não tem
+  figura fica com o glifo do tipo, que cobre os 1 232 tipos do freedesktop por construção.
+  **E O TIPO SAI DO QUE O ARQUIVO ABRE**, nunca do que ele É: `View::opens` é uma segunda tabela ao
+  lado de `types`, e a diferença é o symlink — o GLIFO diz que é um link, que é o fato que uma
+  listagem não pode omitir, e a MINIATURA mostra a fotografia, porque *"um link para uma fotografia é
+  uma fotografia quando se olha para ela"*. Custa um glob por LINK numa leitura de diretório.
+  **O trabalho é um POOL, e não a thread da prévia** (`thumbs.rs`): o `inspector` esvazia a fila até o
+  mais NOVO, que é certo para um painel sobre o arquivo sob o cursor e jogaria fora 63 das 64 células.
+  É o molde do `apps::painter` — pedidos todos queridos, resposta por chave — com várias mãos, porque
+  aqui o custo é um PROCESSO. Medido na pasta do dono (64 arquivos, 36 extensões): uma miniatura custa
+  ~110 ms seja qual for o arquivo (109 ms num JPEG de 22 KB, 167 num MP4 de **355 MB** — paga-se o
+  processo, não a figura), e a pasta inteira sai em 8 129 ms numa mão, 1 681 em seis e 1 293 em doze.
+  Metade da máquina, piso de duas e teto de oito. **Só o que está VISÍVEL é pedido** (o precedente
+  literal é o `request_visible_icons`) e **`Some(None)` é uma RESPOSTA** — "este arquivo não dá
+  figura" —, senão um documento é perguntado a cada quadro.
+  **E A GRADE CABE NA PORTA EM QUE ESTÁ.** O tamanho é limitado dos dois lados: por baixo pelo teto
+  de figuras do renderizador, e por cima por `THUMB_SHELVES` — **duas prateleiras**. O rodapé dá doze
+  linhas, uma é o caminho e quatro são a faixa dos painéis, o que deixa sete; ao degrau médio isso é
+  UMA prateleira com o resto da região em branco, que é uma listagem PIORADA — sem noção de página,
+  sem para onde descer, e com uma rolagem que anda uma tela por vez. O dono fotografou: *"a versão de
+  rodapé … está mostrando apenas uma linha no meu laptop em vez de duas"*. Então o degrau DESCE até
+  caber, e uma janela alta não paga por isso.
+  **O GLIFO SÓ APARECE ONDE NÃO HÁ FIGURA, e ele ENCHE a sala dela.** Duas coisas que o dono
+  fotografou na mesma tela — *"os glifos dos itens que não tem thumbnail aparecem minúsculos"* e *"os
+  glifos estão aparecendo por cima das thumbnails"* — e são uma pergunta só feita duas vezes: esta
+  célula tem figura? A resposta decide se o glifo é desenhado e quanta sala ele tem. O tamanho viaja
+  no CAMPO (`Field::tall`) e não na linha, e isso não é arbitrário: o rodapé achata as quatro seções
+  numa linha só, então uma altura por LINHA fez `trash` e `owner:group` ficarem do tamanho de um
+  glifo de miniatura ao lado dele — fotografado também. `files::run_size` é o único lugar onde linhas
+  viram um tamanho, e as duas portas o chamam.
+  **E NÃO HÁ FAIXA DE HOVER SOBRE UMA GRADE.** A regra é mais velha que o modo e o `band_belongs` já
+  a dizia: uma faixa diz que LINHA DE UMA LISTA está sob o ponteiro, e uma fotografia não é lista —
+  lado a lado a região inteira é fotografia. O dono fotografou o que desenhar uma assim mesmo parece:
+  *"a linha do hover do mouse aparece e está enorme. Porém não deveria aparecer nenhuma linha"*. O que
+  continua dizendo onde o ponteiro está é o CAMPO que ele acende, o nome sob a célula. A faixa do
+  CURSOR fica: ela é onde o teclado está, e uma grade sem nada aceso é uma grade que não se percorre.
+  **O ANEL VENCE DEPOIS DE TOCADO.** Enquanto ninguém o girou, o desenho escolhe um tamanho que CABE
+  na porta; depois disso quem pediu manda — *"ao apertar Ctrl+Shift+g os tamanhos não estão sendo
+  alterados no modo rodapé"* é o que um teto silencioso parece. E ele anda a partir do que está NA
+  TELA, não do que foi pedido por último: numa porta baixa o pedido nunca desenhado era o do meio, e
+  a primeira tecla pulava de pequeno para grande.
+  **E HÁ UM GLIFO PARA O TAMANHO**, à esquerda do da forma, a pedido do dono. Ele desenha QUAL dos
+  três é — ao contrário do vizinho, que desenha para onde VAI: um interruptor tem para onde ir, um
+  anel de três não, então o que ele pode dizer com utilidade é onde ESTÁ. Some quando as entradas
+  voltam a ser uma por linha, e devolve as células ao caminho: um controle que não faz nada não fica
+  segurando espaço. **Com uma célula de AR entre os dois** (`space.files.layoutAir`): dois glifos da
+  mesma família e do mesmo peso em células vizinhas não têm fronteira nenhuma que se veja, e o dono
+  os leu na tela como um controle só — *"colado no glifo de trocar de modo"*. **E o da FORMA não se
+  mexe ao trocar de modo**: o do tamanho nasce à ESQUERDA dele, e o par não é alinhado à direita
+  como um bloco — um controle que escorrega uma célula no instante em que é apertado sai de baixo do
+  ponteiro que o apertou, que é o defeito que o botão de expandir a ficha já teve uma vez. O zero
+  desse ar é recusado pelo COMPILADOR, porque toda asserção sobre a distância entre os dois é
+  escrita em função dele e ficaria verde com eles colados de novo.
+  **O NOME TEM DUAS LINHAS**, quebradas por `layout::wrap` — que parte por CLUSTER uma palavra sem
+  espaços, que é o que um nome de arquivo é. E nunca três: o `wrap` para de EMPILHAR no teto dele e
+  guarda o resto na mão, então responde com uma linha a mais do que se pediu, e ela cai na prateleira
+  de baixo. O corte é nosso, e o que sobrou volta para a última linha para ser elidido ali — reticência
+  onde o nome para, não um nome que simplesmente acaba. **No menor degrau ele também encolhe**
+  (`Ink::Small`, do `paint::scale_in_px`, que é o único resolvedor que o `one-text-size` deixa ler um
+  tamanho fixo), e a QUEBRA é medida nesse tamanho: contar células da grade para uma run menor deixa
+  um quinto de cada linha vazio. **E a ENTRELINHA das duas é a da fonte pequena, não a da grade**
+  (`Size::Stacked`, a quarta forma de `ronoctua_render::Size`): um nome que quebra é UMA coisa lida
+  para baixo, e a três quartos do corpo duas linhas a uma linha da grade de distância deixam um
+  quarto de linha de nada entre elas — o dono mediu na tela (*"a distância entre as duas linhas dos
+  nomes … está muito grande"*), e são 4,35 px dos 26,1. A run continua NOMEANDO a linha da grade que
+  ocuparia — a porta segue com uma `Row` por linha, e nenhum `hit`, faixa ou elisão muda —; o número
+  diz quantas linhas atrás o bloco começou, e quem o desenha na entrelinha dele é o renderizador.
+  `Stacked(px, 0)` é `Px(px)` exato, então nome de uma linha não se mexe, e a expressão vale nos dois
+  sentidos: bloco MAIOR que a grade desce pela mesma conta.
+  **E DUAS LINHAS DE NOME CUSTAM UMA PRATELEIRA.** A menor célula passou a ter 4 linhas (2 de figura,
+  2 de nome) e o rodapé com os painéis abertos deixa 7 — que não cabem duas. Com os painéis fechados
+  (11 linhas) cabem. Onde não cabem, o degrau escolhido é o MENOR: uma prateleira de nove arquivos e
+  não de cinco.
+  **E NUMA CÉLULA UM SOM SEM CAPA MOSTRA O GLIFO, não a onda.** A onda é uma figura de um SOM: lê-se
+  num painel e é um borrão cinza em seis células. Quem diz isso é a AUSÊNCIA DE TINTA — o `wave` do
+  pedido vai vazio, e o `pixels` recusa desenhar ondas sem ela. O painel continua passando a tinta e
+  continua tendo as suas.
+  **E UMA FOTOGRAFIA COM FILME DENTRO ANIMA SOB O PONTEIRO.** Ela é um `image/*` por toda outra
+  resposta — só o `Moving::inside` a distingue —, então um portão pelo media type passava por cima de
+  todas elas. O trabalhador lê isso dos bytes do próprio arquivo (uma janela XMP e a cauda), sem
+  `ffprobe`, e o passeio a toca INTEIRA em vez de espalhar quatro pontos por três segundos.
+  **E O CACHE É O DO FREEDESKTOP**, o mesmo que o GNOME Files, o Thunar e o Dolphin escrevem:
+  `$XDG_CACHE_HOME/thumbnails/<tamanho>/<md5 da URI>.png`, com a URI e o mtime da origem em chunks
+  `tEXt` e o arquivo a `0600`. O trabalho é o MESMO trabalho — quem já abriu a pasta noutro
+  gerenciador já pagou os 109 ms, e quem abre aqui primeiro pagou por ele. Custa um **MD5 escrito à
+  mão** (os sete vetores da RFC 1321 são um teste) e a inserção dos `tEXt` no PNG à mão, porque o
+  `image` codifica pixels e não expõe chunk — comprimento, tipo, dados e checksum, quinze linhas.
+  Os nossos três degraus de decodificação (128, 256, 512) **são três dos quatro tamanhos que o padrão
+  nomeia**, o que torna a troca gratuita em vez de uma reamostragem; um teste guarda isso.
+  **O que NÃO vai lá é o que NÓS pintamos** — a onda de um áudio, uma peça 3D iluminada pela nossa
+  lâmpada: não são miniaturas do arquivo em nenhum sentido que outro programa reconheça, mudam com o
+  tema, e o padrão não tem onde dizer isso. Essas ficam no nosso formato, cujo cabeçalho carrega a
+  tinta.
+  **E a SEGUNDA visita é de graça**: `ronoctua_inspect::cache` guarda a figura em
+  `$XDG_CACHE_HOME/ronoctua`, que é a QUARTA raiz XDG e nasceu aqui — um cache é o que se pode apagar
+  e refazer do que ainda existe, que o estado não é. O nome é um FNV-1a de 64 bits do caminho (dez
+  linhas, sem dependência), e **o caminho inteiro vai DENTRO do arquivo**: colisão e arquivo alterado
+  dão a mesma resposta, que é MISS, e é isso que torna dez linhas de hash honestas em vez de uma
+  aposta. Provado na tela com os cinco leitores apontando para `/nonexistent` — as figuras
+  apareceram.
+  **A ANIMAÇÃO TEM UMA REGRA SÓ: o que anima em PROCESSO anima sozinho; o que precisa de um PROCESSO
+  anima sob o PONTEIRO.** GIF, WebP animado e APNG têm iterador preguiçoso dentro do `image`, então
+  custam um descritor e um quadro; vídeo custa um ffmpeg. A fronteira não é arbitrária — é a única que
+  existe. O animador segura até `space.files.thumbAnimators` iteradores, **um quadro na memória cada**
+  e um relógio só; medido, 2,35 ms por quadro e 625 KiB de canvas por arquivo aberto, contra os
+  **215 MiB** que guardar os quadros de cinquenta GIFs custaria — que é o que o dono pediu para isto
+  não custar, nessas palavras. Um arquivo mais rápido que a taxa da célula é PULADO e não atrasado:
+  ele leva exatamente o que o autor dele disse para dar a volta. Acima do teto a célula mostra o
+  quadro parado **e diz isso com uma marca** — recusa desenhada é recusa; muda é defeito. Sob o
+  ponteiro há um SEGUNDO `motion::Player` que passeia o filme em quatro pontos espalhados
+  (`space.files.thumbClipTenths` em cada), porque o primeiro quadro é o que menos diz sobre um filme;
+  **os quadros são o relógio** e nenhuma porta ganhou temporizador. Som NUNCA: som é do arquivo que se
+  ESCOLHEU, e a mão atravessando uma pasta não é uma escolha.
+  **E o teto de figuras da GPU é honrado dos DOIS lados**: o `Images::CEILING` conta uma tela de
+  miniaturas (`space.files.thumbMost`) e a grade **sobe o tamanho** em vez de pedir mais células do
+  que o renderizador desenha — porque o `prepare` descarta o excedente **sem nada em log nenhum**, que
+  é o único defeito mudo desta feature. Contado: 1080p cabe 128 pequenas e 4K caberia 512, então 256
+  deixa a menor alcançável na tela do dono e sobe a de 4K para a média, que é a resposta certa de
+  qualquer jeito.
   **A linha que NOMEIA as colunas nasce escondida**, e `C-D` a mostra — o par shiftado do
   `C-d` como `C-S` é do `C-s`: um decide QUAIS colunas são desenhadas, o outro se os nomes delas
   são. A linha custa uma das doze do rodapé e o que ela carrega é alcançável sem ela (`C-s` e `C-S`

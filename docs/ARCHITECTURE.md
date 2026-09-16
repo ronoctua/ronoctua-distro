@@ -4605,6 +4605,55 @@ inteira para que um nome pudesse se mexer nos poucos quadros em que alguém desc
 **Um nome anda por vez** — o do ponteiro, ou o do cursor quando o ponteiro não está sobre nenhum.
 Dois seriam duas coisas se mexendo numa tela onde nada se mexe, e o olho está num dos dois.
 
+### O modo miniatura — uma segunda forma da listagem, e nenhuma segunda aritmética
+
+Uma listagem responde *onde está*; uma grade de miniaturas responde *qual é*. São a mesma lista com
+duas formas, e a segunda nasce desligada (`C-g`, ou o glifo clicável no fim da linha do caminho).
+
+**O problema não é desenhar figuras: é que uma linha deixa de ser uma fileira.** Dezoito lugares
+deste arquivo transformavam uma linha de tela num índice de entrada e de volta, e todos estavam
+certos enquanto uma entrada ocupava uma linha. A tentação é espalhar um `if grade` por todos eles, e
+é assim que dois deles passam a discordar.
+
+O que foi feito em vez disso tem três peças e nada mais:
+
+1. **`Section` ganhou UM campo** — `grid: Option<ronoctua_design::Grid>`. `None` é exatamente o
+   comportamento de antes.
+2. **`offset` e `total` continuam em ENTRADAS.** A roda, o arrasto, o `follow` e o
+   `scroll_listing_to` já falam entradas; dar a eles uma segunda unidade é como um número passa a
+   significar duas coisas. O deslocamento é travado num múltiplo da prateleira na LEITURA, que é o
+   arranjo que o `facts_offset` já tem e pelo mesmo motivo: o que o desalinha não é uma escrita, é a
+   GRADE mudando embaixo dele.
+3. **As duas conversões viraram dois métodos, um o inverso do outro** — `Section::line_of` e
+   `Section::row_at` —, e os dois delegam ao `Grid`. É a mesma soma nos dois sentidos, que é
+   literalmente o que o `ronoctua-design` escreveu no topo do `grid.rs`: os três navegadores de
+   ícones tinham cada um a sua, e o sintoma era *"o clique cair num item enquanto a tela mostrava
+   outro"*. Numa listagem, esse sintoma apaga o arquivo errado.
+
+**As linhas continuam sendo linhas.** Uma prateleira de `down` linhas produz `down` `Row`s, com os
+nomes na última delas. É isso que mantém o `expansion_window` achatando uma linha por linha, os dois
+pintores caminhando o `content` como sempre, e o `Field` sem uma linha própria.
+
+**E a célula responde no vão.** `View::hit` terminava em `field_at`, que exige um CAMPO; uma
+miniatura é quase toda célula vazia com uma figura pintada por cima pela porta. Sem um braço de
+aritmética ali, o hover e o clique responderiam "lugar nenhum" na maior parte de cada célula —
+exatamente o defeito que o dono reportou uma vez sobre o botão de expandir, multiplicado por sessenta.
+A faixa, pela mesma razão, deixou de ser uma linha de largura total e passou a ser o RETÂNGULO da
+célula: uma faixa da largura da coluna acende sete arquivos para dizer que o ponteiro está sobre um.
+
+**A animação tem uma regra só, e ela é medida.** O que anima DENTRO do processo anima sozinho; o que
+precisa de um processo anima sob o ponteiro. GIF, WebP animado e APNG têm um iterador preguiçoso
+dentro do `image` — um descritor e um quadro cada, 2,35 ms por quadro medidos. Vídeo custa um ffmpeg.
+A fronteira não foi escolhida: é a única que existe. E o número que ela evita foi medido também —
+cinquenta GIFs com os quadros decodificados de antemão são **215 MiB**, que é o que o dono pediu para
+isto não custar, com essas palavras.
+
+**O custo de uma miniatura é o PROCESSO, não o arquivo.** Medido contra a pasta do dono, 64 arquivos
+e 36 extensões: 109 ms para um JPEG de 22 KB e 167 ms para um MP4 de 355 MB. É por isso que o
+trabalho é um pool e não a thread única da prévia — aquela esvazia a fila até o pedido mais novo, o
+que é certo para um painel sobre um arquivo e jogaria fora 63 das 64 células — e é por isso que
+existe um cache em disco: a segunda visita a uma pasta não pode repagar oito segundos de processo.
+
 ### A prévia e os fatos — dois painéis, e por que eles custaram tão pouco
 
 Nome, tamanho, modo e data: nenhuma das quatro colunas responde *é esta a foto?*, que é a pergunta

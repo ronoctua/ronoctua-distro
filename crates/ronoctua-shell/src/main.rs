@@ -101,6 +101,10 @@ mod terminal;
 // WHICH THEME THIS PROCESS DRAWS IN, and how the doors hear about a change.
 mod theme;
 mod theme_chooser;
+// THE FILE MANAGER'S THUMBNAILS: the workers that make them and what has been
+// made. A pool and not the preview's single thread, because a grid wants every
+// answer and the panel wants only the newest.
+mod thumbs;
 mod toolkits;
 mod transfers;
 mod world;

@@ -1587,6 +1587,20 @@ files-theatre-nothing = nada está selecionado, então não há o que expandir
 files-wide-hidden = esse painel está escondido, então não há o que expandir
 files-facts-wide-on = a ficha está com a região inteira, em quantas colunas ela couber
 files-facts-wide-off = a ficha está de volta na coluna dela
+# A OUTRA FORMA DA LISTAGEM. O que o glifo no fim da linha do caminho diz sob o
+# ponteiro — para onde ele VAI, nunca onde ele está.
+files-grid-on = os arquivos estão lado a lado, em miniaturas
+files-grid-off = os arquivos voltaram a ser um por linha
+# O QUE O ANEL DE TAMANHO DIZ QUE ELE PEGOU. Três chaves e não um seletor: um
+# seletor escolhe o ramo pelo TIPO do argumento, e a linha a que isto chega é o
+# `Step::Say`, cujos argumentos são strings por construção — então um número
+# chegaria como texto e toda tela leria o ramo padrão.
+files-grid-small = miniaturas pequenas
+files-grid-medium = miniaturas médias
+files-grid-large = miniaturas grandes
+files-grid-moves = este se mexe — está parado porque outros estão se mexendo
+files-grid-bigger = mostrar maiores
+files-grid-none = os itens estão um por linha, então não há miniatura para dimensionar
 files-no-root-helper = trocar o dono precisa do sistema instalado — a unidade ronoctua-files-root nao esta aqui
 files-yes = sim, aplicar
 files-no = não, deixar como está
@@ -1613,6 +1627,11 @@ files-menu = menu de ações
 files-measure = medir
 files-pane-next = próxima seção
 files-pane-previous = seção anterior
+# E AS MESMAS DUAS SETAS, onde os itens estão lado a lado. Coisa diferente,
+# palavra diferente: elas atravessam as SEÇÕES numa linha e andam pelos ITENS
+# numa prateleira.
+files-grid-next = próximo arquivo
+files-grid-previous = arquivo anterior
 
 files-type-is = { $named }
 files-type-disagrees = o nome diz { $named }, o conteúdo diz { $found }
@@ -1650,6 +1669,8 @@ files-forward = avançar
 files-sound = som
 files-theatre = expandir a prévia
 files-facts-wide = expandir a ficha
+files-grid = miniaturas
+files-grid-size = tamanho da miniatura
 # As da peça. `files-turn-left` é a direção da MÃO e não um eixo — veja o
 # `View::spin`, que é onde essa convenção está escrita.
 files-turn-left = girar à esquerda
@@ -3877,6 +3898,10 @@ about-files-preview-left = Desliza o texto da prévia para o lado, em direção 
 about-files-preview-right = Desliza o texto da prévia para o lado, em direção ao fim das linhas longas.
 about-files-theatre = Dá à prévia a região inteira, e devolve a região. Sem nada selecionado não há prévia para expandir.
 about-files-facts-wide = Dá à ficha a região inteira, e devolve a região. Expandida, ela é disposta em quantas colunas a largura couber, então cada valor aparece mais por inteiro.
+about-files-grid-next = Vai para o próximo arquivo da prateleira. Com os itens lado a lado, as setas laterais andam por eles; o TAB continua atravessando para a próxima seção.
+about-files-grid-previous = Vai para o arquivo anterior da prateleira. Com os itens lado a lado, as setas laterais andam por eles; o Shift TAB continua voltando uma seção.
+about-files-grid = Mostra os arquivos lado a lado, como figuras, em vez de um por linha. O glifo no fim da linha do caminho faz o mesmo, e desenha para qual forma ele levaria. Nasce desligado.
+about-files-grid-size = Gira entre os três tamanhos em que uma miniatura é desenhada. Numa tela que caberia mais figuras do que o gerenciador desenha de uma vez, o degrau menor é o que fica de fora.
 about-files-play = Toca o que a prévia está mostrando, ou pausa onde está.
 about-files-rewind = Volta um trecho no que está tocando.
 about-files-forward = Avança um trecho no que está tocando.

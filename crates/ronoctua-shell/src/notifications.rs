@@ -32,7 +32,7 @@ use ronoctua_notify::{Book, Life, Presentation, Record, RecordKey, Show, TOP_LEV
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 
-use crate::files::{Field, Hit as FilesHit};
+use crate::files::{Field, Hit as FilesHit, Ink};
 
 /// The commands the MANAGER reaches, with each one's key.
 ///
@@ -1415,6 +1415,7 @@ fn piece(at: u16, text: String, color: tokens::Color) -> Field {
         color,
         hit: FilesHit::Nothing,
         explain: None,
+        ink: Ink::Grid,
     }
 }
 

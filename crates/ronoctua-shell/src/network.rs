@@ -46,7 +46,7 @@ use ronoctua_network::{Link, Manager, Medium, Network, Saved, Snapshot, State};
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 
-use crate::files::{Field, Hit as FilesHit};
+use crate::files::{Field, Hit as FilesHit, Ink};
 
 /// `xdg-open`, baked at build time — what opens a tailnet's login page.
 ///
@@ -2644,6 +2644,7 @@ impl Builder<'_> {
             color,
             hit: FilesHit::Nothing,
             explain: None,
+            ink: Ink::Grid,
         }
     }
 

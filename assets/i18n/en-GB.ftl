@@ -1591,6 +1591,20 @@ files-theatre-nothing = nothing is selected, so there is nothing to expand
 files-wide-hidden = that panel is hidden, so there is nothing to expand
 files-facts-wide-on = the facts have the whole region, in as many columns as it holds
 files-facts-wide-off = the facts are back in their column
+# THE LISTING'S OTHER SHAPE. What the glyph at the end of the path's line says
+# under the pointer — where it GOES, never where it is.
+files-grid-on = the files are side by side, in thumbnails
+files-grid-off = the files are one to a line again
+# WHAT THE SIZE RING SAYS IT LANDED ON. Three keys and not one selector: a
+# selector picks its branch by the TYPE of its argument, and the line this
+# reaches is `Step::Say`, whose arguments are strings by construction — so a
+# number would arrive as text and every screen would read the default branch.
+files-grid-small = small thumbnails
+files-grid-medium = medium thumbnails
+files-grid-large = large thumbnails
+files-grid-moves = this one moves — it is holding still because others are
+files-grid-bigger = show them bigger
+files-grid-none = the entries are one to a line, so there is no thumbnail to size
 files-no-root-helper = changing the owner needs the installed system — the ronoctua-files-root unit is not here
 files-yes = yes, apply it
 files-no = no, leave it as it is
@@ -1617,6 +1631,11 @@ files-menu = action menu
 files-measure = measure
 files-pane-next = next section
 files-pane-previous = section before
+# AND THE SAME TWO ARROWS, where the entries are side by side. A different
+# thing, so a different word: they cross the SECTIONS on a line and walk the
+# ENTRIES on a shelf.
+files-grid-next = next file
+files-grid-previous = file before
 
 files-type-is = { $named }
 files-type-disagrees = the name says { $named }, the content says { $found }
@@ -1654,6 +1673,8 @@ files-forward = forward
 files-sound = sound
 files-theatre = expand the preview
 files-facts-wide = expand the facts
+files-grid = thumbnails
+files-grid-size = thumbnail size
 # The shape's. `files-turn-left` is the hand's direction and not an axis — see
 # `View::spin`, which is where that convention is written down.
 files-turn-left = turn left
@@ -3885,6 +3906,10 @@ about-files-preview-left = Slide the previewed text sideways, towards the beginn
 about-files-preview-right = Slide the previewed text sideways, towards the end of its long lines.
 about-files-theatre = Give the preview the whole region, and give the region back. With nothing selected there is no preview to expand.
 about-files-facts-wide = Give the facts the whole region, and give the region back. Expanded they are laid out in as many columns as the width holds, so each value is shown more of.
+about-files-grid-next = Move to the next file along the shelf. With the entries side by side the sideways arrows walk them; TAB still crosses to the next section.
+about-files-grid-previous = Move to the file before this one along the shelf. With the entries side by side the sideways arrows walk them; Shift TAB still crosses back a section.
+about-files-grid = Show the files side by side as pictures instead of one to a line. The glyph at the end of the path's line does the same, and draws which shape it would go to. It starts off.
+about-files-grid-size = Ring through the three sizes a thumbnail is drawn at. On a screen that would hold more pictures than the manager draws at once, the smallest step is the one that is skipped.
 about-files-play = Start what the preview is showing, or hold it where it is.
 about-files-rewind = Jump backwards in what is playing.
 about-files-forward = Jump forwards in what is playing.

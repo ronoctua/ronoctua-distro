@@ -42,7 +42,7 @@
 //! individual option. That is what keeps a hundred and twenty-one of them from
 //! being a hundred and twenty-one decisions nobody could audit.
 
-use crate::files::{Field, Hit as FilesHit};
+use crate::files::{Field, Hit as FilesHit, Ink};
 use ronoctua_render::layout;
 use ronoctua_syncthing::options::{self, Kind, Setting};
 use ronoctua_syncthing::prefs::{Mark, Preferences};
@@ -1553,6 +1553,7 @@ impl Builder<'_> {
             color,
             hit: FilesHit::Nothing,
             explain: None,
+            ink: Ink::Grid,
         }
     }
 

@@ -94,6 +94,33 @@ Tudo abaixo é decisão, não esquecimento.
   sete `command::svg` (um por `Ink`, um token cada, sem mudar o WIT) com a malha de 110 m, sem ruas
   e sem ponteiro, porque buffer não tem disco nem recebe valor de token.
 
+### 0.0000001-C. As miniaturas — o que elas deliberadamente NÃO fazem · registro
+
+Entregues no modo grade (`C-g`). O que ficou de fora, com o preço de cada um:
+
+**Miniatura de pasta como mosaico do conteúdo.** Seriam N decodificações por pasta, e uma pasta de
+pastas seria N². A pasta fica com o glifo dela.
+
+**Documento de escritório** (`.odt`, `.docx`, `.ppt`, `.odp`) — não há rasterizador para eles na
+árvore; só o PDF tem (`pdftoppm`). Ficam com o glifo do tipo.
+
+**Duas prateleiras no rodapé COM os painéis abertos.** O nome leva duas linhas, então a menor célula
+tem quatro (duas de figura, duas de nome) e a região do rodapé com a faixa dos painéis deixa sete —
+uma prateleira. Fechando os painéis (`C-v`, `C-i`) são onze linhas e duas prateleiras. O que faria as
+duas caberem é uma figura de UMA linha, que a 26 px não é uma figura.
+**Como saber que acabou:** o rodapé com os painéis abertos mostrando duas fileiras de miniaturas que
+ainda se reconhecem.
+
+**Cobertura da onda e da capa.** O que o shell PINTA fica no nosso cache e não no do freedesktop —
+a onda de um áudio e uma peça 3D mudam com o tema, e o padrão não tem onde dizer isso. A conta é
+feita pelo TIPO, antes de qualquer leitura, então a CAPA de um áudio (que é do arquivo e não muda com
+o tema) fica no nosso também. Custa não reaproveitar a capa que outro gerenciador já extraiu; o que
+custaria consertar é saber capa-de-onda antes de decodificar, que hoje só se sabe depois.
+**Como saber que acabou:** um `.mp3` com capa aparecendo em `thumbnails/normal/`.
+
+**Renomear, arrastar-e-soltar e seleção por retângulo** são gestos que uma grade torna tentadores e
+que o dono não pediu.
+
 ### 0.0000003. Tirar a coordenada de um arquivo antes de enviá-lo · pequeno
 
 A ficha mostra onde a fotografia foi tirada, porque esconder um fato de quem já tem o arquivo não
@@ -281,6 +308,11 @@ localizador é indexado pelo nome nu do `Icon=` (`surface.rs`, `im.missing(key)`
 nunca é pedido de novo, nem numa troca de escala nem numa troca de tamanho do texto. É a mesma classe
 que o AGENTS.md já registra para o tema ("leva o tema na CHAVE do cache"), com `scale` e `size`
 faltando; o `files::Stamp::key()` já carrega o passo de decodificação e está certo por isso.
+
+**E as MINIATURAS saíram desta lista**, que é o que este item queria de cada textura: o alvo delas é
+tirado do pixel FÍSICO (`files::thumb_side` recebe a célula e a linha já multiplicadas pela escala),
+e a chave é o `Stamp`, que carrega esse passo. Sobram o ícone do localizador, a prévia do clipboard,
+os painéis do gerenciador e o `Command::Svg`.
 
 **Como saber que acabou:** uma foto do localizador numa saída em `scale 2` com o ícone e a letra ao
 lado, e o `render-png --scale 2` de um buffer com `Command::Svg`.

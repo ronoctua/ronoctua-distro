@@ -38,7 +38,7 @@
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 
-use crate::files::{Field, Hit as FilesHit};
+use crate::files::{Field, Hit as FilesHit, Ink};
 
 /// The keys this view answers to. The hint line is GENERATED from it
 /// (`chrome::hint_of`), so a key that moves here moves on screen.
@@ -570,6 +570,7 @@ impl Builder<'_> {
             color: colour,
             hit: FilesHit::Nothing,
             explain: None,
+            ink: Ink::Grid,
         }
     }
 

@@ -26,7 +26,7 @@ use ronoctua_bluetooth::{Ask, Device, Kind, Scene, agent};
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 
-use crate::files::{Field, Hit as FilesHit};
+use crate::files::{Field, Hit as FilesHit, Ink};
 
 /// WHERE a key means something.
 ///
@@ -1942,6 +1942,7 @@ impl Builder<'_> {
             color,
             hit: FilesHit::Nothing,
             explain: None,
+            ink: Ink::Grid,
         }
     }
 

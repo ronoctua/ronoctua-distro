@@ -452,6 +452,17 @@ pub fn at(path: &Path, mime: &str, target: u32, seconds: Option<f64>, wave: &str
             if !matches!(why, Refusal::Failed) {
                 return Err(why);
             }
+            // AND NO INK MEANS NO WAVEFORM.
+            //
+            // The caller says what it can draw with, and an empty string says
+            // "nothing". The file manager's GRID asks that way: a waveform is
+            // a picture of a sound and reads beautifully in a panel, and in a
+            // cell six cells wide it is a grey smudge that says less than the
+            // glyph for "this is music" — which is what the owner read off the
+            // screen. The panel still passes an ink and still gets its waves.
+            if wave.is_empty() {
+                return Err(why);
+            }
             child_image(Tool::Ffmpeg, &wave_args(path, target, wave))
                 .and_then(|png| from_raster(&png, target))
         }),
