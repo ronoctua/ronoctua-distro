@@ -1838,6 +1838,34 @@ files-explain-measure = clique para medir esta pasta — é uma caminhada
 # true when a leading digit arrives, and the special bit that brought it already
 # has a sentence of its own on the letter beside it.
 files-explain-octal = { $octal } é a mesma permissão escrita como número — um dígito para o dono, um para o grupo, um para todos os outros
+files-octal-can = { $kind ->
+        [dir] { $bits ->
+                [0] não pode fazer nada com ele
+                [1] pode entrar nele, mas não listá-lo
+                [2] pode criar e apagar coisas nele, sem poder entrar nem listar
+                [3] pode entrar nele e criar e apagar coisas nele
+                [4] pode listar os nomes que há nele
+                [5] pode listar os nomes que há nele e entrar
+                [6] pode listar os nomes que há nele e criar e apagar coisas
+               *[7] pode listar, entrar, criar e apagar
+            }
+       *[file] { $bits ->
+                [0] não pode fazer nada com ele
+                [1] pode executá-lo
+                [2] pode alterá-lo
+                [3] pode alterá-lo e executá-lo
+                [4] pode lê-lo
+                [5] pode lê-lo e executá-lo
+                [6] pode lê-lo e alterá-lo
+               *[7] pode lê-lo, alterá-lo e executá-lo
+            }
+    }
+files-explain-octal-digit = { $part ->
+        [special] { $digit } é o primeiro dígito de { $octal }: os bits especiais — setuid, setgid e o sticky —, cada um explicado na letra que o carrega.
+        [owner] { $digit } é o dígito do dono em { $octal }: { $name } { $can }.
+        [group] { $digit } é o dígito do grupo em { $octal }: o grupo { $name } { $can }.
+       *[other] { $digit } é o último dígito de { $octal }: todos os outros { $can }.
+    }
 files-explain-when = { $when }, na hora local desta máquina
 files-explain-when-utc = { $when }, em UTC — não consegui ler o /etc/localtime
 

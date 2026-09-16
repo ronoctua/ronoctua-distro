@@ -153,8 +153,10 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   parado em cada ponta, 200 ms por célula, e volta de uma vez — escolha do dono). O relógio é
   ARMADO e só existe enquanto um nome anda. **`..` é o primeiro renque** — nunca
   oculta, nunca marcável, e toda célula dela responde a saída. Permissão
-  PERGUNTA nos DOIS caminhos, **o número dela EXPLICA** (`files-explain-octal`; as dez letras
-  explicavam e a forma que a pessoa digita não dizia nada), e **UMA célula acende UM campo**
+  PERGUNTA nos DOIS caminhos, **e cada DÍGITO do número explica o que ele é** — de quem é aquele
+  terço e o que aquele valor permite (`files-explain-octal-digit` + `files-octal-can`), com os
+  parênteses guardando a frase geral; primeiro o número não dizia nada, depois dizia UMA frase para
+  os três dígitos, que é a definição de octal e não uma resposta sobre o arquivo, e **UMA célula acende UM campo**
   (`files::lit_field`, um `rposition`, e o `field_at` escrito em cima dele): o `covers` dá de
   propósito o vão DEPOIS de um campo a ele, então onde os campos são colados — as dez letras, o
   `owner:group` — a célula do meio é coberta por dois, e os pintores, que perguntavam `covers` por
@@ -1101,6 +1103,15 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **Nunca peça `Family::Monospace`**: fallback, **4 447 ms** contra 0,76 ms. **Buffer não tem parser
   de JSON**: campo nenhum leva caractere cru. **Token vira WIT**: segmento começa por LETRA.
 - **Dentro de `''…''` valem DOIS idiomas**: `#`/`//` é do script embutido, mas `${...}` é do Nix e vive até em linha comentada; **`` ` `` é substituição de comando ATÉ no comentário**; e a fence FECHA num `''` qualquer — inclusive dentro de comentário (`'''`, `''$`, `''\` escapam).
+- **Seletor Fluent com ramo NUMÉRICO recebe `Arg::Number`, nunca texto.** O Fluent escolhe a
+  variante pelo TIPO do argumento: com a string `"1"` ele procura uma variante chamada
+  literalmente `1`, não acha, e cai no padrão — em silêncio. Já custou `1 screens` em toda máquina
+  que é um laptop (o `display.rs` guarda a medição, e a frase dele termina em *"with every check
+  green"*), custou o mês por extenso uma vez, e custou os três dígitos do octal dizerem
+  `pode ler, alterar e executar` — o `777` escrito numa frase sobre `644`. Quem achou foi um teste
+  que IMPRIMIU as três frases; nenhuma asserção de "não está vazio" veria. Cobra o
+  `numeric-selectors-get-numbers`, que lê as chaves com ramo numérico dos `.ftl` e recusa
+  `t_with`/`t_marked` sobre elas.
 - **Chave de texto tem SETE derivados**, só um é o `.ftl`; **pergunta do instalador tem 13** — os dois no ARCHITECTURE. **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 × fonte**; **caixa 1,25 em** contra entrelinha 1,45. `tiny-skia` entrega RGBA PRÉ-MULTIPLICADO. **Uma run ocupa `heights.of(escala)` CÉLULAS, e a escala alarga tanto quanto sobe**: `Large` são DUAS, e a régua em `line+1` virava sublinhado. Título é do tamanho do CORPO — hierarquia é cor e ar, nunca tamanho nem régua; os dois `DisplayList::nothing_*` cobram isso em TODO buffer, em TODO estado.
 - **Fallback silencioso precisa de check**: a tabela de tray era validada no build e não chegava ao
   Rust. **Há DUAS réguas de célula, e elas respondem a perguntas diferentes**:

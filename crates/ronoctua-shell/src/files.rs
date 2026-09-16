@@ -5486,28 +5486,93 @@ impl View {
         let used = u16::try_from(fields.len()).unwrap_or(room);
         let left = room.saturating_sub(used + 1);
         if left >= width_of(&octal) {
+            let start = at + used + 1;
+            // EACH DIGIT IS ITS OWN FIELD, and the brackets are punctuation.
+            //
+            // The number was ONE field with ONE sentence saying what the form
+            // is — "one digit for the owner, one for the group, one for
+            // everybody else" — which is a definition of octal and not an
+            // answer about THIS file. The owner pointed at the digits and got
+            // it: *"o minibuffer está mostrando uma explicação genérica, em vez
+            // de explicar para cada número, o que o número representa"*.
+            //
+            // Ten letters each explain themselves; there is no reason three
+            // digits should not. What each one says is whose part of the number
+            // it is and what that value permits — which is the SAME question
+            // the letters answer, asked three characters at a time.
+            //
+            // The brackets keep the general sentence: pointing at the shape
+            // still says what the shape is.
+            let whole = Explanation {
+                key: ronoctua_i18n::key::FILES_EXPLAIN_OCTAL,
+                args: vec![("octal", number.clone())],
+            };
             fields.push(Field {
-                at: at + used + 1,
-                text: octal,
+                at: start,
+                text: "(".to_owned(),
                 color: ronoctua_tokens::color::TEXT_DIM,
-                // NOTHING TO CLICK — there is no bit in a number to turn, and
-                // a target that lights and then refuses is worse than one that
-                // never promised (`menu::Applies`, one register down).
                 hit: Hit::Nothing,
-                // AND IT SAYS WHAT IT IS. Ten letters each explain themselves
-                // and the form most people actually type explained nothing:
-                // the owner pointed at it and the line stayed empty — *"ao
-                // colocar o cursor sobre a versão numérica das permissões,
-                // nada está sendo mostrado no minibuffer"*.
-                //
-                // One sentence for three digits and for four: "one digit for
-                // the owner, one for the group, one for everybody else" stays
-                // true when a fourth arrives, and the special bit that brought
-                // it already has its own sentence on the letter beside it.
-                explain: Some(Explanation {
-                    key: ronoctua_i18n::key::FILES_EXPLAIN_OCTAL,
-                    args: vec![("octal", number)],
-                }),
+                explain: Some(whole.clone()),
+            });
+            let kind = mode::kind_word(entry.kind);
+            for (i, digit) in number.chars().enumerate() {
+                let Ok(k) = u16::try_from(i) else { break };
+                let part = mode::part_of(number.chars().count(), i);
+                // THE VERBS ARE RESOLVED HERE, because this is where the texts
+                // are: `mode` is the FILE half and knows no language. The
+                // fragment goes in as an argument, which is what the address
+                // under the globe already does with a name.
+                // THE VALUE GOES IN AS A NUMBER, and that is not a detail:
+                // a Fluent selector matches `[6]` against a NUMBER, and a
+                // string argument falls through to the default branch. Every
+                // digit said `can read, change and run it` — the `*[7]` — and
+                // the test that printed the three lines is what showed it.
+                // `AGENTS.md` records the same trap on the months.
+                let can = self.texts.t_args(
+                    ronoctua_i18n::key::FILES_OCTAL_CAN,
+                    &[
+                        ("kind", ronoctua_i18n::Arg::Text(kind)),
+                        (
+                            "bits",
+                            ronoctua_i18n::Arg::Number(i64::from(digit.to_digit(8).unwrap_or(0))),
+                        ),
+                    ],
+                );
+                fields.push(Field {
+                    at: start + 1 + k,
+                    text: digit.to_string(),
+                    color: ronoctua_tokens::color::TEXT_DIM,
+                    // NOTHING TO CLICK — there is no bit in a number to turn,
+                    // and a target that lights and then refuses is worse than
+                    // one that never promised (`menu::Applies`, one register
+                    // down).
+                    hit: Hit::Nothing,
+                    explain: Some(Explanation {
+                        key: ronoctua_i18n::key::FILES_EXPLAIN_OCTAL_DIGIT,
+                        args: vec![
+                            ("part", part.word().to_owned()),
+                            ("digit", digit.to_string()),
+                            ("octal", number.clone()),
+                            (
+                                "name",
+                                match part {
+                                    mode::Part::Group => group.clone(),
+                                    _ => owner.clone(),
+                                },
+                            ),
+                            ("can", can),
+                        ],
+                    }),
+                });
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            let after = start + 1 + number.chars().count() as u16;
+            fields.push(Field {
+                at: after,
+                text: ")".to_owned(),
+                color: ronoctua_tokens::color::TEXT_DIM,
+                hit: Hit::Nothing,
+                explain: Some(whole),
             });
         }
         fields
@@ -14970,13 +15035,16 @@ mod tests {
         }
     }
 
-    /// FAILS IF: the numeric form of the permission explains nothing.
+    /// FAILS IF: the numeric form of the permission explains nothing, or
+    /// explains the FORM instead of the file.
     ///
-    /// Ten letters each say what they are, and the form most people actually
-    /// type said nothing at all: the owner rested the pointer on it and the
-    /// message line stayed empty.
+    /// Ten letters each say what they are; the form most people actually type
+    /// said nothing at all, and then said one thing for all three digits — a
+    /// definition of octal, which is not an answer about this file. The owner
+    /// reported both, in that order: *"nada está sendo mostrado"*, and then
+    /// *"uma explicação genérica, em vez de explicar para cada número"*.
     #[test]
-    fn the_octal_says_what_it_is() {
+    fn every_digit_of_the_octal_says_whose_it_is() {
         let root = scratch("octal");
         std::fs::write(root.join("um.txt"), b"x").unwrap();
         let mut v = view_at(&root);
@@ -14985,18 +15053,97 @@ mod tests {
         let _ = v.drawn(120, &bundle());
         v.cursor = 1;
         let fields = v.mode_fields(0, 24);
-        let last = fields.last().expect("no fields at all");
-        assert!(
-            last.text.starts_with('('),
-            "the last field of a wide-enough panel is the octal"
+        let number = mode::octal(v.focused().expect("a file is focused").mode);
+        // THE BRACKETS KEEP THE GENERAL SENTENCE, and the digits do not.
+        let open = fields
+            .iter()
+            .find(|f| f.text == "(")
+            .expect("the octal is not drawn at all");
+        assert_eq!(
+            open.explain.as_ref().map(|e| e.key),
+            Some(ronoctua_i18n::key::FILES_EXPLAIN_OCTAL)
         );
-        let said = last.explain.clone().expect("the octal explains nothing");
-        assert_eq!(said.key, ronoctua_i18n::key::FILES_EXPLAIN_OCTAL);
-        assert!(
-            said.args.iter().any(|(n, _)| *n == "octal"),
-            "the sentence does not name the number it is about"
+        let digits: Vec<&Field> = fields
+            .iter()
+            .filter(|f| f.text.len() == 1 && f.text.chars().all(|c| c.is_ascii_digit()))
+            .collect();
+        assert_eq!(
+            digits.len(),
+            number.chars().count(),
+            "the number is not one field per digit"
         );
+        // AND EACH ONE NAMES ITS OWN THIRD, which is what the report asked
+        // for: the first digit of `644` is the owner's and the last is not.
+        let parts: Vec<String> = digits
+            .iter()
+            .map(|f| {
+                let said = f.explain.as_ref().expect("a digit that explains nothing");
+                assert_eq!(said.key, ronoctua_i18n::key::FILES_EXPLAIN_OCTAL_DIGIT);
+                said.args
+                    .iter()
+                    .find(|(n, _)| *n == "part")
+                    .map(|(_, v)| v.clone())
+                    .expect("the sentence does not say whose digit it is")
+            })
+            .collect();
+        assert_eq!(parts, vec!["owner", "group", "other"]);
+        // WHAT THE LINE SAYS, PRINTED — the check no assertion replaces, and
+        // the one this file already makes for a screen.
+        let texts = bundle();
+        for f in &digits {
+            let said = f.explain.as_ref().expect("a digit that explains nothing");
+            println!("{} → {}", f.text, texts.t_with(said.key, &said.borrowed()));
+        }
+        // AND TWO DIFFERENT VALUES DO NOT SAY THE SAME THING.
+        //
+        // This is the assertion that has teeth, and the first version of this
+        // test did not have it: with the value passed to Fluent as TEXT, every
+        // branch of the selector fell through to the default and all three
+        // digits said `can read, change and run it` — `644` reading as `777`,
+        // on screen, in a sentence about permissions. Emptiness was not the
+        // failure mode; sameness was.
+        let verbs: Vec<(String, String)> = digits
+            .iter()
+            .map(|f| {
+                let said = f.explain.as_ref().expect("a digit that explains nothing");
+                let can = said
+                    .args
+                    .iter()
+                    .find(|(n, _)| *n == "can")
+                    .map(|(_, v)| v.clone())
+                    .expect("the sentence does not say what the value permits");
+                assert!(
+                    !can.is_empty() && !can.starts_with('['),
+                    "the verbs did not resolve: {can:?}"
+                );
+                (f.text.clone(), can)
+            })
+            .collect();
+        for (a, b) in verbs.iter().zip(verbs.iter().skip(1)) {
+            if a.0 != b.0 {
+                assert_ne!(
+                    a.1, b.1,
+                    "`{}` and `{}` permit the same things — the selector is not \
+                     reading the value",
+                    a.0, b.0
+                );
+            }
+        }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: a leading digit is read as the owner's.
+    ///
+    /// `4755` is four digits and `644` is three; counting from the LEFT with a
+    /// fixed meaning per index calls the `4` of `4755` the owner's, which is
+    /// the one reading that is always wrong.
+    #[test]
+    fn the_parts_of_an_octal_are_counted_from_the_right() {
+        assert_eq!(mode::part_of(3, 0), mode::Part::Owner);
+        assert_eq!(mode::part_of(3, 2), mode::Part::Other);
+        assert_eq!(mode::part_of(4, 0), mode::Part::Special);
+        assert_eq!(mode::part_of(4, 1), mode::Part::Owner);
+        assert_eq!(mode::part_of(4, 3), mode::Part::Other);
     }
 
     #[test]

@@ -8775,6 +8775,96 @@ let
     END
   '';
 
+  # A SELECTOR THAT BRANCHES ON NUMBERS IS FED A NUMBER, and never a string.
+  #
+  # Fluent picks a variant by the ARGUMENT'S TYPE: given the string `"1"` it
+  # looks for a variant literally named `1`, does not find one, and falls
+  # through to the default. The row then reads `1 screens` on the machine every
+  # laptop is — or, the day this check was written, every digit of `644` saying
+  # `can read, change and run it`, which is `777` in a sentence about
+  # permissions.
+  #
+  # It is a KNOWN trap: `display.rs` records it in a comment ending *"with every
+  # check green"*, and the months were fixed for it once. Then the octal's
+  # digits walked into it anyway, and the only reason it was caught is that a
+  # test PRINTED the three sentences. So the rule stops being folklore: a key
+  # whose value has a numeric branch may only be resolved through `t_args`.
+  numeric-selectors-get-numbers = mkCheck "numeric-selectors-get-numbers" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    root = pathlib.Path("${self}")
+    bad = []
+
+    # THE KEYS ARE READ FROM THE `.ftl`, both languages: a selector that is
+    # numeric in one and not in the other is a key that answers differently by
+    # language, which this finds as well.
+    numeric = {}
+    for language in ${builtins.toJSON languages}:
+        text = (root / "assets/i18n" / (language + ".ftl")).read_text()
+        key, body = None, []
+        def close(key, body):
+            if key is None:
+                return
+            said = "\n".join(body)
+            if re.search(r"\[\s*\d+\s*\]", said):
+                numeric.setdefault(key, set()).update(re.findall(r"\{\s*\$(\w+)\s*->", said))
+        # A MESSAGE'S VALUE CONTINUES ONLY ON INDENTED LINES, which is
+        # Fluent's own rule — and the first version of this swept everything up
+        # to the next `key =`, comments and all. It reported
+        # `locale-date-mdy`, whose value is `{ $m }/{ $d }/{ $y }`, for the
+        # numeric branches of the key TWO comment lines below it.
+        for line in text.splitlines():
+            m = re.match(r"^([a-z][a-z0-9-]*) =", line)
+            if m:
+                close(key, body)
+                key, body = m.group(1), [line]
+            elif key is not None and line[:1].isspace():
+                body.append(line)
+            else:
+                close(key, body)
+                key, body = None, []
+        close(key, body)
+
+    if len(numeric) < 3:
+        bad.append(
+            f"only {len(numeric)} keys with a numeric branch were found; the "
+            "sweep is not reading the .ftl"
+        )
+
+    # THE CONSTANT IS THE KEY IN THE SHAPE THE GENERATOR WRITES IT.
+    consts = {k.upper().replace("-", "_"): k for k in numeric}
+
+    # AND THE CALL SITES. `t_with` and `t_marked` take `&str` arguments and can
+    # only ever hand Fluent a string; `t_args` is the one that carries a type.
+    for f in sorted(root.glob("crates/**/*.rs")):
+        if "target" in f.parts:
+            continue
+        text = f.read_text()
+        for m in re.finditer(r"\bt_(with|marked)\s*\(", text):
+            window = text[m.end() : m.end() + 400]
+            # The call ends at the first `);` — good enough to name the key,
+            # which is always the first argument.
+            window = window.split(");", 1)[0]
+            for const, key in consts.items():
+                if re.search(rf"\b{const}\b", window):
+                    bad.append(
+                        f"{f.relative_to(root)}: `{key}` branches on numbers and is "
+                        f"resolved through `t_{m.group(1)}`, which can only pass a "
+                        "string — every number falls through to the default branch"
+                    )
+
+    for b in bad:
+        print(f"ERROR: {b}", file=sys.stderr)
+    if bad:
+        raise SystemExit(1)
+    print(
+        f"OK: {len(numeric)} keys branch on numbers, and every call site hands "
+        "them a number"
+    )
+    END
+  '';
+
   one-zip-reader = mkCheck "one-zip-reader" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -17420,6 +17510,7 @@ let
       one-syncthing-boundary
       one-http-writer
       one-zip-reader
+      numeric-selectors-get-numbers
       every-view-follows-its-cursor
       syncthing-options-are-declared
       syncthing-flake-owned-rows-refuse

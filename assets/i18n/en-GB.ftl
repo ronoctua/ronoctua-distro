@@ -1843,6 +1843,34 @@ files-explain-measure = click to measure this directory — it is a walk
 # true when a leading digit arrives, and the special bit that brought it already
 # has a sentence of its own on the letter beside it.
 files-explain-octal = { $octal } is the same permission written as a number — one digit for the owner, one for the group, one for everybody else
+files-octal-can = { $kind ->
+        [dir] { $bits ->
+                [0] cannot do anything with it
+                [1] can enter it, but not list it
+                [2] can create and delete things in it, without being able to enter or list it
+                [3] can enter it and create and delete things in it
+                [4] can list the names in it
+                [5] can list the names in it and enter it
+                [6] can list the names in it and create and delete things in it
+               *[7] can list, enter, create and delete
+            }
+       *[file] { $bits ->
+                [0] cannot do anything with it
+                [1] can run it
+                [2] can change it
+                [3] can change and run it
+                [4] can read it
+                [5] can read and run it
+                [6] can read and change it
+               *[7] can read, change and run it
+            }
+    }
+files-explain-octal-digit = { $part ->
+        [special] { $digit } is the first digit of { $octal }: the special bits — setuid, setgid and the sticky bit, each explained on the letter that carries it.
+        [owner] { $digit } is the owner's digit of { $octal }: { $name } { $can }.
+        [group] { $digit } is the group's digit of { $octal }: the group { $name } { $can }.
+       *[other] { $digit } is the last digit of { $octal }: everybody else { $can }.
+    }
 files-explain-when = { $when }, in this machine's local time
 files-explain-when-utc = { $when }, in UTC — /etc/localtime could not be read
 

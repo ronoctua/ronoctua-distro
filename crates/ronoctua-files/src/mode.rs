@@ -254,6 +254,55 @@ impl Explanation {
     }
 }
 
+/// Which third of the octal a digit is, by its POSITION and how many there are.
+///
+/// # Why the count decides and not the index
+///
+/// `644` is three digits — owner, group, everybody else — and `4755` is four:
+/// the first one carries the special bits. Counting from the LEFT with a fixed
+/// meaning per index would call the `4` of `4755` the owner's, which is the
+/// one reading that is always wrong. Counting from the RIGHT is what the
+/// format actually promises, and that is what this does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    /// The leading digit, when there is one: setuid, setgid and the sticky bit.
+    Special,
+    /// The owning user's digit.
+    Owner,
+    /// The owning group's digit.
+    Group,
+    /// Everybody else's digit.
+    Other,
+}
+
+impl Part {
+    /// The word the text key selects on. A `&'static str` and not the enum's
+    /// `Debug`: a selector's branch name is part of the `.ftl`'s contract, and
+    /// a derived spelling would change the day somebody renames a variant.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Special => "special",
+            Self::Owner => "owner",
+            Self::Group => "group",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Which part the digit at `at` is, in a number of `digits` digits.
+#[must_use]
+pub const fn part_of(digits: usize, at: usize) -> Part {
+    // FROM THE RIGHT: the last is everybody else, then the group, then the
+    // owner, and anything before that is the special bits.
+    match digits.saturating_sub(at) {
+        1 => Part::Other,
+        2 => Part::Group,
+        3 => Part::Owner,
+        _ => Part::Special,
+    }
+}
+
 /// What this cell means for this file — the sentence the pointer asks for.
 ///
 /// `owner` and `group` are the NAMES, already resolved: a sentence saying "the
@@ -343,7 +392,12 @@ const fn yes_no(set: bool) -> &'static str {
 /// Only two branches matter to a permission sentence: a directory behaves
 /// differently, everything else behaves like a file. A device node's `x` bit is
 /// a question nobody has ever needed answered in a listing.
-const fn kind_word(kind: Kind) -> &'static str {
+/// The word a text key selects on for this kind — `dir` or `file`.
+///
+/// PUBLIC because the octal's digits ask it too: what an `x` bit permits is
+/// entering a directory and running a file, and the digit that carries it has
+/// to say the same thing the letter beside it says. One word, one place.
+pub const fn kind_word(kind: Kind) -> &'static str {
     match kind {
         Kind::Directory => "dir",
         _ => "file",
