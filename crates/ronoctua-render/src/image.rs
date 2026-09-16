@@ -117,7 +117,26 @@ struct Instance {
 /// one for the clipboard's preview, which occupies the right panel and coexists with the
 /// list on the left. The number is the token's because it is the SAME limit: what
 /// does not fit in the region has no icon to draw.
-const CEILING: usize = tokens::space::EXPANSION_MAXLINES as usize + 1;
+///
+/// # And why the file manager gets TWO on top of that
+///
+/// Because it draws two pictures at once now: the preview's, in the right-hand
+/// panel, and the globe's, at the top of the info panel beside it. A second
+/// view could be showing a globe of its own.
+///
+/// THIS IS THE ONE NUMBER IN THE FEATURE THAT FAILS SILENTLY. `prepare` takes
+/// what fits and DROPS the rest with no error anywhere — so a ceiling one too
+/// low means the globe simply never reaches the GPU on a full region, and
+/// nothing on screen or in any log says why. `files-panels-have-two-pictures`
+/// is what keeps it honest.
+const CEILING: usize =
+    tokens::space::EXPANSION_MAXLINES as usize + 1 + crate::image::MANAGER_PICTURES;
+
+/// How many pictures the file manager can have on screen at once.
+///
+/// The preview's and the globe's. It is named rather than inlined because the
+/// ceiling above has to be able to say WHY it is not just the region's rows.
+pub const MANAGER_PICTURES: usize = 2;
 
 /// How many textures stay on the GPU between frames.
 ///

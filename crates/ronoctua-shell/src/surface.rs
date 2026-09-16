@@ -74,7 +74,8 @@ use crate::leader::{Effect, Leader, Order};
 /// name of the variable that carries it.
 ///
 /// The six that exist: `RONOCTUA_BUFFER_GLYPHS` (`LEADER i n`), `_EDITOR`
-/// (`LEADER f f`), `_UNICODE` (`i u`), `_LUCIDE`, `_MEMORY` and `_TRANSFERS`.
+/// (which had a key and no longer does — see `foreign::editor`), `_UNICODE`
+/// (`i u`), `_LUCIDE`, `_MEMORY` and `_TRANSFERS`.
 /// The last three carry something the others do not: Lucide (`i l`) also
 /// depends on a FACE — the `RONOCTUA_FONT_LUCIDE` embedded in the renderer, and
 /// the two come out of the same derivation, without which the 1,668 icons would
@@ -675,6 +676,8 @@ struct Footer {
     locale: Option<crate::locale::View>,
     /// What the language view is waiting to be told, while it waits.
     locale_asking: Option<crate::locale::Asking>,
+    /// The regions' view, when it is open. `LEADER s g g`.
+    geo: Option<crate::geo::View>,
     /// The glance, and when it goes away. `LEADER d`.
     ///
     /// An `Instant` and MONOTONIC, which is the rule this project has paid
@@ -864,6 +867,8 @@ struct Footer {
     walk_armed: bool,
     /// The thread that draws a shape at the angle it is being looked at.
     files_turning: Option<crate::stage::Stage>,
+    /// The thread that draws the globe. One per DOOR — see the window's twin.
+    files_globe: Option<crate::globe::Stage>,
     /// Where the pointer was when it last moved a shape.
     ///
     /// A gesture of the door's own and NOT a fourth `Axis`: `drag_to` inverts
@@ -872,6 +877,9 @@ struct Footer {
     /// is the same kind of thing: a press that owns the pointer until it is
     /// let go.
     spinning: Option<(f64, f64)>,
+    /// Where the pointer was when it took hold of the GLOBE. A field of its
+    /// own and not `spinning` — see the press handler.
+    dragging_globe: Option<(f64, f64)>,
     /// Who the numeric ids belong to, read ONCE.
     ///
     /// `/etc/passwd` and `/etc/group` do not change while a listing is on
@@ -972,6 +980,9 @@ enum ViewState {
     /// chooser for the same reason: a cursor over a list of facts holds
     /// nothing a person built by hand, so it yields to everything above it.
     Locale,
+    /// The regions whose streets are installed — `LEADER s g g`. Modal, and
+    /// ranked with the language view for its reason.
+    Geo,
     /// The sound view. Modal, and ranked beside the power one: a cursor over
     /// a list of devices holds nothing a person built by hand. It sits BELOW
     /// the radio for the radio's own reason — a pairing question is waiting
@@ -1265,6 +1276,8 @@ enum Click {
     Syncthing(usize),
     /// A row of the language and region view.
     Locale(usize),
+    /// A row of the regions' view.
+    Geo(usize),
     /// A row of the screens' view.
     Display(usize),
     /// A row of the bluetooth view.
@@ -2156,6 +2169,7 @@ pub fn run() -> Result<()> {
         theme_chooser: None,
         locale: None,
         locale_asking: None,
+        geo: None,
         glance: None,
         glance_stripes: Vec::new(),
         audio_snapshot: None,
@@ -2205,7 +2219,9 @@ pub fn run() -> Result<()> {
         repeat: None,
         walk_armed: false,
         files_turning: None,
+        files_globe: None,
         spinning: None,
+        dragging_globe: None,
         // Read ONCE, at startup. Neither answer changes while a listing is on
         // screen, and asking per row would put two hundred opens inside the
         // frame that draws it.
@@ -2430,6 +2446,21 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the stage channel: {e}"))?;
+
+    // AND THE GLOBE'S, on a third — a drag across the world emits a picture
+    // every few tens of milliseconds, and none of them is news about anything
+    // else.
+    let (globes_sender, globes) = channel::channel::<crate::globe::Beat>();
+    state.files_globe = crate::globe::stage(globes_sender);
+    handle
+        .insert_source(globes, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(b) = event
+                && state.files.as_mut().is_some_and(|v| v.saw_globe(&b))
+            {
+                state.owes_paint = true;
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the globe channel: {e}"))?;
 
     // THE END OF A RADIO SCAN.
     //
@@ -4670,6 +4701,12 @@ impl PointerHandler for Footer {
                     // whose name walks: the owner asked for the hover to move
                     // a name too long for its column, as well as the cursor.
                     let aimed = self.files_target();
+                    if let Some(v) = self.files.as_ref() {
+                        v.pointing_globe(matches!(
+                            aimed.as_ref().map(|t| &t.hit),
+                            Some(crate::files::Hit::Globe | crate::files::Hit::GlobeDot)
+                        ));
+                    }
                     let over = aimed.as_ref().map(|t| t.pane);
                     let row = aimed
                         .as_ref()
@@ -4684,6 +4721,19 @@ impl PointerHandler for Footer {
                     // idea how big a pixel is; a whole screen's width is about
                     // half a turn, which is the ratio that makes a piece feel
                     // attached to the pointer rather than geared to it.
+                    if let Some((was_x, was_y)) = self.dragging_globe {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let moved = self.files.as_mut().is_some_and(|v| {
+                            v.pan_globe(
+                                (e.position.0 - was_x) as f32,
+                                (e.position.1 - was_y) as f32,
+                            )
+                        });
+                        self.dragging_globe = Some(e.position);
+                        if moved {
+                            spun = true;
+                        }
+                    }
                     if let Some((was_x, was_y)) = self.spinning {
                         let wide = self
                             .screens
@@ -4898,6 +4948,24 @@ impl PointerHandler for Footer {
                         // is what pressing a picture does, and is exactly what
                         // somebody about to turn it does not want.
                         self.spinning = Some(e.position);
+                    } else if self
+                        .files_target()
+                        .is_some_and(|t| matches!(t.hit, crate::files::Hit::Globe))
+                    {
+                        // A PRESS ON THE GLOBE TAKES THE POINTER TOO, for the
+                        // reason just above — and in a field of its own, not
+                        // `spinning`: the two turn pixels into different
+                        // quantities (radians of yaw against degrees of
+                        // centre), and one field for both would need a
+                        // discriminant, which is a second place to be wrong.
+                        //
+                        // THE PICTURE, AND NOT THE DOT. The dot is the one
+                        // place on this figure with a meaning of its own — it
+                        // frames on the coordinate — and a press that started a
+                        // drag there could never become that press. It is the
+                        // scrollbar's rule: the thumb is a target, the trough
+                        // is a drag.
+                        self.dragging_globe = Some(e.position);
                     } else {
                         clicked = self.row_under_pointer;
                     }
@@ -4905,6 +4973,7 @@ impl PointerHandler for Footer {
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
                     self.dragging = false;
                     self.dragging_section = None;
+                    self.dragging_globe = None;
                     self.dragging_shelf = None;
                     self.dragging_fold = false;
                     self.spinning = None;
@@ -5287,10 +5356,11 @@ impl Footer {
     /// # Why not one of ours
     ///
     /// There was one: a wasm buffer, `buffers/editor`. It existed for a single
-    /// stated reason — `LEADER f f` promised to open a file and did nothing —
-    /// and its own docstring said it was not Emacs and did not try to be. With
-    /// `f f` opening the manager, that reason was gone, and what was left was a
-    /// second editor nobody asked for on a system whose editor is Doom Emacs.
+    /// stated reason — the file key promised to open a file and did nothing —
+    /// and its own docstring said it was not Emacs and did not try to be. Once
+    /// that key opened the MANAGER (`LEADER . .` today, `f f` then), the reason
+    /// was gone, and what was left was a second editor nobody asked for on a
+    /// system whose editor is Doom Emacs.
     ///
     /// `emacsclient` and not `emacs`, because `nix/modules/emacs.nix` runs a
     /// DAEMON: a second process would take seconds and would not see the
@@ -5696,6 +5766,11 @@ impl Footer {
                     self.open_foreign(&me.to_string_lossy(), &["locale".to_owned()], None);
                 }
             }
+            "geo-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["geo".to_owned()], None);
+                }
+            }
             "power-window" => {
                 if let Ok(me) = std::env::current_exe() {
                     self.open_foreign(&me.to_string_lossy(), &["power".to_owned()], None);
@@ -6038,9 +6113,9 @@ impl Footer {
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
-            // `LEADER .` — the file manager, in the footer's expanded region.
+            // `LEADER . .` — the file manager, in the footer's expanded region.
             "files-open" => self.open_files(),
-            // `LEADER f w` — the same manager, in a window of its own.
+            // `LEADER . w` — the same manager, in a window of its own.
             //
             // A WINDOW AND NOT A SECOND IMPLEMENTATION: it re-execs this binary
             // with `files`, and what draws there is the same `files::View` this
@@ -6159,6 +6234,48 @@ impl Footer {
                 }
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            // THE REGIONS. The language view's rule above, for its reasons:
+            // never over the footer's manager, and a second open keeps the
+            // live view rather than building one that has forgotten where the
+            // cursor was.
+            "geo-open" => {
+                if !self.region_is_free("geo-open") {
+                    return;
+                }
+                if self.geo.is_none() {
+                    self.geo = Some(crate::geo::View::fresh());
+                }
+                self.first_page();
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            "geo-up" | "geo-down" | "geo-enter" | "geo-remove" => {
+                let press = match id {
+                    "geo-up" => crate::geo::Press::Up,
+                    "geo-down" => crate::geo::Press::Down,
+                    "geo-remove" => crate::geo::Press::Remove,
+                    _ => crate::geo::Press::Enter,
+                };
+                let texts = std::rc::Rc::clone(&self.texts);
+                let errand = self
+                    .geo
+                    .as_mut()
+                    .map(|v| v.press(press, &texts))
+                    .unwrap_or(crate::geo::Errand::Nothing);
+                self.geo_errand(errand);
+            }
+            // ASKED AND THEN TOLD, which is the shape the language view's
+            // three typed answers already have: the command runs twice, once
+            // to open the question and once with what was typed.
+            "geo-find" => {
+                if let Some(said) = argument {
+                    if let Some(v) = self.geo.as_mut() {
+                        v.took_a_filter(said);
+                    }
+                    self.draw_and_paint();
+                } else {
+                    self.geo_errand(crate::geo::Errand::Ask);
+                }
             }
             "theme-apply" => {
                 let Some(v) = self.theme_chooser.as_mut() else {
@@ -6489,6 +6606,60 @@ impl Footer {
     /// FILE, which every door watches. This one then re-reads it like all the
     /// others, through the same path, so there is one way a language changes
     /// and not a fast path here and a slow path everywhere else.
+    /// What the regions' view wants done.
+    ///
+    /// The install goes through the QUEUE and not through a thread here: it is
+    /// between six megabytes and two thousand, and `LEADER t` already survives
+    /// this process restarting, already knows how to give a job up, and
+    /// already answers "how far along".
+    fn geo_errand(&mut self, errand: crate::geo::Errand) {
+        match errand {
+            crate::geo::Errand::Nothing => self.draw_and_paint(),
+            crate::geo::Errand::Close => {
+                self.geo = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            crate::geo::Errand::Speak(key) => {
+                self.echo_message(self.texts.t(key));
+                self.draw_and_paint();
+            }
+            crate::geo::Errand::Ask => {
+                // THE MINIBUFFER ASKS, and the command is run a second time
+                // with what was typed — the language view's three questions
+                // are the same shape. `false`: a filter is read back and
+                // corrected, and dots are for a password.
+                self.mx.request("geo-find", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+            }
+            crate::geo::Errand::Install { region, label, url } => {
+                let Some(into) =
+                    ronoctua_xdg::data_dir().map(|d| ronoctua_atlas_packs::root_of(&d))
+                else {
+                    self.echo_message(self.texts.t(ronoctua_i18n::key::GEO_NO_HOME));
+                    return;
+                };
+                let work = ronoctua_transfers::Work::Atlas {
+                    region,
+                    label,
+                    url,
+                    into,
+                };
+                if let Err(e) =
+                    ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work })
+                {
+                    tracing::warn!(error = %e, "the transfer queue did not take the region");
+                    self.echo_message(self.texts.t(ronoctua_i18n::key::TRANSFERS_OFFLINE));
+                } else {
+                    self.echo_message(self.texts.t(ronoctua_i18n::key::GEO_QUEUED));
+                }
+                self.draw_and_paint();
+            }
+        }
+    }
+
     fn locale_errand(&mut self, errand: crate::locale::Errand) {
         match errand {
             crate::locale::Errand::Nothing => self.draw_and_paint(),
@@ -8098,6 +8269,19 @@ impl Footer {
             self.draw();
             self.paint();
         }
+        // AND THE GLOBE IS ASKED FOR AFTER THE FRAME, for the reason the
+        // walking name's clock is: what the stage has to draw is the box the
+        // LAYOUT measured, and the layout is this frame.
+        //
+        // `look_again` runs at the top of this function and tells the stage
+        // what it knew BEFORE the frame — which, the first time a coordinate
+        // appears, is nothing at all: `measured_globe` is called inside the
+        // drawing. So the order was: subject arrives, ask (with no box), draw
+        // (measure the box), and then silence — the picture appeared only if
+        // something else asked for a second frame, which on a still screen is
+        // the pointer moving. The window door showed it plainly: a panel with
+        // the globe's lines reserved and nothing in them.
+        self.follow_the_turn();
         // AND THE WALKING NAME'S CLOCK, asked for AFTER the frame: whether
         // there is a name to walk is written down by the layout, and the
         // layout is this frame. See `arm_the_walk`.
@@ -8243,7 +8427,40 @@ impl Footer {
     /// to `get_keyboard_with_repeat` and not through `repeat_key`, and a repeat
     /// that took a different path is a key that does something slightly
     /// different the second time round.
+    ///
+    /// # And the region follows the cursor HERE, once, for every view
+    ///
+    /// This is the wrapper, and the whole of what it adds is the line below.
+    /// Before it, exactly two of the fifteen views scrolled with their own
+    /// cursor — the manager and the clipboard, which call [`Self::follow_cursor`]
+    /// inside their errand handlers. In the other thirteen the cursor walked
+    /// off the bottom of the twelve-line region and the page stayed where it
+    /// was, which reads as an arrow key that stopped working. The owner
+    /// reported it from the regions' view and said what it is: *"isso precisa
+    /// ser corrigido de forma global"*.
+    ///
+    /// **Why the wrapper and not thirteen calls.** Because thirteen call sites
+    /// is thirteen places to forget, and the fourteenth view would be written
+    /// by copying one of them. There is exactly one place where "a PERSON
+    /// moved something" is known, and this is it.
+    ///
+    /// **And why not in `draw_and_paint`.** Because a daemon's arrival redraws
+    /// too, and a page that follows the cursor on arrival is the defect the
+    /// owner reported once already — *"está ocorrendo um redirecionamento/
+    /// scroll forçado para baixo"*, a reading thrown back to the cursor by a
+    /// ten-second clock. That is what [`Self::settle_region`] is for: an
+    /// arrival CLAMPS, a person's key FOLLOWS.
     fn typed(&mut self, event: KeyEvent) {
+        self.took_a_key(event);
+        // THE PAINT IS ONLY OWED WHEN THE PAGE ACTUALLY MOVED. The branch
+        // above has already drawn what the key did; this is the second half of
+        // the frame, and it costs nothing on the keys that scroll nothing.
+        if self.follow_cursor() {
+            self.draw_and_paint();
+        }
+    }
+
+    fn took_a_key(&mut self, event: KeyEvent) {
         // The RIGHT `Ctrl`, tracked by its keysym.
         //
         // It does not come in the `Modifiers`: xkb merges both Ctrls into a single
@@ -8456,6 +8673,33 @@ impl Footer {
                     .unwrap_or(crate::locale::Errand::Nothing);
                 self.zone = zone;
                 self.locale_errand(errand);
+            }
+            return;
+        }
+
+        // THE REGIONS' VIEW. Two arrows, `RET`, and two bare letters — the
+        // letters are free here for the language view's reason: what is typed
+        // is typed into the MINIBUFFER, so a letter on this screen is not a
+        // query.
+        if self.view() == ViewState::Geo {
+            use ronoctua_keymap::Sym;
+            let press = match key.sym {
+                Sym::Esc => Some(crate::geo::Press::Escape),
+                Sym::Down => Some(crate::geo::Press::Down),
+                Sym::Up => Some(crate::geo::Press::Up),
+                Sym::Enter => Some(crate::geo::Press::Enter),
+                Sym::Char('f') => Some(crate::geo::Press::Find),
+                Sym::Char('d') => Some(crate::geo::Press::Remove),
+                _ => None,
+            };
+            if let Some(press) = press {
+                let texts = std::rc::Rc::clone(&self.texts);
+                let errand = self
+                    .geo
+                    .as_mut()
+                    .map(|v| v.press(press, &texts))
+                    .unwrap_or(crate::geo::Errand::Nothing);
+                self.geo_errand(errand);
             }
             return;
         }
@@ -8851,13 +9095,18 @@ impl Footer {
     /// a drag and from the region being resized, and enumerating those is how
     /// one of them gets missed.
     fn follow_the_turn(&mut self) {
-        let Some(stage) = self.files_turning.as_mut() else {
-            return;
-        };
         let Some(view) = self.files.as_mut() else {
             return;
         };
-        if let Some(ask) = view.wants_turn() {
+        if let Some(stage) = self.files_turning.as_mut()
+            && let Some(ask) = view.wants_turn()
+        {
+            stage.tell(ask);
+        }
+        // AND THE GLOBE, by the same value diff.
+        if let Some(stage) = self.files_globe.as_mut()
+            && let Some(ask) = view.wants_globe()
+        {
             stage.tell(ask);
         }
     }
@@ -9727,6 +9976,11 @@ impl Footer {
             ViewState::Themes
         } else if self.locale.is_some() {
             ViewState::Locale
+        } else if self.geo.is_some() {
+            // WITH THE LANGUAGE VIEW, and for its reason: a cursor over a list
+            // of regions holds nothing a person built by hand — what it holds
+            // is a filter, which is five letters.
+            ViewState::Geo
         } else if self.bluetooth.is_some() {
             // ABOVE THE POWER VIEW, and the key branch says the same: a
             // pairing question is the one thing on this list that another
@@ -11193,6 +11447,22 @@ impl Footer {
                 })
                 .collect();
         }
+        if self.view() == ViewState::Geo
+            && let Some(v) = self.geo.as_ref()
+        {
+            let width = self.screen_columns();
+            return v
+                .rows(width, &self.texts)
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::Geo(n)),
+                    fields: r.fields,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
         if self.view() == ViewState::Notifications {
             return self.manager_rows();
         }
@@ -12248,6 +12518,17 @@ impl Footer {
         // business; the rest goes straight through.
         match doing {
             Doing::Open(path) => return self.open_the_file(&path),
+            // THE MAP, through the opener this system already has. It is the
+            // same road `s s a` takes to the Syncthing page, and it is the one
+            // thing the manager does that leaves the machine.
+            Doing::Web(address) => {
+                let Some(opener) = XDG_OPEN_PATH.filter(|p| !p.is_empty()) else {
+                    tracing::error!("RONOCTUA_XDG_OPEN was not set at build time");
+                    return;
+                };
+                self.open_foreign(opener, &[address], None);
+                return;
+            }
             Doing::OpenWith(path, which) => {
                 let Some(entry) = self.catalogue.iter().find(|e| e.id == which).cloned() else {
                     return;
@@ -12704,6 +12985,18 @@ impl Footer {
                     self.locale_errand(errand);
                 }
             }
+            Some(Click::Geo(n)) => {
+                let width = self.screen_columns();
+                let texts = std::rc::Rc::clone(&self.texts);
+                let errand = self.geo.as_mut().map(|v| {
+                    let rows = v.rows(width, &texts);
+                    v.clicked(n, &rows);
+                    v.press(crate::geo::Press::Enter, &texts)
+                });
+                if let Some(errand) = errand {
+                    self.geo_errand(errand);
+                }
+            }
             Some(Click::Syncthing(n)) => {
                 let width = self.screen_columns();
                 let snapshot = self.syncthing_snapshot.take();
@@ -12926,12 +13219,14 @@ impl Footer {
     /// already reached it. With two lines of margin, what comes next is on
     /// screen already when you decide to go down — it is vi's `scrolloff`, and
     /// the request was exactly that: start following before the end.
-    fn follow_cursor(&mut self) {
+    /// Answers whether the page MOVED, so the one caller that has not drawn
+    /// yet can tell whether it owes a frame — see [`Self::typed`].
+    fn follow_cursor(&mut self) -> bool {
         if self.took_the_anchor() {
-            return;
+            return false;
         }
         let Some(cursor) = self.list_cursor() else {
-            return;
+            return false;
         };
         let ceiling = self.expansion_ceiling();
         let total = self.expansion_len();
@@ -12947,7 +13242,10 @@ impl Footer {
         } else {
             offset
         };
-        self.scroll_offset_to(fresh.min(last_offset(total, ceiling)));
+        let want = fresh.min(last_offset(total, ceiling));
+        let moved = want != offset;
+        self.scroll_offset_to(want);
+        moved
     }
 
     /// Which item of the expanded region is focused, when there is one.
@@ -12992,6 +13290,7 @@ impl Footer {
             ViewState::Clipboard => Some(self.clip_view.cursor()),
             ViewState::History => self.history.as_ref().map(crate::history::View::cursor),
             ViewState::Locale => self.locale.as_ref().map(crate::locale::View::cursor),
+            ViewState::Geo => self.geo.as_ref().map(crate::geo::View::cursor),
             ViewState::Display => self.display.as_ref().map(crate::display::View::cursor),
             ViewState::Bluetooth => self.bluetooth.as_ref().map(crate::bluetooth::View::cursor),
             // The manager's cursor, so the region scrolls with it — the same
@@ -13438,6 +13737,12 @@ impl Footer {
         // AND THE PICTURE THAT REDRAWS ITSELF — a film's frame, or a shape at
         // the angle it is being turned to — which replaces it while it lasts.
         let files_frame = self.files.as_ref().and_then(crate::files::View::live_frame);
+        // AND THE GLOBE'S, taken here for the same reason the two above are: the
+        // borrow of `self.files` has to end before the GPU's begins.
+        let files_globe_pixels = self
+            .files
+            .as_ref()
+            .and_then(crate::files::View::globe_frame);
 
         let segments = self.segments_now();
         let mini_at_rest = crate::minibuffer_at_rest();
@@ -13511,6 +13816,7 @@ impl Footer {
         // cursor.
         let syncthing_state = self.syncthing_snapshot.as_ref();
         let locale = &self.locale;
+        let geo = &self.geo;
         let display = &self.display;
         // THE READING TOO, because this view's hint depends on whether the
         // screen its level is about is still there — see `display::View::hint`.
@@ -13566,6 +13872,10 @@ impl Footer {
                 // a row says so, which is the same reason every view above
                 // has a line here.
                 ViewState::Locale => locale.as_ref().map(|v| v.hint(texts)),
+                // THE REGIONS: two of its five keys are bare letters, so
+                // without the line there is nothing on screen saying that `d`
+                // removes one.
+                ViewState::Geo => geo.as_ref().map(|v| v.hint(texts)),
                 ViewState::Display => display
                     .as_ref()
                     .map(|v| v.hint(screens, std::time::Instant::now(), texts)),
@@ -13672,11 +13982,19 @@ impl Footer {
             // then the region.
             .band_hint
             .clone()
-            .or_else(|| self.segment_hint())
+            .map(|t| vec![crate::chrome::Piece::said(t)])
+            .or_else(|| {
+                self.segment_hint()
+                    .map(|t| vec![crate::chrome::Piece::said(t)])
+            })
             // AND THE BRAIN'S LINE, next down the screen: it sits under the
             // minibuffer and above the region, and this chain is the screen's
             // own order from the top.
-            .or_else(|| self.brain_hint.clone())
+            .or_else(|| {
+                self.brain_hint
+                    .clone()
+                    .map(|t| vec![crate::chrome::Piece::said(t)])
+            })
             // AND WHAT THE MANAGER'S FOCUSED ROW HAS TO ADD — today, the reason
             // a switch does nothing. It used to be drawn as a third column on
             // the row and the owner asked for it gone; the honesty had to stay,
@@ -13685,11 +14003,13 @@ impl Footer {
                 self.notifications_open
                     .then(|| self.manager.note(&self.texts))
                     .flatten()
+                    .map(|t| vec![crate::chrome::Piece::said(t)])
             })
             .or_else(|| {
                 self.row_under_pointer
                     .and_then(|i| visible.get(i))
                     .and_then(|l| l.description.clone())
+                    .map(|t| vec![crate::chrome::Piece::said(t)])
             })
             // AND WHAT THE MANAGER'S ROW UNDER THE POINTER HAS TO ADD.
             //
@@ -13705,13 +14025,15 @@ impl Footer {
                 let row = self.row_under_pointer?;
                 let records = self.notifications.history();
                 let lists = crate::notifications::Lists::of(records, &self.book);
-                self.manager.about_at(
-                    &lists,
-                    self.screen_columns(),
-                    row,
-                    self.cell_under_pointer,
-                    &self.texts,
-                )
+                self.manager
+                    .about_at(
+                        &lists,
+                        self.screen_columns(),
+                        row,
+                        self.cell_under_pointer,
+                        &self.texts,
+                    )
+                    .map(|t| vec![crate::chrome::Piece::said(t)])
             })
             // AND A MENU ROW UNDER THE CURSOR SAYS WHAT IT ACTUALLY DOES.
             //
@@ -13730,7 +14052,7 @@ impl Footer {
             // choice about to be made.
             .or_else(|| {
                 let e = self.files.as_ref()?.cursor_explains()?;
-                Some(self.texts.t_with(e.key, &e.borrowed()))
+                Some(crate::chrome::sentence(&e, &self.texts))
             })
             // THE FILE MANAGER'S FIELDS ANSWER PER CELL, and this is the whole
             // of the "tooltip" the owner asked for: pointing at the `w` of a
@@ -13746,7 +14068,7 @@ impl Footer {
                 // an empty part of the facts described a file far down the
                 // listing — the owner photographed exactly that.
                 let e = self.files_target()?.explain?;
-                Some(self.texts.t_with(e.key, &e.borrowed()))
+                Some(crate::chrome::sentence(&e, &self.texts))
             })
             // AND WHAT WENT WRONG WITH A FILM, which nothing else on screen
             // could say: **refusal is a value, not an absence**. A panel with
@@ -13761,7 +14083,7 @@ impl Footer {
                 // AND WHAT WENT WRONG WITH A SHAPE, on the same line and for
                 // the same reason the film's sentence is here.
                 let e = v.film_trouble().or_else(|| v.shape_said())?;
-                Some(self.texts.t_with(e.key, &e.borrowed()))
+                Some(crate::chrome::sentence(&e, &self.texts))
             })
             // AND A TRANSFER'S ROW SAYS WHAT WENT WRONG.
             //
@@ -13785,10 +14107,9 @@ impl Footer {
                 let Some(Click::Transfers(n)) = visible.get(row)?.click else {
                     return None;
                 };
-                Some(crate::transfers::under_the_pointer(
-                    view.at(n)?,
-                    &self.texts,
-                ))
+                Some(vec![crate::chrome::Piece::said(
+                    crate::transfers::under_the_pointer(view.at(n)?, &self.texts),
+                )])
             });
         // WHERE THE POINTER IS, marked by a BACKGROUND — and, since the owner
         // reported it from the screen, where the FOCUS is by another.
@@ -14157,7 +14478,22 @@ impl Footer {
             // one run of prose. One representation is what lets the drawer be
             // drawn by the same painter as the line, so a key is the same
             // colour three rows down as it is on the first.
-            let line_pieces: Vec<crate::chrome::Piece> = if let Some(h) = &held_pieces {
+            //
+            // AND THE ORDER IS THE DRAWING'S, which is a correction: this list
+            // put the HINT first while the painter beside it put the hint
+            // fourth, so with an echo on the line the fold measured a sentence
+            // nobody could see. Two orders for one line is the same defect as
+            // two painters for one line, and this wave removed both.
+            let line_pieces: Vec<crate::chrome::Piece> = if let Some(e) = &echo {
+                vec![crate::chrome::Piece::said(e.clone())]
+            } else if let Some(d) = &explanation {
+                // ALREADY IN PIECES, because a sentence about a fact has two
+                // halves: the name of it and the fact itself. See
+                // `chrome::sentence`.
+                d.clone()
+            } else if let Some(p) = &prompt_mx {
+                vec![crate::chrome::Piece::said(p.clone())]
+            } else if let Some(h) = &held_pieces {
                 let mut out = h.clone();
                 // AND THE KEYS THAT WALK IT, once it is open. Only then: on a
                 // folded line they would name a gesture that does nothing.
@@ -14168,19 +14504,10 @@ impl Footer {
                     out.extend(crate::fold::teaching(&self.texts));
                 }
                 out
+            } else if let Some(p) = &pending {
+                vec![crate::chrome::Piece::pending(p.clone())]
             } else {
-                let text = if let Some(e) = &echo {
-                    e.clone()
-                } else if let Some(d) = &explanation {
-                    d.clone()
-                } else if let Some(p) = &prompt_mx {
-                    p.clone()
-                } else if let Some(p) = &pending {
-                    p.clone()
-                } else {
-                    mini_at_rest.clone()
-                };
-                vec![crate::chrome::Piece::prose(text)]
+                vec![crate::chrome::Piece::said(mini_at_rest.clone())]
             };
             let line_text: String = line_pieces.iter().map(|p| p.text.as_str()).collect();
             let plain_room = columns
@@ -14196,45 +14523,37 @@ impl Footer {
             // (an echo, a message, what is being typed), because then there is
             // no shortcut on it to point at.
             let mut marks: Vec<crate::chrome::Mark> = Vec::new();
-            let (mini, mini_color) = if let Some(e) = &echo {
-                (e.clone(), tokens::color::TEXT_SUBTLE_STRONG)
-            } else if let Some(d) = &explanation {
-                (d.clone(), tokens::color::TEXT_SUBTLE_STRONG)
-            } else if let Some(p) = &prompt_mx {
-                (p.clone(), tokens::color::TEXT_SUBTLE_STRONG)
-            } else if let Some(h) = &held_pieces {
-                if !held.open {
-                    spans.extend(crate::chrome::hint_spans(
-                        h,
-                        ronoctua_render::Size::Grid,
-                        tokens::space::MODELINE_EDGELEFT,
-                        mini_line,
-                        mini_room,
-                    ));
-                    marks.extend(crate::chrome::hint_marks(
-                        h,
-                        tokens::space::MODELINE_EDGELEFT,
-                        mini_line,
-                        mini_room,
-                    ));
-                }
-                (String::new(), tokens::color::TEXT_SUBTLE_STRONG)
-            } else if let Some(p) = &pending {
-                (p.clone(), tokens::color::STATE_ACCENT)
-            } else {
-                (mini_at_rest.clone(), tokens::color::TEXT_SUBTLE_STRONG)
-            };
-            // WHILE IT IS OPEN the drawer draws this line too, from the wrap.
-            if !mini.is_empty() && !held.open {
-                spans.push(ronoctua_render::Span {
-                    size: ronoctua_render::Size::Grid,
-                    text: layout::elide_end(&mini, mini_room),
-                    column: tokens::space::MODELINE_EDGELEFT,
-                    line: mini_line,
-                    color: mini_color,
-                    edge: false,
-                    foot: false,
-                });
+            // ONE PAINTER FOR THIS LINE, and there were two.
+            //
+            // A hint went through `hint_spans`, in its registers; everything
+            // else — an echo, a message, an explanation, the chord — was
+            // flattened to a string and drawn beside it with one token written
+            // out by hand. Two representations of one line is the arrangement
+            // `chrome` exists to end, and it is what kept the sentence about a
+            // fact in a single colour when the owner asked for its two halves
+            // to differ. `line_pieces` above is now the whole line, whatever
+            // is on it.
+            //
+            // WHILE THE DRAWER IS OPEN it draws this line too, from the wrap,
+            // so nothing is painted here.
+            if !held.open && !line_pieces.is_empty() {
+                spans.extend(crate::chrome::hint_spans(
+                    &line_pieces,
+                    ronoctua_render::Size::Grid,
+                    tokens::space::MODELINE_EDGELEFT,
+                    mini_line,
+                    mini_room,
+                ));
+                // AND THE MARKS ONLY WHEN THERE ARE SHORTCUTS ON IT: a line
+                // showing a message has nothing for the pointer to name, and
+                // `hint_marks` says so by returning none — it filters on a
+                // run's id, and only a hint's runs carry one.
+                marks.extend(crate::chrome::hint_marks(
+                    &line_pieces,
+                    tokens::space::MODELINE_EDGELEFT,
+                    mini_line,
+                    mini_room,
+                ));
             }
 
             // THE CONTROL, flush against the right edge. No box and no border
@@ -14316,15 +14635,17 @@ impl Footer {
                             mini_room,
                         ));
                     } else {
-                        spans.push(ronoctua_render::Span {
-                            size: ronoctua_render::Size::Grid,
-                            text: row.into_iter().map(|p| p.text).collect(),
-                            column: tokens::space::MODELINE_EDGELEFT,
+                        // THE SAME PAINTER AS THE LINE ABOVE, in the runs'
+                        // own registers. It used to flatten the row into one
+                        // string and one hand-written token, which is the
+                        // second painter this wave removed.
+                        spans.extend(crate::chrome::hint_spans(
+                            &row,
+                            ronoctua_render::Size::Grid,
+                            tokens::space::MODELINE_EDGELEFT,
                             line,
-                            color: mini_color,
-                            edge: false,
-                            foot: false,
-                        });
+                            mini_room,
+                        ));
                     }
                 }
                 self.fold_scroll = scroll;
@@ -14413,9 +14734,18 @@ impl Footer {
                     // A COLOUR and not a box: invariant 15, and the same choice
                     // the focused row already makes.
                     let on_this_row = self.row_under_pointer == Some(i);
-                    for f in &line.fields {
-                        let under =
-                            on_this_row && self.cell_under_pointer.is_some_and(|c| f.covers(c));
+                    // WHICH field, asked ONCE and by the walk the click makes.
+                    // See `files::Row::field_index_at`: `covers` answers "may
+                    // this field own the cell", and two packed fields both say
+                    // yes to the cell between them.
+                    let alight = on_this_row
+                        .then(|| {
+                            self.cell_under_pointer
+                                .and_then(|c| crate::files::lit_field(&line.fields, c))
+                        })
+                        .flatten();
+                    for (which, f) in line.fields.iter().enumerate() {
+                        let under = alight == Some(which);
                         spans.push(ronoctua_render::Span {
                             size: ronoctua_render::Size::Grid,
                             text: f.text.clone(),
@@ -14555,6 +14885,7 @@ impl Footer {
             // because whoever looks does not know whether what is skewed is the
             // image or the panel.
             let mut file_preview: Option<(String, ronoctua_render::image::Area)> = None;
+            let mut file_globe: Option<(String, ronoctua_render::image::Area)> = None;
             if let Some(v) = self.files.as_ref() {
                 let panes = v.panes(columns);
                 // WHERE THE PANELS' OWN ROWS BEGIN, and it is NOT the top of
@@ -14655,6 +14986,31 @@ impl Footer {
                                 rgba.height,
                             ),
                         ));
+                    }
+
+                    // AND THE GLOBE, at the top of the info panel beside it.
+                    // The same three steps: measure the box, tell the view, ask
+                    // for the picture — because the picture that is DRAWN has
+                    // to be the picture that was MEASURED.
+                    #[allow(clippy::cast_precision_loss)]
+                    let area = crate::files::globe_px(
+                        panes,
+                        crate::chrome::FIELDS_LEAD,
+                        columns,
+                        (cell, line_height, width as f32),
+                        top,
+                        v.globe_lines(),
+                    );
+                    if let Some(a) = area {
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        v.measured_globe(
+                            (a.width.max(0.0) as u32, a.height.max(0.0) as u32),
+                            tokens::theme::current().position(),
+                        );
+                        if let (Some(key), Some(rgba)) = (v.globe_key(), v.globe_frame()) {
+                            file_globe =
+                                Some((key, crate::files::picture_in(a, rgba.width, rgba.height)));
+                        }
                     }
                 }
             }
@@ -15319,6 +15675,15 @@ impl Footer {
                     } else if im.missing(&key)
                         && let Some(rgba) = files_pixels
                     {
+                        im.upload_it(&gpu.device, &gpu.queue, &key, rgba);
+                    }
+                    batch.push((key, area));
+                }
+                // AND THE GLOBE, which is the SECOND picture this manager draws
+                // at once — the reason `image::CEILING` had to grow, and the
+                // one number in this feature that would have failed silently.
+                if let Some((key, area)) = file_globe {
+                    if let Some(rgba) = files_globe_pixels.as_ref() {
                         im.upload_it(&gpu.device, &gpu.queue, &key, rgba);
                     }
                     batch.push((key, area));

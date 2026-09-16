@@ -155,6 +155,56 @@
       chroma = 0.3;
     };
 
+    # THE GLOBE, and the argument the mesh makes applies whole: the world
+    # carries no colours of its own, so any variety here would be invented.
+    # What has to read at a glance is THREE things — sea, land, and the country
+    # the coordinate is in — and that is what these four are.
+    #
+    # There is NO background token: what is behind the disc is each door's own
+    # surface, which is the same one-texture-two-doors argument the mesh and
+    # the film's letterbox already had to make.
+    atlas = {
+      # THE DISC, WHERE THERE IS NO LAND — and it must NOT be the chrome.
+      #
+      # It was `neutral.chrome` and that is the panel's own ground: the sea and
+      # the panel came out the same ink, so the globe had no DISC at all —
+      # land floating on the background, with the rim the only thing saying
+      # where the world ended. Caught by the shots, and only because the
+      # assertion that was supposed to find the sea found the whole screen
+      # instead: an empty assertion and a real defect, in one line.
+      #
+      # `accent.element` is the theme's OWN hue at a ground's weight, and it is
+      # not an invention: a sea that reads as sea is the one thing every map
+      # that has ever been drawn agrees on, and taking the hue from the theme
+      # is what keeps it the theme's rather than a colour this file chose.
+      #
+      # `neutral.window` was tried first and is wrong for a reason worth
+      # keeping: it is the same rung the buffer's ground sits on, so the disc
+      # would be invisible in the window door and visible in the footer — one
+      # picture, two answers.
+      ocean = {
+        of = "accent.element";
+      };
+      # Land. The mesh's own reasoning at a lower chroma: warm by a hair so it
+      # does not read as part of the cold surface behind it.
+      land = {
+        of = "neutral.text-loud";
+        chroma = 0.22;
+      };
+      # THE COUNTRY THE COORDINATE IS IN. It is what "framed on the country"
+      # SHOWS as well as frames, and it is the accent because it is the answer
+      # to the question that was asked.
+      here = {
+        of = "accent.text-muted";
+      };
+      # Inland water, painted over the land. Named apart from the ocean on
+      # purpose: the day one of the two moves, the other must not — and one of
+      # them just did.
+      lake = {
+        of = "accent.element";
+      };
+    };
+
     # THE WAVEFORM DRAWN FROM A SOUND, and one colour for the same reason the
     # mesh has one: a sound carries no colours, so any variety would be
     # invented.
@@ -477,6 +527,23 @@
     # One line, one logical pixel. It separates the content from the footer.
     default = "neutral.border";
     strong = "neutral.border-strong";
+
+    # THE LINES OF THE GLOBE. A border is stroked OVER the fill, which is also
+    # what hides the one-step seam two independently quantised countries can
+    # have between them — see `baked.rs`.
+    atlas = {
+      border = "neutral.border-strong";
+      # A REGION'S EDGE IS QUIETER THAN A COUNTRY'S, and the theme gate holds
+      # the two apart in every palette: with one ink for both, a country full
+      # of provinces reads as mud.
+      region = "neutral.border";
+      rim = "neutral.border-strong";
+      # A STREET NETWORK CARRIES NO COLOURS EITHER, so one ink, for the mesh's
+      # reason.
+      street = {
+        of = "neutral.text-muted";
+      };
+    };
   };
 
   # -------------------------------------------------------------------
@@ -674,6 +741,28 @@
   # owner asked for the second place to GAIN a background, and at one rung it
   # had not gained a visible one. Two rungs is still two dark greys with no
   # hue between them — quiet, and legible.
+  # -------------------------------------------------------------------
+  # Marks — a point drawn ON something, rather than a surface or a line
+  # -------------------------------------------------------------------
+  #
+  # ONE FAMILY FOR TWO, and it is a family rather than two strays under
+  # `surface` because a dot on a globe is neither a surface nor a rule: it is a
+  # mark, and the next one that needs a colour will be too.
+  mark = {
+    atlas = {
+      # WHERE THE COORDINATE IS. The accent at its loudest, because the whole
+      # picture exists to answer where this is.
+      dot = "accent.text-strong";
+      # AND A RING ROUND IT, so the dot reads over land and over sea both —
+      # two draws and no branch. The chrome's own colour, which is what is
+      # furthest from both of them.
+      halo = {
+        of = "neutral.chrome";
+        alpha = 0.85;
+      };
+    };
+  };
+
   glance = {
     ground = "neutral.chrome-loud";
     ground-alternate = "neutral.chrome";

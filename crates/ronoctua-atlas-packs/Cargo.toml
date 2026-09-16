@@ -1,0 +1,22 @@
+[package]
+name = "ronoctua-atlas-packs"
+description = "A region's streets: where a pack lives, how one is baked from a Geofabrik download, and what it answers."
+# EVERYTHING SPELLED OUT, for the reason `ronoctua-atlas` writes out.
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+# TWO DEPENDENCIES, AND NEITHER IS `ronoctua-atlas`.
+#
+# The pure crate is what a buffer could ask; this one opens files. Keeping the
+# edge absent is not tidiness: the transfers daemon bakes a pack, and that
+# daemon is extracted from the workspace precisely so the desktop's closure
+# does not follow it. A dependency on the globe's geometry would put the
+# projection into a download queue.
+[dependencies]
+ronoctua-zip = { path = "../ronoctua-zip" }
+
+[lints]
+workspace = true

@@ -224,7 +224,7 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
     }
     let header = auth::cookie_header(*identity, &cookies, url);
     match carry(shared, id, switch, url, into, header.as_deref()) {
-        Ok(()) => {}
+        Ok(()) => shared.touch(id, |j| j.stage = Stage::Done),
         Err(e) => {
             // A cancellation is not a failure and must not read like one: the
             // person asked for it.
@@ -244,7 +244,13 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
     }
 }
 
-fn carry(
+/// The download itself, without saying that the JOB is over.
+///
+/// `pub(crate)` and it does not touch `Stage::Done`, because it has a second
+/// caller with a second half: `crate::atlas` downloads a region and then bakes
+/// it, and a row that said "done" between the two would be a row lying for the
+/// minute that matters. Who is finished is decided by whoever called this.
+pub(crate) fn carry(
     shared: &Arc<Shared>,
     id: u64,
     switch: &Arc<Control>,
@@ -306,7 +312,6 @@ fn carry(
             "complete" => {
                 progress.set(status.done, status.done.max(status.total), &status.name);
                 progress.flush();
-                shared.touch(id, |j| j.stage = Stage::Done);
                 let _ = call("aria2.removeDownloadResult", vec![Value::String(gid)]);
                 return Ok(());
             }

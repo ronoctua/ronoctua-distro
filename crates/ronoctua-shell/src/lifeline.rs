@@ -40,7 +40,7 @@ use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     output::{OutputHandler, OutputState},
-    reexports::calloop::EventLoop,
+    reexports::calloop::{EventLoop, channel},
     reexports::calloop_wayland_source::WaylandSource,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -335,6 +335,27 @@ pub fn host_it(unit: &str) -> Result<()> {
         .insert(cycle.handle())
         .map_err(|e| anyhow::anyhow!("could not hang Wayland: {e}"))?;
 
+    // AND THE SIZE OF THE TEXT, which this line kept from the moment it was
+    // raised while every other door followed the person's choice.
+    //
+    // It is the one door that can be on screen BESIDE the footer — that is
+    // what it is for — so two different sizes on two lines of the same edge is
+    // exactly the photograph that made this system have one size at all. The
+    // height is a function of the size too (`LINES` of `line_height`), so the
+    // surface is asked for a new one rather than only repainted.
+    let (size_sender, size_changed) = channel::channel::<()>();
+    let _size_watch = crate::toolkits::watch(move || size_sender.send(()).is_ok());
+    cycle
+        .handle()
+        .insert_source(size_changed, |event, (), state: &mut Lifeline| {
+            if let channel::Event::Msg(()) = event
+                && crate::toolkits::reload()
+            {
+                state.text_size_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the text size channel: {e}"))?;
+
     let signal = cycle.get_signal();
     cycle
         .run(None, &mut state, |e| {
@@ -504,6 +525,27 @@ impl Lifeline {
 }
 
 impl Lifeline {
+    /// The person chose another size, anywhere on the system.
+    ///
+    /// The rasteriser is told, the surface asks for the height that size now
+    /// needs, and the line is repainted. `toolkits::reload` has already put
+    /// the new value in the tokens by the time this runs — it is what the
+    /// channel's guard calls.
+    fn text_size_changed(&mut self) {
+        if let Some(t) = self.text.as_mut() {
+            t.draw_at(tokens::text::size());
+        }
+        let height = tokens::metrics::line_height(tokens::text::size()) * f32::from(LINES);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let height = height.ceil() as u32;
+        self.layer.set_size(0, height);
+        self.layer
+            .set_exclusive_zone(i32::try_from(height).unwrap_or(i32::MAX));
+        self.layer.commit();
+        self.recount();
+        self.ask_paint();
+    }
+
     /// How many cells the line has, both margins already off.
     fn recount(&mut self) {
         let size = tokens::text::size();

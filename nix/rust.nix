@@ -93,6 +93,7 @@
   # The FONTS travel on the wrapper (read at run time, 54 MB, and a store path
   # in the compiler's environment rebuilds all thirty-three crates); the chain
   # is baked, because it is code.
+  atlasData,
   coverageFonts,
   chainRs,
   widthRs,
@@ -591,6 +592,22 @@ let
     # DIRECTORY at run time. `/etc/localtime` answers for the machine's own
     # zone and the glance asks about several.
     RONOCTUA_ZONEINFO = "${tzdata}/share/zoneinfo";
+    # THE WORLD. Borders, inland water, named places and the catalogue of
+    # downloadable street regions — about six megabytes, baked by
+    # `nix/atlas.nix`.
+    #
+    # AT RUN TIME AND NOT IN `generated`, and the reason is measured: a store
+    # path in `generated` is a compilation INPUT, so re-baking the table — a
+    # newer Natural Earth tag, a fresher GeoNames dump, `cities1000` instead of
+    # `cities500` — would rebuild the whole workspace at the 2m15–5m46 this
+    # file records for the buffers, and make both dependency layers wait on it.
+    # `deps-layer-is-lean` refuses a `RONOCTUA_*` in those layers for exactly
+    # this reason, and `atlas-is-at-run-time` turns the rule on this variable.
+    #
+    # AND ABSENCE IS NOT AN ERROR, which is `RONOCTUA_COVERAGE_FONTS`' rule:
+    # the installer and the rescue console have no atlas, and there the info
+    # panel shows the coordinate and no globe, with a sentence saying why.
+    RONOCTUA_ATLAS = "${atlasData}/world.atlas";
   };
 
   # The dependencies, compiled once.
@@ -915,6 +932,11 @@ rec {
       # `Refusal::Missing` and proves nothing, which is the trap AGENTS.md
       # records as "every ffmpeg test was EMPTY".
       RONOCTUA_XLS2CSV = "${pkgs.catdoc}/bin/xls2csv";
+      # AND THE WORLD, for the same reason again: `globe::world()` returns
+      # `None` without it, the test that asks London where it is returns early,
+      # and it proves nothing while passing. The variable is the one the
+      # WRAPPER sets at run time; this is the same path, for the tests.
+      RONOCTUA_ATLAS = "${atlasData}/world.atlas";
     }
   );
 

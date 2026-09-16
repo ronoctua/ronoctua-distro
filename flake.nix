@@ -194,6 +194,12 @@
       # cell arithmetic of the whole footer rests on it. See nix/width.nix.
       widthRs = pkgs.callPackage ./nix/width.nix { };
 
+      # THE WORLD, for the globe and for the address under it. Borders, inland
+      # water, named places and the catalogue of downloadable street regions,
+      # all in one table the pure crate reads at RUN time. See nix/atlas.nix,
+      # and `assets/atlas.nix` for the sources and their licences.
+      atlasData = pkgs.callPackage ./nix/atlas.nix { };
+
       # The glance's places (`LEADER d`). One declaration, and the build
       # refuses a zone `zone1970.tab` does not know — see nix/world.nix.
       worldRs = pkgs.callPackage ./nix/world.nix {
@@ -467,6 +473,7 @@
         # glyph (invariant 10) and there was no glyph to be had.
         marksFontFile = "${marksdb.db}/NoctuaMarks.ttf";
         inherit
+          atlasData
           coverageFonts
           chainRs
           widthRs
@@ -527,6 +534,7 @@
 
       devApp = pkgs.callPackage ./nix/dev.nix {
         inherit
+          atlasData
           graphicsHost
           reloadApp
           singleFooter

@@ -216,6 +216,14 @@ pub struct Civil {
     pub hour: u32,
     /// 0 to 59.
     pub minute: u32,
+    /// 0 to 59.
+    ///
+    /// Not in [`Civil::args`], and deliberately: that is the COLUMN's contract,
+    /// where a second would be three cells nobody scans for. It is here for the
+    /// sentence the pointer asks for, which has a whole line — the owner's own
+    /// request, *"a data completa no idioma do usuário"*, and a date without
+    /// its seconds is not complete.
+    pub second: u32,
 }
 
 impl Civil {
@@ -252,6 +260,10 @@ pub fn civil(secs: i64, zone: &Zone) -> Civil {
         day,
         hour: u32::try_from(rest / 3600).unwrap_or(0),
         minute: u32::try_from((rest % 3600) / 60).unwrap_or(0),
+        // `rem_euclid` ABOVE is what makes this right before 1970 as well: the
+        // remainder is already in `0..86_400`, so the seconds of a pre-epoch
+        // instant count forwards like any other.
+        second: u32::try_from(rest % 60).unwrap_or(0),
     }
 }
 

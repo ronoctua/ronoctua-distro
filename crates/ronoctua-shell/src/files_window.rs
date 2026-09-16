@@ -266,6 +266,20 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the stage channel: {e}"))?;
 
+    // AND THE GLOBE'S, on a third — for the same reason as the second: a drag
+    // across the world emits a picture every few tens of milliseconds, and none
+    // of them is news about a directory or about a shape.
+    let (globes_sender, globes) = channel::channel::<crate::globe::Beat>();
+    handle
+        .insert_source(globes, |event, (), state: &mut FilesWindow| {
+            if let channel::Event::Msg(b) = event
+                && state.view.saw_globe(&b)
+            {
+                state.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the globe channel: {e}"))?;
+
     let texts = std::rc::Rc::new(crate::language::texts());
     // The catalogue is swept HERE and not inherited: this is a process of its
     // own, and `open with` needs to know who declares a type. 128 entries in
@@ -315,6 +329,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         looking: crate::files::inspector(sender.clone()),
         playing: crate::motion::player(frames_sender),
         turning: crate::stage::stage(turns_sender),
+        spinning_globe: crate::globe::stage(globes_sender),
         sender,
         under_pointer: None,
         dragging: None,
@@ -338,6 +353,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         handle: handle.clone(),
         walk_armed: false,
         spinning: None,
+        dragging_globe: None,
         notice,
         _theme_watch,
     };
@@ -531,6 +547,9 @@ struct FilesWindow {
     walk_armed: bool,
     /// The thread that draws a shape at the angle it is being looked at.
     turning: Option<crate::stage::Stage>,
+    /// The thread that draws the globe. One per DOOR, because a door has one
+    /// calloop and one channel; the pose is the view's.
+    spinning_globe: Option<crate::globe::Stage>,
     /// Where the pointer was when it last moved a shape.
     ///
     /// A gesture of the door's own and NOT a fourth `Axis`: `drag_to` inverts
@@ -539,6 +558,8 @@ struct FilesWindow {
     /// is the same kind of thing: a press that owns the pointer until it is
     /// let go.
     spinning: Option<(f64, f64)>,
+    /// Where the pointer was when it took hold of the GLOBE.
+    dragging_globe: Option<(f64, f64)>,
     /// The directory reporting itself, when one could be had.
     ///
     /// `None` means the watch could not be armed and the fallback clock above
@@ -643,10 +664,16 @@ impl FilesWindow {
     /// and from the panel being resized, and enumerating those is how one gets
     /// missed.
     fn follow_the_turn(&mut self) {
-        let Some(stage) = self.turning.as_mut() else {
-            return;
-        };
-        if let Some(ask) = self.view.wants_turn() {
+        if let Some(stage) = self.turning.as_mut()
+            && let Some(ask) = self.view.wants_turn()
+        {
+            stage.tell(ask);
+        }
+        // AND THE GLOBE, asked in the same place and by the same rule: a value
+        // diff, so a repeat costs nothing.
+        if let Some(stage) = self.spinning_globe.as_mut()
+            && let Some(ask) = self.view.wants_globe()
+        {
             stage.tell(ask);
         }
     }
@@ -709,6 +736,33 @@ impl FilesWindow {
                 match doing {
                     Doing::Open(path) => {
                         self.open_the_file(&path);
+                        self.ask_paint();
+                        return;
+                    }
+                    // THE MAP. DETACHED and never waited on: this runs inside
+                    // the calloop callback, and waiting there is the frozen
+                    // footer the `systemd-run --scope` lesson already cost this
+                    // project twice. Same shape as `syncthing_window`'s page.
+                    Doing::Web(address) => {
+                        match option_env!("RONOCTUA_XDG_OPEN").filter(|p| !p.is_empty()) {
+                            Some(opener) => {
+                                match std::process::Command::new(opener)
+                                    .arg(&address)
+                                    .stdin(std::process::Stdio::null())
+                                    .stdout(std::process::Stdio::null())
+                                    .stderr(std::process::Stdio::null())
+                                    .spawn()
+                                {
+                                    Ok(child) => drop(child),
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "could not open the map");
+                                    }
+                                }
+                            }
+                            None => {
+                                tracing::error!("RONOCTUA_XDG_OPEN was not set at build time");
+                            }
+                        }
                         self.ask_paint();
                         return;
                     }
@@ -1181,6 +1235,12 @@ impl FilesWindow {
             self.ask_paint();
         }
         self.under_pointer = self.target_at(x, y);
+        // AND WHETHER IT IS ON THE GLOBE, remembered where it was resolved —
+        // the wheel arrives with less than this and must not ask again.
+        self.view.pointing_globe(matches!(
+            self.under_pointer.as_ref().map(|t| &t.hit),
+            Some(crate::files::Hit::Globe | crate::files::Hit::GlobeDot)
+        ));
         let at = self.line_and_cell(x, y);
         self.cell_under_pointer = at.map(|(_, c)| c);
         self.line_under_pointer = at.map(|(l, _)| l);
@@ -1389,6 +1449,19 @@ impl FilesWindow {
         if crate::fold::settle(&mut self.fold, self.fold_wrapped) {
             self.ask_paint();
         }
+        // AND THE GLOBE IS ASKED FOR AFTER THE FRAME, for the reason the
+        // walking name's clock is: what the stage has to draw is the box the
+        // LAYOUT measured, and the layout is this frame.
+        //
+        // `look_again` runs at the top of this function and tells the stage
+        // what it knew BEFORE the frame — which, the first time a coordinate
+        // appears, is nothing at all: `measured_globe` is called inside the
+        // drawing. So the order was: subject arrives, ask (with no box), draw
+        // (measure the box), and then silence — the picture appeared only if
+        // something else asked for a second frame, which on a still screen is
+        // the pointer moving. The window door showed it plainly: a panel with
+        // the globe's lines reserved and nothing in them.
+        self.follow_the_turn();
         // AND THE WALKING NAME'S CLOCK, asked for AFTER the frame: whether
         // there is a name to walk is written down by the layout, and the
         // layout is this frame.
@@ -1483,7 +1556,7 @@ impl FilesWindow {
             spans,
             quads,
             over,
-            picture,
+            pictures,
         } = painted;
         #[allow(clippy::cast_possible_truncation)]
         let under = (quads.len() - over) as u32;
@@ -1502,27 +1575,36 @@ impl FilesWindow {
         let (logical_w, logical_h) = (self.width, self.height);
         if let Some(im) = self.images.as_mut() {
             im.clear();
-            let batch = match picture {
-                Some((key, area)) => {
-                    // A MOVING FILE REPLACES THE TEXTURE UNDER THE SAME KEY,
-                    // every frame — which is what keeps an animation to ONE of
-                    // the thirty-nine slots. A key per frame would fill the
-                    // cache with one file's film and evict every icon.
+            let preview_key = self.view.preview_key();
+            let globe_key = self.view.globe_key();
+            for (key, _) in &pictures {
+                // WHICH PICTURE THIS KEY IS, asked of the VIEW and not worked
+                // out here: the choice between "replace it every frame" and
+                // "only when it is missing" belongs where it can be made once.
+                //
+                // A MOVING FILE REPLACES THE TEXTURE UNDER THE SAME KEY, every
+                // frame — which is what keeps an animation to ONE of the
+                // thirty-nine slots. A key per frame would fill the cache with
+                // one file's film and evict every icon. The globe is the same
+                // kind of picture: it is redrawn as the hand moves.
+                if preview_key.as_deref() == Some(key.as_str()) {
                     if let Some(frame) = self.view.live_frame() {
-                        im.upload_it(&gpu.device, &gpu.queue, &key, frame);
-                    } else if im.missing(&key)
+                        im.upload_it(&gpu.device, &gpu.queue, key, frame);
+                    } else if im.missing(key)
                         // THE STILL ONE ONLY GOES UP WHEN IT IS MISSING: a
                         // preview is up to a mebibyte, and `prepare` is
                         // sixteen bytes.
                         && let Some(rgba) = self.view.preview_pixels()
                     {
-                        im.upload_it(&gpu.device, &gpu.queue, &key, rgba);
+                        im.upload_it(&gpu.device, &gpu.queue, key, rgba);
                     }
-                    vec![(key, area)]
+                } else if globe_key.as_deref() == Some(key.as_str())
+                    && let Some(rgba) = self.view.globe_frame()
+                {
+                    im.upload_it(&gpu.device, &gpu.queue, key, &rgba);
                 }
-                None => Vec::new(),
-            };
-            im.prepare(&gpu.queue, logical_w, logical_h, &batch);
+            }
+            im.prepare(&gpu.queue, logical_w, logical_h, &pictures);
         }
         if let Err(e) = text.prepare(
             &gpu.device,
@@ -1586,8 +1668,14 @@ pub(crate) struct Painted {
     /// film's transport is the one thing that does not, because the owner asked
     /// for the film to keep the whole panel and be controlled where it plays.
     pub over: usize,
-    /// The preview's texture and where it goes, when there is one.
-    pub picture: Option<(String, ronoctua_render::image::Area)>,
+    /// The textures this frame draws, and where each goes.
+    ///
+    /// A LOT AND NOT ONE, because this manager now draws two pictures at once:
+    /// the preview's, in the right-hand panel, and the globe's, at the top of
+    /// the info panel beside it. `Images::prepare` has always taken a slice —
+    /// the footer's door already hands it several — so the renderer needed no
+    /// change; it was this field that capped it at one.
+    pub pictures: Vec<(String, ronoctua_render::image::Area)>,
 }
 
 /// The window's geometry: one home for every number about WHERE.
@@ -1792,7 +1880,10 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         // reason: a blank panel and a refused one look identical, and only one
         // of them has a sentence.
         .or_else(|| s.view.shape_said())
-        .map(|e| s.texts.t_with(e.key, &e.borrowed()));
+        // AS PIECES, because a sentence about a fact has two halves — the name
+        // of it and the fact itself — and they were drawn in one colour. See
+        // `chrome::sentence`.
+        .map(|e| crate::chrome::sentence(&e, s.texts));
     // THE QUERY IS NOT HERE. It goes at the end of the path, on the line
     // above — see `files::View::crumbs`. This line is for what the pointer
     // is resting on and what the last action said, and while the query
@@ -1817,8 +1908,16 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     let does = s
         .view
         .cursor_explains()
-        .map(|e| s.texts.t_with(e.key, &e.borrowed()));
-    let second = s.message.clone().or(does).or(explained);
+        .map(|e| crate::chrome::sentence(&e, s.texts));
+    // A MESSAGE IS ONE REGISTER, and saying so at the boundary is better than
+    // making thirty `Step::Say` sites carry pieces they have nothing to say
+    // about: what a view raised is an answer, whole.
+    let second = s
+        .message
+        .clone()
+        .map(|t| vec![crate::chrome::Piece::said(t)])
+        .or(does)
+        .or(explained);
     // THE LINE AS PIECES, whatever is on it — the same representation the
     // footer's minibuffer uses, and for the same reason: the drawer is drawn
     // by the painter that drew the line, so a key is the same colour three
@@ -1832,9 +1931,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         }
         out
     } else {
-        vec![crate::chrome::Piece::prose(
-            second.clone().unwrap_or_default(),
-        )]
+        second.clone().unwrap_or_default()
     };
     let line_text: String = line_pieces.iter().map(|p| p.text.as_str()).collect();
     // WHERE THE SHORTCUTS OF THIS LINE LAND, collected while they are drawn.
@@ -1904,19 +2001,18 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             }
         }
         s.fold_scroll = scroll;
-    } else if let Some(text) = second {
-        spans.push(ronoctua_render::Span {
-            size: ronoctua_render::Size::Px(size),
-            text: ronoctua_render::layout::elide_end(&text, room),
-            column: margin,
-            line: 0,
-            // THE SAME REGISTER AS THE HINT that shares this line, and as the
-            // footer's minibuffer, which is the same line through the other
-            // door. See `text.subtle`.
-            color: tokens::color::TEXT_SUBTLE_STRONG,
-            edge: false,
-            foot: false,
-        });
+    } else if let Some(pieces) = second {
+        // THE SAME PAINTER THE HINT USES, in the runs' own registers — and it
+        // used to be a second painter with one hand-written token, which is
+        // what kept a sentence about a fact in a single colour. See
+        // `chrome::sentence` and the footer door's twin.
+        spans.extend(crate::chrome::hint_spans(
+            &pieces,
+            ronoctua_render::Size::Px(size),
+            margin,
+            0,
+            room,
+        ));
     } else if hinting {
         // WITH NOTHING TYPED AND NOTHING TO SAY, the hint. Typing is not a
         // key and so has no line in the manual; without this the one
@@ -2193,11 +2289,19 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             // through the target, the accent and the band disagreed over every
             // cell that belongs to no field.
             let lit = hover_at == Some((sec.pane, sec.top + i));
-            for f in &line.fields {
+            // WHICH field, asked ONCE and by the walk the click makes. Asking
+            // `covers` per field lights every field that MAY own the cell, and
+            // the gap rule gives a packed cell to two of them — the owner read
+            // two permission letters lighting where one should. See
+            // `Row::field_index_at`.
+            let alight = lit
+                .then(|| s.cell_under_pointer.and_then(|c| line.field_index_at(c)))
+                .flatten();
+            for (which, f) in line.fields.iter().enumerate() {
                 // THE FIELD UNDER THE POINTER LIGHTS UP, so the sentence on
                 // the line above has a visible subject. A colour and not a
                 // box — invariant 15.
-                let under = lit && s.cell_under_pointer.is_some_and(|c| f.covers(c));
+                let under = alight == Some(which);
                 spans.push(ronoctua_render::Span {
                     size: ronoctua_render::Size::Px(size),
                     text: f.text.clone(),
@@ -2403,6 +2507,41 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             ),
         ))
     });
+
+    // AND THE GLOBE, at the top of the info panel beside it.
+    //
+    // The same three steps the preview takes — measure the box, tell the view,
+    // ask for the picture — because the picture that is DRAWN has to be the
+    // picture that was MEASURED. See `files::globe_px`.
+    let globe_lines = s.view.globe_lines();
+    let (info_top, _) = crate::files::panel_band(
+        s.geo.metric.first,
+        strip_top - s.geo.metric.first,
+        panes.strip,
+    );
+    let globe = crate::files::globe_px(
+        panes,
+        margin,
+        s.geo.columns,
+        (cell, line_px, s.geo.metric.width),
+        info_top,
+        globe_lines,
+    );
+    if let Some(area) = globe {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        s.view.measured_globe(
+            ((area.width.max(0.0)) as u32, (area.height.max(0.0)) as u32),
+            ronoctua_tokens::theme::current().position(),
+        );
+    }
+    let globe_picture = globe.and_then(|area| {
+        let key = s.view.globe_key()?;
+        let rgba = s.view.globe_frame()?;
+        Some((key, crate::files::picture_in(area, rgba.width, rgba.height)))
+    });
+    let pictures: Vec<(String, ronoctua_render::image::Area)> =
+        picture.into_iter().chain(globe_picture).collect();
+
     // THE FILM'S CONTROLS, LAST AND ON TOP.
     //
     // Three rectangles that go over the picture: the half-transparent band that
@@ -2467,7 +2606,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         spans,
         quads,
         over,
-        picture,
+        pictures,
     }
 }
 
@@ -2756,6 +2895,17 @@ impl PointerHandler for FilesWindow {
                     // idea how big a pixel is; a whole panel's width is about
                     // half a turn, which is the ratio that makes a piece feel
                     // attached to the pointer rather than geared to it.
+                    if let Some((was_x, was_y)) = self.dragging_globe {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let moved = self.view.pan_globe(
+                            (e.position.0 - was_x) as f32,
+                            (e.position.1 - was_y) as f32,
+                        );
+                        self.dragging_globe = Some(e.position);
+                        if moved {
+                            self.ask_paint();
+                        }
+                    }
                     if let Some((was_x, was_y)) = self.spinning {
                         let wide = f64::from(self.width.max(1));
                         let by = std::f64::consts::PI / wide;
@@ -2823,6 +2973,17 @@ impl PointerHandler for FilesWindow {
                         // is what pressing a picture does, and is exactly what
                         // somebody about to turn it does not want.
                         self.spinning = Some(e.position);
+                    } else if self
+                        .under_pointer
+                        .as_ref()
+                        .is_some_and(|t| matches!(t.hit, crate::files::Hit::Globe))
+                    {
+                        // A PRESS ON THE GLOBE TAKES THE POINTER — the footer door's
+                        // twin, and a field of its own for the same reason. The
+                        // DOT is not part of it, for the reason written there:
+                        // it is a target, and a drag starting on it could never
+                        // be the press that frames on the coordinate.
+                        self.dragging_globe = Some(e.position);
                     } else {
                         left = self.under_pointer.clone();
                     }
@@ -2837,6 +2998,7 @@ impl PointerHandler for FilesWindow {
                     self.dragging = None;
                     self.dragging_fold = false;
                     self.spinning = None;
+                    self.dragging_globe = None;
                 }
                 // THE RIGHT BUTTON OPENS THE MENU. It draws in this window's own
                 // region, has no surface of its own and does not float — see the

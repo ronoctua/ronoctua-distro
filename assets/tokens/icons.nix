@@ -153,6 +153,10 @@
   # The magnet, because it is what a person clicks to start one — the drawing
   # they already associate with the thing.
   engine-torrent = "cod-magnet";
+  # The globe, because what is being fetched is a PLACE — and it is the same
+  # drawing the geography view puts beside a region, which is this file's rule:
+  # the same meaning gets the same drawing.
+  engine-atlas = "cod-globe";
 
   # Buffer state, in the left cluster.
   modified = "cod-circle_filled";

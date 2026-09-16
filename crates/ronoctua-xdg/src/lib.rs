@@ -64,6 +64,27 @@ pub fn state_dir() -> Option<PathBuf> {
     Some(base.join(NAME))
 }
 
+/// `$XDG_DATA_HOME/ronoctua`, or `~/.local/share/ronoctua`. See [`config_dir`].
+///
+/// # Why a third root, and what belongs in it
+///
+/// State is what this system writes about itself and can lose without anybody
+/// minding — a history, a cache of the weather, the last notification. The
+/// third root is for what a person DOWNLOADED: a region's streets is half a
+/// gigabyte that took an hour on somebody's connection, and a tool that swept
+/// it away with the state would be a tool that made that hour worthless. The
+/// XDG specification draws the line in the same place, which is why this is
+/// its own variable and not a subdirectory of the other.
+#[must_use]
+pub fn data_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
+        })?;
+    Some(base.join(NAME))
+}
+
 /// Writes `bytes` to `dir/file`, whole and renamed over.
 ///
 /// Written to a scratch file and renamed, so a full disk or a kill mid-write

@@ -3602,12 +3602,23 @@ saiu da tela. O título vive em `Asking::title()`, no próprio enum, porque um s
 do que monta as escolhas é um segundo lugar para esquecer uma variante — e esse o compilador não
 pegaria: ele desenharia a frase errada.
 
-#### `LEADER f f` abria outra coisa
+#### A tecla do gerenciador abria outra coisa, e hoje o grupo é o `.`
 
 `f f` era o seletor de arquivo do EDITOR, e foi relatado como "um gerenciador de arquivos diferente e
-inferior". A leitura estava certa: quem digita `f f` num grupo chamado "file" está atrás de arquivos,
-e o que subia era uma lista chata de nomes que só sabia fazer uma coisa com o que você escolhesse.
-Hoje `f f` abre o mesmo que `.`.
+inferior". A leitura estava certa: quem digita uma tecla num grupo chamado "file" está atrás de
+arquivos, e o que subia era uma lista chata de nomes que só sabia fazer uma coisa com o que você
+escolhesse. A tecla passou a abrir o gerenciador.
+
+Depois disso o arranjo ficou com uma coisa alcançável por TRÊS sequências — `.`, `f f` e, na janela,
+`f w` — e a letra `f` não dizia nada que o `.` não diga. O dono pediu a forma única: *"não quero que
+`LEADER f` exista; quero que `LEADER .` seja um submenu"*. Então **`.` virou o grupo**, `. .` é o
+rodapé e `. w` é a janela.
+
+E isso obrigou uma coisa que vale escrever: **o `.` deixou de ser comando para poder ser prefixo**.
+O registro recusa as duas coisas na mesma sequência — um prefixo que também executa faz o primeiro
+toque rodar algo enquanto a pessoa ainda está digitando —, e é a mesma regra que fez `s b b`, `s n n`
+e `t t` dobrarem a letra. O preço é um toque a mais; o que ele compra é a segunda porta ter casa sem
+inventar um segundo grupo.
 
 O grupo tem DUAS teclas e nada mais: `f f` abre o gerenciador no rodapé e **`f w` o abre em janela**,
 `w` de *window* — a mesma letra que toda vista com segunda porta usa (`t w`, `n w`, `s n w`, `s p w`,
@@ -5099,13 +5110,126 @@ altura um gesto de roda rola. As duas eram defeitos antes desta feature — a se
 para os fatos na faixa, doze linhas onde o painel tem quatro — e as duas apareceram porque a prévia
 passou a fazer as mesmas perguntas.
 
-#### O GPS fica guardado, e a linha diz que ele está lá
+#### O GPS é mostrado, e a escolha de esconder era uma escolha errada de LUGAR
 
-`Place::Withheld` é o padrão, e a linha do lugar continua aparecendo: ela diz que a coordenada está
-ESCRITA dentro do arquivo e vai junto com ele para onde ele for. É esse o fato que alguém quer antes
-de mandar uma fotografia para um estranho, e é ele que uma ficha que simplesmente omitisse o GPS
-esconderia. Mostrar os números por padrão seria o inverso: pôr a casa de alguém na tela porque o
-cursor passou por cima de um arquivo.
+`Place::Withheld` foi o padrão por um ano. O argumento está preservado aqui porque ele não era tolo:
+a ficha é o que alguém abre pouco antes de mandar uma fotografia para um estranho, e uma tela
+compartilhada, um projetor ou alguém em pé atrás transformam *"onde isto foi tirado"* numa revelação
+que ninguém pediu — quase sempre a casa onde foi tirada.
+
+O que o argumento errava é **de quem é a decisão**. A ficha não é um canal: ela mostra o que o
+arquivo tem, para quem já tem o arquivo. Quem vê a tela pode abrir o mesmo arquivo com qualquer
+outro programa e ler a mesma coordenada — esconder não protegia nada, só fazia desta a única
+ferramenta da máquina que **mente por omissão** sobre o que está lendo. E a linha que dizia "está
+escrito aqui dentro, mas não vou mostrar" era a pior das três opções possíveis: dava o susto sem dar
+a informação, e obrigava a pessoa a sair do gerenciador para descobrir o que o próprio gerenciador
+acabara de dizer que sabia.
+
+O dono removeu a regra por instrução explícita: *"tudo que é tipo de informação que o arquivo prover
+DEVE ser mostrado na coluna de info"*. Então a coordenada é um fato como os outros — cinco decimais
+(cerca de um metro, que é tudo que um telefone sabe), o sinal como hemisfério, e
+`files-value-coordinates` nos dois idiomas.
+
+**O que MUDA de verdade é a escala, e isso fica escrito:** cinco decimais numa linha passam
+despercebidos numa tela compartilhada; um globo apontando para a casa de alguém, não. O lugar de
+resolver isso é um comando que TIRA a coordenada do arquivo antes de enviá-lo — que não existe hoje
+e está no `docs/PENDING.md` com essa frase.
+
+### O globo — três camadas, e nenhuma delas é do gerenciador de arquivos
+
+O dono foi explícito ao recusar a primeira versão do plano: *"o globo, o suporte a coordenada etc.
+serão utilizados por outros APPs que eu criarei, então tenha certeza de que isso não seja uma
+feature criada específica e exclusivamente para o filemanager"*. O molde já existia no repositório,
+escrito para outro assunto: *"o realce de sintaxe é um crate, e não é de app nenhum … devolve PAPEL,
+nunca cor"*. O globo é a mesma divisão um assunto adiante.
+
+| camada | o que sabe | o que não pode saber |
+|---|---|---|
+| `ronoctua-atlas` — a tabela assada, `address(...)` e a projeção | geometria e PAPÉIS (`Ink`) | cor, idioma, porta, token, Wayland. `no_std`, zero dependências |
+| `ronoctua-atlas-packs` — onde um pacote mora, como se assa um e o que ele responde | disco e shapefile | desenho: não depende do crate acima, e o `one-zip-reader` cobra |
+| `shell/globe.rs` + `chrome::ink_color` | como aquilo vira pixel NESTA máquina | qual vista pediu — é o `Owner` que diz |
+
+O gerenciador é o PRIMEIRO chamador e nunca o dono. Três outros já seguram coordenada hoje e não
+tinham o que fazer com ela: o relance (`assets/world.nix` guarda latitude e longitude por lugar), o
+`LEADER s l` (que PERGUNTA uma coordenada a uma pessoa) e o instalador, cujo próprio comentário diz
+que joga fora *"as coordenadas e os códigos de país de um mapa que este instalador não desenha"*.
+
+#### O horizonte é a única geometria de verdade nova
+
+Projeção ortográfica sobre uma esfera girada é aritmética de colégio: `z > 0` é o hemisfério
+visível. O que não é óbvio é o recorte. **Descartar os vértices invisíveis liga o último visível ao
+próximo em linha reta e desenha uma corda ATRAVÉS do planeta** — o sintoma é a África ganhar um lado
+reto, e isso se lê como dado ruim, não como recorte errado.
+
+São duas metades: cortar cada ARESTA no horizonte (bissecção pelo grande círculo, oito vezes, que é
+menos de um pixel) e **andar pelo ARO** entre uma saída e a entrada seguinte, no sentido que mantém
+o interior dentro — decidido uma vez por anel. É isso que fecha a África quando metade dela foi para
+trás.
+
+E o preenchimento é `EvenOdd`, nunca `Winding`: anel interno não vem marcado no dado, então com a
+regra de rotação o Cáspio vira terra. Cobra o `atlas-fill-is-even-odd`.
+
+#### Zoom é ESCALA e pan é CENTRO, e confundir os dois tira o globo da tela
+
+O zoom multiplica o raio; o pan move o centro. Se o passo do pan não dividir pelo zoom, um globo
+aproximado sai da tela num único gesto — e perto do polo ele também divide por `cos φ`, senão
+arrastar parece preso em vez de engrenado.
+
+#### A figura mora nas primeiras linhas do painel, e o campo para isso já existia
+
+`Section::above` quer dizer "quantas das primeiras linhas são chrome e não rolam", e era usado só
+pelo cabeçalho da listagem. O globo é exatamente isso virado para o outro lado: N linhas REAIS, com
+campos reais (o alvo do ponto, o endereço, o alvo do Google Maps), então `hit`, a faixa, o clique e
+a tecla continuam passando pela máquina que já existe. O `line_of` e o `bar_box` já honravam o
+campo; o que faltava era um braço no `hit`.
+
+**E `globe_lines` pergunta ao SUJEITO, nunca ao desenho.** Por uma rodada ele perguntou se o
+componente estava APONTADO, e isso é um impasse sem sintoma: quem aponta o componente é a porta,
+quando `globe_px` devolve uma caixa, e `globe_px` recusa caixa de menos de duas linhas. Zero linhas
+→ nenhuma caixa → ninguém aponta → zero linhas, para sempre, em toda máquina. A tela mostrava uma
+foto com coordenada e um painel de fatos comuns, que se lê como arquivo sem coordenada.
+
+#### A chave da textura tem QUATRO partes
+
+Dono, assunto, tamanho e tema. Sem o dono, duas vistas com a mesma coordenada no mesmo tamanho e
+tema resolvem para UMA chave, e como as duas reescrevem a textura a cada quadro elas piscam entre
+duas poses sem nada em log nenhum. Por isso o `Owner` nasce com a segunda variante antes de ela ser
+alcançada — e a era do desenho é POR DONO (`[AtomicU64; GLOBES_AT_ONCE]`), senão arrastar um globo
+cancelaria o quadro do outro para sempre.
+
+### As ruas por região — um pacote, uma fila, e um leitor que recusa
+
+O embarcado responde país, estado e lugar mais próximo em qualquer lugar do mundo, em 10,70 MB. A
+RUA exige o dado da região na máquina, e foi o que o dono pediu junto: *"suporte completo para que o
+usuário possa facilmente ativar/baixar/manter o suporte a ruas por país"*.
+
+**E o catálogo carrega as 555 regiões, não as 526 que dá para baixar.** Vinte e nove delas — Brasil,
+Alemanha, França, Rússia, Estados Unidos e todos os continentes — a Geofabrik publica só em
+`.osm.pbf`, e um pacote é assado de shapefile. Descartá-las na assadura foi o que fez o dono
+procurar o Brasil e não achar nada; de fora, uma linha ausente e uma tecla que não faz nada são
+indistinguíveis. Agora a linha existe, recusa, e diz que a região é publicada em PARTES — e as
+partes estão na mesma lista, alcançáveis pelo nome do país porque o rótulo delas o carrega
+(`Sudeste, Brazil`). É a linha do XFS do formatar, um assunto adiante.
+
+**O que se guarda de um download de 101 arquivos são DUAS camadas e DUAS colunas.** Medido no menor
+pacote que a Geofabrik publica (Andorra): 6,3 MB no fio, 13,8 MB abertos, `roads` e `places` são 34%
+disso, e 27,8% das 8 799 vias têm nome. Uma via sem nome é uma linha sobre a qual o painel só
+poderia dizer "uma estrada", e o lugar é uma resposta melhor que essa.
+
+**Quem baixa e assa é a FILA, num trabalho só.** Duas razões: o `-latest-` é um REDIRECIONAMENTO e o
+nosso HTTP não segue um (está escrito no cabeçalho dele), e o nome DATADO para onde ele aponta é a
+versão do pacote — a única que existe. Um trabalho só é a forma do `Work::Media`, que baixa e depois
+remuxa: dois trabalhos encadeados exigiriam um segundo escalonador, e o estado do meio (um zip que
+não é de ninguém) é justamente o que uma fila existe para não deixar.
+
+**O leitor recusa onde não pode conferir.** O `.dbf` casa com o `.shp` por POSIÇÃO e por nada mais —
+não há chave em nenhum dos dois —, então um registro a mais desloca todos os atributos em silêncio e
+cada via passa a ter o nome da vizinha. Isso **se lê como verdade** na tela, que é o pior tipo de
+defeito, e a única detecção possível é a contagem: contagens diferentes são recusa.
+
+**E o pacote só ACRESCENTA.** A rua e o bairro entram no `Address` que o embarcado montou, e o
+bairro só substitui a cidade quando está mais PERTO. Um pacote instalado nunca pode piorar a
+resposta que existia sem ele.
 
 #### A chave do cache é uma versão, e não um tamanho
 

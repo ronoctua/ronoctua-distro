@@ -1488,6 +1488,10 @@ files-size-tib = { $whole },{ $tenth } TiB
 # dia com mês, que é o único jeito de uma coluna de datas não mentir.
 files-when = { $date } { $time }
 files-when-utc = { $date } { $time } UTC
+# THE SAME INSTANT, WRITTEN OUT. The column's form is `files-when`; this is
+# what the pointer asks for, where there is a line and the question was which
+# day and which second.
+files-when-long = { $date } às { $time }
 
 files-order-name = nome
 files-order-size = tamanho
@@ -1502,6 +1506,7 @@ files-format-zip = .zip — o que se envia para quem usa Windows
 # compara os dois, porque a linha copiada com o id trocado COMPILA e mostra as
 # palavras da linha vizinha.
 files-open = abrir
+files-open-map = abrir o lugar num mapa
 files-open-with = abrir com
 files-terminal = terminal aqui
 files-root-terminal = abrir como root
@@ -1747,6 +1752,10 @@ format-tech-nothing = nenhum disco sob o cursor
 # que dá para desfazer. Aparece na linha de mensagem quando a linha está sob o
 # CURSOR — não só sob o ponteiro, porque o que o mouse faz o teclado faz.
 files-does-open = abre no aplicativo padrão do tipo MIME; pasta entra na listagem
+# THE ONE ACTION IN THIS MENU THAT LEAVES THE MACHINE, and the sentence says
+# so before the key is pressed — the same courtesy the glance's two hosts get.
+files-does-open-map = abre no mapa do navegador a coordenada gravada neste arquivo — a coordenada sai desta máquina
+files-does-open-map-nowhere = este arquivo não tem coordenada gravada
 files-does-open-with = escolhe entre os `.desktop` que declaram este tipo MIME
 files-does-terminal = abre o terminal nesta pasta, como você
 files-does-root-terminal = abre o terminal como root, pelo pkexec
@@ -1821,8 +1830,16 @@ files-explain-owner = { $who } é o dono; clicar troca
 files-explain-group = o grupo é { $who }; clicar troca
 files-explain-size = { $bytes } bytes exatos
 files-explain-measure = clique para medir esta pasta — é uma caminhada
-files-explain-when = e { $seconds } segundos, na hora local desta máquina
-files-explain-when-utc = e { $seconds } segundos, em UTC — não consegui ler o /etc/localtime
+# THE NUMBER SAYS WHAT IT IS. Each of the ten letters explains itself, and the
+# form most people actually type explained nothing at all — read off the screen:
+# the pointer rested on it and the line stayed empty.
+#
+# One sentence for three digits and for four: naming the three audiences stays
+# true when a leading digit arrives, and the special bit that brought it already
+# has a sentence of its own on the letter beside it.
+files-explain-octal = { $octal } é a mesma permissão escrita como número — um dígito para o dono, um para o grupo, um para todos os outros
+files-explain-when = { $when }, na hora local desta máquina
+files-explain-when-utc = { $when }, em UTC — não consegui ler o /etc/localtime
 
 # A ficha de detalhe.
 files-detail-path = caminho
@@ -1917,6 +1934,55 @@ files-fact-shutter = obturador
 files-fact-aperture = abertura
 files-fact-focal = focal
 files-fact-place = lugar
+
+# THE GLOBE AND WHAT IT ANSWERS — shared, and the prefix says so.
+#
+# These are not the file manager's words even though it is the first caller:
+# the glance, the locale view and the installer all hold coordinates and could
+# ask the same question. A sentence with an app's prefix is an app owning a
+# word that is not its.
+#
+# WHICH LINES THERE ARE IS THE SELECTOR and the ORDER is the language's. A
+# separator written into a value could not be counted and could not be given a
+# register — see `chrome::Piece::separator`.
+globe-address =
+    { $has ->
+        [street] { $street }, { $place } — { $region }, { $country }
+        [place] { $place } — { $region }, { $country }
+        [region] { $region }, { $country }
+       *[country] { $country }
+    }
+globe-address-near = perto de { $place }, a cerca de { $km } km
+globe-address-nowhere = nenhum lugar com nome perto desta coordenada
+globe-behind = este lugar está do outro lado do globo
+atlas-absent = os dados do mundo não estão nesta máquina
+# THE ATTRIBUTION, ON SCREEN. GeoNames is CC BY 4.0 and the street packs are
+# ODbL: both REQUIRE it, and this repository is MIT + OFL — so it is said in
+# four places, of which this is the one a person actually reads. See
+# `LICENSE-DATA.txt` for the other three.
+atlas-credits = lugares do GeoNames (CC BY 4.0) · fronteiras do Natural Earth (domínio público) · ruas dos colaboradores do OpenStreetMap (ODbL)
+atlas-heading = Dados do mundo
+atlas-baseline = fronteiras e lugares
+atlas-present = nesta máquina
+atlas-offered = ruas, por região
+atlas-not-yet = não está nesta máquina
+atlas-not-yet-said = baixar as ruas de uma região ainda não está pronto — faltam o seletor, a fila e o leitor
+atlas-open = abrir
+atlas-previous = anterior
+atlas-next = próximo
+atlas-back = voltar
+cmd-atlas-open = dados do mundo
+cmd-atlas-window = dados do mundo numa janela
+group-geography = geografia
+files-explain-globe = arraste para girar, a roda para aproximar
+files-explain-globe-dot = onde este arquivo diz que foi feito — Enter enquadra
+files-explain-globe-address = { $value } — aperte para abrir esta coordenada no mapa do navegador.
+files-globe = globo
+globe-north = mover o globo para o norte
+globe-south = mover o globo para o sul
+globe-east = mover o globo para o leste
+globe-west = mover o globo para o oeste
+files-fact-where = onde
 files-fact-pages = páginas
 
 # AND THE RIGHT ONE, when the number needs a word around it. A unit is language
@@ -1943,10 +2009,6 @@ files-value-lossy = encolhido descartando som
 files-value-millimetres = { $mm } mm
 files-value-seconds = { $s } s
 files-value-coordinates = { $lat }, { $lon }
-# THE PHOTOGRAPH CARRIES A PLACE AND THIS SCREEN IS NOT PRINTING IT. What
-# somebody needs before sending a picture to a stranger is not "hidden": it is
-# that the file still knows, and that sending the file sends the place too.
-files-value-place-withheld = gravado no arquivo, não mostrado aqui — vai junto se a foto for enviada
 # The other selector, and a plural one: in pt-BR `one` covers 0 as well.
 files-value-pages = { $n ->
         [one] { $n } página
@@ -2121,12 +2183,14 @@ transfers-window-field-answer = resposta
 transfers-engine-fetch = link
 transfers-engine-media = mídia
 transfers-engine-torrent = torrent
+transfers-engine-atlas = região
 
 transfers-work-fetch = baixar
 transfers-work-media = baixar vídeo
 transfers-work-audio = baixar áudio
 transfers-work-subtitles = baixar legenda
 transfers-work-torrent = torrent
+transfers-work-region = instalar as ruas de uma região
 
 
 # ---------------------------------------------------------------------------
@@ -3348,6 +3412,8 @@ locale-clock-24h = Relógio de 24 horas
 locale-clock-12h = Relógio de 12 horas
 locale-clock-sample-24 = { $hh }:{ $mm }
 locale-clock-sample-12 = { $hh }:{ $mm } { $half }
+locale-clock-exact-24 = { $hh }:{ $mm }:{ $ss }
+locale-clock-exact-12 = { $hh }:{ $mm }:{ $ss } { $half }
 locale-clock-am = da manhã
 locale-clock-pm = da tarde
 locale-order-ymd = Ano primeiro
@@ -3356,6 +3422,38 @@ locale-order-mdy = Mês primeiro
 locale-date-ymd = { $y }-{ $m }-{ $d }
 locale-date-dmy = { $d }/{ $m }/{ $y }
 locale-date-mdy = { $m }/{ $d }/{ $y }
+
+# THE TWELVE MONTHS, AS ONE KEY. A Fluent selector, because which numbers get a
+# word of their own is the LANGUAGE's business — the same argument the channel
+# counts already make. The month arrives as a NUMBER: `"01"` does not match `[1]`.
+#
+# Lower case, because Portuguese does not capitalise a month and these are
+# written inside a sentence.
+locale-month =
+    { $m ->
+        [1] janeiro
+        [2] fevereiro
+        [3] março
+        [4] abril
+        [5] maio
+        [6] junho
+        [7] julho
+        [8] agosto
+        [9] setembro
+        [10] outubro
+        [11] novembro
+       *[12] dezembro
+    }
+
+# A DATE WRITTEN OUT, one key per order.
+#
+# The order is still the person's: somebody who chose "month first" and got
+# "3 de setembro" would read a preference being ignored. Each language writes
+# its three the way that language writes them, and the day and the year come
+# UNPADDED — `03 de setembro` is a column's spelling, and this is not a column.
+locale-date-long-ymd = { $y }, { $d } de { $month }
+locale-date-long-dmy = { $d } de { $month } de { $y }
+locale-date-long-mdy = { $month } { $d }, { $y }
 locale-heading-machine = Decidido pelo sistema
 locale-zone = Fuso horário
 locale-zone-unknown = desconhecido
@@ -3372,6 +3470,50 @@ cmd-locale-up = Linha anterior
 cmd-locale-down = Próxima linha
 cmd-locale-enter = Escolher
 group-locale = idioma/região
+
+# ---------------------------------------------------------------------------
+# LEADER s g — as regiões cujas ruas esta máquina tem.
+#
+# Os nomes são as regiões do mundo como a Geofabrik as publica, e isso é DADO,
+# nunca chave: `Île-de-France` não se traduz, e procurar `[geo-region-…]` seria
+# procurar a tradução de um nome que alguém escreveu. Chave é a frase em volta.
+# ---------------------------------------------------------------------------
+geo-title = Regiões
+mode-geo = regiões
+geo-up = cima
+geo-down = baixo
+geo-enter = instalar
+geo-find = filtrar
+geo-remove = remover
+geo-installed = Instaladas
+geo-available = Regiões do mundo
+geo-none-installed = Nenhuma região tem as ruas nesta máquina. Um endereço para na cidade mais próxima.
+geo-no-world = Esta build não carrega os dados do mundo, então não há catálogo para escolher.
+geo-filter = Filtro
+geo-filter-none = todas as regiões
+geo-pack = { $size } · { $ways } vias · { $version }
+geo-have = instalada
+geo-get = instalar
+geo-in-parts = em partes
+geo-only-in-parts = Esta região é publicada em partes. As partes estão nesta lista, e o filtro as encontra pelo nome dela.
+geo-sure = Remover as ruas de { $region }?
+geo-no = Não, manter
+geo-yes = Sim, remover
+geo-not-installed = Essa linha não é uma região instalada.
+geo-not-removed = A região não pôde ser removida.
+geo-not-in-catalogue = Esta região não está no catálogo desta build, então não dá para baixá-la de novo.
+geo-ask-filter = Região:
+geo-queued = Na fila. O tamanho é o que o servidor responde, e dá para desistir por lá.
+geo-no-home = Não há diretório de dados onde instalar.
+geo-in-the-footer = O que se digita, digita-se no rodapé — { $keys } abre isto lá.
+cmd-geo-open = Regiões e suas ruas, no rodapé
+cmd-geo-window = Regiões e suas ruas, em janela
+cmd-geo-up = Linha anterior
+cmd-geo-down = Próxima linha
+cmd-geo-enter = Instalar a região sob o cursor, ou instalar de novo
+cmd-geo-find = Estreitar a lista de regiões
+cmd-geo-remove = Remover a região instalada sob o cursor
+group-geo = geografia
 
 # ---------------------------------------------------------------------------
 # LEADER d — the glance: what time it is somewhere, and the weather and money.
@@ -3707,6 +3849,11 @@ about-files-forward = Avança um trecho no que está tocando.
 about-files-sound = Dá som ao filme, ou tira. Um filme sem trilha não tem som para dar.
 about-files-playlist-previous = Mostra a entrada anterior a esta na lista de reprodução.
 about-files-playlist-next = Mostra a próxima entrada desta lista de reprodução.
+about-files-globe = Mostra ou esconde o globo no topo dos fatos, para um arquivo que carrega uma coordenada.
+about-globe-north = Gira o globo para o norte, na direção do polo de cima.
+about-globe-south = Gira o globo para o sul, na direção do polo de baixo.
+about-globe-east = Gira o globo para leste, trazendo à vista a terra que está à direita.
+about-globe-west = Gira o globo para oeste, trazendo à vista a terra que está à esquerda.
 about-files-turn-left = Gira a forma para a esquerda, em torno do eixo vertical.
 about-files-turn-right = Gira a forma para a direita, em torno do eixo vertical.
 about-files-turn-up = Inclina a forma para longe de você, para vê-la por baixo.

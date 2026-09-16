@@ -17,6 +17,7 @@
   niri,
   # The solved palettes and the list of themes, so the nested compositor wears
   # the default theme's three colours (see `nix/themes.nix`).
+  atlasData,
   themed,
   themes,
   defaultTheme,
@@ -356,6 +357,71 @@ let
       echo
 
       # ------------------------------------------------------------------
+      # What earlier sessions left behind
+      # ------------------------------------------------------------------
+      # Every session mints a log and a pidfile with `mktemp` and, by the
+      # decision below, leaves the log where it is — so `/tmp` only ever grew.
+      # Counted on the owner's machine before this existed: 65 files and 55 MB,
+      # the oldest nine days old, plus five pidfiles naming processes that had
+      # been gone for a week.
+      #
+      # ON THE WAY IN, never in the `trap`. A session that is killed hard cleans
+      # nothing, so a cleanup that only runs on the way out is a cleanup that
+      # misses exactly the sessions worth cleaning up after.
+      #
+      # TWO conditions, and both have to be true, because another `.#dev` may be
+      # running right now: the file is not one of the ten most recent, AND
+      # nothing has written to it for a day. A footer that is up but idle can go
+      # a long time without logging, which is why the count alone is not enough.
+      prune_old() {
+        local keep=10
+        # THE `|| true` IS INSIDE THE BRACES, and it is load-bearing: `ls` with
+        # nothing to list exits non-zero, `pipefail` makes that the pipeline's
+        # status, and `errexit` then takes the whole session down — before the
+        # `trap` below is even installed, so it goes down without cleaning up
+        # and without saying why. `dev-exits-clean` caught exactly that.
+        # shellcheck disable=SC2012 # `ls -t` is the ordering; these are our own names
+        { ls -t /tmp/ronoctua-footer-*.log /tmp/ronoctua-niri-*.log 2>/dev/null || true; } \
+          | tail -n +$(( keep + 1 )) \
+          | while read -r old; do
+              # AN `if` AND NOT AN `&&`, and the difference is the whole
+              # session: a `test && rm` is the LAST command of this body, so
+              # when the test is false the loop's status is 1, `pipefail` makes
+              # it the pipeline's, and `errexit` ends `.#dev` right here —
+              # after the banner and before the compositor, with nothing said.
+              # The owner met exactly that. An `if` with no `else` is 0.
+              if [ -n "$(find "$old" -mtime +0 2>/dev/null)" ]; then
+                rm -f "$old"
+              fi
+            done
+        # A PIDFILE IS ANSWERABLE, so it takes no heuristic at all: the process
+        # it names is alive or it is not.
+        for stale in /tmp/ronoctua-footer-*.pid; do
+          [ -f "$stale" ] || continue
+          held=$(cat "$stale" 2>/dev/null || true)
+          case "$held" in
+            *[!0-9]* | "") rm -f "$stale" "$stale.onpurpose" "$stale.watcher" ;;
+            *) kill -0 "$held" 2>/dev/null || rm -f "$stale" "$stale.onpurpose" "$stale.watcher" ;;
+          esac
+        done
+        # AND THE BUFFER SOCKETS, which carry their owner's PID in the name —
+        # `ronoctua-buffer-<pid>.sock`. Seven of them were left over from days
+        # gone by. The footer's own socket is NOT swept here: it is named after
+        # the display, not a process, and a running session of another display
+        # owns one.
+        for sock in "''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/ronoctua-buffer-*.sock; do
+          [ -S "$sock" ] || continue
+          owner=''${sock##*/ronoctua-buffer-}
+          owner=''${owner%.sock}
+          case "$owner" in
+            *[!0-9]* | "") ;;
+            *) kill -0 "$owner" 2>/dev/null || rm -f "$sock" ;;
+          esac
+        done
+      }
+      prune_old
+
+      # ------------------------------------------------------------------
       # Compositor
       # ------------------------------------------------------------------
       # In the background, and not `exec`: the script stays up to supervise
@@ -388,13 +454,78 @@ let
       watcher_pid=""
       shutdown() {
         [ -n "$watcher_pid" ] && kill "$watcher_pid" 2>/dev/null || true
+
+        # THE FOOTER'S WATCHER GOES FIRST, and until now this session could not
+        # reach it at all.
+        #
+        # `footer-single.nix` keeps a subshell alive to notice a footer that
+        # dies on its own and raise the rescue line. It is asynchronous, so bash
+        # gives it SIG_IGN for SIGINT; it outlives the script that spawned it,
+        # so it is reparented to init. Ctrl+C therefore never reached it and
+        # nothing here knew its PID — and it read the footer this function kills
+        # as a crash, started another, and that one found no compositor and died
+        # too. Measured on the owner's machine: one turn every 2.01 s, for an
+        # hour, with `Error: raise the lifeline` on his terminal the whole time.
+        #
+        # It now writes its PID beside the footer's, so stopping it is a kill
+        # and not a hope. The `.onpurpose` below is the second of three guards,
+        # and it covers the case where this file is stale.
+        if [ -s "$RONOCTUA_FOOTER_PID.watcher" ]; then
+          kill "$(cat "$RONOCTUA_FOOTER_PID.watcher")" 2>/dev/null || true
+        fi
+
         if [ -s "$RONOCTUA_FOOTER_PID" ]; then
-          kill "$(cat "$RONOCTUA_FOOTER_PID")" 2>/dev/null || true
+          # SAID OUT LOUD BEFORE THE KILL. The watcher tells a death that was
+          # asked for from a crash by this file and by nothing else, and for a
+          # year ending the session did not write it — so every Ctrl+C read as a
+          # crash. See `nix/footer-single.nix`.
+          footer=$(cat "$RONOCTUA_FOOTER_PID")
+          echo "$footer" > "$RONOCTUA_FOOTER_PID.onpurpose"
+          kill "$footer" 2>/dev/null || true
+          # AND WAITED FOR, because the watcher reads `.onpurpose` only AFTER
+          # the footer is gone: removing it before that races the guard it is
+          # there to arm. Five seconds, the same patience `footer-single` has.
+          for _ in $(seq 50); do
+            kill -0 "$footer" 2>/dev/null || break
+            sleep 0.1
+          done
         fi
         kill "$niri_pid" 2>/dev/null || true
         kill "$tailpid" 2>/dev/null || true
         kill "$taillogpid" 2>/dev/null || true
-        # ONLY THE PIDFILE. `$cfg` was a STORE path (now a `mktemp` copy of
+
+        # AND WHAT THE FOOTER RAISED NEXT DOOR — but only what THIS build raised.
+        #
+        # `ronoctua-transfers` and `ronoctua-brain` are started by the FOOTER,
+        # not by this script (see `rebuild`, which builds them for exactly that
+        # reason), and they are given a session of their own — measured, `PGID
+        # == PID`. So neither the pidfile nor any group sweep reaches them, and
+        # they were still running forty-seven minutes after a session ended,
+        # serving this session's socket to whatever came next.
+        #
+        # What does reach them is what they ARE: `/proc/<pid>/exe` pointing
+        # inside this session's build. A daemon of a real installation points
+        # into the system's store path and is therefore never touched. And the
+        # list comes from `ps` with the kill by PID, never `pkill -f`, which
+        # matches its own command line — this repository has been bitten by that
+        # one three times in a day.
+        for pid in $(ps -eo pid= 2>/dev/null); do
+          exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
+          # THE LOOP PROFILE IS THE MARK, and it is a sound one: `[profile.loop]`
+          # is never installed on a real system, which `the-loop-profile-is-never-installed`
+          # is there to keep true. A daemon built for an installation comes out
+          # of `ronoctua-0.1.0` and does not match. The default for
+          # `CARGO_TARGET_DIR` is a path that cannot exist, because this
+          # function runs under `set -u` and `rebuild` — which exports it — may
+          # never have been called.
+          case "$exe" in
+            "''${CARGO_TARGET_DIR:-/nonexistent}"/loop/*) kill "$pid" 2>/dev/null || true ;;
+            /nix/store/*-ronoctua-loop-*) kill "$pid" 2>/dev/null || true ;;
+            /nix/store/*-ronoctua-shell-loop/*) kill "$pid" 2>/dev/null || true ;;
+          esac
+        done
+
+        # ONLY THE PIDFILES. `$cfg` was a STORE path (now a `mktemp` copy of
         # one, left like the log) — the store file is immutable, shared by
         # every run and collected by Nix's garbage collector. It ended up on
         # this list back when the config was written to a temporary file; once it
@@ -403,7 +534,8 @@ let
         # with Ctrl+C.
         #
         # `-f` does not save it: it silences "does not exist", not "is not yours".
-        rm -f "$RONOCTUA_FOOTER_PID"
+        rm -f "$RONOCTUA_FOOTER_PID" "$RONOCTUA_FOOTER_PID.onpurpose" \
+              "$RONOCTUA_FOOTER_PID.watcher"
         # THE LOGS STAY. Deleting them in the `trap` was deleting the evidence
         # exactly when it starts to matter — whoever ends the session after
         # something went wrong is the one who needs them most.
@@ -466,6 +598,16 @@ let
       export RUST_LOG="$rustlog"
       [ -n "''${niri_sock:-}" ] && export NIRI_SOCKET="$niri_sock"
 
+      # AND WHO ASKED FOR IT, which is the third of the watcher's three guards.
+      #
+      # `footer-single.nix`'s subshell is reparented the moment the script that
+      # spawned it returns, so it cannot ask about its parent. It can ask about
+      # a PID, and this is the one that means "the session that wanted a footer
+      # is still running" — true through every hot reload, false the instant
+      # Ctrl+C is answered, and answerable no matter who the kernel made its
+      # parent.
+      export RONOCTUA_DEV_PID="$$"
+
       # WHAT THE RUNNING FOOTER READS, and it goes BEFORE the footer starts.
       #
       # These two were exported further down, inside the `if [ -f Cargo.toml ]`
@@ -490,6 +632,12 @@ let
       # the same two variables `nix/modules/niri.nix` exports to the session.
       export RONOCTUA_THEME="${defaultTheme}"
       export RONOCTUA_THEMES="${themed}"
+      # AND THE WORLD, for the globe and the address under it. Here for the
+      # same reason the two above are: it is not a build input, and a variable
+      # that arrives after the footer makes the feature work on an installed
+      # machine and do nothing in the loop — which is the first place anybody
+      # looks.
+      export RONOCTUA_ATLAS="${atlasData}/world.atlas"
       # AND THE EDITOR, for the same reason: it is out of the compilation so
       # that `ronoctua.editor.emacs = false` can really remove it, which means
       # somebody has to put it back for the nested loop.

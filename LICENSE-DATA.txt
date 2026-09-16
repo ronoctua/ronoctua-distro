@@ -1,0 +1,46 @@
+The world data this distribution ships
+======================================
+
+The code in this repository is MIT (see LICENSE) and the typefaces are OFL
+(see LICENSE-OFL.txt). The geographic data is neither, and this file says what
+it is — because two of the three sources REQUIRE attribution and none of that
+may be silent.
+
+What is shipped, and under what terms
+-------------------------------------
+
+Natural Earth — PUBLIC DOMAIN
+    Country outlines, state and province outlines, and inland water.
+    https://www.naturalearthdata.com/
+    Natural Earth's own terms place its data in the public domain: "no
+    permission is needed to use Natural Earth". The provenance is recorded
+    here all the same, because the day somebody asks where a border came from
+    is a day this file answers.
+
+GeoNames — CC BY 4.0
+    The names and coordinates of populated places.
+    https://www.geonames.org/
+    https://creativecommons.org/licenses/by/4.0/
+    ATTRIBUTION IS REQUIRED. It is given in four places, and the one that
+    matters most is the third: a copy of the baked table can never be
+    separated from its licence.
+      - this file
+      - the header of `assets/atlas.nix`, where the sources are declared
+      - a section INSIDE the baked table itself (`world.atlas`)
+      - the screen, through the text key `atlas-credits`
+
+OpenStreetMap, via Geofabrik — ODbL
+    Street names and geometry, in the per-region packs a person may choose to
+    download. Nothing of this is shipped: it becomes true on a machine that
+    installs a pack.
+    https://www.openstreetmap.org/copyright
+    https://opendatacommons.org/licenses/odbl/
+    ATTRIBUTION IS REQUIRED, and so is sharing alike any derived database.
+    The same four places carry it.
+
+What is NOT here
+----------------
+
+Nothing personal (invariant 13). This is the world: borders, water, the names
+of places, and a catalogue of regions. Where the owner has been is in the
+photographs on his own disk, and it stays there.

@@ -31,13 +31,26 @@ pub enum Engine {
     Media,
     /// BitTorrent, through the session this unit owns.
     Torrent,
+    /// A region's streets: a download, and then a baking.
+    ///
+    /// ONE ENGINE AND NOT TWO JOBS, which is `Work::Media`'s shape a subject
+    /// along — that one downloads and then remuxes. Two chained jobs would
+    /// need a second scheduler, and the half-way state (a zip on disk that is
+    /// nobody's) would be a thing this queue promises not to leave.
+    Atlas,
 }
 
 impl Engine {
     /// Every one of them, for the check that demands a text and an icon per
     /// engine. A `match` would compile with one missing; a list is what can be
     /// compared against the `.ftl`.
-    pub const ALL: [Self; 4] = [Self::Local, Self::Fetch, Self::Media, Self::Torrent];
+    pub const ALL: [Self; 5] = [
+        Self::Local,
+        Self::Fetch,
+        Self::Media,
+        Self::Torrent,
+        Self::Atlas,
+    ];
 
     /// The stem of its text key and of its icon token.
     ///
@@ -51,6 +64,7 @@ impl Engine {
             Self::Fetch => "fetch",
             Self::Media => "media",
             Self::Torrent => "torrent",
+            Self::Atlas => "atlas",
         }
     }
 }
@@ -243,6 +257,27 @@ pub enum Work {
         #[serde(default)]
         identity: Identity,
     },
+    /// A region's streets, from the catalogue baked into the world.
+    ///
+    /// The URL is the catalogue's, which is a `-latest-` one and a REDIRECT:
+    /// what it points at carries a date, and that date is the pack's version.
+    /// Following it is why this goes through the queue's engine and not
+    /// through `ronoctua-http`, which says in its own header that it does not
+    /// follow redirects.
+    Atlas {
+        /// Geofabrik's id — `portugal`, `brazil/sudeste`.
+        region: String,
+        /// What the catalogue calls it, carried so the pack can name itself
+        /// without the daemon holding a copy of the catalogue.
+        label: String,
+        /// Where to get it.
+        url: String,
+        /// The atlas root — `$XDG_DATA_HOME/ronoctua/atlas`. An argument for
+        /// the reason `Work::Trash` carries its root: the daemon asking the
+        /// environment a second time could get a different answer.
+        #[serde(with = "crate::wire::path")]
+        into: PathBuf,
+    },
     /// A torrent: a magnet URI, or the path of a `.torrent` as text.
     Torrent {
         /// The magnet, or the file.
@@ -314,11 +349,12 @@ impl Work {
                 ..
             } => "subtitles",
             Self::Torrent { .. } => "torrent",
+            Self::Atlas { .. } => "region",
         }
     }
 
     /// Every stem, for the check that demands a text per kind of work.
-    pub const WORDS: [&'static str; 14] = [
+    pub const WORDS: [&'static str; 15] = [
         "copy",
         "move",
         "delete",
@@ -333,6 +369,7 @@ impl Work {
         "audio",
         "subtitles",
         "torrent",
+        "region",
     ];
 
     /// Who does it.
@@ -347,6 +384,7 @@ impl Work {
             Self::Fetch { .. } => Engine::Fetch,
             Self::Media { .. } => Engine::Media,
             Self::Torrent { .. } => Engine::Torrent,
+            Self::Atlas { .. } => Engine::Atlas,
             Self::Paste { .. }
             | Self::Delete { .. }
             | Self::Shred { .. }
@@ -371,7 +409,8 @@ impl Work {
             | Self::Shred { .. }
             | Self::Fetch { .. }
             | Self::Media { .. }
-            | Self::Torrent { .. } => Measure::Bytes,
+            | Self::Torrent { .. }
+            | Self::Atlas { .. } => Measure::Bytes,
             Self::Measure { .. }
             | Self::Delete { .. }
             | Self::Trash { .. }
@@ -398,7 +437,8 @@ impl Work {
             | Self::Extract { into, .. }
             | Self::Fetch { into, .. }
             | Self::Media { into, .. }
-            | Self::Torrent { into, .. } => Some(into),
+            | Self::Torrent { into, .. }
+            | Self::Atlas { into, .. } => Some(into),
             Self::Trash { root, .. } | Self::Restore { root, .. } => Some(root),
             Self::Compress { archive, .. } => Some(archive),
             Self::Delete { .. } | Self::Shred { .. } | Self::Measure { .. } => None,
@@ -418,6 +458,10 @@ impl Work {
             Self::Measure { path } => Paths::One(path),
             Self::Fetch { url, .. } | Self::Media { url, .. } => Paths::Text(url),
             Self::Torrent { source, .. } => Paths::Text(source),
+            // THE LABEL AND NOT THE URL: the row says what a person chose, and
+            // what they chose is a place with a name. The URL is in the
+            // catalogue and nobody typed it.
+            Self::Atlas { label, .. } => Paths::Text(label),
         }
     }
 

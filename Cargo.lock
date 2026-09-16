@@ -2686,6 +2686,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-atlas"
+version = "0.1.0"
+
+[[package]]
+name = "ronoctua-atlas-packs"
+version = "0.1.0"
+dependencies = [
+ "ronoctua-zip",
+]
+
+[[package]]
 name = "ronoctua-atuin"
 version = "0.1.0"
 dependencies = [
@@ -2846,6 +2857,7 @@ dependencies = [
  "ronoctua-files",
  "ronoctua-protocol",
  "ronoctua-syntax",
+ "ronoctua-zip",
  "roxmltree 0.21.1",
  "rustix 1.1.4",
  "serde_json",
@@ -3006,6 +3018,8 @@ dependencies = [
  "raw-window-handle",
  "resvg",
  "ronoctua-apps",
+ "ronoctua-atlas",
+ "ronoctua-atlas-packs",
  "ronoctua-atuin",
  "ronoctua-audio",
  "ronoctua-bluetooth",
@@ -3104,9 +3118,11 @@ name = "ronoctua-transfers"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ronoctua-atlas-packs",
  "ronoctua-files",
  "ronoctua-http",
  "ronoctua-torrent",
+ "ronoctua-xdg",
  "rustix 1.1.4",
  "serde",
  "serde_json",
@@ -3142,6 +3158,13 @@ dependencies = [
 [[package]]
 name = "ronoctua-xdg"
 version = "0.1.0"
+
+[[package]]
+name = "ronoctua-zip"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+]
 
 [[package]]
 name = "roxmltree"

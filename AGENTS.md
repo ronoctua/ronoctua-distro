@@ -75,6 +75,20 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   `footer-single.nix` vigia o PID e levanta a mesma linha; ele distingue queda de recarga por um
   arquivo `.onpurpose`, senão a linha nasceria a cada save. E isso importa porque **com o rodapé
   morto os QUATRO binds de emergência estão mortos junto**: os quatro escrevem no socket dele.
+- **O vigia do laço aninhado sabe PARAR, e o `.#dev` avisa a morte que pede.** O `footer-single`
+  mantém um subshell que ressuscita o rodapé caído; ele é assíncrono (logo `SIG_IGN` em `SIGINT`, e
+  isso sobrevive ao `execve`) e reparentado, então Ctrl+C nunca o alcançou — e ninguém guardava o PID
+  dele. Sem condição de parada nenhuma, toda saída do `.#dev` virava um laço: o dono viu uma volta a
+  cada **2,01 s durante uma hora**, com `Error: raise the lifeline` no terminal. Agora ele escreve o
+  próprio PID em `<pidfile>.watcher` (o `shutdown` o mata pelo nome), e pergunta TRÊS coisas antes de
+  repetir: se a morte foi anunciada (`.onpurpose`, que o `dev.nix` passou a escrever ANTES do kill),
+  se o niri sob o qual aquele rodapé nasceu ainda vive — **pelo PID que está no nome do
+  `NIRI_SOCKET`, nunca por `[ -S ]`: soquete de servidor morto por sinal FICA no disco, medido uma
+  hora depois** — e se a sessão que pediu o rodapé ainda existe (`RONOCTUA_DEV_PID`). Mais um teto de
+  cinco reinícios por minuto. O `shutdown` também encerra o que o RODAPÉ subiu ao lado (transfers,
+  brain: `PGID == PID`, alcançáveis só pelo `/proc/<pid>/exe` apontando para esta build) e poda na
+  PARTIDA os logs de sessões velhas — eram 65 arquivos e 55 MB. Cobram o `a-dead-footer-stays-dead`
+  e o `the-dev-loop-ends-with-the-session`.
 - **A aritmética do rodapé não pergunta ao conteúdo do rodapé.** `Footer::metric` é o fundo: ele
   transforma largura, altura e a PRIMEIRA LINHA da região num frame, e essa primeira linha é o
   `first_of_expansion`. Nada que o `metric` alcance pode perguntar o que a região CONTÉM — e a shell
@@ -117,7 +131,10 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   escritos deixa de ser resposta; cobra o `the-footer-draws-what-the-keyboard-drives`. A pergunta do
   minibuffer é a única exceção, e é deliberada — pergunta é LINHA, não região. O localizador (`a`)
   varre o XDG na PARTIDA em thread; a rede (`s n n`) lê o CACHE do NetworkManager.
-- **`LEADER .` (e `f f`) é o gerenciador, DUAS portas** — rodapé (teto de 12) e janela (`f w`), UMA
+- **`LEADER .` é o gerenciador, e é um SUBMENU de duas portas** — `. .` no rodapé (teto de 12)
+  e `. w` em janela. O `LEADER f` MORREU a pedido do dono: uma coisa alcançável por três
+  sequências, e a letra não dizia nada que o `.` não diga. E o `.` teve de deixar de ser comando
+  para virar prefixo — o registro recusa as duas coisas na mesma sequência. UMA
   `files::View`; só o `ronoctua-files` toca o disco. **Letra é QUERY** e vai no FIM do caminho;
   comandos da vista sob `C-` — **nunca `M-`, que é a família dos acordes do compositor**;
   `Backspace` vazio SOBE; o direito só FOCA, e a linha na TELA não é a da listagem.
@@ -136,7 +153,13 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   parado em cada ponta, 200 ms por célula, e volta de uma vez — escolha do dono). O relógio é
   ARMADO e só existe enquanto um nome anda. **`..` é o primeiro renque** — nunca
   oculta, nunca marcável, e toda célula dela responde a saída. Permissão
-  PERGUNTA nos DOIS caminhos. **Rótulo de `Choice` é TEXTO, não chave**; texto abre no `emacsclient`.
+  PERGUNTA nos DOIS caminhos, **o número dela EXPLICA** (`files-explain-octal`; as dez letras
+  explicavam e a forma que a pessoa digita não dizia nada), e **UMA célula acende UM campo**
+  (`files::lit_field`, um `rposition`, e o `field_at` escrito em cima dele): o `covers` dá de
+  propósito o vão DEPOIS de um campo a ele, então onde os campos são colados — as dez letras, o
+  `owner:group` — a célula do meio é coberta por dois, e os pintores, que perguntavam `covers` por
+  campo, acendiam os dois. O que o olho vê aceso é agora, por construção, o que o clique pega; cobra
+  o `the-pointer-lights-what-the-click-takes`. **Rótulo de `Choice` é TEXTO, não chave**; texto abre no `emacsclient`.
   **O TIPO SAI DO NOME, e o EMPATE sai dos bytes** (`mime::named` → `Named::sure`): a base
   reivindica `*.ogg` por QUATRO tipos no mesmo peso, porque a extensão nomeia um CONTÊINER, e o
   `by_name` ficava com o primeiro da tabela — o dono fotografou um vídeo Theora com o glifo de
@@ -166,7 +189,21 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   que é o custo de ter várias abertas), só se o observador não subir. Fechar DESCANSA o watch, e os
   dois lugares que largam a vista chamam — o segundo é perder o FOCO. A ficha ROLA (`C-.`, e a barra diz que cortou);
   permissão, dono e grupo nascem OCULTOS na listagem (`C-d`), e no painel de infos os campos são
-  os MESMOS da linha — mesma `Hit`, mesma máquina. **A prévia mostra DOCUMENTO** — 13 tipos,
+  os MESMOS da linha — mesma `Hit`, mesma máquina. **As DUAS metades de um fato explicam, e em DUAS
+  cores**: a legenda levava `explain: None` e o valor levava a frase inteira, e o dono leu uma
+  legenda cortada e pediu as duas por completo no minibuffer *e distinguíveis*. Agora as duas levam a
+  MESMA frase (uma só, construída uma vez — duas não teriam como divergir) e a linha de mensagem
+  aprendeu a levar PEDAÇOS: o que NOMEIA o fato sai em `Register::Prose` e o que É o fato em
+  `Register::Said`, que é o par que a linha de dicas já põe lado a lado e que todo tema já mantém
+  separado. Qual metade é qual se PROVA: a legenda chega no argumento `$label`, e `$label` é
+  interpolado por uma chave só em toda a árvore. E isso apagou o SEGUNDO pintor daquela linha — ela
+  tinha dois, um por `hint_spans` e outro achatando tudo numa string com um token escrito à mão.
+  **E a data sob o ponteiro é a data INTEIRA** (`chrome::when_long`): era o resto do minuto colado a
+  uma coluna que o olho já tinha lido (*"e 20 segundos"*), e agora é o mês por extenso com o segundo,
+  na ordem que a pessoa escolheu — doze meses numa chave só, por seletor Fluent, porque quais números
+  ganham palavra é assunto do idioma. A linha da ficha leva as MESMAS duas chaves da coluna
+  (`Fact::says`, que não é um `Doable`: numa data não se FAZ nada), e o `Civil` ganhou o segundo que
+  ele já calculava e jogava fora. **A prévia mostra DOCUMENTO** — 13 tipos,
   `document.rs`: os seis do office são zip de XML, planilha vira TABELA, `.rtf` tem leitor próprio
   (`rtf.rs`, e o `\uc` é pago pelo `\'hh` ao lado — sem isso toda linha de lista perdia a primeira
   letra; o `\listtext` é maquinária e sai, porque a marca dele é PUA e a PUA é dos NOSSOS ícones),
@@ -257,6 +294,57 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   a seção sob o ponteiro (a listagem é da PORTA; **figura** não rola, e engole).
   Barra lateral tem `side_offset` PRÓPRIO: linha `n` deixou de ser a linha `n`
   dela. **Clique SELECIONA; o segundo é que abre** — na listagem e na lateral.
+- **A COORDENADA VIRA UM GLOBO, e o globo não é do gerenciador** (`ronoctua-atlas`): crate PURO —
+  `no_std`, **zero dependências**, devolve um `Ink` e nunca uma cor, o molde exato do
+  `ronoctua-syntax` —, mais `shell/globe.rs`, que tem a thread, o `tiny-skia` e o
+  `chrome::ink_color` (um `match` exaustivo, ao lado do `syntax_color`). O gerenciador é o PRIMEIRO
+  chamador; o relance, o `LEADER s l` e o instalador já seguram coordenada e não têm o que mostrar
+  — o instalador diz no próprio comentário que joga fora *"as coordenadas e os códigos de país de
+  um mapa que ele não desenha"*. **A tabela é assada na build** (`nix/atlas.nix`: Natural Earth em
+  GeoJSON + GeoNames `cities500`) e entra pelo `atRunTime` — nunca pelo `generated`, que custaria os
+  2m15–5m46 de reconstrução; **ausência não é erro** (regra do `RONOCTUA_COVERAGE_FONTS`), e aí a
+  ficha mostra a coordenada sem globo, com frase. **10,70 MB medidos**, com a quantização em `i16`
+  (611 m na longitude, 305 m na latitude) que fica ABAIXO da resolução do dado 1:50 m — e o
+  admin-1 vem a 1:10 m porque o 1:50 m tem só 294 feições e Londres saía sem região. Medido de
+  ponta a ponta contra a tabela real: *"United Kingdom / Westminster / London a 320 m"*, offline.
+  **O horizonte é a única geometria de verdade nova**: descartar os vértices invisíveis desenha uma
+  CORDA através do planeta (a África ganha um lado reto e lê-se como dado ruim), então cada aresta é
+  cortada por bissecção no grande círculo e o caminho anda pelo ARO entre a saída e a entrada.
+  **Zoom é escala e pan é centro** — o passo do pan divide pelo zoom e pelo `cos φ`, senão um globo
+  aproximado sai da tela num gesto. **A figura mora nas primeiras linhas do painel de infos**, pelo
+  `Section::above`, que já queria dizer exatamente isso ("quantas das primeiras linhas são chrome")
+  e já é honrado pelo `line_of` e pelo `bar_box`; o que faltava era o `hit` subtraí-lo. **A chave da
+  textura tem QUATRO partes** (dono, assunto, tamanho, tema): sem o dono, duas vistas com a mesma
+  coordenada no mesmo tamanho e tema reescreveriam a textura uma da outra a cada quadro, sem nada em
+  log nenhum — por isso o `Owner` existe com a segunda variante antes de ela ser alcançada. E o
+  `Images::CEILING` subiu, porque o `prepare` DESCARTA o que não cabe em silêncio: era o único
+  defeito desta entrega sem sintoma. **A atribuição do GeoNames (CC-BY) viaja em quatro lugares**,
+  um deles DENTRO da própria tabela, para que uma cópia do arquivo nunca se separe da licença.
+- **`LEADER s g` são as RUAS POR REGIÃO, e elas não são do gerenciador** (`geo.rs`, duas portas:
+  `s g g` no rodapé, `s g w` em janela): o que está instalado, o catálogo das **555 regiões** que a
+  tabela assada carrega — e as **29 que a Geofabrik publica SEM shapefile**
+  (Brasil, Alemanha, França, Rússia, EUA, os continentes) são DESENHADAS
+  recusando, dizendo que a região sai em partes: deixá-las de fora foi o que
+  fez o dono não achar o Brasil na lista, e de fora linha ausente e tecla morta
+  são a mesma coisa. O rótulo de uma parte CARREGA o país (`Sudeste, Brazil`),
+  que é o que a torna legível e o que faz o filtro achá-la pelo nome dele, um filtro que se digita no MINIBUFFER (a janela diz isso) e `d` para
+  remover, atrás de uma pergunta que abre no NÃO. **Um pacote é uma região da Geofabrik**, e o que
+  se guarda dele são DUAS das 101 camadas (`roads`, `places`) e DUAS das dez colunas (`name`,
+  `fclass`) — medido em Andorra: 6,3 MB no fio, 13,8 MB abertos, 34% nas duas camadas, 27,8% das
+  8 799 vias com nome. **Quem baixa e assa é a FILA** (`Work::Atlas`, motor próprio): o `-latest-`
+  é REDIRECIONAMENTO e o nosso HTTP não segue um — e o nome DATADO para onde ele aponta é a versão
+  do pacote, a única que existe. Um trabalho só, do jeito do `Work::Media`, porque o estado do meio
+  (um zip que não é de ninguém) é o que uma fila existe para não deixar. **O leitor de `.shp`/`.dbf`
+  mora no `ronoctua-atlas-packs`** com as cinco armadilhas no topo (cabeçalho big-endian e registros
+  little-endian; comprimento em PALAVRAS de 16 bits; o `.dbf` casando por POSIÇÃO e por nada mais —
+  contagens diferentes são RECUSA, porque a alternativa é nomear cada via com o nome da vizinha e
+  isso se lê como verdade; campo de largura fixa com espaço; e o shape tipo 0, que é legal e não tem
+  geometria). **O zip DESCEU de crate** (`ronoctua-zip`): um pacote é um zip e o `ronoctua-inspect`
+  não podia ser dependência de quem assa — cobra o `one-zip-reader`, que também recusa desenho no
+  caminho da fila. **O pacote responde por GRADE** (célula de 0,01°, segmento arquivado em toda
+  célula que TOCA, teto de 2 km) e os segmentos ficam no DISCO: só o índice e os nomes sobem à
+  memória. **E o pacote só ACRESCENTA**: a rua e o bairro entram no endereço, e o bairro só
+  substitui a cidade quando está mais PERTO — um pacote nunca piora a resposta que havia sem ele.
 - **A prévia 3D GIRA, e são ONZE formatos** (`ronoctua-inspect`: `mesh/` lê — um por leitor —, `solid`
   desenha; `shell/stage.rs` é a thread, molde do `motion.rs`). **Nove são MALHA** (STL, 3MF, OBJ, PLY,
   OFF, glTF, GLB, COLLADA, AMF) e **dois não têm triângulo NENHUM**: STEP e IGES são B-Rep. **O STEP é
@@ -721,7 +809,9 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   de 17 MB e o ffmpeg fez o mesmo em 0,21 s. RAW é a prévia EMBUTIDA pelo `exiftool`, porque o
   ffmpeg decodifica os planos lineares e sai quase preto. Todo caminho externo devolve imagem no
   **stdout** e quem decodifica é o `image`: `Rgba` nasce num lugar só. **Recusa é VALOR, não ausência** — painel em branco e painel recusado são
-  iguais na tela, e só um tem frase. GPS não é mostrado, e a linha DIZ que o arquivo o carrega.
+  iguais na tela, e só um tem frase. **O arquivo DIZ tudo o que carrega**, coordenada inclusive — a
+  regra que a escondia caiu a pedido do dono, e o `docs/ARCHITECTURE.md` guarda o argumento que foi
+  feito por ela e por que ele não se sustentava.
 - **A ficha de um aparelho tem DUAS METADES**: os fatos, e o que dá para ajustar NELE. Lado a lado
   acima de `space.bluetooth.settingsFrom`, empilhadas abaixo — e **as setas ←/→ atravessam** nos
   dois casos, `TAB`/`S-TAB` junto (molde do gerenciador; `notifications::two_columns` é o molde do
@@ -1025,6 +1115,16 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   os três vídeos que compara. Vão na derivação `tests` e NÃO em `commonArgs`: a build do workspace
   não pode referenciar o ffmpeg.
 - **Três baterias, e só o gate fecha**: `quick` (dez escolhidos), `most` (tudo que não constrói instalação), `gate` (tudo). `tests/slow.nix` diz o que sai do `most`, e `test-tiers-are-total` cobra a divisão. **`nix flake check` SEM `-L` não mostra log** — silêncio não é sintoma. **`nix fmt` sem argumento formata a árvore**; `--check` confere.
+- **`teste && comando` como ÚLTIMA instrução de um corpo de laço derruba a sessão inteira.** Com
+  `errexit` e `pipefail` — que é o que o `writeShellApplication` liga —, o teste falso faz o
+  compound sair 1, o laço herda, o pipeline herda, e o script morre. O dono viu isso como um
+  `.#dev` que imprimia o banner, imprimia o `config:` e voltava ao prompt **sem dizer nada**. Um
+  `if` sem `else` sai 0 e é o conserto. O irmão dessa armadilha é o `ls` sem correspondência, que
+  sai não-zero e faz o mesmo. **E o check não via nada disso**: ele rodava num sandbox com o `/tmp`
+  VAZIO, então todo laço da poda retornava 0 por não rodar — a regra entrou verde e quebrou na
+  primeira máquina de verdade. Quem varre diretório tem de PLANTAR arquivo no teste, e plantar o
+  caso que dói (mais de dez logs do MESMO dia, que é o que faz a idade reprovar e o corpo terminar
+  em falso).
 - **`rustc` morto por `signal: 15` SEM diagnóstico é o `earlyoom` do HOST** (`-m 10,5`, `rustc` no `--prefer`), e `--max-jobs` não salva: o que estoura é jobs × cores. Por isso o gate mede e limita o produto. **`cannot download … from any mirror` NÃO é arquivo removido**: o `fetchurl` repete SEM retomar, e o android-studio (1,37 GB, unfree, um espelho, fora de todo cache) reseta aos ~150 MB — quem baixa é o `nix/prefetch.nix`, que o gate roda ANTES de compilar. **`pkill`/`pgrep` casa o PRÓPRIO comando**, e **`git checkout <arquivo>` apaga o não-commitado** (o store guarda cópia: `ls -dt /nix/store/*-source`).
 - **Modificador segurado mata o keymap.** No aninhado a leader É `Ctrl+Alt+Espaço`: DESCONTE o que já estava em baixo ao ganhar o foco E ao começar a sequência. Caps Lock idem — `not bound` mudo. **E no aninhado ele fica preso PARA SEMPRE**: modificador que desce aqui e sobe lá fora — o host comeu um acorde e levou o foco junto — nunca é relatado, porque o `winit` só diz `Focused(false)`, o smithay DESCARTA evento sintético e nunca encaminha `ModifiersChanged`, e o `WinitEvent::Focus(_)` do niri é `()`. Apertar de novo NÃO limpa (o libxkbcommon conta referência: 1 → 2 → 1) e recarregar o keymap também não (`update_xkb_state` REPETE as teclas que o smithay julga em baixo). Como o niri casa bind por IGUALDADE, um bit sobrando mata TODOS os binds da sessão — leader inclusive — e o único conserto é reiniciar o niri. Por isso o aninhado tem keymap PRÓPRIO, SEM Super (`nix/keyboard-nested.nix`; cobra o `nested-keyboard-has-no-super`): Super é o único modificador que o aninhado dispensa, e é o que todo acorde do host carrega. Em produção Super FICA — lá ele É a leader. **Um acorde sobrevive exatamente aos modificadores que já estão DENTRO dele** — por isso a leader do aninhado é `Ctrl+Alt` (o que a família `Super+Ctrl+…` do host prende) e ganhou uma segunda forma com Shift; trocar de modificador só muda a exposição, acrescentar é que fecha. **Os ACORDES não têm essa saída**: `Ctrl+<tecla>` já é tecla de acorde (`LEADER+Ctrl+←` MOVE a coluna), então crescer o prefixo para `Ctrl+Alt` colide com 41 binds e o niri recusa o arquivo inteiro — e com o Ctrl preso alguns acordes não morrem, fazem a AÇÃO ERRADA. Com resíduo que não seja Shift, a saída é reiniciar o `.#dev`. **Não tente consertar do lado do cliente**: o `zwp_virtual_keyboard` do smithay escreve nos CLIENTES e nunca no estado do assento, e o IPC do niri não expõe modificador nenhum — de dentro, preso e segurado de verdade são indistinguíveis.
 - **"Nenhum atalho funciona" tem três causas com a MESMA tela** — tecla que não chega, modificador preso, foco não concedido: `nix run .#diagnostics` ANTES de supor. No Xvfb ninguém tem foco (`xdotool windowfocus`), e **`xdotool key` SOLTA a tecla**: segurar exige `keydown`.
@@ -1186,6 +1286,19 @@ isso moram aqui, no único arquivo que chega sozinho ao contexto.
   mover o ponteiro entre duas cenas mudou qual porta recebia as teclas, quebrando o miniplayer três
   cenas adiante. O conserto é a asserção ser de FORA da tela (`pgrep` na porta que a cena usa), que
   é o que um cursor não tem como responder.
+- **O rodapé da bateria de fotos NÃO herda o ambiente do módulo.** Os leitores externos
+  (`RONOCTUA_EXIFTOOL` e os cinco irmãos) vêm do `nix/modules/media.nix`, que os põe na unidade
+  `ronoctua-footer` e nas variáveis de sessão; o `shots.nix` sobe o rodapé com `systemd-run
+  --unit=footer` e recebe NENHUMA das duas coisas. O sintoma é uma ficha de fotografia sem uma única
+  tag: `Refusal::Missing` não desenha nada, e lê-se como arquivo sem metadado. Quem fotografa um
+  caminho que chama programa externo acrescenta o `--setenv` ali.
+- **Asserção de cor com o fuzz padrão é respondida por LETRA.** Doze por cento é distância
+  euclidiana de ~53 em oito bits — `surface.atlas.land` (`#D7D2CA`) está a 28 de `text.primary`
+  (`#E0E0E0`), então "há continentes aqui" foi respondido por um painel de PALAVRAS. O fuzz largo
+  existe para o glifo, cujas bordas são mistura; região preenchida passa com fuzz pequeno, e é isso
+  que a torna inrespondível por texto. O irmão dessa armadilha é o RECORTE: `surface.atlas.ocean` é
+  violeta escuro e `surface.selection` também, então a pergunta tem de ser feita na coluna em que a
+  figura está, nunca na tela toda.
 - **Cena de foto ou abre a própria porta, ou declara de quem ela usa** (`needs`/`alone` em
   `nix/shots-scenes.nix`): o `document` e o `miniplayer` andam na janela que o `manager-window`
   abriu, e sozinhos fotografavam a mesa. Pedir uma cena traz o fecho transitivo dela, na ordem

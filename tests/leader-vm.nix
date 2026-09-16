@@ -529,6 +529,18 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
+        # TWICE, because `.` is a GROUP now and not a command.
+        #
+        # It opened the manager directly and also hung off a group called `f`,
+        # so one thing was reachable by three sequences; the owner asked for the
+        # one shape and `.` became the prefix. The first press opens the group's
+        # list, the second is the footer's door — the doubling `s n n`, `t t`
+        # and `n n` already keep.
+        #
+        # A prefix cannot also be a command (the registry refuses it), so this
+        # is not a second way of saying the same thing: one press no longer
+        # reaches a manager at all.
+        press_key("period")
         press_key("period")
 
         # THE LIST IS ON SCREEN when the region is taller than the two lines at

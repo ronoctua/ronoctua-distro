@@ -120,29 +120,6 @@ impl Value {
     }
 }
 
-/// Whether the coordinates of a photograph are shown.
-///
-/// # Why this is a choice and not a fact like any other
-///
-/// Because it is the one thing in the panel that is about the PERSON and not
-/// about the file. The info panel is what somebody opens just before sending a
-/// photograph to a stranger, and a screen share, a projector or somebody
-/// standing behind them turns "where this was taken" into a disclosure nobody
-/// asked for — most often the house it was taken in.
-///
-/// So the default withholds the numbers and still says the file CARRIES them,
-/// which is the fact that actually helps: you want to know before you send it.
-/// [`Place::Shown`] is a deliberate act, and the drawing wave decides which key
-/// asks for it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Place {
-    /// Say that the file knows where it was made; do not say where.
-    #[default]
-    Withheld,
-    /// Show the coordinates.
-    Shown,
-}
-
 /// The tools a file of this type would be asked.
 ///
 /// For a screen that wants to say "exiftool is not installed" rather than
@@ -196,7 +173,7 @@ pub struct Told {
 /// Synchronous, and it spawns at most two children. The caller runs it off the
 /// loop that draws — the same long-lived thread the preview uses.
 #[must_use]
-pub fn facts(path: &Path, mime: &str, place: Place) -> Told {
+pub fn facts(path: &Path, mime: &str) -> Told {
     let mut out = Vec::new();
     let mut probe = String::new();
     for tool in needs(mime) {
@@ -221,7 +198,7 @@ pub fn facts(path: &Path, mime: &str, place: Place) -> Told {
                         probe = text.clone().into_owned();
                         from_probe(&text)
                     }
-                    Tool::Exiftool => from_exif(&text, place),
+                    Tool::Exiftool => from_exif(&text),
                     _ => from_pdfinfo(&text),
                 });
             }
@@ -325,23 +302,23 @@ pub fn content_identifier(path: &Path) -> Option<String> {
 /// into `0.010392` instead of `1/96`, which is the number this module can do
 /// arithmetic on.
 ///
-/// The tags are NAMED rather than asking for everything: a Pixel's DNG carries
-/// several hundred, and the panel wants eleven.
+/// # Why it asks for EVERYTHING now, and used to name eleven tags
+///
+/// Because the owner asked for everything — *"tudo que é tipo de informação que
+/// o arquivo prover DEVE ser mostrado na coluna de info (garanta com que tudo
+/// seja mostrado)"* — and because it costs nothing. Measured against his own
+/// files with the exiftool this flake pins, three runs each: the eleven named
+/// tags took 129 ms and ALL of them took 132 ms. The process is the cost; the
+/// list of tags is not, because naming tags filters the OUTPUT and does not
+/// stop exiftool walking the file's directories.
+///
+/// And it is not "several hundred" rows either: that HEIC answers with 167 and
+/// a Pixel DNG with 149, in a column that already scrolls.
 #[must_use]
 pub fn exif_args(path: &Path) -> Vec<OsString> {
     vec![
         "-json".into(),
         "-n".into(),
-        "-Make".into(),
-        "-Model".into(),
-        "-LensModel".into(),
-        "-ISO".into(),
-        "-FNumber".into(),
-        "-ExposureTime".into(),
-        "-FocalLength".into(),
-        "-DateTimeOriginal".into(),
-        "-GPSLatitude".into(),
-        "-GPSLongitude".into(),
         "--".into(),
         path.as_os_str().to_owned(),
     ]
@@ -907,13 +884,72 @@ fn written_inside(
         })
         .collect();
     named.sort_by_key(|(name, _)| name.to_lowercase());
-    for (name, value) in named.into_iter().take(TAGS_CEILING) {
-        out.push(Fact {
-            label: Label::Named((*name).to_owned()),
-            value: Value::Data(value.clone()),
-        });
-    }
+    out.extend(
+        named
+            .into_iter()
+            .take(TAGS_CEILING)
+            .filter_map(|(name, value)| under_its_own_name(name, value)),
+    );
     out
+}
+
+/// THE CAMERA ROWS THIS SYSTEM DECIDED TO PROMOTE, and every exiftool name
+/// each of them can arrive under.
+///
+/// It is the promotion table AND the subtraction: what is listed here comes out
+/// with a label of ours, and what is not comes out under the name the file
+/// wrote. Reading both halves off ONE constant is what stops a name being added
+/// to one and forgotten in the other — which would put a single fact on screen
+/// twice, once translated and once raw, under two different labels. See
+/// `SOUND_TAGS`, which makes the same argument one format along.
+const EXIF_TAGS: [&str; 10] = [
+    "Make",
+    "Model",
+    "LensModel",
+    "DateTimeOriginal",
+    "ISO",
+    "ExposureTime",
+    "FNumber",
+    "FocalLength",
+    "GPSLatitude",
+    "GPSLongitude",
+];
+
+/// WHAT EXIFTOOL SAYS ABOUT ITSELF AND ABOUT THE FILESYSTEM, which this panel
+/// already answers from one `lstat`.
+///
+/// A second list of the same facts is the two-implementations defect this
+/// module's own header refuses: the day they disagreed about a permission bit,
+/// nothing on screen would say which is right. `ExifToolVersion` is not even
+/// about the file — it is about the program that read it.
+const EXIF_NOT_OURS: [&str; 12] = [
+    "SourceFile",
+    "ExifToolVersion",
+    "FileName",
+    "Directory",
+    "FileSize",
+    "FileModifyDate",
+    "FileAccessDate",
+    "FileInodeChangeDate",
+    "FilePermissions",
+    "FileType",
+    "FileTypeExtension",
+    "MIMEType",
+];
+
+/// A tag under the name the FILE wrote — the ONE site that builds a label out
+/// of data rather than out of a key.
+///
+/// Narrow on purpose, and `inspect-labels-are-keys` is what keeps it narrow: a
+/// literal here would be invariant 8's defect wearing `Label` as a disguise.
+/// Three dumps go through it — sound, camera and document — so a name is tidied
+/// and bounded the same way whichever tool produced it.
+fn under_its_own_name(name: &str, value: &str) -> Option<Fact> {
+    let name = tidy(name).filter(|n| n.chars().count() <= TAG_NAME_CHARS)?;
+    Some(Fact {
+        label: Label::Named(name),
+        value: Value::Data(tidy(value)?),
+    })
 }
 
 /// The facts in exiftool's JSON.
@@ -923,7 +959,7 @@ fn written_inside(
 /// an error and must not read like one: a PNG with no camera in it simply has
 /// no camera rows.
 #[must_use]
-pub fn from_exif(text: &str, place: Place) -> Vec<Fact> {
+pub fn from_exif(text: &str) -> Vec<Fact> {
     let Ok(doc) = serde_json::from_str::<serde_json::Value>(text) else {
         return Vec::new();
     };
@@ -991,18 +1027,107 @@ pub fn from_exif(text: &str, place: Place) -> Vec<Fact> {
     if let (Some(lat), Some(lon)) = (number("GPSLatitude"), number("GPSLongitude")) {
         out.push(Fact {
             label: Label::Key(key::FACT_PLACE),
-            value: match place {
-                Place::Withheld => Value::phrase(key::VALUE_PLACE_WITHHELD),
-                // FIVE DECIMALS is about a metre, which is as much as a phone
-                // knows and more than anybody reads off a screen.
-                Place::Shown => Value::Phrase {
-                    key: key::VALUE_COORDINATES,
-                    args: vec![("lat", format!("{lat:.5}")), ("lon", format!("{lon:.5}"))],
-                },
+            // FIVE DECIMALS is about a metre, which is as much as a phone
+            // knows and more than anybody reads off a screen. The SIGN is the
+            // hemisphere, which is what exiftool's `-n` buys: without it the
+            // number arrives as `51 deg 29' 47.19" N`, in English, from
+            // another program.
+            //
+            // IT USED TO BE WITHHELD BY DEFAULT — the row said the file
+            // carried a coordinate and refused to say which. The owner
+            // removed the rule: *"tudo que é tipo de informação que o arquivo
+            // prover DEVE ser mostrado na coluna de info"*. See
+            // `docs/ARCHITECTURE.md`, which keeps the argument that was made
+            // for it and why it did not hold.
+            value: Value::Phrase {
+                key: key::VALUE_COORDINATES,
+                args: vec![("lat", format!("{lat:.5}")), ("lon", format!("{lon:.5}"))],
             },
         });
     }
+
+    // AND EVERY OTHER TAG THE FILE CARRIES, under the name the file wrote.
+    //
+    // Four things are left out, and each for its own reason:
+    //
+    // ONE, exiftool's own bookkeeping and what this panel already answers from
+    // a single `lstat` — `EXIF_NOT_OURS`. TWO, the names already promoted
+    // above, subtracted from the SAME table that promotes them. THREE, the
+    // binary placeholders: without `-b` exiftool writes `(Binary data 12345
+    // bytes, use -b option to extract)`, which is another program's English
+    // sentence on a screen that may be in Portuguese. FOUR, anything that is
+    // not a scalar — some XMP tags arrive as objects or arrays, and a row is a
+    // line.
+    //
+    // Sorted by name, for `written_inside`'s reason: a hash order makes rows
+    // move between two readings of one file, which reads as a bug in the panel.
+    // It also means somebody hunting `LensSerialNumber` among two hundred rows
+    // has somewhere to look.
+    let Some(object) = one.as_object() else {
+        return out;
+    };
+    let mut named: Vec<(&String, String)> = object
+        .iter()
+        .filter(|(k, _)| {
+            !EXIF_NOT_OURS.iter().any(|n| n.eq_ignore_ascii_case(k))
+                && !EXIF_TAGS.iter().any(|n| n.eq_ignore_ascii_case(k))
+        })
+        .filter_map(|(k, v)| scalar(v).map(|text| (k, text)))
+        .filter(|(_, text)| !text.starts_with("(Binary data "))
+        .collect();
+    named.sort_by_key(|(name, _)| name.to_lowercase());
+    out.extend(
+        named
+            .into_iter()
+            .take(TAGS_CEILING)
+            .filter_map(|(name, value)| under_its_own_name(name, &value)),
+    );
     out
+}
+
+/// A JSON value as one line, or nothing.
+///
+/// exiftool answers a number as a number and a string as a string, and a few
+/// XMP tags as an object or an array. A row is a line; a structure is not one,
+/// and flattening it here would invent a notation nobody asked for.
+fn scalar(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::String(s) => Some(s.trim().to_owned()).filter(|s| !s.is_empty()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
+/// WHERE A FILE SAYS IT WAS MADE, read back off the facts it produced.
+///
+/// # Why it reads the facts rather than the file
+///
+/// Because the facts are already the answer. exiftool has run, the two tags
+/// have been parsed, and the row is a PHRASE with two named arguments — so the
+/// numbers survive as numbers and nothing has to be scraped back out of a
+/// formatted sentence. A second read of the file would be a second chance for
+/// the two to disagree about what the file says, on top of a second process.
+///
+/// `f32`, because whoever wants this wants to point something at it: a
+/// projection works in `f32` and five decimals is about a metre.
+#[must_use]
+pub fn coordinate(facts: &[Fact]) -> Option<(f32, f32)> {
+    let found = facts.iter().find_map(|f| match (&f.label, &f.value) {
+        (Label::Key(k), Value::Phrase { key, args })
+            if *k == key::FACT_PLACE && *key == key::VALUE_COORDINATES =>
+        {
+            Some(args)
+        }
+        _ => None,
+    })?;
+    let of = |name: &str| {
+        found
+            .iter()
+            .find(|(n, _)| *n == name)
+            .and_then(|(_, v)| v.parse::<f32>().ok())
+    };
+    Some((of("lat")?, of("lon")?))
 }
 
 /// The page count in pdfinfo's output.
@@ -1012,19 +1137,37 @@ pub fn from_exif(text: &str, place: Place) -> Vec<Fact> {
 /// already give.
 #[must_use]
 pub fn from_pdfinfo(text: &str) -> Vec<Fact> {
-    text.lines()
+    let mut out = Vec::new();
+    if let Some(n) = text
+        .lines()
         .find_map(|line| line.strip_prefix("Pages:"))
         .and_then(|n| n.trim().parse::<u64>().ok())
-        .map(|n| {
-            vec![Fact {
-                label: Label::Key(key::FACT_PAGES),
-                value: Value::Phrase {
-                    key: key::VALUE_PAGES,
-                    args: vec![("n", n.to_string())],
-                },
-            }]
-        })
-        .unwrap_or_default()
+    {
+        out.push(Fact {
+            label: Label::Key(key::FACT_PAGES),
+            value: Value::Phrase {
+                key: key::VALUE_PAGES,
+                args: vec![("n", n.to_string())],
+            },
+        });
+    }
+
+    // AND EVERY OTHER LINE, under the name pdfinfo wrote.
+    //
+    // It answers fourteen `Key: value` lines and this read ONE of them. The
+    // title, the author, the producer and the two dates were thrown away on
+    // every PDF — the same half-reading the sound tags and the camera tags have
+    // each been through, and the same fix: promote what we translate, list the
+    // rest, and subtract one from the other off a single name.
+    //
+    // `Pages` is the only promoted one, so the subtraction is a single
+    // comparison rather than a table.
+    out.extend(text.lines().filter_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        (!name.eq_ignore_ascii_case("Pages")).then_some(())?;
+        under_its_own_name(name.trim(), value.trim())
+    }));
+    out
 }
 
 /// Whether ffmpeg opened a still photograph by pretending it was a film.
@@ -1086,7 +1229,28 @@ const TAG_BYTES: usize = 512;
 ///
 /// ID3 permits arbitrary `TXXX` frames, so "every tag" has no upper bound in
 /// the format. The curated rows are never cut — only the ones nobody named.
-const TAGS_CEILING: usize = 64;
+///
+/// # Why it is 256 and used to be 64
+///
+/// Because 64 was not "everything" and the owner asked for everything: *"tudo
+/// que é tipo de informação que o arquivo prover DEVE ser mostrado na coluna de
+/// info"*. Measured on his own files with the exiftool the flake pins: a HEIC
+/// answers with 167 tags and a Pixel DNG with 149, so 64 was cutting a third of
+/// what a photograph carries.
+///
+/// The ceiling was never about the screen — the panel scrolls — it was about
+/// the per-frame cost of building the sheet. Raising it was only safe once that
+/// sheet stopped being rebuilt on every painted frame; see
+/// `files::View::sheet`, which remembers it.
+const TAGS_CEILING: usize = 256;
+
+/// How long a name the file wrote may be.
+///
+/// Not the screen's business and not the value's: it is the MODAL sheet, which
+/// sizes its value column to the widest label there is. One
+/// `ProfileHueSatMapEncoding` would push every value on the sheet to the right,
+/// and a tag name longer than this is not a name anybody reads anyway.
+const TAG_NAME_CHARS: usize = 48;
 
 /// A tag's value, made fit to be one row of a panel.
 ///
@@ -1263,8 +1427,8 @@ fn camera(make: Option<&str>, model: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Fact, Label, Place, Value, camera, clock, from_exif, from_pdfinfo, from_probe, needs,
-        ratio, shutter, taken, trimmed,
+        Fact, Label, Value, camera, clock, from_exif, from_pdfinfo, from_probe, needs, ratio,
+        shutter, taken, trimmed,
     };
     use crate::key;
     use crate::tools::Tool;
@@ -1633,8 +1797,8 @@ mod tests {
         assert!(from_probe("").is_empty());
         assert!(from_probe("i am not json").is_empty());
         assert!(from_probe("{}").is_empty());
-        assert!(from_exif("[]", Place::Withheld).is_empty());
-        assert!(from_exif("i am not json", Place::Withheld).is_empty());
+        assert!(from_exif("[]").is_empty());
+        assert!(from_exif("i am not json").is_empty());
         assert!(from_pdfinfo("").is_empty());
     }
 
@@ -1655,7 +1819,7 @@ mod tests {
 
     #[test]
     fn a_photograph_says_what_took_it() {
-        let f = from_exif(PIXEL, Place::Withheld);
+        let f = from_exif(PIXEL);
         assert_eq!(
             value(&f, key::FACT_CAMERA),
             Some(Value::Data("Google Pixel 8 Pro".to_owned()))
@@ -1684,20 +1848,15 @@ mod tests {
         );
     }
 
+    /// FAILS IF: a photograph stops saying where it was taken.
+    ///
+    /// It used to say only that it CARRIED a coordinate, and the owner removed
+    /// that rule — see `docs/ARCHITECTURE.md`, which keeps the argument. What
+    /// this pins now is the SHAPE of the answer: five decimals, and the sign as
+    /// the hemisphere.
     #[test]
-    fn the_place_is_withheld_by_default_and_still_announced() {
-        // The fact that helps before sending a photograph to a stranger is
-        // that it CARRIES a location — not the location.
-        let hidden = from_exif(PIXEL, Place::Withheld);
-        assert_eq!(
-            value(&hidden, key::FACT_PLACE),
-            Some(Value::phrase(key::VALUE_PLACE_WITHHELD))
-        );
-        let joined = format!("{hidden:?}");
-        assert!(!joined.contains("51.49"), "the latitude leaked: {joined}");
-        assert!(!joined.contains("0.26"), "the longitude leaked: {joined}");
-
-        let shown = from_exif(PIXEL, Place::Shown);
+    fn a_photograph_says_where_it_was_taken() {
+        let shown = from_exif(PIXEL);
         assert_eq!(
             value(&shown, key::FACT_PLACE),
             Some(Value::Phrase {
@@ -1717,7 +1876,7 @@ mod tests {
     fn a_file_with_no_camera_in_it_gets_no_camera_rows() {
         // exiftool answers a PNG with an object holding only `SourceFile`.
         // That is not an error and must not read like one.
-        assert!(from_exif(r#"[{"SourceFile":"x.png"}]"#, Place::Withheld).is_empty());
+        assert!(from_exif(r#"[{"SourceFile":"x.png"}]"#).is_empty());
     }
 
     #[test]
@@ -1741,20 +1900,37 @@ mod tests {
         assert_eq!(taken("2024:02:25 07:08:57").unwrap(), "2024-02-25 07:08");
     }
 
+    /// FAILS IF: a PDF stops saying how many pages it has, or the other
+    /// thirteen lines pdfinfo answers go back to being thrown away.
+    ///
+    /// The page count was the ONE line this read. The title, the author, the
+    /// producer and the dates were on every report and reached no screen.
     #[test]
     fn the_page_count_comes_out_of_pdfinfo() {
         let report = "Title:          Nothing\nPages:          12\nEncrypted:      no\n";
+        let said = from_pdfinfo(report);
         assert_eq!(
-            from_pdfinfo(report),
-            vec![Fact {
+            said.first(),
+            Some(&Fact {
                 label: Label::Key(key::FACT_PAGES),
                 value: Value::Phrase {
                     key: key::VALUE_PAGES,
                     args: vec![("n", "12".to_owned())],
                 },
-            }]
+            })
         );
-        assert!(from_pdfinfo("Title: x\n").is_empty());
+        // AND THE OTHER TWO LINES ARE THERE, under the names pdfinfo wrote.
+        let names: Vec<&str> = said
+            .iter()
+            .filter_map(|f| match &f.label {
+                Label::Named(n) => Some(n.as_str()),
+                Label::Key(_) => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["Title", "Encrypted"]);
+        // A REPORT WITH NO PAGE COUNT still says what it does have.
+        let thin = from_pdfinfo("Title: x\n");
+        assert_eq!(thin.len(), 1, "the title was thrown away");
     }
 
     #[test]
@@ -1788,5 +1964,59 @@ mod tests {
         assert_eq!(needs("audio/flac"), vec![Tool::Ffprobe]);
         assert_eq!(needs("application/pdf"), vec![Tool::Pdfinfo]);
         assert!(needs("text/plain").is_empty());
+    }
+
+    /// FAILS IF: a tag the file carries is thrown away, or one it carries is
+    /// shown twice.
+    ///
+    /// The camera rows were eleven named tags and everything else went in the
+    /// bin — the owner asked for all of it. What this pins is the pair of rules
+    /// that make "all of it" honest: a promoted name does NOT come back under
+    /// its raw spelling, and what this system already answers from one `lstat`
+    /// does not arrive a second time from another program.
+    #[test]
+    fn every_tag_the_photograph_carries_is_shown_once() {
+        let answer = r#"[{
+            "SourceFile": "x.jpg",
+            "ExifToolVersion": 13.59,
+            "FileName": "x.jpg",
+            "FilePermissions": "-rw-r--r--",
+            "MIMEType": "image/jpeg",
+            "Make": "Google",
+            "Model": "Pixel 8 Pro",
+            "LensSerialNumber": "0123456789",
+            "ThumbnailImage": "(Binary data 8281 bytes, use -b option to extract)",
+            "SubjectArea": [2015, 1511, 2217, 1330],
+            "Sharpness": 0
+        }]"#;
+        let said = from_exif(answer);
+        let names: Vec<&str> = said
+            .iter()
+            .filter_map(|f| match &f.label {
+                Label::Named(n) => Some(n.as_str()),
+                Label::Key(_) => None,
+            })
+            .collect();
+        // WHAT THE FILE CARRIES AND WE DO NOT TRANSLATE, in reading order.
+        assert_eq!(names, vec!["LensSerialNumber", "Sharpness"]);
+        // THE CAMERA IS PROMOTED, and `Make`/`Model` do not come back raw.
+        assert_eq!(
+            value(&said, key::FACT_CAMERA),
+            Some(Value::Data("Google Pixel 8 Pro".to_owned()))
+        );
+        // AND NONE OF THE FOUR EXCLUSIONS ARRIVED: the program's own version,
+        // what an `lstat` already answered, a binary placeholder written in
+        // English by another program, and a value that is not a line.
+        for gone in [
+            "ExifToolVersion",
+            "FileName",
+            "FilePermissions",
+            "MIMEType",
+            "SourceFile",
+            "ThumbnailImage",
+            "SubjectArea",
+        ] {
+            assert!(!names.contains(&gone), "{gone} reached the panel");
+        }
     }
 }

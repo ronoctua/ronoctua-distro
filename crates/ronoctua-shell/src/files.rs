@@ -350,6 +350,13 @@ const SEEK_STEP: f64 = 5.0;
 /// one wanted. The pointer is the coarse gesture and this is the fine one.
 const SPIN_STEP: f32 = 0.15;
 
+/// How far a key moves the globe, in pixels of the box.
+///
+/// A KEY HAS NO DISTANCE, so it borrows one: thirty pixels of the picture,
+/// which `Pose::panned` then divides by the zoom — so the step is a tenth of
+/// what is on screen whether the globe shows the world or one city.
+const GLOBE_STEP: f32 = 30.0;
+
 /// How much one key moves a shape nearer or further.
 const ZOOM_STEP: f32 = 1.25;
 
@@ -811,6 +818,37 @@ pub struct Fact {
     /// What acting on it reaches — and [`Doable::Nothing`] for the facts one
     /// only reads.
     pub does: Doable,
+    /// WHAT THIS ROW SAYS UNDER THE POINTER, when `label: value` is not the
+    /// honest answer.
+    ///
+    /// A date is the case that made it exist: the column has room for
+    /// `2026-09-03 12:45` and the question somebody asks by pointing at it is
+    /// *which second, and in whose time*. Every other row leaves it `None` and
+    /// gets the generic sentence, which carries both halves un-elided and is
+    /// the right answer for a path or a size.
+    ///
+    /// It is NOT a `Doable`: that enum answers "what can be DONE here", and a
+    /// date is not something one edits — a row that lit up and then refused
+    /// would be worse than one that never promised.
+    pub says: Option<Explanation>,
+}
+
+/// WHAT A REMEMBERED SHEET WAS BUILT FOR.
+///
+/// Everything here can change what the sheet says; nothing here changes without
+/// the sheet needing to be built again. See `View::remembered`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SheetFor {
+    /// The entry the sheet is about.
+    name: String,
+    /// Its mtime, because a file rewritten in place keeps its name.
+    modified: i64,
+    /// What a directory measured to, when one has been.
+    measured: Option<u64>,
+    /// Which inspection has come back for it.
+    looked: Option<String>,
+    /// Which language it was written in, by the identity of the bundle.
+    said: usize,
 }
 
 /// What a row of the info panel offers, if anything.
@@ -1503,6 +1541,39 @@ pub fn section_px(
     }
 }
 
+/// WHERE THE GLOBE GOES: the info panel's first lines, minus the address.
+///
+/// The same arithmetic the preview's box gets, one panel along — `panel_px` for
+/// the column and `panel_band` for the line — and then through `picture_in`, so
+/// the air and the SHRINK-NEVER-GROW rule hold for the globe exactly as they do
+/// for a photograph.
+#[must_use]
+pub fn globe_px(
+    panes: Panes,
+    lead: u16,
+    width: u16,
+    // THE THREE MEASUREMENTS THAT ARE PIXELS, together: a cell, a line and the
+    // surface's right edge. One tuple and not three arguments, because seven is
+    // where a signature stops being read and starts being counted.
+    px: (f32, f32, f32),
+    top: u16,
+    lines: usize,
+) -> Option<ronoctua_render::image::Area> {
+    let (cell, line_px, edge) = px;
+    if lines < 2 {
+        return None;
+    }
+    let (x, wide) = panel_px(panes, Panel::Info, lead, width, cell, edge)?;
+    // THE LAST OF THEM IS THE ADDRESS, so the picture stops one line short.
+    let tall = line_px * (lines.saturating_sub(1)) as f32;
+    Some(ronoctua_render::image::Area {
+        x,
+        y: f32::from(top) * line_px,
+        width: wide,
+        height: tall,
+    })
+}
+
 /// The preview's picture, centred in its box with air on all four sides.
 ///
 /// # What `fit_into` alone does not do
@@ -1678,6 +1749,13 @@ pub enum Hit {
     Name(usize),
     /// The icon: mark it, as `m` does.
     Mark(usize),
+    /// The address under the globe: open the coordinate in the browser's map.
+    ///
+    /// Its own variant and not `Nothing`, because a line that says where a
+    /// photograph was taken is the line somebody presses to go and look. What
+    /// it runs is the menu's `open-map`, which is the keyboard's path to the
+    /// same place.
+    GlobeMap,
     /// One permission cell: flip that bit, as the menu's `m` reaches.
     Bit(usize, mode::Who, mode::What),
     /// A special bit's cell.
@@ -1688,6 +1766,20 @@ pub enum Hit {
     Group(usize),
     /// The size of a directory: measure it, as `TAB` on a directory does.
     Measure(usize),
+    /// The globe at the top of the info panel.
+    ///
+    /// One target for the whole picture, and the drag is resolved from it: a
+    /// press on the globe takes the pointer, exactly as a press on a shape in
+    /// the preview does. The sentence it carries teaches the gesture, because
+    /// a picture that responds to the hand and says nothing is a picture people
+    /// do not try.
+    Globe,
+    /// The coordinate's own dot, when it is on this side of the world.
+    ///
+    /// A second target and not the same one: pressing the dot FRAMES on it,
+    /// and pressing anywhere else on the disc drags. Where the dot is comes
+    /// back with the frame — where a thing is drawn is where it is grabbed.
+    GlobeDot,
     /// A piece of the path above: go there, as `-` does one level at a time.
     Crumb(usize),
     /// A column's header: sort by it, as `s` cycles.
@@ -1845,6 +1937,20 @@ impl Field {
     pub fn covers(&self, cell: u16) -> bool {
         cell >= self.at && cell < self.at + width_of(&self.text) + 1
     }
+}
+
+/// WHICH of these fields owns that cell — the one walk, for every row type.
+///
+/// A free function and not a method, because two different types carry the
+/// same `Field`s: the manager's [`Row`] and the footer's own expansion row,
+/// which is what the footer's manager is drawn out of. A method on one of them
+/// would have been a second ruler for the other, and this whole file is the
+/// record of what two rulers cost.
+///
+/// See [`Row::field_index_at`] for why it is `rposition` and not `position`.
+#[must_use]
+pub fn lit_field(fields: &[Field], cell: u16) -> Option<usize> {
+    fields.iter().rposition(|f| f.covers(cell))
 }
 
 /// ONE COLUMN OF THE MANAGER, and everything that is true about it.
@@ -2180,14 +2286,40 @@ pub struct Target {
 }
 
 impl Row {
-    /// Which field a cell belongs to.
+    /// WHICH field a cell belongs to, as an index.
     ///
     /// Walks from the right, so a click in the gap after a field belongs to
     /// that field rather than to nothing: a one-cell dead zone between columns
     /// is invisible and feels like a broken click.
+    ///
+    /// # Why the index, and why the painters ask for it
+    ///
+    /// Because [`Field::covers`] answers "MAY this field own the cell" and
+    /// only walking from the right answers "does it". The two painters asked
+    /// the first question once per field and lit every field that said yes —
+    /// so where fields are packed with no gap between them, the `+ 1` of the
+    /// gap rule gave cell `k + 1` to field `k` as well as to field `k + 1`,
+    /// and BOTH lit.
+    ///
+    /// The owner read it off the screen on the one row of this manager where
+    /// ten fields sit shoulder to shoulder: *"ao colocar o cursor sobre uma das
+    /// letras de permissão, mais de uma (duas) letras estão alterando para a
+    /// cor de destaque do hover, mas deveria ser apenas uma"*. It is also true
+    /// of `owner:group`, which is packed the same way.
+    ///
+    /// `Field::covers`' own doc already promised this — *"THE ONE RULER, and
+    /// there were three"* — and the wave that wrote it unified the wrong half,
+    /// by teaching the painters to call `covers`. What the eye sees lit and
+    /// what the hand would click are now the same walk, by construction.
+    #[must_use]
+    pub fn field_index_at(&self, cell: u16) -> Option<usize> {
+        lit_field(&self.fields, cell)
+    }
+
+    /// Which field a cell belongs to.
     #[must_use]
     pub fn field_at(&self, cell: u16) -> Option<&Field> {
-        self.fields.iter().rev().find(|f| f.covers(cell))
+        self.fields.get(self.field_index_at(cell)?)
     }
 }
 
@@ -2400,6 +2532,13 @@ pub enum Doing {
     RootTerminal(PathBuf),
     /// Put this text on the clipboard.
     Copy(String),
+    /// Hand this address to the browser.
+    ///
+    /// A `String` and not a `PathBuf`, because a URL is text with a grammar
+    /// and the one thing that must not happen to it is being treated as a
+    /// path. It is the only thing this manager does that leaves the machine,
+    /// and the row that raises it says so before the key is pressed.
+    Web(String),
     /// Move these to the trash, in the bin at this root.
     Trash(PathBuf, Vec<PathBuf>),
     /// Put these back where they came from, by their name in the trash.
@@ -3036,6 +3175,41 @@ pub struct View {
     /// long for its column walk under the pointer as well as under the cursor
     /// — the owner asked for both.
     pointing_row: std::cell::Cell<Option<usize>>,
+    /// WHETHER THE POINTER IS ON THE GLOBE, remembered where it was resolved.
+    ///
+    /// The wheel arrives with a cell and the answer needs a LINE as well, and
+    /// the door already resolved both to draw the band. Asking again from
+    /// inside `wheel` would be a second opinion about where the picture is —
+    /// which is the whole of what `Panes::section_at` was written to end.
+    pointing_at_the_globe: std::cell::Cell<bool>,
+    /// Whether the globe is drawn at all. On by default — the owner asked for
+    /// the picture whenever a file says where it was made — and `C-g` is what
+    /// buys the facts' lines back.
+    globe_shown: bool,
+    /// THE LAST SHEET BUILT, and what it was built for.
+    ///
+    /// # Why this is not an optimisation to be weighed
+    ///
+    /// Because `sheet_of` runs on EVERY painted frame — `sections_of` builds
+    /// all four sections, and the panel is one of them — and it formats one
+    /// Fluent message per row. With a dozen rows that is invisible. Once the
+    /// panel started showing every tag the file carries, a photograph became
+    /// 167 rows and a Pixel DNG 149, and it would have been that many
+    /// formats per frame, forever, while nothing on screen changed.
+    ///
+    /// THE KEY IS WHAT CAN CHANGE THE ANSWER: the name in focus, its mtime
+    /// (the same file rewritten in place is a different sheet), whether a
+    /// directory has been measured, and which inspection has come back. Not
+    /// the language — a language change rebuilds the `Rc<Texts>` this view
+    /// holds, and `texts` is compared by pointer for exactly that reason.
+    remembered: std::cell::RefCell<Option<(SheetFor, Vec<Fact>)>>,
+    /// THE GLOBE THIS VIEW IS SHOWING, when the focused file has a coordinate.
+    ///
+    /// On the VIEW and not on the door, because a view lives in two doors and a
+    /// pose kept in the door would reset the globe when the manager moved from
+    /// the footer to a window. The thread is the door's; this is the value in
+    /// between. See `crate::globe::Globe`, which belongs to no app.
+    globe: std::cell::RefCell<crate::globe::Globe>,
     /// How many cells the NAME column was last drawn in.
     ///
     /// The same arrangement as [`View::drawn_panel`] and for the same reason: a
@@ -3168,6 +3342,15 @@ pub struct Looked {
     /// should be told about, and the panel is where they are looking. Zero for
     /// everything that is not a STEP or an IGES.
     pub outlined: usize,
+    /// WHERE THE FILE SAYS IT WAS MADE, in signed decimal degrees.
+    ///
+    /// It is on `Looked` and not only among the facts because a coordinate is
+    /// not only a row: it is what a globe is pointed at and what a map is
+    /// opened on. Reading it back out of the fact's formatted value would be a
+    /// second parse of a number this side already had — and `f32` because the
+    /// projection is in `f32` and five decimals is about a metre, which is more
+    /// than any of it needs.
+    pub at: Option<(f32, f32)>,
 }
 
 /// An action's technical answer, as an [`Explanation`] with nothing to fill in.
@@ -3315,6 +3498,10 @@ impl View {
             drawn_lines: std::cell::Cell::new(0),
             drawn_panel: std::cell::Cell::new(0),
             pointing_row: std::cell::Cell::new(None),
+            pointing_at_the_globe: std::cell::Cell::new(false),
+            globe_shown: true,
+            remembered: std::cell::RefCell::new(None),
+            globe: std::cell::RefCell::new(crate::globe::Globe::new(crate::globe::Owner::Files)),
             drawn_name: std::cell::Cell::new(0),
             slide_over: std::cell::Cell::new(0),
             slide_since: std::cell::Cell::new(None),
@@ -3893,7 +4080,24 @@ impl View {
             sidebar,
             right,
             strip: if wanted > 0 && right == 0 && strip_fits(width, wanted) {
-                ronoctua_tokens::space::FILES_STRIPLINES
+                // AND IT GROWS FOR A GLOBE, because four lines cannot hold one.
+                //
+                // `space.files.stripLines` is four — the number a preview needs
+                // to be a picture rather than a smudge — and a globe asks for
+                // `space.atlas.lines` plus the two facts that have to survive
+                // beside it. Below that the globe is not drawn at all, so
+                // without this the window door had a coordinate, an atlas, a
+                // panel and no globe, with nothing on screen saying why.
+                //
+                // It costs the listing four rows, and only for a file that
+                // carries a coordinate: the strip is back to four the moment
+                // the cursor moves to one that does not.
+                if self.info_on && self.wants_a_globe() {
+                    ronoctua_tokens::space::FILES_STRIPLINES
+                        .max(ronoctua_tokens::space::ATLAS_LINES + 2)
+                } else {
+                    ronoctua_tokens::space::FILES_STRIPLINES
+                }
             } else {
                 0
             },
@@ -3920,6 +4124,71 @@ impl View {
     #[must_use]
     pub const fn info_showing(&self) -> bool {
         self.info_on
+    }
+
+    /// HOW MANY LINES OF THE INFO PANEL THE GLOBE TAKES, and the ONE place
+    /// that decides.
+    ///
+    /// Zero unless the panel is on, the focused file carries a coordinate and
+    /// this machine has world data — and then `space.atlas.lines`, clamped so
+    /// at least two facts are left. Everything asks it; nothing else decides,
+    /// which is the sentence `Section` opens with.
+    pub fn globe_lines(&self) -> usize {
+        if !self.panes(self.drawn_at.get()).info || !self.wants_a_globe() {
+            return 0;
+        }
+        // AND THE SUBJECT IS ASKED, NEVER THE GLOBE.
+        //
+        // This asked the globe whether it was POINTED for one round, and that
+        // is a deadlock with no symptom: the component is pointed by
+        // `measured_globe`, the door only calls that when `globe_px` hands back
+        // a box, and `globe_px` refuses a box of fewer than two lines. Zero lines reserved → no box →
+        // nobody points it → zero lines for ever. The screen showed a photo
+        // with a coordinate in it and a panel of plain facts, which reads as
+        // the coordinate not being there.
+        //
+        // ITS FULL ASK OR NOTHING, and two facts left over.
+        //
+        // A disc squeezed into the two lines a bottom strip could spare is not
+        // a globe — it is one line of picture under one line of address, which
+        // says less than the coordinate it replaced. `space.atlas.lines` is
+        // what the drawing was measured for; a panel that cannot give that
+        // many shows the facts, the coordinate among them.
+        //
+        // AND THE STRIP GROWS SO THAT IT CAN, which is the other half of this:
+        // see `View::panes`. Without it the window door — where the panels are
+        // a four-line strip until the window is ninety-six cells wide — never
+        // had the room and never drew a globe at all, which is what the owner
+        // photographed.
+        let room = usize::from(self.drawn_lines.get());
+        let want = usize::from(ronoctua_tokens::space::ATLAS_LINES);
+        if room < want + 2 { 0 } else { want }
+    }
+
+    /// Whether this file, on this machine, has a globe to draw at all.
+    ///
+    /// THE SUBJECT AND NOTHING ELSE: what the file carries, whether the person
+    /// asked for it (`C-g`) and whether this build has the world table. Every
+    /// one of those is known before a single line is measured, which is what
+    /// lets the LAYOUT ask it — [`View::panes`] grows the strip by it, and a
+    /// predicate that looked at the drawing would be the deadlock this file
+    /// records one function up.
+    ///
+    /// **It does not ask `Globe::absent`.** That is the answer for ONE
+    /// coordinate and it arrives from a thread a frame or two later; a strip
+    /// whose height followed it would change under the hand. When it comes back
+    /// absent the lines stay and the address line says so — which is the same
+    /// arrangement the preview has for a refusal: a refusal is a VALUE.
+    #[must_use]
+    pub fn wants_a_globe(&self) -> bool {
+        self.globe_shown
+            && self.looked.as_ref().is_some_and(|l| l.at.is_some())
+            && crate::globe::present()
+    }
+
+    /// How many ROWS of facts the panel has room for, which is not its lines.
+    pub fn info_room(&self) -> usize {
+        usize::from(self.drawn_lines.get()).saturating_sub(self.globe_lines())
     }
 
     /// How many LINES the panels want, when they sit on the right.
@@ -3992,7 +4261,27 @@ impl View {
                 lines.max(usize::from(preview_lines()).max(self.preview_total().min(PANEL_WANT)));
         }
         if self.info_on {
-            lines = lines.max(self.sheet().len());
+            // AND THE GLOBE'S LINES ON TOP OF THE FACTS', because they do not
+            // share: the globe takes the panel's first lines and the facts get
+            // what is left. Without this the region would grow to the sheet's
+            // height and the globe would push exactly that many facts off the
+            // bottom.
+            //
+            // `globe_lines` asks `drawn_lines`, which is the LAST frame's — so
+            // on the very first frame the globe asks for nothing and the panel
+            // settles a frame later. That is the same one-frame lag `fold`
+            // already has, and for the same reason: what the region can spare
+            // is remembered where it was measured, never asked from inside the
+            // sum (`the-footer-does-not-ask-itself`).
+            // AND THE SUBJECT IS ASKED HERE TOO, for the reason `globe_lines`
+            // writes out: a globe that is only pointed once a box exists can
+            // never ask for the lines that make the box.
+            let mine = if self.wants_a_globe() {
+                usize::from(ronoctua_tokens::space::ATLAS_LINES)
+            } else {
+                0
+            };
+            lines = lines.max(self.sheet().len().saturating_add(mine));
         }
         // AND THE TITLE IS A LINE THEY NEED. It does not scroll, so a panel
         // given exactly as many lines as it has to SAY would push its last row
@@ -4962,6 +5251,110 @@ impl View {
     /// UN-ELIDED — the row that had to be cut to fit is exactly the row
     /// somebody wants to read in full, and the message line is where it goes.
     /// Nothing floats (invariant 14).
+    /// The globe's own rows: its targets, and the address under it.
+    ///
+    /// EVERY LINE CARRIES A FIELD, and one with no text at that. It is not an
+    /// invention: the film's transport row already has a background field for
+    /// exactly this reason — without one `hit` answers `None` over the picture,
+    /// and a control the pointer cannot name is a control that runs away from
+    /// the hand reaching for it.
+    ///
+    /// The LAST line is the address, because that is where the owner asked for
+    /// it: *"abaixo do globo apareça o endereço detectado"*.
+    fn globe_fields(&self, n: usize, air: usize, at: u16, room: u16) -> Vec<Field> {
+        let last = air.saturating_sub(1);
+        if n == last {
+            let globe = self.globe.borrow();
+            let said = globe.address().map_or_else(
+                || {
+                    if globe.absent() {
+                        self.texts.t(ronoctua_i18n::key::ATLAS_ABSENT)
+                    } else {
+                        String::new()
+                    }
+                },
+                |a| crate::globe::said(a, &self.texts),
+            );
+            return vec![Field {
+                at,
+                text: ronoctua_render::layout::elide_end(&said, room),
+                color: ronoctua_tokens::color::TEXT_PRIMARY,
+                // THE ADDRESS IS A DOOR, and the only one on this screen that
+                // goes out of the machine.
+                hit: if said.is_empty() {
+                    Hit::Globe
+                } else {
+                    Hit::GlobeMap
+                },
+                // THE WHOLE OF IT, AND WHAT PRESSING IT DOES — the address is
+                // three names and a comma and the panel is twenty-four cells,
+                // and the same line has to say that this one leaves the
+                // machine. The network view names its two hosts for the same
+                // reason: what goes out is said before it goes.
+                explain: (!said.is_empty()).then(|| mode::Explanation {
+                    key: ronoctua_i18n::key::FILES_EXPLAIN_GLOBE_ADDRESS,
+                    args: vec![("value", said.clone())],
+                }),
+            }];
+        }
+        // THE PICTURE'S OWN LINES: no text, a target, and the sentence that
+        // teaches the gesture.
+        //
+        // AND THE CELL THE DOT LANDED IN IS A TARGET OF ITS OWN, because WHERE
+        // A THING IS DRAWN IS WHERE IT IS GRABBED — the rule the scrollbars
+        // keep. The globe's thread reports the dot's pixels with the frame, so
+        // this is one projection answering both "draw it here" and "this is
+        // what was pressed"; a second opinion would be a dot the eye sees in
+        // one place and the hand finds in another.
+        let globe = self.globe.borrow();
+        let cell = ronoctua_tokens::metrics::cell_width(ronoctua_tokens::text::size());
+        let line = ronoctua_tokens::metrics::line_height(ronoctua_tokens::text::size());
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let dot = globe.dot().and_then(|(x, y)| {
+            let row = (y / line) as usize;
+            (row == n).then(|| at.saturating_add((x / cell) as u16))
+        });
+        // A FIELD IS AS WIDE AS ITS TEXT, and these two carry none.
+        //
+        // They were born with `String::new()`, and `Field::covers` is
+        // `cell >= at && cell < at + width_of(text) + 1` — so each of them owned
+        // exactly ONE cell of a picture hundreds of pixels wide. Every symptom
+        // the owner reported is that one line: the drag never started (the
+        // press looks for `Hit::Globe` and found nothing), the wheel scrolled
+        // the facts underneath (the door asks the same hit before it lets the
+        // figure swallow the gesture), and the dot could not be clicked.
+        //
+        // SPACES, and it is not a trick: it is what `transport_fields` already
+        // does for the film's controls, one panel along, for the same reason —
+        // the row has to be nameable everywhere it is DRAWN. Nothing of this
+        // reaches the screen; the picture is painted over it.
+        let mut fields = vec![Field {
+            at,
+            text: " ".repeat(usize::from(room)),
+            color: ronoctua_tokens::color::TEXT_DIM,
+            hit: Hit::Globe,
+            explain: Some(does(ronoctua_i18n::key::FILES_EXPLAIN_GLOBE)),
+        }];
+        if let Some(where_) = dot {
+            // AND THE DOT IS GRABBED WHERE IT IS DRAWN, which is a disc and not
+            // a point: `space.atlas.dotRadius` is in tenths of a pixel, so the
+            // target is the cells the halo covers, and never fewer than one.
+            // A one-cell target on a mark that is drawn wider is a mark the eye
+            // finds and the hand misses.
+            let radius = f32::from(ronoctua_tokens::space::ATLAS_DOTRADIUS) / 10.0;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let wide = ((radius * 2.0 / cell).ceil() as u16).max(1);
+            fields.push(Field {
+                at: where_.saturating_sub(wide / 2),
+                text: " ".repeat(usize::from(wide)),
+                color: ronoctua_tokens::color::TEXT_DIM,
+                hit: Hit::GlobeDot,
+                explain: Some(does(ronoctua_i18n::key::FILES_EXPLAIN_GLOBE_DOT)),
+            });
+        }
+        fields
+    }
+
     fn info_fields(&self, n: usize, at: u16, room: u16, sheet: &[Fact]) -> Vec<Field> {
         // THE OFFSET IS THE PANEL'S OWN. The listing scrolls with the region
         // and the facts do not: they are about ONE entry, and there are more
@@ -4983,12 +5376,38 @@ impl View {
         // while one reads is worse than a cell of air. See `View::facts_bar`
         // for why the bar cannot sit in the surface's own last cell.
         let for_value = room.saturating_sub(for_label + 2);
+        // THE SENTENCE IS THE ROW'S, and both halves give it.
+        //
+        // The value always explained and the label never did, and the owner
+        // reported the half that was missing: *"às vezes há legendas que não
+        // cabem na linha e são cortadas, porém, nesses casos, ao colocar o
+        // cursor do mouse sobre a legenda e sobre o valor, o texto deles deve
+        // aparecer por completo no minibuffer"*. A label cut to eight cells
+        // and a value cut to sixteen are two halves of ONE fact, and putting
+        // them back together is what this line is for.
+        //
+        // And ALWAYS, unlike the listing's name, which explains only when it
+        // was cut. The two are different kinds of row and the rule follows the
+        // kind: a name sits on a row of seven fields, five of which already
+        // speak, so explaining one that fits spends the line saying what the
+        // eye just read. A panel row is two fields in a column twenty-four
+        // cells wide, where `(room / 3)` cuts nearly every label there is — and
+        // a sentence that appeared and vanished between adjacent rows would
+        // read as a flaky tooltip rather than as a rule.
+        // WHAT THE ROW SAYS, and the row is what decides. A date carries its
+        // own sentence because `label: value` is not the honest answer for one
+        // — the column shows a minute and the question is which second, in
+        // whose time. Everything else takes the generic one.
+        let says = fact.says.clone().unwrap_or_else(|| mode::Explanation {
+            key: FACT_SAYS,
+            args: vec![("label", fact.label.clone()), ("value", fact.value.clone())],
+        });
         let mut fields = vec![Field {
             at,
             text: ronoctua_render::layout::elide_end(&fact.label, for_label),
             color: ronoctua_tokens::color::TEXT_DIM,
             hit: Hit::Nothing,
-            explain: None,
+            explain: Some(says.clone()),
         }];
         let acted = match fact.does {
             Doable::Mode => self.mode_fields(value_at, for_value),
@@ -5005,10 +5424,11 @@ impl View {
                 // THE WHOLE VALUE, for the line that explains. A path of two
                 // hundred characters is exactly the fact one opened the panel
                 // to read, and the panel is twenty-four cells wide.
-                explain: Some(mode::Explanation {
-                    key: FACT_SAYS,
-                    args: vec![("label", fact.label.clone()), ("value", fact.value.clone())],
-                }),
+                //
+                // THE SAME SENTENCE THE LABEL GIVES, built once above: two
+                // halves of one fact cannot come to answer differently if
+                // there is only one answer.
+                explain: Some(says),
             });
         } else {
             fields.extend(acted);
@@ -5061,7 +5481,8 @@ impl View {
         }
         // THE OCTAL, when there is room for it whole. Half of `(0644)` is not
         // a mode, and a mode read wrong is worse than one not shown.
-        let octal = format!("({})", mode::octal(entry.mode));
+        let number = mode::octal(entry.mode);
+        let octal = format!("({number})");
         let used = u16::try_from(fields.len()).unwrap_or(room);
         let left = room.saturating_sub(used + 1);
         if left >= width_of(&octal) {
@@ -5069,8 +5490,24 @@ impl View {
                 at: at + used + 1,
                 text: octal,
                 color: ronoctua_tokens::color::TEXT_DIM,
+                // NOTHING TO CLICK — there is no bit in a number to turn, and
+                // a target that lights and then refuses is worse than one that
+                // never promised (`menu::Applies`, one register down).
                 hit: Hit::Nothing,
-                explain: None,
+                // AND IT SAYS WHAT IT IS. Ten letters each explain themselves
+                // and the form most people actually type explained nothing:
+                // the owner pointed at it and the line stayed empty — *"ao
+                // colocar o cursor sobre a versão numérica das permissões,
+                // nada está sendo mostrado no minibuffer"*.
+                //
+                // One sentence for three digits and for four: "one digit for
+                // the owner, one for the group, one for everybody else" stays
+                // true when a fourth arrives, and the special bit that brought
+                // it already has its own sentence on the letter beside it.
+                explain: Some(Explanation {
+                    key: ronoctua_i18n::key::FILES_EXPLAIN_OCTAL,
+                    args: vec![("octal", number)],
+                }),
             });
         }
         fields
@@ -5404,11 +5841,21 @@ impl View {
                         ),
                         color: ronoctua_tokens::color::TEXT_DIM,
                         hit: Hit::Nothing,
-                        // THE SECONDS, which the column has no room for — and
-                        // whether this is local time at all. When
-                        // `/etc/localtime` could not be read the column is UTC,
-                        // and saying so is the difference between a date one
-                        // can trust and one that is an hour out for ever.
+                        // THE WHOLE DATE, IN WORDS — and whether this is local
+                        // time at all. When `/etc/localtime` could not be read
+                        // the column is UTC, and saying so is the difference
+                        // between a date one can trust and one that is an hour
+                        // out for ever.
+                        //
+                        // It used to be the seconds ALONE, appended to a column
+                        // the eye had already read: `and 20 seconds, in this
+                        // machine's local time`. The owner read that off the
+                        // screen and said what he wanted instead — *"a data
+                        // completa no idioma do usuário"* — and he was right
+                        // about the shape as well as the content: a sentence
+                        // that begins with a conjunction is a sentence that
+                        // only makes sense if you happen to have read the cell
+                        // it is pinned to.
                         explain: Some(Explanation {
                             key: if self.zone.is_utc() {
                                 ronoctua_i18n::key::FILES_EXPLAIN_WHEN_UTC
@@ -5416,12 +5863,8 @@ impl View {
                                 ronoctua_i18n::key::FILES_EXPLAIN_WHEN
                             },
                             args: vec![(
-                                "seconds",
-                                entry
-                                    .modified
-                                    .saturating_add(i64::from(self.zone.offset_at(entry.modified)))
-                                    .rem_euclid(60)
-                                    .to_string(),
+                                "when",
+                                crate::chrome::when_long(entry.modified, &self.zone, &self.texts),
                             )],
                         }),
                     });
@@ -5748,6 +6191,10 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
             Errand::Done
         }
         Doing::Copy(_) => Errand::Done,
+        // AND THE MAP IS A PROCESS TOO — the browser's. Both doors carry it
+        // out where they carry out `Doing::Open`, which is the only place in
+        // this system that knows how to hand something to a program.
+        Doing::Web(_) => Errand::Done,
         // Launching is a process too, and it goes through the launcher's own
         // path — never a second reader of a `.desktop` file's `Exec`.
         Doing::Launch(_) => Errand::Done,
@@ -5968,6 +6415,24 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
     }
 }
 
+/// The address of a coordinate on a map, for a browser.
+///
+/// # Why the query form and not a path of tiles
+///
+/// Because this is the one link the manager hands over, and the query form is
+/// the one Google documents as stable (`?api=1`). A URL built out of a zoom
+/// level and tile numbers is a URL that breaks when the other end reorganises,
+/// and the other end is not ours.
+///
+/// FIVE DECIMALS, the same as the fact's own row: about a metre, which is as
+/// much as a phone knows. `{:.5}` and not `{}` so the number that leaves the
+/// machine is the number on the screen — a float printed in full would send
+/// digits nobody was shown.
+#[must_use]
+pub fn map_url(lat: f32, lon: f32) -> String {
+    format!("https://www.google.com/maps/search/?api=1&query={lat:.5},{lon:.5}")
+}
+
 /// Hands one piece of work to the queue.
 ///
 /// It is `tell` and not `ask`: nothing here needs the id back, and waiting for
@@ -6061,15 +6526,7 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                 }
                 // THE FACTS FIRST, because their probe is what says whether the
                 // file MOVES — and a file that moves needs no still picture.
-                let told = ronoctua_inspect::facts::facts(
-                    &ask.path,
-                    ask.mime,
-                    // WITHHELD, and it is the default for a reason the crate
-                    // spells out: the panel is what somebody opens just before
-                    // sending a photograph to a stranger, and "where this was
-                    // taken" is most often the house it was taken in.
-                    ronoctua_inspect::facts::Place::Withheld,
-                );
+                let told = ronoctua_inspect::facts::facts(&ask.path, ask.mime);
                 // AND WHETHER IT IS A SHAPE, read ONCE.
                 //
                 // The same read answers the facts and the question of whether
@@ -6235,6 +6692,11 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                     }
                     Some(Err(refused)) => (false, 0, Some(refused)),
                 };
+                // WHERE IT SAYS IT WAS MADE, out of the SAME facts the panel
+                // draws — never a second run of exiftool. The row is a phrase
+                // with two named arguments, so the numbers are still numbers
+                // here and nothing is parsed back out of a sentence.
+                let at = ronoctua_inspect::facts::coordinate(&facts);
                 let looked = Looked {
                     key: ask.key,
                     path: ask.path,
@@ -6247,6 +6709,7 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                     mime: ask.mime,
                     turns,
                     outlined,
+                    at,
                 };
                 if out.send(Report::Inspected(Box::new(looked))).is_err() {
                     // A closed channel = the door left.
@@ -6612,8 +7075,16 @@ pub enum Where {
     OnSound,
     /// Only over a playlist.
     OnAList,
-    /// Only over a shape.
-    OnAShape,
+    /// Only where there is a globe — a file that says where it was made, on a
+    /// machine that has the world data to place it.
+    OnAPlace,
+    /// Over EITHER, because the three zoom keys mean the same thing in both
+    /// and one notation cannot carry two ids.
+    ///
+    /// The two contexts are disjoint by construction: a shape is in the preview
+    /// panel and a globe is in the info panel, so `zoom` dispatches on the
+    /// focused pane and no key is ever ambiguous.
+    OnAShapeOrAPlace,
 }
 
 impl Where {
@@ -6636,7 +7107,8 @@ impl Where {
             Self::OnAFilm => v.film_here(),
             Self::OnSound => v.has_sound(),
             Self::OnAList => v.showing_list().is_some(),
-            Self::OnAShape => v.shape_here(),
+            Self::OnAPlace => v.globe_here(),
+            Self::OnAShapeOrAPlace => v.shape_here() || v.globe_here(),
         }
     }
 }
@@ -6823,9 +7295,23 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     // that reads as a pair; `C--` and `C-=` would have been the obvious two
     // and they are the film's rewind and forward, and one notation cannot
     // carry two ids.
-    ("C-k", "files-zoom-in", Where::OnAShape),
-    ("C-j", "files-zoom-out", Where::OnAShape),
-    ("C-r", "files-reframe", Where::OnAShape),
+    // AND THE SAME THREE TURN A GLOBE, because they mean the same thing there
+    // and one notation cannot carry two ids. The two contexts cannot both be
+    // in focus — a shape is in the preview panel and a globe is in the info
+    // panel — so `zoom` and `reframe` dispatch on the focused pane.
+    // `C-g` FOR THE GLOBE, and it is the only new letter this feature takes.
+    //
+    // In a terminal `C-g` is cancel; on Wayland it is the keysym `g` and this
+    // shell's cancel is `Esc`, so nothing collides — but somebody will assume
+    // otherwise, which is why it is written here.
+    //
+    // It HIDES the globe rather than summoning it: the picture is there
+    // whenever the file says where it was made (the owner asked for that), and
+    // what this buys is the facts back when one wants to read them.
+    ("C-g", "files-globe", Where::OnAPlace),
+    ("C-k", "files-zoom-in", Where::OnAShapeOrAPlace),
+    ("C-j", "files-zoom-out", Where::OnAShapeOrAPlace),
+    ("C-r", "files-reframe", Where::OnAShapeOrAPlace),
     // THE THREE COLUMNS ONE LOOKS UP, hidden until asked for.
     //
     // `C-d` for the DETAIL, and a letter for the reason the sidebar's four
@@ -7183,6 +7669,17 @@ impl View {
             Some("files-zoom-in") => Self::stepped(self.zoom(ZOOM_STEP)),
             Some("files-zoom-out") => Self::stepped(self.zoom(1.0 / ZOOM_STEP)),
             Some("files-reframe") => Self::stepped(self.reframe()),
+            Some("files-globe") => {
+                self.globe_shown = !self.globe_shown;
+                Step::Changed
+            }
+            // THE GLOBE'S FOUR, in degrees rather than in pixels: a key has no
+            // distance, so it moves by a fixed step of the CURRENT view — a
+            // tenth of the box, which reads the same near and far.
+            Some("globe-north") => Self::stepped(self.pan_globe(0.0, GLOBE_STEP)),
+            Some("globe-south") => Self::stepped(self.pan_globe(0.0, -GLOBE_STEP)),
+            Some("globe-east") => Self::stepped(self.pan_globe(-GLOBE_STEP, 0.0)),
+            Some("globe-west") => Self::stepped(self.pan_globe(GLOBE_STEP, 0.0)),
             Some("files-preview") => self.toggle_panel(Panel::Preview),
             Some("files-facts") => self.toggle_panel(Panel::Info),
             Some("files-facts-scroll") => self.scroll_facts(),
@@ -7563,6 +8060,24 @@ impl View {
             Hit::Play => self.play_pause(),
             Hit::Sound => self.hear(),
             Hit::Theatre => self.theatre(),
+            // THE GLOBE'S PICTURE ANSWERS NOTHING TO A CLICK, because a press
+            // on it is the start of a DRAG — resolved before the row, exactly
+            // as a press on a shape in the preview is. A click that also acted
+            // would act every time somebody let go after turning it.
+            Hit::Globe => Step::Nothing,
+            // AND THE DOT FRAMES ON ITSELF, through the key's own code.
+            Hit::GlobeDot => Self::stepped(self.globe.borrow_mut().frame_on_the_dot()),
+            // AND THE ADDRESS OPENS THE MAP — through the MENU's own row, so
+            // the mouse reaches nothing the keyboard cannot (`open-map`, which
+            // is `RET` on a row of the file's menu). The owner asked for this
+            // one twice: *"a opção de clicar na coordenada para abrir no Google
+            // Maps"*, and then again from the screen — *"ao clicar no nome da
+            // localidade … nada ocorre"*.
+            //
+            // IT IS THE ONE THING HERE THAT LEAVES THE MACHINE, so the sentence
+            // under the pointer says so before the click does it — see
+            // `globe_fields`.
+            Hit::GlobeMap => menu::by_id("open-map").map_or(Step::Nothing, |a| self.run(a)),
             // THE MOUSE GOES THROUGH THE SAME CODE THE KEY GOES THROUGH: it
             // puts the cursor where it clicked and then presses the key. That
             // is what keeps `files-everything-has-a-key` honest — the mouse
@@ -8290,8 +8805,25 @@ impl View {
                 let content_lines = lines
                     .saturating_sub(usize::from(across.is_some()))
                     .saturating_sub(usize::from(transport));
+                // THE GLOBE TAKES LINES OFF THE TOP, the way `across` and
+                // `transport` take them off the bottom — the same arithmetic
+                // turned the other way up. The rows it takes are REAL rows with
+                // real fields, so `hit`, `band_row`, a click and a key all keep
+                // going through the machine that already exists rather than
+                // through a fourth opinion about where the panel is.
+                let air = if matches!(which, Panel::Info) {
+                    self.globe_lines()
+                } else {
+                    0
+                };
                 let mut content: Vec<Row> = Vec::with_capacity(content_lines);
-                content.extend((0..content_lines).map(|k| Row {
+                content.extend((0..air).map(|k| Row {
+                    fields: self.globe_fields(k, air, at, content_room),
+                    marked: false,
+                    foot: false,
+                    focused: false,
+                }));
+                content.extend((0..content_lines.saturating_sub(air)).map(|k| Row {
                     fields: match which {
                         Panel::Preview => {
                             self.preview_fields(k, content_lines, at, content_room, texts)
@@ -8343,7 +8875,13 @@ impl View {
                         self.preview_offset
                     },
                     total,
-                    above: 0,
+                    // AND THOSE LINES DO NOT SCROLL, which is exactly what this
+                    // field already means — "how many of `content`'s first
+                    // lines are chrome". It was the listing's path and header
+                    // and nothing else; `Section::line_of` and
+                    // `Section::bar_box` already honour it, so the facts' own
+                    // scrollbar starts below the globe for free.
+                    above: air,
                     content,
                 });
             }
@@ -8415,7 +8953,14 @@ impl View {
         let row = match sec.pane {
             Pane::Listing if inside < chrome.len() => usize::MAX,
             Pane::Listing => sec.offset + inside - chrome.len(),
-            _ => sec.offset + inside,
+            // AND A PANEL'S RESERVE IS NOT ONE OF ITS ROWS EITHER.
+            //
+            // `above` was the listing's alone, so this arm added it to the row
+            // index. With the globe taking lines off the top of the info
+            // panel, the pointer on the picture would answer for the first
+            // fact — which is the same defect one column along.
+            _ if inside < sec.above => usize::MAX,
+            _ => sec.offset + inside - sec.above,
         };
         Some(Target {
             pane: sec.pane,
@@ -8449,6 +8994,14 @@ impl View {
         // listing pads with empty rows and the sidebar with its gaps; lighting
         // those would promise a click on nothing.
         if sec.content.get(inside).is_none_or(|r| r.fields.is_empty()) {
+            return None;
+        }
+        // AND NEVER OVER A PICTURE. The band says which ROW OF A LIST the
+        // pointer is on, and the globe is not a list — the same sentence
+        // `band_belongs` already makes about a photograph in the preview. Its
+        // lines carry a field so the pointer can NAME them; that is a different
+        // question from whether to stripe them.
+        if matches!(sec.pane, Pane::Info) && inside < sec.above {
             return None;
         }
         Some((sec.pane, sec.top + inside))
@@ -8754,6 +9307,18 @@ impl View {
         let here = self.where_.clone();
         match a.id {
             "open" => self.open_focused(),
+            // THE PLACE, IN A MAP — and a REFUSAL with a sentence when the file
+            // carries no coordinate.
+            //
+            // The row is drawn for every file because whether one carries a
+            // coordinate is not a property of its type: two photographs from
+            // one camera differ. Drawn and refusing is the formatter's XFS
+            // line, and it is better than a row that is missing — from the
+            // outside, a missing row and a key that does nothing look the same.
+            "open-map" => self.looked.as_ref().and_then(|l| l.at).map_or_else(
+                || Step::Say(does(ronoctua_i18n::key::FILES_DOES_OPEN_MAP_NOWHERE)),
+                |(lat, lon)| Step::Do(Doing::Web(map_url(lat, lon))),
+            ),
             "open-with" => self.ask(Asking::Application(focused)),
             "pin" => self.pin(&paths),
             "unhide" => self.ask_hidden(),
@@ -8859,6 +9424,17 @@ impl View {
     /// that only goes the other.
     #[must_use]
     pub fn strong_meaning(&self, d: Strong) -> &'static str {
+        // THE GLOBE IS IN THE INFO PANEL, and the shifted arrows follow the
+        // focused section — which is the mechanism the owner himself asked for
+        // when he met this exact collision one panel along.
+        if matches!(self.pane, Pane::Info) && self.globe_here() {
+            return match d {
+                Strong::Left => "globe-west",
+                Strong::Right => "globe-east",
+                Strong::Up => "globe-north",
+                Strong::Down => "globe-south",
+            };
+        }
         if matches!(self.pane, Pane::Preview) {
             if self.shape_here() {
                 return match d {
@@ -8988,7 +9564,16 @@ impl View {
         // AND THE PANEL SCROLLS UNDER IT. `drawn_lines` is what the last frame
         // gave this panel — the title already taken off — so this is the same
         // number the bar and the paging keys use.
-        let room = usize::from(self.drawn_lines.get()).max(1);
+        //
+        // THE FACTS' OWN ROOM, which is not the panel's lines: the globe takes
+        // lines off the top of the info panel and they do not scroll, so a
+        // cursor walked to the bottom would go looking for a fact that is not
+        // drawn.
+        let room = if preview {
+            usize::from(self.drawn_lines.get()).max(1)
+        } else {
+            self.info_room().max(1)
+        };
         let offset = if preview {
             &mut self.preview_offset
         } else {
@@ -9288,8 +9873,31 @@ impl View {
                 if !self.panes(width).info {
                     return false;
                 }
+                // A FIGURE SWALLOWS THE GESTURE, and this is the one figure in
+                // this panel with somewhere to put it. The preview's arm makes
+                // the same move for a shape; without it the wheel over the
+                // globe would scroll the facts underneath, which is the defect
+                // `Panes::section_at` exists to end, one section in.
+                // AND IT IS THE POINTER THAT DECIDES, not the focus.
+                //
+                // `View::zoom` asks which pane has the KEYBOARD — right for
+                // `C-k`, because the shape and the globe share that notation
+                // and the focused pane is what tells them apart. A wheel has no
+                // such ambiguity and no such question: it acts where the hand
+                // is. Going through `zoom` meant the gesture only worked with
+                // the info panel focused, which is not the state anybody scrolls
+                // in — the listing has the focus while one reads a photograph.
+                if self.pointing_at_the_globe.get()
+                    && self.globe_here()
+                    && self
+                        .globe
+                        .borrow_mut()
+                        .zoom(WHEEL_ZOOM.powi(-i32::try_from(by).unwrap_or(0)))
+                {
+                    return true;
+                }
                 let total = self.sheet().len();
-                self.info_offset = slide(self.info_offset, by, total, room);
+                self.info_offset = slide(self.info_offset, by, total, self.info_room().max(1));
                 true
             }
         }
@@ -10012,7 +10620,19 @@ impl View {
         // The label column is as wide as the widest label, so the values line
         // up — a sheet whose values start at seven different columns is a
         // sheet one reads seven times.
-        let widest = lines.iter().map(|f| width_of(&f.label)).max().unwrap_or(0);
+        //
+        // CAPPED AT A THIRD OF THE SHEET, and that is a drawing decision made
+        // where drawing happens. The labels used to be ours and a dozen; they
+        // are now every name the file wrote, and one `ProfileHueSatMapEncoding`
+        // would push every value on the sheet to the right — for the sake of
+        // lining up with a row nobody is reading. The name itself is bounded
+        // one layer down (`facts::TAG_NAME_CHARS`); this bounds the COLUMN.
+        let widest = lines
+            .iter()
+            .map(|f| width_of(&f.label))
+            .max()
+            .unwrap_or(0)
+            .min((width / 3).max(1));
         lines
             .into_iter()
             .map(|f| Row {
@@ -10048,10 +10668,31 @@ impl View {
 
     /// Everything known about the entry the cursor is on.
     fn sheet(&self) -> Vec<Fact> {
-        let Some(name) = self.focused().map(|e| e.name.clone()) else {
+        let Some(entry) = self.focused() else {
             return Vec::new();
         };
-        self.sheet_of(&name)
+        // REMEMBERED, and it is not an optimisation to be weighed: this runs on
+        // every painted frame and formats one Fluent message per row. See
+        // `View::remembered` for what the key is made of and why.
+        let wanted = SheetFor {
+            name: entry.name.clone(),
+            modified: entry.modified,
+            measured: self
+                .measured
+                .as_ref()
+                .filter(|(n, _)| *n == entry.name)
+                .map(|(_, b)| *b),
+            looked: self.looked.as_ref().map(|l| l.key.clone()),
+            said: std::rc::Rc::as_ptr(&self.texts) as usize,
+        };
+        if let Some((was, sheet)) = self.remembered.borrow().as_ref()
+            && *was == wanted
+        {
+            return sheet.clone();
+        }
+        let built = self.sheet_of(&entry.name);
+        *self.remembered.borrow_mut() = Some((wanted, built.clone()));
+        built
     }
 
     /// Everything known about one entry, as [`Fact`]s already in words.
@@ -10104,11 +10745,12 @@ impl View {
         // WHAT EACH ROW OFFERS IS DECIDED HERE, once, beside the value it is
         // about — and not in the drawing, which would have to work out what
         // kind of fact it was holding from the text of it.
-        let mut lines: Vec<(&'static str, String, Doable)> = vec![
+        let mut lines: Vec<(&'static str, String, Doable, Option<Explanation>)> = vec![
             (
                 ronoctua_i18n::key::FILES_DETAIL_PATH,
                 path.to_string_lossy().into_owned(),
                 Doable::Nothing,
+                None,
             ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_TYPE,
@@ -10117,6 +10759,7 @@ impl View {
                     _ => named.to_owned(),
                 },
                 Doable::Nothing,
+                None,
             ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_MODE,
@@ -10126,11 +10769,13 @@ impl View {
                     ronoctua_files::mode::octal(entry.mode)
                 ),
                 Doable::Mode,
+                None,
             ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_OWNER,
                 format!("{owner}:{group}"),
                 Doable::Ownership,
+                None,
             ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_SIZE,
@@ -10143,16 +10788,33 @@ impl View {
                 } else {
                     Doable::Nothing
                 },
+                None,
             ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_MODIFIED,
                 crate::chrome::when_text(entry.modified, &self.zone, false, &texts),
                 Doable::Nothing,
+                // THE SAME TWO KEYS THE LISTING'S COLUMN USES, so the column
+                // and the panel cannot come to disagree about a date — which
+                // is the argument `chrome::when_text` opens with, one panel
+                // along.
+                Some(Explanation {
+                    key: if self.zone.is_utc() {
+                        ronoctua_i18n::key::FILES_EXPLAIN_WHEN_UTC
+                    } else {
+                        ronoctua_i18n::key::FILES_EXPLAIN_WHEN
+                    },
+                    args: vec![(
+                        "when",
+                        crate::chrome::when_long(entry.modified, &self.zone, &texts),
+                    )],
+                }),
             ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_LINKS,
                 entry.links.to_string(),
                 Doable::Nothing,
+                None,
             ),
         ];
         // A LINK SAYS WHERE IT GOES, and whether it goes anywhere at all.
@@ -10165,14 +10827,16 @@ impl View {
                 },
                 target.clone(),
                 Doable::Nothing,
+                None,
             ));
         }
         let mut out: Vec<Fact> = lines
             .into_iter()
-            .map(|(k, value, does)| Fact {
+            .map(|(k, value, does, says)| Fact {
                 label: texts.t(k),
                 value,
                 does,
+                says,
             })
             .collect();
         // AND WHAT THE TOOLS SAID, when they have been asked about THIS file.
@@ -10196,7 +10860,43 @@ impl View {
                 },
                 value: fact_said(&f.value, &texts),
                 does: Doable::Nothing,
+                // THE GENERIC SENTENCE, which carries both halves un-elided.
+                // A tool's fact is a label and a value and nothing more; the
+                // one row that needs its own sentence is a date, and the dates
+                // this panel shows are assembled above.
+                says: None,
             }));
+
+            // AND WHERE THAT COORDINATE IS, in words.
+            //
+            // A row of its own and not a longer coordinate: the numbers say
+            // where on the Earth, and this says where among PEOPLE — which is
+            // the question anybody actually has when they look at a
+            // photograph. It is offline arithmetic over a table this machine
+            // carries; the glance's refusal of a geocoder was about the
+            // NETWORK, and this one opens no socket.
+            //
+            // Absent on a machine with no world data, WITH A SENTENCE: the
+            // installer and the rescue console have none, and a row that
+            // simply vanished would read as a file that carries no place.
+            if let Some(at) = l.at {
+                let value = crate::globe::address_of(at, &texts).map_or_else(
+                    || {
+                        if crate::globe::present() {
+                            texts.t(ronoctua_i18n::key::GLOBE_ADDRESS_NOWHERE)
+                        } else {
+                            texts.t(ronoctua_i18n::key::ATLAS_ABSENT)
+                        }
+                    },
+                    |found| crate::globe::said(&found, &texts),
+                );
+                out.push(Fact {
+                    label: texts.t(ronoctua_i18n::key::FILES_FACT_WHERE),
+                    value,
+                    does: Doable::Nothing,
+                    says: None,
+                });
+            }
         }
         out
     }
@@ -10259,7 +10959,10 @@ impl View {
         // the only ones true of what is on screen. A key arrives with neither
         // — see `View::drawn_at` and `View::drawn_lines`.
         let width = self.drawn_at.get();
-        let room = usize::from(self.drawn_lines.get());
+        // THE PANEL'S ROWS AND NOT ITS LINES. The globe takes lines off the
+        // top and they do not scroll (`Section::above`), so paging by the
+        // region's height would step past facts nobody has seen.
+        let room = self.info_room();
         let total = self.sheet().len();
         if !self.panes(width).info || room == 0 || total <= room {
             return Step::Say(does(FACTS_ALL_SHOWN));
@@ -11103,6 +11806,72 @@ impl View {
         })
     }
 
+    /// Points the globe at whatever the cursor is on, in the box it was given.
+    ///
+    /// The DOOR measures the box and calls this, exactly as `measured_preview`
+    /// already works: the picture that is drawn is the picture that was
+    /// measured, and a second opinion about the size is a texture the GPU has
+    /// at one size and the layout at another.
+    pub fn measured_globe(&self, size: (u32, u32), theme: usize) {
+        let at = self.looked.as_ref().and_then(|l| l.at);
+        let key = self
+            .looked
+            .as_ref()
+            .map_or(String::new(), |l| l.key.clone());
+        let portuguese = self.texts.language().starts_with("pt");
+        self.globe
+            .borrow_mut()
+            .looking_at(at, &key, size, theme, portuguese);
+    }
+
+    /// What the globe wants drawn, when it is not what was last asked for.
+    pub fn wants_globe(&mut self) -> Option<crate::globe::Ask> {
+        self.globe.borrow_mut().wants()
+    }
+
+    /// A picture or an address coming back.
+    pub fn saw_globe(&mut self, beat: &crate::globe::Beat) -> bool {
+        // THE SHEET IS REMEMBERED and the address is part of it, so an answer
+        // arriving has to forget what was built before it.
+        if self.globe.borrow_mut().saw(beat) {
+            *self.remembered.borrow_mut() = None;
+            return true;
+        }
+        false
+    }
+
+    /// The globe's picture, when there is one for what is being shown.
+    #[must_use]
+    pub fn globe_frame(&self) -> Option<ronoctua_render::image::Rgba> {
+        self.globe.borrow().frame().cloned()
+    }
+
+    /// Its texture's name.
+    #[must_use]
+    pub fn globe_key(&self) -> Option<String> {
+        self.globe.borrow().key()
+    }
+
+    /// Whether there is a globe to draw at all.
+    #[must_use]
+    pub fn globe_here(&self) -> bool {
+        self.globe_lines() > 0
+    }
+
+    /// Whether the pointer is resting on the globe, told by the door.
+    ///
+    /// The door has already resolved a target to draw the band; this is that
+    /// answer remembered where it was found, so the wheel does not have to ask
+    /// a second time with less to go on.
+    pub fn pointing_globe(&self, on: bool) {
+        self.pointing_at_the_globe.set(on);
+    }
+
+    /// Turns the globe by a drag, in pixels.
+    pub fn pan_globe(&mut self, right: f32, down: f32) -> bool {
+        self.globe.borrow_mut().pan(right, down)
+    }
+
     /// The difference between what is drawn and what should be.
     ///
     /// One comparison in one place, the arrangement [`View::wants_motion`]
@@ -11193,8 +11962,15 @@ impl View {
         true
     }
 
-    /// Moves the shape nearer or further.
+    /// Moves the shape — or the globe — nearer or further.
+    ///
+    /// ONE NOTATION, ONE ID, and the FOCUSED PANE decides which subject: a
+    /// shape is in the preview panel and a globe is in the info panel, so the
+    /// two contexts are disjoint by construction and no key is ambiguous.
     pub fn zoom(&mut self, by: f32) -> bool {
+        if matches!(self.pane, Pane::Info) && self.globe_here() {
+            return self.globe.borrow_mut().zoom(by);
+        }
         if !self.shape_here() {
             return false;
         }
@@ -11202,8 +11978,11 @@ impl View {
         true
     }
 
-    /// Puts the shape back the way it is first shown.
+    /// Puts the shape — or the globe — back the way it is first shown.
     pub fn reframe(&mut self) -> bool {
+        if matches!(self.pane, Pane::Info) && self.globe_here() {
+            return self.globe.borrow_mut().reframe();
+        }
         if !self.shape_here() {
             return false;
         }
@@ -11745,6 +12524,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         (v, dir)
     }
@@ -11811,6 +12591,275 @@ mod tests {
                 "the sentence still talks about pictures: {said:?}"
             );
         }
+    }
+
+    /// FAILS IF: a file that carries a coordinate reserves no lines for the
+    /// globe.
+    ///
+    /// THIS IS A DEADLOCK, AND IT SHIPPED FOR A ROUND. `globe_lines` asked the
+    /// globe component whether it was POINTED; what points it is
+    /// `View::measured_globe`; the door only calls that when `files::globe_px`
+    /// hands back a box; and `globe_px` refuses a box of fewer than two lines.
+    /// So zero lines reserved meant no box, no box meant nobody pointed it, and
+    /// nobody pointing it meant zero lines — for ever, on every machine, with
+    /// nothing on screen saying so. A photograph with GPS in it drew a panel of
+    /// plain facts, which reads as the file not carrying a coordinate.
+    ///
+    /// What the fix says is the rule this test pins: the SUBJECT is asked (what
+    /// the file carries, and whether this machine has the table), never the
+    /// drawing.
+    #[test]
+    fn a_coordinate_reserves_the_globe_its_lines() {
+        let dir = scratch("globe-lines");
+        std::fs::write(dir.join("where.jpg"), b"not a real jpeg").expect("write the file");
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.info_on = true;
+        v.reread();
+        let ask = v.wants_look(512).expect("a file wants a look");
+        v.looked(Looked {
+            key: ask.key,
+            path: ask.path,
+            rgba: None,
+            moving: None,
+            list: None,
+            text: None,
+            why: None,
+            facts: Vec::new(),
+            mime: "image/jpeg",
+            turns: false,
+            outlined: 0,
+            // LONDON, which `assets/world.nix` already declares in the open.
+            at: Some((51.51, -0.13)),
+        });
+        // THE ONE THING THIS TEST NEEDS FROM OUTSIDE, and it is not allowed to
+        // be missing quietly: without the table `globe::present()` is false and
+        // every assertion below would be answered by the absence rule instead
+        // of by the arithmetic. `nix/rust.nix` sets it for the test derivation
+        // and the devshell both.
+        assert!(
+            crate::globe::present(),
+            "RONOCTUA_ATLAS is unset or unreadable, so this test proves nothing"
+        );
+        // THE FOOTER'S OWN CEILING, which is the height the panel gets when
+        // the region is as tall as invariant 14 lets it be.
+        let tall = ronoctua_tokens::space::EXPANSION_MAXLINES;
+        v.drawn_at.set(200);
+        v.drawn_lines.set(tall);
+        assert_eq!(
+            v.globe_lines(),
+            usize::from(ronoctua_tokens::space::ATLAS_LINES),
+            "the globe asked for no lines with a coordinate on screen"
+        );
+        assert_eq!(
+            v.info_room(),
+            usize::from(tall) - usize::from(ronoctua_tokens::space::ATLAS_LINES),
+            "the facts did not get what the globe left"
+        );
+        // AND THE ROWS ARE REAL ROWS, which is what keeps `hit`, the band and
+        // the keys going through the machine that already exists.
+        let texts = bundle();
+        let sections = v.sections(&[], 64, 200, &texts);
+        let info = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Info))
+            .expect("the info panel is a section");
+        assert_eq!(
+            info.above,
+            usize::from(ronoctua_tokens::space::ATLAS_LINES),
+            "the globe's lines are not marked as the ones that do not scroll"
+        );
+        assert!(
+            info.content[0]
+                .fields
+                .iter()
+                .any(|f| matches!(f.hit, Hit::Globe)),
+            "the panel's first row is not the globe"
+        );
+
+        // AND A FILE WITHOUT ONE RESERVES NOTHING. The same answer again with
+        // the coordinate taken out of it — `wants_look` has nothing left to
+        // ask, the file has not changed.
+        let again = v.wants_look(512);
+        assert!(again.is_none(), "it asked for a file it already has");
+        v.looked(Looked {
+            key: v
+                .looked
+                .as_ref()
+                .expect("an answer is installed")
+                .key
+                .clone(),
+            path: dir.join("where.jpg"),
+            rgba: None,
+            moving: None,
+            list: None,
+            text: None,
+            why: None,
+            facts: Vec::new(),
+            mime: "image/jpeg",
+            turns: false,
+            outlined: 0,
+            at: None,
+        });
+        assert_eq!(v.globe_lines(), 0, "a file with no coordinate got a globe");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the globe answers the pointer on one cell of its picture.
+    ///
+    /// THIS IS WHAT THE OWNER REPORTED, and all three symptoms were one line:
+    /// the picture's rows were built with `text: String::new()`, and
+    /// `Field::covers` is `cell >= at && cell < at + width_of(text) + 1` — one
+    /// cell, on a figure hundreds of pixels wide. So the press never found
+    /// `Hit::Globe` and the drag never started, the wheel fell through to
+    /// scrolling the facts underneath, and the dot could not be pressed.
+    /// *"ao tentar clicar e arrastar nada ocorre"*.
+    ///
+    /// AND THE ADDRESS IS A DOOR: pressing it opens the coordinate in the
+    /// browser's map, which is the second half of the same report.
+    #[test]
+    fn the_whole_picture_answers_the_pointer_and_the_address_is_a_door() {
+        let dir = scratch("globe-target");
+        std::fs::write(dir.join("where.jpg"), b"not a real jpeg").expect("write the file");
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.info_on = true;
+        v.reread();
+        let ask = v.wants_look(512).expect("a file wants a look");
+        let key = ask.key.clone();
+        v.looked(Looked {
+            key: ask.key,
+            path: ask.path,
+            rgba: None,
+            moving: None,
+            list: None,
+            text: None,
+            why: None,
+            facts: Vec::new(),
+            mime: "image/jpeg",
+            turns: false,
+            outlined: 0,
+            at: Some((51.51, -0.13)),
+        });
+        assert!(
+            crate::globe::present(),
+            "RONOCTUA_ATLAS is unset, so this test proves nothing"
+        );
+        v.drawn_at.set(200);
+        v.drawn_lines
+            .set(ronoctua_tokens::space::EXPANSION_MAXLINES);
+
+        // THE ANSWER INSTALLED BY HAND, through the same `Beat` the thread
+        // sends: the address is what turns the last line into a door, and a
+        // test that only asked the empty case would pass with the door gone.
+        v.measured_globe((200, 100), 0);
+        v.saw_globe(&crate::globe::Beat::Said {
+            key,
+            owner: crate::globe::Owner::Files,
+            address: Box::new(ronoctua_atlas::Address {
+                country: Some(("United Kingdom".to_owned(), *b"GB")),
+                ..ronoctua_atlas::Address::default()
+            }),
+        });
+
+        let texts = bundle();
+        let sections = v.sections(&[], 64, 200, &texts);
+        let info = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Info))
+            .expect("the info panel is a section");
+        let first = info.content[0]
+            .fields
+            .first()
+            .expect("the globe's first line has a field")
+            .at;
+        // THE MIDDLE OF THE PICTURE, and not only its first cell.
+        for cell in [first, first + 1, first + 6, first + 11] {
+            assert!(
+                matches!(
+                    info.content[0].field_at(cell).map(|f| &f.hit),
+                    Some(Hit::Globe | Hit::GlobeDot)
+                ),
+                "cell {cell} of the globe's picture answers nothing"
+            );
+        }
+        let last = info
+            .content
+            .get(usize::from(ronoctua_tokens::space::ATLAS_LINES) - 1)
+            .expect("the globe's last line is the address");
+        assert!(
+            matches!(last.field_at(first).map(|f| &f.hit), Some(Hit::GlobeMap)),
+            "the address under the globe does not open the map"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the bottom strip stops growing for a globe.
+    ///
+    /// The window door puts the panels in a four-line strip until it is
+    /// `space.files.panelsFrom` cells wide, and a globe asks for
+    /// `space.atlas.lines` plus two facts. Without the growth there was a
+    /// coordinate, an atlas, a panel — and no globe, which is what the owner
+    /// photographed.
+    #[test]
+    fn the_strip_grows_for_a_globe_and_shrinks_back() {
+        let dir = scratch("globe-strip");
+        std::fs::write(dir.join("where.jpg"), b"not a real jpeg").expect("write the file");
+        std::fs::write(dir.join("plain.txt"), b"no coordinate here").expect("write the file");
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.info_on = true;
+        v.reread();
+        // NARROW ENOUGH FOR THE STRIP, which is what `panelsFrom` decides.
+        let narrow = ronoctua_tokens::space::FILES_PANELSFROM - 1;
+        let ask = v.wants_look(512).expect("a file wants a look");
+        let path = ask.path.clone();
+        v.looked(Looked {
+            key: ask.key,
+            path,
+            rgba: None,
+            moving: None,
+            list: None,
+            text: None,
+            why: None,
+            facts: Vec::new(),
+            mime: "image/jpeg",
+            turns: false,
+            outlined: 0,
+            at: Some((51.51, -0.13)),
+        });
+        assert!(crate::globe::present(), "RONOCTUA_ATLAS is unset");
+        let with = v.panes(narrow).strip;
+        assert!(
+            with >= ronoctua_tokens::space::ATLAS_LINES + 2,
+            "the strip is {with} lines, which cannot hold a globe and two facts"
+        );
+        // AND BACK, for a file that carries no coordinate: the listing does not
+        // pay four rows for a globe nobody can draw. The cursor has to MOVE
+        // first — `wants_look` asks about the focused entry, and it has its
+        // answer for this one.
+        v.key(of_view("<down>"));
+        let ask = v.wants_look(512).expect("the next file wants a look");
+        v.looked(Looked {
+            key: ask.key,
+            path: ask.path,
+            rgba: None,
+            moving: None,
+            list: None,
+            text: None,
+            why: None,
+            facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
+            outlined: 0,
+            at: None,
+        });
+        assert_eq!(
+            v.panes(narrow).strip,
+            ronoctua_tokens::space::FILES_STRIPLINES,
+            "the strip stayed tall for a file with no coordinate"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FAILS IF: `total: 1` comes back for the preview. With one row there is
@@ -11887,6 +12936,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         assert_eq!(v.preview_total(), 1, "a picture claimed more than one row");
         assert!(v.wheel(Pane::Preview, 5, 200, 12), "the gesture escaped");
@@ -12038,6 +13088,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         assert_eq!(v.preview_offset, 50, "a re-decode threw the reader back");
         assert_eq!(v.info_offset, 8);
@@ -12056,6 +13107,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         assert_eq!(v.preview_offset, 0, "a new file kept the old one's place");
         assert_eq!(v.preview_column, 0);
@@ -12176,6 +13228,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
 
         let texts = bundle();
@@ -12439,6 +13492,7 @@ mod tests {
             mime: "audio/x-mpegurl",
             turns: false,
             outlined: 0,
+            at: None,
         });
         let _ = v.panes(200);
         v.set_pane(Pane::Preview);
@@ -12496,6 +13550,7 @@ mod tests {
             mime: "audio/x-mpegurl",
             turns: false,
             outlined: 0,
+            at: None,
         });
 
         // IT DOES NOT START BY ITSELF, which is the owner's rule reaching a
@@ -12603,6 +13658,7 @@ mod tests {
                 mime: "audio/mpeg",
                 turns: false,
                 outlined: 0,
+                at: None,
             });
         };
 
@@ -12686,6 +13742,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         assert!(
             v.wants_motion().is_none(),
@@ -12706,6 +13763,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         // THE PANEL HAS TO HAVE BEEN MEASURED, because the frame is decoded at
         // the box's OWN shape — no box, no wish. It is the DOOR that measures
@@ -12771,6 +13829,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -12846,6 +13905,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         let still = preview_of(&v, &words);
         assert!(
@@ -12975,6 +14035,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -13039,6 +14100,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         // THE WINDOW DOOR'S OWN REPORT: `pane=Preview cell=Some(11) columns=51`.
         let panes = v.panes(51);
@@ -13094,6 +14156,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
 
         // WITH NO FRAME IN HAND, THE PHOTOGRAPH IS WHAT IS DRAWN.
@@ -13267,6 +14330,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -13355,6 +14419,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -13423,6 +14488,7 @@ mod tests {
                 mime: "text/plain",
                 turns: false,
                 outlined: 0,
+                at: None,
             });
             key
         };
@@ -13579,6 +14645,7 @@ mod tests {
             mime: "text/plain",
             turns: false,
             outlined: 0,
+            at: None,
         });
         let frame = |key: &str| crate::motion::Beat::Frame(a_frame(key));
 
@@ -13849,6 +14916,86 @@ mod tests {
         sentences.sort_unstable();
         sentences.dedup();
         assert_eq!(sentences.len(), 10, "two cells explain the same thing");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: a cell of a packed row lights more than one field.
+    ///
+    /// The owner read it off the screen — *"mais de uma (duas) letras estão
+    /// alterando para a cor de destaque do hover, mas deveria ser apenas
+    /// uma"*. The cause is that `Field::covers` deliberately owns the gap
+    /// AFTER a field, so where fields are packed shoulder to shoulder the cell
+    /// between two of them is covered by both; the hit test walks from the
+    /// right and takes one, and the painters asked `covers` per field and took
+    /// both.
+    ///
+    /// It asserts the two answers are the SAME answer, which is the only form
+    /// of this that cannot drift back apart.
+    #[test]
+    fn one_cell_of_a_packed_row_lights_one_field() {
+        let a = Field {
+            at: 4,
+            text: "r".to_owned(),
+            color: ronoctua_tokens::color::TEXT_PRIMARY,
+            hit: Hit::Nothing,
+            explain: None,
+        };
+        let b = Field {
+            at: 5,
+            text: "w".to_owned(),
+            ..a.clone()
+        };
+        let row = Row {
+            fields: vec![a, b],
+            marked: false,
+            foot: false,
+            focused: false,
+        };
+        // CELL 5 IS THE ONE: `covers` gives it to the field at 4 (through the
+        // gap) and to the field at 5 (its own character).
+        assert!(row.fields[0].covers(5) && row.fields[1].covers(5));
+        assert_eq!(
+            row.field_index_at(5),
+            Some(1),
+            "the cell under a character belongs to that character"
+        );
+        // AND THE TWO QUESTIONS ARE ONE. Whatever the painter lights is what
+        // the click would take, at every cell of the row.
+        for cell in 0..12u16 {
+            assert_eq!(
+                row.field_index_at(cell).map(|i| &row.fields[i]),
+                row.field_at(cell),
+                "the lit field and the clicked field differ at cell {cell}"
+            );
+        }
+    }
+
+    /// FAILS IF: the numeric form of the permission explains nothing.
+    ///
+    /// Ten letters each say what they are, and the form most people actually
+    /// type said nothing at all: the owner rested the pointer on it and the
+    /// message line stayed empty.
+    #[test]
+    fn the_octal_says_what_it_is() {
+        let root = scratch("octal");
+        std::fs::write(root.join("um.txt"), b"x").unwrap();
+        let mut v = view_at(&root);
+        // THE CURSOR IS THE SUBJECT: `mode_fields` reads the focused entry,
+        // and row 0 of every listing with a parent is `..`.
+        let _ = v.drawn(120, &bundle());
+        v.cursor = 1;
+        let fields = v.mode_fields(0, 24);
+        let last = fields.last().expect("no fields at all");
+        assert!(
+            last.text.starts_with('('),
+            "the last field of a wide-enough panel is the octal"
+        );
+        let said = last.explain.clone().expect("the octal explains nothing");
+        assert_eq!(said.key, ronoctua_i18n::key::FILES_EXPLAIN_OCTAL);
+        assert!(
+            said.args.iter().any(|(n, _)| *n == "octal"),
+            "the sentence does not name the number it is about"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -15510,8 +16657,14 @@ mod tests {
                 | crate::chrome::Register::Alternate
                 | crate::chrome::Register::Contextual => since += 1,
                 // `Explain` is not a piece of a hint line: the sentence is
-                // drawn on its own row, from `Hinted::said`.
-                crate::chrome::Register::Prose | crate::chrome::Register::Explain => {}
+                // drawn on its own row, from `Hinted::said`. `Said` and
+                // `Pending` are not pieces of one either — they are the
+                // minibuffer's own line, which is what is on that row when a
+                // hint is NOT.
+                crate::chrome::Register::Prose
+                | crate::chrome::Register::Explain
+                | crate::chrome::Register::Said
+                | crate::chrome::Register::Pending => {}
             }
         }
         // AND NO COMMA IN ANY OF THE SENTENCES: on this line a comma reads as
@@ -18800,6 +19953,7 @@ mod tests {
             mime: "model/stl",
             turns: true,
             outlined,
+            at: None,
         });
         assert!(v.shape_here(), "the fixture did not become a shape");
     }
@@ -19536,6 +20690,7 @@ mod tests {
             mime: "image/gif",
             turns: false,
             outlined: 0,
+            at: None,
         });
         let playing = hint_keys(&v, &b);
         for want in ["C-;", "C--", "C-="] {
@@ -19568,5 +20723,50 @@ mod tests {
             "the film's three keys are on the line in the fixed register, \
              not the guest's: {guests} contextual pieces"
         );
+    }
+
+    /// FAILS IF: the address handed to a browser stops being the coordinate on
+    /// the screen, or stops being a URL.
+    ///
+    /// Five decimals, both signs, and the query form Google documents as
+    /// stable. A float printed in full would send digits nobody was shown.
+    #[test]
+    fn the_map_is_opened_on_the_coordinate_that_was_drawn() {
+        assert_eq!(
+            map_url(51.496_44, -0.264_88),
+            "https://www.google.com/maps/search/?api=1&query=51.49644,-0.26488"
+        );
+        // A SOUTHERN, WESTERN ONE TOO: the sign is the hemisphere, and a
+        // formatter that dropped it would put this photograph in Siberia.
+        assert!(map_url(-23.55, -46.63).contains("query=-23.55000,-46.63000"));
+    }
+
+    /// FAILS IF: the map row stops refusing when there is no coordinate.
+    ///
+    /// The row is drawn for every file, because whether one carries a
+    /// coordinate is not a property of its type. Drawn and refusing WITH A
+    /// SENTENCE is the arrangement; drawn and silent is a key that does
+    /// nothing, which from the outside is the same as a missing row.
+    #[test]
+    fn the_map_row_refuses_with_a_sentence_when_there_is_nowhere_to_go() {
+        let root = scratch("nomap");
+        std::fs::write(root.join("um.txt"), b"x").unwrap();
+        let mut v = view_at(&root);
+        let _ = v.drawn(120, &bundle());
+        v.cursor = 1;
+        let row = ronoctua_files::menu::all_of()
+            .iter()
+            .find(|a| a.id == "open-map")
+            .expect("the menu has no open-map row");
+        let said = v.run(row);
+        match said {
+            Step::Say(e) => assert_eq!(
+                e.key,
+                ronoctua_i18n::key::FILES_DOES_OPEN_MAP_NOWHERE,
+                "it refused with the wrong sentence"
+            ),
+            other => panic!("a file with no coordinate did not refuse: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -710,6 +710,15 @@ const fn errand_of(work: &ronoctua_transfers::Work) -> ronoctua_protocol::Errand
             ..
         } => E::Subtitles,
         W::Torrent { .. } => E::Torrent,
+        // A REGION IS A DOWNLOAD, to the window that draws the queue.
+        //
+        // `ronoctua_protocol::Errand` crosses the WIT into a wasip2 buffer, so
+        // a variant of its own would be a WIT change, a regenerated binding
+        // and a rebuild of every buffer — for a word. What this job does from
+        // the queue's side IS a fetch, and the row says WHICH: its subject is
+        // the region's name. The FOOTER's door, which is not a buffer, reads
+        // `Work::word` and says "install a region's streets" in full.
+        W::Atlas { .. } => E::Fetch,
     }
 }
 
@@ -718,6 +727,9 @@ const fn engine_of(engine: ronoctua_transfers::Engine) -> ronoctua_protocol::Eng
     use ronoctua_protocol::Engine as E;
     match engine {
         ronoctua_transfers::Engine::Local => E::Local,
+        // See `errand_of`: the queue's window is a buffer, and this engine's
+        // work is a download with a second half.
+        ronoctua_transfers::Engine::Atlas => E::Fetch,
         ronoctua_transfers::Engine::Fetch => E::Fetch,
         ronoctua_transfers::Engine::Media => E::Media,
         ronoctua_transfers::Engine::Torrent => E::Torrent,

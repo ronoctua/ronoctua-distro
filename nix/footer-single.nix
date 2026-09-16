@@ -141,14 +141,95 @@ writeShellApplication {
     # the rescue arriving before the rescue.
     (
       while kill -0 "$new_pid" 2>/dev/null; do sleep 1; done
+
+      # ---------------------------------------------------------------
+      # THREE REASONS NOT TO RAISE IT AGAIN, and any one of them is enough
+      # ---------------------------------------------------------------
+      # Because this loop re-executes the script, which starts another footer
+      # AND another copy of this subshell — so it has to be able to stop, and
+      # for a while it could not. The owner ended a session with Ctrl+C and his
+      # terminal filled with `footer <pid> standing` and `there is no reachable
+      # Wayland compositor`, one turn every 2.01 s, for an hour. Measured:
+      # ~2000 turns and ~8000 processes.
+      #
+      # It is orphaned and SIGINT-proof BY CONSTRUCTION, and neither is fixable
+      # from here. Bash sets SIGINT and SIGQUIT to SIG_IGN for an asynchronous
+      # command when job control is off (`SigIgn: 0000000000000006` in
+      # /proc/<pid>/status, measured), SIG_IGN survives `execve` so every
+      # generation is born immune too, and a non-interactive bash cannot install
+      # a trap for a signal ignored on entry. So the stopping is not a signal:
+      # it is three questions, asked before doing it again.
+
+      # ONE. THE DEATH WAS ASKED FOR. The restart block above writes this file,
+      # and so does `dev.nix`'s `shutdown` — which for a year it did not, and
+      # that is the whole of why the loop had no end.
       if [ -s "$pidfile.onpurpose" ] && [ "$(cat "$pidfile.onpurpose")" = "$new_pid" ]; then
+        rm -f "$pidfile.watcher"
         exit 0
       fi
+
+      # TWO. THE COMPOSITOR THAT FOOTER WAS BORN UNDER IS STILL THERE — and the
+      # question is niri's PID, never whether its socket file is on disk. A
+      # Wayland server killed by a signal does not unlink its own socket:
+      # measured, `/run/user/1000/wayland-2` was still there an hour after that
+      # niri was gone, which is also why the lifeline answers "could not find
+      # wayland compositor" (it connects and takes ECONNREFUSED) instead of
+      # hanging. A `[ -S … ]` test here would pass with the whole defect in
+      # place. `NIRI_SOCKET` is `niri.<display>.<pid>.sock`, so the PID is in
+      # the NAME, and reading it costs no process at all.
+      if [ -n "''${NIRI_SOCKET:-}" ]; then
+        sock=''${NIRI_SOCKET##*/}
+        compositor=''${sock%.sock}
+        compositor=''${compositor##*.}
+        case "$compositor" in
+          *[!0-9]* | "") ;;
+          *) kill -0 "$compositor" 2>/dev/null || { rm -f "$pidfile.watcher"; exit 0; } ;;
+        esac
+      fi
+
+      # THREE. THE SESSION THAT ASKED FOR A FOOTER IS STILL RUNNING. Reparented
+      # or not, this stays answerable — which is exactly what being reparented
+      # takes away from every other way of asking.
+      if [ -n "''${RONOCTUA_DEV_PID:-}" ] && ! kill -0 "$RONOCTUA_DEV_PID" 2>/dev/null; then
+        rm -f "$pidfile.watcher"
+        exit 0
+      fi
+
+      # AND A CEILING ON TOP OF THE THREE, because a footer that dies AS it
+      # starts answers yes to all of them and would spin at the speed of the
+      # poll for as long as the session lasts. Five in a minute is a crash loop
+      # and not a crash: the line is raised once, and this stops. `EPOCHSECONDS`
+      # and not `date`, so the guard against runaway processes is not itself two
+      # processes a turn.
+      tries=$(( ''${RONOCTUA_FOOTER_TRIES:-0} + 1 ))
+      since=''${RONOCTUA_FOOTER_SINCE:-$EPOCHSECONDS}
+      if [ "$(( EPOCHSECONDS - since ))" -gt 60 ]; then
+        tries=1
+        since=$EPOCHSECONDS
+      fi
+      if [ "$tries" -gt 5 ]; then
+        echo "  the footer died $tries times in a minute; not starting it again" >&2
+        rm -f "$pidfile.watcher"
+        "$binary" lifeline ronoctua-footer.service || true
+        exit 0
+      fi
+      export RONOCTUA_FOOTER_TRIES="$tries"
+      export RONOCTUA_FOOTER_SINCE="$since"
+
       # THE SAME SECOND THE UNIT WAITS. `RestartSec=1` over there; a tight loop
       # here would be a crash loop spinning at the speed of the poll.
       sleep 1
       "$0" "$pidfile" "$binary" "$@" || true
       "$binary" lifeline ronoctua-footer.service || true
     ) &
+    # AND THE WATCHER IS REACHABLE NOW, which it was not.
+    #
+    # `dev.nix` held the footer's PID in a file and the watcher's in nothing at
+    # all, so the one thing that could resurrect a footer was the one thing the
+    # session could not stop. It goes beside the footer's pidfile, by the
+    # argument at the top of this file: whoever starts and whoever stops are
+    # different processes, and state between two processes lives in the
+    # filesystem or does not exist.
+    echo $! > "$pidfile.watcher"
   '';
 }

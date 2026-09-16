@@ -90,7 +90,7 @@ pkgs.mkShell {
   # `option_env!` is resolved at COMPILE time, so a binary `cargo` built inside
   # the devshell has exactly what this attrset holds and nothing else. Written
   # out one at a time, eighteen of them were, this list drifted from
-  # `nix/rust.nix` twice: the buffer of the editor was missing (and `LEADER f f`
+  # `nix/rust.nix` twice: the buffer of the editor was missing (and the file manager's key
   # answered "could not open" here and worked in production), and
   # `RONOCTUA_SYSTEMCTL` was never here at all — so `cargo test` built code that
   # believed `systemctl` did not exist.

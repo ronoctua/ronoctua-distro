@@ -4448,9 +4448,41 @@ let
     # wants to exercise never runs. With a fake name it carries on, niri dies at
     # startup, the waiting loop gives up — and `shutdown` really runs.
     export WAYLAND_DISPLAY=does-not-exist-1
+
+    # AND SESSIONS TO CLEAN UP AFTER, planted before the run.
+    #
+    # `.#dev` prunes what earlier sessions left in `/tmp` — 65 files and 55 MB
+    # had built up on the owner's machine — and this check could not see that
+    # code at all: a build sandbox starts with an empty `/tmp`, the loops had
+    # nothing to walk, and every one of them returned 0 by not running. The
+    # rule went in green and took the session down on the first real machine
+    # it met, right after the banner and with nothing said.
+    #
+    # FOURTEEN, ALL FRESH, and that is the reproduction rather than a round
+    # number: the rule keeps the ten most recent AND only deletes what nothing
+    # has written to for a day, so with eleven or more logs from TODAY the
+    # oldest four fall past the count and fail the age test — which is the case
+    # where the body's last command is a false one. Somebody who runs `.#dev`
+    # more than ten times in a day meets it, and he does.
+    for n in $(seq 1 14); do
+      : > "/tmp/ronoctua-footer-plant$n.log"
+      : > "/tmp/ronoctua-niri-plant$n.log"
+    done
+
     # It exits non-zero on purpose (niri does not come up here); what is measured
     # is what it PRINTS on ending.
     timeout 300 ronoctua-dev > out_text.txt 2> errors.txt || true
+
+    # NOTHING FRESH WAS TAKEN. The count alone would have deleted four of these;
+    # the age is the second half of the rule and this is where it is asserted.
+    left=$( { ls /tmp/ronoctua-footer-plant*.log 2>/dev/null | wc -l; } || true )
+    [ "$left" = 14 ] || {
+      echo "ERROR: the prune took $left of 14 logs that were written today." >&2
+      echo "      It keeps the ten most recent AND spares whatever was" >&2
+      echo "      written to within the day — another session may be using" >&2
+      echo "      one of them right now." >&2
+      exit 1
+    }
 
     if grep -qE "cannot remove|Permission denied" errors.txt; then
       echo "ERROR: shutting the session down printed a removal error:" >&2
@@ -5014,7 +5046,14 @@ let
             bad.append("files.rs no longer declares OF_THE_VIEW as a table")
         else:
             body = re.sub(r"//.*", "", block.group(1))
-            bound = re.findall(r'\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)', body)
+            # A THIRD ELEMENT IS ALLOWED, and the day one arrived this check
+            # went BLIND: the manager's table grew a `Where` — which rows a key
+            # is alive on — and a pattern that demanded the closing bracket
+            # right after the second string matched nothing at all. It failed
+            # loudly ("binds nothing"), which is the only reason it was not
+            # silence; the lesson is that a table's SHAPE is not the contract,
+            # its first two columns are.
+            bound = re.findall(r'\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*[,)]', body)
             if not bound:
                 bad.append("OF_THE_VIEW binds nothing, which cannot be right")
             for chord, action in bound:
@@ -7471,6 +7510,19 @@ let
     # have swept every view except the two that were broken.
     LIVE = re.compile(r"focused\s*(?:,|:\s*(?!false\b))")
 
+    # AND A VIEW THAT DRAWS `label: value` ROWS IS SWEPT WHETHER OR NOT IT
+    # KEEPS THE FLAG.
+    #
+    # `Row::focused` is read by no door, so a view can do the right thing —
+    # colour the row — and never fill it; `geo.rs` is written that way, and it
+    # fell straight through this sweep into the "carries none" bucket. The flag
+    # was the only thing being looked for, so the hole is exactly the shape of
+    # a view that skipped it: one with rows, a cursor, and no colour saying
+    # where it is. `chrome::field_pair` is what such a view calls to draw a row
+    # at all, and every view in this system that calls it names a cursor colour
+    # today — so requiring it costs nothing and closes the hole.
+    PAIRS = "chrome::field_pair("
+
     wrong, swept, skipped = [], [], []
     for name in VIEWS:
         body = (shell / name).read_text()
@@ -7478,7 +7530,7 @@ let
         # assertion is a thing the test says, not a thing the view draws.
         cut = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", body, re.M)
         code = body[: cut.start()] if cut else body
-        if not LIVE.search(code):
+        if not LIVE.search(code) and PAIRS not in code:
             skipped.append(name)
             continue
         swept.append(name)
@@ -7497,7 +7549,7 @@ let
                         )
             continue
         wrong.append(
-            f"{name} fills `Row::focused` and names no cursor colour "
+            f"{name} draws rows with a cursor and names no cursor colour "
             "(`text.here.acts` / `text.here.read`)"
         )
 
@@ -8634,6 +8686,164 @@ let
   # that the chunked decoder in `ronoctua-http` exists because a chunk boundary
   # inside a multi-byte character panicked a thread and killed every tunnel key
   # for a session, and a copy that has not learned that is a copy that will.
+  # ONE WALK THROUGH A CENTRAL DIRECTORY, and the queue does not gain a
+  # rasteriser for baking a region.
+  #
+  # Two promises in one check, because they are the same promise from two
+  # sides. The zip reader MOVED out of `ronoctua-inspect` when a region pack
+  # turned out to be a zip too — copying it would have been the second walk
+  # through one, which is what this repository refuses everywhere else. And the
+  # crate that bakes a pack is deliberately NOT allowed to know the globe: the
+  # transfers daemon is extracted from the workspace precisely so the desktop's
+  # closure does not follow it into the ISO, and a dependency on the drawing
+  # would undo that without anything on screen saying so.
+  # EVERY VIEW'S PAGE FOLLOWS ITS OWN CURSOR, and the arithmetic is in one
+  # place.
+  #
+  # The footer's region is twelve lines and every view is longer than that, so a
+  # cursor that walks past the twelfth line without the page moving is a cursor
+  # nobody can see — which reads as an arrow key that stopped working. It was
+  # the state of THIRTEEN of the fifteen views: only the manager and the
+  # clipboard called `follow_cursor`, each from inside its own errand handler,
+  # and the owner reported it — *"ao mover a seleção para cima e para baixo com
+  # as setas o scroll não acompanha … isso precisa ser corrigido de forma
+  # global"*.
+  #
+  # Two halves, and neither is enough alone. `Footer::typed` is the ONE place
+  # that knows a person pressed a key (an arrival must NOT follow — see
+  # `settle_region`), and `list_cursor` is the ONE place that knows where each
+  # view's cursor is. A view missing from that table follows nothing, silently.
+  every-view-follows-its-cursor = mkCheck "every-view-follows-its-cursor" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    src = pathlib.Path("${../crates/ronoctua-shell/src/surface.rs}").read_text()
+    bad = []
+
+    # THE VIEWS ARE READ FROM THE ENUM, never from a list typed here: a list
+    # would be one more place to forget the next view.
+    enum = src[src.index("enum ViewState {") :]
+    enum = enum[: enum.index("\n}\n")]
+    views = re.findall(r"^    (\w+),", enum, re.M)
+    if len(views) < 12:
+        bad.append(f"only {len(views)} views found; the sweep is not reading the enum")
+
+    # THE THREE THAT HAVE NO CURSOR, and each is a claim about what it is.
+    #
+    #   `Manual`  — the shortcut list is READ, and paged by its own keys.
+    #   `Leader`  — a sequence under way draws a table, not a list.
+    #   `NoneOf`  — the region is closed.
+    WITHOUT = {"Manual", "Leader", "NoneOf"}
+
+    at = src.index("fn list_cursor(&self)")
+    table = src[at : src.index("\n    }\n", at)]
+    named = set(re.findall(r"ViewState::(\w+)", table))
+    for v in views:
+        if v in WITHOUT or v in named:
+            continue
+        bad.append(
+            f"ViewState::{v} is not in `list_cursor`, so its page never follows "
+            "its cursor — the arrow walks off the bottom of the region"
+        )
+    for v in sorted(WITHOUT):
+        if v in named:
+            bad.append(f"ViewState::{v} is excused from following and now does; the excuse is stale")
+
+    # AND THE ONE CALLER THAT MAKES IT HAPPEN. `typed` is the human-key path;
+    # if the call leaves it, every view stops following at once and no test of
+    # a single view would say so.
+    key = src.index("fn typed(&mut self, event: KeyEvent)")
+    wrapper = src[key : src.index("\n    }\n", key)]
+    if "follow_cursor()" not in wrapper:
+        bad.append(
+            "`Footer::typed` no longer follows the cursor: it is the one place "
+            "that knows a PERSON moved something, and an arrival must not"
+        )
+    # AND NOT FROM THE PAINT, which is the arrival's path.
+    paint = src.index("fn draw_and_paint(&mut self)")
+    if "follow_cursor" in src[paint : src.index("\n    }\n", paint)]:
+        bad.append(
+            "`draw_and_paint` follows the cursor: a daemon's arrival redraws "
+            "too, and that is the forced scroll the owner reported once already"
+        )
+
+    for b in bad:
+        print(f"ERROR: {b}", file=sys.stderr)
+    if bad:
+        raise SystemExit(1)
+    print(f"OK: {len(views) - len(WITHOUT)} views follow their cursor, from one place")
+    END
+  '';
+
+  one-zip-reader = mkCheck "one-zip-reader" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    crates = pathlib.Path("${../crates}")
+    reader = crates / "ronoctua-zip"
+    wrong = []
+
+    # WHAT ONLY A ZIP READER WRITES: the two directory signatures. A comment
+    # may say "zip" and a `.desktop` may open one; walking a central directory
+    # is what this is about.
+    NAMES = ("0x50, 0x4b, 0x01, 0x02", "0x50, 0x4b, 0x05, 0x06")
+
+    for f in sorted(crates.rglob("*.rs")):
+        if reader in f.parents:
+            continue
+        text = f.read_text()
+        # A FIXTURE THAT BUILDS ONE IS NOT A SECOND READER. `mesh::fixture` and
+        # the packs' own tests WRITE a zip so the reader has something to read,
+        # and a test that built its zip through the reader would be a test of
+        # nothing.
+        if "fixture" in f.name or f.name == "tests.rs":
+            continue
+        cut = list(re.finditer(r"^#\[cfg\(test\)\]\s*\nmod tests", text, re.M))
+        if cut:
+            text = text[: cut[-1].start()]
+        if "mod fixture" in text:
+            text = text[: text.index("mod fixture")]
+        for name in NAMES:
+            if name in text:
+                wrong.append(
+                    f"{f.relative_to(crates)} walks a zip by hand; "
+                    "`ronoctua-zip` is where that lives"
+                )
+
+    heart = reader / "src" / "lib.rs"
+    if not heart.exists():
+        wrong.append("crates/ronoctua-zip/src/lib.rs is gone; what is this checking?")
+    else:
+        body = heart.read_text()
+        for name in ("pub fn members", "pub fn member_bytes", "pub fn member_up_to"):
+            if name not in body:
+                wrong.append(f"the zip reader no longer has `{name}` — has it moved?")
+
+    # AND THE QUEUE DOES NOT DRAW. `ronoctua-atlas` is the geometry and the
+    # projection; `resvg` and `image` are pixels. None of them belongs on the
+    # path that downloads and bakes.
+    DRAWING = ("ronoctua-atlas =", "resvg", "tiny-skia", "image =", "image.workspace")
+    for name in ("ronoctua-atlas-packs", "ronoctua-transfers"):
+        manifest = (crates / name / "Cargo.toml").read_text()
+        body = "\n".join(
+            line for line in manifest.splitlines() if not line.lstrip().startswith("#")
+        )
+        for draws in DRAWING:
+            if draws in body:
+                wrong.append(
+                    f"{name} depends on `{draws.strip()}`: the baking path "
+                    "gained the drawing, and `rust.transfers` is extracted so "
+                    "that it cannot"
+                )
+
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        raise SystemExit(1)
+    print("OK: one crate walks a zip, and the queue that bakes a region cannot draw one")
+    END
+  '';
+
   one-http-writer = mkCheck "one-http-writer" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -9315,13 +9525,22 @@ let
     crates = pathlib.Path("${../crates}")
     bad = []
 
-    def production(text):
+    def production(path, text):
         """The part of a file that is not its test module.
 
         Every crate here puts its tests in one '#[cfg(test)] mod tests' at
         the end, and 'files::View::at' is called fifteen times inside one of
         them. Counting those as doors would make claim one meaningless.
+
+        AND A FILE THAT IS A TEST MODULE HAS NO PRODUCTION PART AT ALL. The
+        attribute then sits on the `mod tests;` line in the PARENT — there is
+        nothing in the file itself to find — so a sweep that only looked for
+        `#[cfg(test)]` read a whole file of tests as a door. It reported
+        `geo/tests.rs`, whose `View` is not this one, for never watching a
+        directory.
         """
+        if path.name == "tests.rs" or "tests" in path.parts:
+            return ""
         cut = text.find("#[cfg(test)]")
         return text if cut < 0 else text[:cut]
 
@@ -9341,7 +9560,7 @@ let
                     return text[i : j + 1]
         return None
 
-    files = {f: production(f.read_text()) for f in sorted(crates.rglob("*.rs"))}
+    files = {f: production(f, f.read_text()) for f in sorted(crates.rglob("*.rs"))}
 
     # ONE. Every door that builds a view builds a watcher.
     #
@@ -10420,6 +10639,699 @@ let
         kill "$second" 2>/dev/null || true
         echo "OK: the second footer replaces the first, and exactly one is left"
       '';
+
+  # THE WATCHER STOPS WHEN THERE IS NOTHING LEFT TO WATCH FOR.
+  #
+  # # Why this check exists
+  #
+  # Because the owner ended a session with Ctrl+C and his terminal filled with
+  # `footer <pid> standing` and `Error: raise the lifeline`, one turn every
+  # 2.01 s, for an hour — measured on his machine, about 2000 turns and 8000
+  # processes, with the watcher reparented to `systemd --user` and immune to a
+  # second Ctrl+C.
+  #
+  # The loop in `footer-single.nix` re-executes the script, which starts
+  # another footer AND another copy of the watcher, and it had no stopping
+  # condition of any kind: no counter, no deadline, and no question about
+  # whether there was still a compositor to draw on.
+  #
+  # # Why three existing checks could not see it
+  #
+  # `footer-is-single` exercises only the HAPPY path, where the restart
+  # announces itself and the watcher takes its early exit. `dev-exits-clean`
+  # runs `ronoctua-dev` against a display that does not exist, so the script
+  # exits before a footer is ever started and no watcher is ever born. And
+  # `a-dead-footer-is-not-a-dead-desktop` greps the script for the substrings
+  # `lifeline` and `onpurpose` — both of which were present the whole time the
+  # defect was.
+  #
+  # So this one reproduces it instead of reading about it: a footer killed from
+  # OUTSIDE, with nothing announced, under a compositor that has gone.
+  a-dead-footer-stays-dead =
+    mkCheck "a-dead-footer-stays-dead"
+      [
+        singleFooter
+        pkgs.procps
+      ]
+      ''
+        export HOME=$TMPDIR
+        pidfile="$PWD/footer.pid"
+
+        # The same standing-there footer `footer-is-single` uses, and `printf`
+        # for the same reason: a heredoc in an indented Nix string carries the
+        # indentation into the shebang.
+        printf '#!/bin/sh\nexec sleep 300\n' > falso
+        chmod +x falso
+
+        # A PID THAT CANNOT ANSWER, in the name shape `dev.nix` exports:
+        # `niri.<display>.<pid>.sock`. A shell that has already exited is the
+        # cheapest dead PID there is; the loop below is against the one chance
+        # in millions that it was recycled before we looked.
+        gone=$(sh -c 'echo $$')
+        for _ in 1 2 3; do
+          kill -0 "$gone" 2>/dev/null || break
+          gone=$(sh -c 'echo $$')
+        done
+        export NIRI_SOCKET="/run/user/0/niri.wayland-9.$gone.sock"
+
+        ronoctua-footer-single "$pidfile" "$PWD/falso"
+        first=$(cat "$pidfile")
+        kill -0 "$first" || {
+          echo "ERROR: the footer did not come up; the rest proves nothing." >&2
+          exit 1
+        }
+
+        # AND THE WATCHER IS REACHABLE, which is the half `dev.nix` needs: it
+        # held the footer's PID in a file and the watcher's in nothing at all,
+        # so the one thing that could resurrect a footer was the one thing the
+        # session could not stop.
+        [ -s "$pidfile.watcher" ] || {
+          echo "ERROR: the watcher did not write its PID beside the footer's." >&2
+          echo "      Without it, ending a session cannot stop the one process" >&2
+          echo "      that starts footers." >&2
+          exit 1
+        }
+
+        # FROM OUTSIDE, AND UNANNOUNCED — which is what a crash looks like, and
+        # is what ending the session looked like for a year.
+        kill "$first"
+
+        # Six seconds is four turns of the old loop: the poll is one second and
+        # the pause before a restart is another.
+        sleep 6
+
+        alive=$( { pgrep -f 'sleep 300' || true; } | wc -l)
+        [ "$alive" = 0 ] || {
+          echo "ERROR: $alive footer(s) came back with no compositor to draw on." >&2
+          echo "      This is the loop the owner watched for an hour: each turn" >&2
+          echo "      starts a footer that finds no Wayland display, dies, and" >&2
+          echo "      leaves another watcher behind to do it again." >&2
+          exit 1
+        }
+
+        # AND THE WATCHER TOOK ITS OWN PIDFILE WITH IT, so the next session does
+        # not find a file naming a process that is gone.
+        [ ! -e "$pidfile.watcher" ] || {
+          echo "ERROR: the watcher left its pidfile behind." >&2
+          exit 1
+        }
+
+        echo "OK: with the compositor gone, a dead footer stays dead"
+      '';
+
+  # THE SESSION ANNOUNCES THE DEATH IT ASKS FOR, AND IN THAT ORDER.
+  #
+  # # Why this is a check and not a comment
+  #
+  # `a-dead-footer-stays-dead` beside this one proves the watcher stops when
+  # the compositor has gone. This one proves the OTHER half, which no behaviour
+  # test in a sandbox can reach: that ending a session says so.
+  #
+  # `footer-single.nix` tells a death that was asked for from a crash by one
+  # file — `<pidfile>.onpurpose` — and for a year `dev.nix`'s `shutdown` killed
+  # the footer without writing it, and then deleted the pidfile on the way out
+  # so the guard could never match even by accident. Every Ctrl+C therefore
+  # read as a crash.
+  #
+  # ORDER IS HALF THE RULE, and it is the half a sabotage found: writing the
+  # file AFTER the kill is a race the watcher usually wins, because it wakes
+  # within a second of the footer dying and reads the file that is not there
+  # yet. So the check reads the positions and not just the presence.
+  #
+  # It strips comment lines first. Two checks in this file have gone green over
+  # a name that appeared only in prose, and the fix both times was this.
+  the-dev-loop-ends-with-the-session =
+    mkCheck "the-dev-loop-ends-with-the-session" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+
+        def code(path):
+            # A COMMENT IS NOT A PROMISE. Both files are Nix strings holding
+            # shell, and both comment with `#`.
+            return "\n".join(
+                l for l in pathlib.Path(path).read_text().splitlines()
+                if not l.lstrip().startswith("#")
+            )
+
+        dev = code("${../nix/dev.nix}")
+        single = code("${../nix/footer-single.nix}")
+        bad = []
+
+        # --- ONE. The session can reach the watcher at all -------------------
+        if ".watcher" not in single:
+            bad.append("footer-single.nix no longer records the watcher's PID; "
+                       "nothing outside it could then stop it")
+        if 'kill "$(cat "$RONOCTUA_FOOTER_PID.watcher")"' not in dev:
+            bad.append("dev.nix's shutdown does not stop the footer's watcher")
+
+        # --- TWO. It announces, and it announces FIRST -----------------------
+        said = dev.find('> "$RONOCTUA_FOOTER_PID.onpurpose"')
+        killed = dev.find('kill "$footer"')
+        if said < 0:
+            bad.append("dev.nix's shutdown does not write .onpurpose; every Ctrl+C "
+                       "would read as a crash and raise another footer")
+        elif killed < 0:
+            bad.append("dev.nix's shutdown no longer kills the footer by that name")
+        elif said > killed:
+            bad.append("dev.nix writes .onpurpose AFTER killing the footer; the "
+                       "watcher wakes within a second and reads a file that is "
+                       "not there yet")
+
+        # --- THREE. And the session says who it is, before the footer --------
+        told = dev.find('export RONOCTUA_DEV_PID=')
+        started = dev.find("ronoctua-footer-single \\\\")
+        if told < 0:
+            bad.append("dev.nix does not export RONOCTUA_DEV_PID; the watcher "
+                       "cannot tell a live session from a finished one")
+        elif started >= 0 and told > started:
+            bad.append("RONOCTUA_DEV_PID is exported AFTER the footer starts, so "
+                       "the first footer of every session is watched by a watcher "
+                       "that cannot see the session")
+
+        # --- FOUR. The watcher declares all three, and the ceiling -----------
+        for want, why in [
+            ('$pidfile.onpurpose', "the guard that tells a requested death from a crash"),
+            ("NIRI_SOCKET", "the guard that asks whether a compositor is still there"),
+            ("RONOCTUA_DEV_PID", "the guard that asks whether the session is still there"),
+            ("RONOCTUA_FOOTER_TRIES", "the ceiling on a footer that dies as it starts"),
+        ]:
+            if want not in single:
+                bad.append(f"footer-single.nix lost {want} — {why}")
+
+        # AND THE COMPOSITOR IS ASKED BY PID, never by whether its socket file is
+        # on disk. A Wayland server killed by a signal leaves the socket behind:
+        # measured, one was still there an hour after its niri was gone, so a
+        # `[ -S ... ]` test would pass with the whole defect in place.
+        if re.search(r"\[\s*-S\s", single):
+            bad.append("footer-single.nix tests for a socket FILE; a killed "
+                       "compositor leaves its socket on disk, so that question "
+                       "answers yes for ever")
+
+        if bad:
+            for b in bad:
+                print("ERROR: " + b, file=sys.stderr)
+            sys.exit(1)
+        print("OK: the session announces the death it asks for, and says who it is")
+        END
+      '';
+
+  # THE POINTER LIGHTS WHAT THE CLICK WOULD TAKE.
+  #
+  # # Why this is a check
+  #
+  # Because the two are separate code in separate files and they drifted apart
+  # twice, in opposite directions.
+  #
+  # `Field::covers` deliberately owns the one cell AFTER a field, so that a
+  # click in the gap between two columns is not a dead click. The first time,
+  # the painters did NOT count that gap and the hit test did: the last cell of
+  # every field lit nothing and clicked something. The fix taught the painters
+  # to call `covers` — which is the wrong half of the unification, and it is
+  # what produced the second defect: `covers` answers "MAY this field own the
+  # cell", so where fields are packed shoulder to shoulder both the field
+  # before the cell and the field on it say yes, and a painter that asks per
+  # field lights BOTH.
+  #
+  # The owner read that one off the screen, on the one row of this manager
+  # where ten fields sit with no gap between them: *"ao colocar o cursor sobre
+  # uma das letras de permissão, mais de uma (duas) letras estão alterando para
+  # a cor de destaque do hover, mas deveria ser apenas uma"*. `owner:group` is
+  # packed the same way and had the same defect.
+  #
+  # So the rule is not "count the gap" and not "do not count it": it is that
+  # ONE walk answers both questions. `files::lit_field` is that walk, and this
+  # check is what keeps both doors asking it.
+  the-pointer-lights-what-the-click-takes =
+    mkCheck "the-pointer-lights-what-the-click-takes" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+
+        home = pathlib.Path("${../crates/ronoctua-shell/src}")
+        bad = []
+
+        # THE ONE WALK, and it is a free function because two different types
+        # carry the same fields: the manager's `Row` and the footer's expansion
+        # row. A method on either would have been a second ruler for the other.
+        files = (home / "files.rs").read_text()
+        if "pub fn lit_field(fields: &[Field], cell: u16) -> Option<usize>" not in files:
+            bad.append("files.rs no longer defines lit_field; there is nothing for "
+                       "the two doors to agree through")
+        if "lit_field(&self.fields, cell)" not in files:
+            bad.append("Row::field_index_at no longer goes through lit_field, so "
+                       "the click and the paint are two walks again")
+        if "rposition" not in files:
+            bad.append("lit_field no longer walks from the RIGHT; with `position` "
+                       "the cell under a character answers for the character "
+                       "BEFORE it, through the gap rule")
+
+        # AND NEITHER PAINTER DECIDES FOR ITSELF. What is refused is `covers`
+        # inside the loop that paints a row's fields — the shape the defect had
+        # in both doors.
+        for door, what in [("files_window.rs", "the window"), ("surface.rs", "the footer")]:
+            src = (home / door).read_text()
+            for hit in re.finditer(r"for \(?[^\n]*\bfields\b[^\n]*\{\n((?:[^\n]*\n){0,6})", src):
+                if ".covers(" in hit.group(1):
+                    line = src[: hit.start()].count("\n") + 1
+                    bad.append(f"{door}:{line} asks `covers` per field while painting "
+                               f"a row — {what} door would light two fields where "
+                               f"they are packed with no gap")
+            if "lit_field" not in src and "field_index_at" not in src:
+                bad.append(f"{door} does not ask which field is lit; it cannot be "
+                           f"drawing the pointer's subject")
+
+        if bad:
+            for b in bad:
+                print("ERROR: " + b, file=sys.stderr)
+            sys.exit(1)
+        print("OK: one walk answers both 'which field lights' and 'which field is clicked'")
+        END
+      '';
+
+  # THE CRATE THAT BELONGS TO NO APP STAYS THAT WAY.
+  #
+  # # Why this is a check and not a habit
+  #
+  # `ronoctua-atlas` is the globe's half that has no colour, no filesystem, no
+  # clock and no dependency — which is what lets the installer (where there is
+  # no store yet) and a future app ask it where a coordinate is without linking
+  # a rasteriser, and what keeps it able to compile for `wasm32-wasip2`.
+  #
+  # None of that is visible from the inside: a crate that grows a dependency
+  # still builds, still passes every test, and only stops being portable months
+  # later when somebody tries. `ronoctua-syntax` keeps the same discipline by
+  # prose; this turns it on the one that came after it.
+  #
+  # NOTE THAT PASSING DOES NOT MAKE IT INVARIANT 12's FOURTH CRATE. That
+  # sentence names three, and adding to it is the owner's decision — this only
+  # proves the capability is there to be claimed.
+  atlas-crate-is-pure = mkCheck "atlas-crate-is-pure" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    home = pathlib.Path("${../crates/ronoctua-atlas}")
+    bad = []
+
+    # --- ONE. No dependency at all ---------------------------------------
+    manifest = (home / "Cargo.toml").read_text()
+    block = re.search(r"\n\[dependencies\]\n(.*?)(\n\[|\Z)", manifest, re.S)
+    lines = [
+        l
+        for l in (block.group(1).splitlines() if block else [])
+        if l.strip() and not l.lstrip().startswith("#")
+    ]
+    if lines:
+        bad.append(
+            f"ronoctua-atlas has {len(lines)} dependency/ies; it is the crate that "
+            "belongs to no app, and zero is what makes that true: "
+            + ", ".join(l.split("=")[0].strip() for l in lines)
+        )
+
+    # --- TWO. `no_std`, and nothing that needs one -----------------------
+    lib = (home / "src/lib.rs").read_text()
+    if "#![no_std]" not in lib:
+        bad.append("lib.rs does not declare #![no_std]; the names it must not use "
+                   "would be in scope again")
+    for source in sorted(home.rglob("*.rs")):
+        text = "\n".join(
+            l for l in source.read_text().splitlines() if not l.lstrip().startswith("//")
+        )
+        for forbidden, why in [
+            ("std::fs", "a filesystem"),
+            ("std::env", "the environment"),
+            ("std::thread", "a thread"),
+            ("option_env!", "a store path baked at compile time"),
+        ]:
+            if forbidden in text:
+                bad.append(f"{source.name} reaches for {forbidden} — {why} is the "
+                           "caller's, and this crate is compiled where it does not exist")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print("OK: ronoctua-atlas has no dependency, no std and no environment")
+    END
+  '';
+
+  # AND IT GIVES BACK A ROLE, NEVER A COLOUR.
+  #
+  # `ronoctua-syntax`'s rule, one subject along and for the same reason: the
+  # crate is compiled inside components that receive no token value, so a colour
+  # cannot cross that boundary. What crosses is an `Ink`, and the ONE place that
+  # turns one into the other is `globe::ink_color` — whose `match` is
+  # exhaustive, so a role added to the crate is a compile error in exactly one
+  # file rather than a shape drawn in whatever colour was last set.
+  atlas-returns-a-role = mkCheck "atlas-returns-a-role" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    crate = pathlib.Path("${../crates/ronoctua-atlas}")
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    bad = []
+
+    for source in sorted(crate.rglob("*.rs")):
+        text = "\n".join(
+            l for l in source.read_text().splitlines() if not l.lstrip().startswith("//")
+        )
+        if "ronoctua_tokens" in text:
+            bad.append(f"{source.name} names ronoctua_tokens; a colour is a token "
+                       "value and this crate is compiled where there is none")
+        hex_literal = re.search(r'"#[0-9A-Fa-f]{6}', text)
+        if hex_literal:
+            bad.append(f"{source.name} writes a colour out by hand (invariant 9)")
+
+    # --- AND THE WALL IS ONE `match`, and exhaustive ---------------------
+    wall = (shell / "globe.rs").read_text()
+    if "pub const fn ink_color(ink: Ink) -> tokens::Color" not in wall:
+        bad.append("globe.rs no longer holds ink_color; there is no single place "
+                   "that turns a role into a colour")
+    inks = re.findall(r"\n    (\w+),", (crate / "src/globe.rs").read_text())
+    arm = re.search(r"pub const fn ink_color.*?\n\}", wall, re.S)
+    for ink in re.findall(r"pub enum Ink \{(.*?)\n\}", (crate / "src/globe.rs").read_text(), re.S):
+        names = re.findall(r"\n    (\w+),", ink)
+        for name in names:
+            if arm is None or f"Ink::{name}" not in arm.group(0):
+                bad.append(f"Ink::{name} has no colour in globe::ink_color")
+    if "_ =>" in (arm.group(0) if arm else ""):
+        bad.append("ink_color has a catch-all arm; the next role added would be "
+                   "drawn in whatever colour that arm names")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print("OK: the atlas answers with a role, and one exhaustive match turns it into a colour")
+    END
+  '';
+
+  # THE WORLD ARRIVES AT RUN TIME, AND NOT AT COMPILE TIME.
+  #
+  # Six megabytes of borders and place names, in `atRunTime` and never in
+  # `generated`. The difference is measured and written in `nix/rust.nix`: a
+  # store path in `generated` is a compilation INPUT, so re-baking the table —
+  # a newer Natural Earth tag, a fresher GeoNames dump, `cities1000` instead of
+  # `cities500` — would rebuild all thirty-three crates at the 2m15–5m46 that
+  # file records, and make both dependency layers wait on it.
+  #
+  # It is `deps-layer-is-lean`'s argument turned on one variable, plus the half
+  # that check cannot see: that `nix/dev.nix` exports it BEFORE the footer
+  # starts, so the globe does not work on an installed machine and do nothing in
+  # the loop — which is the first place anybody looks.
+  atlas-is-at-run-time = mkCheck "atlas-is-at-run-time" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    rust = pathlib.Path("${../nix/rust.nix}").read_text()
+    bad = []
+
+    def block(name):
+        m = re.search(r"\n  " + name + r" = [^\n]*\{(.*?)\n  \};", rust, re.S)
+        return m.group(1) if m else ""
+
+    if "RONOCTUA_ATLAS" not in block("atRunTime"):
+        bad.append("RONOCTUA_ATLAS is not in atRunTime; the wrapper would not set it")
+    for wrong in ("generated", "buildBase"):
+        if "RONOCTUA_ATLAS" in block(wrong):
+            bad.append(
+                f"RONOCTUA_ATLAS is a {wrong} input: re-baking the atlas would "
+                "rebuild 33 crates (2m15-5m46 measured), for a value no "
+                "compilation reads"
+            )
+
+    # AND THE READER ASKS THE ENVIRONMENT, never the compiler.
+    globe = pathlib.Path("${../crates/ronoctua-shell/src}/globe.rs").read_text()
+    if 'option_env!("RONOCTUA_ATLAS")' in globe:
+        bad.append("globe.rs bakes the atlas path in with option_env!; the store "
+                   "path would be a reference this binary carries into every closure")
+    if 'var_os("RONOCTUA_ATLAS")' not in globe:
+        bad.append("globe.rs does not read RONOCTUA_ATLAS from the environment")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print("OK: the world arrives at run time, and re-baking it costs no compilation")
+    END
+  '';
+
+  # THE ATTRIBUTION IS CARRIED IN ALL FOUR PLACES.
+  #
+  # GeoNames is CC BY 4.0 and the street packs are ODbL: both REQUIRE
+  # attribution, and this repository is MIT + OFL (invariant 2), so none of it
+  # may be silent. The four are the repository's own licence file, the header of
+  # the file that names the sources, the SCREEN, and — the one that cannot be
+  # separated from the data — a section inside the baked table itself.
+  atlas-credits-are-carried = mkCheck "atlas-credits-are-carried" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+
+    bad = []
+    places = {
+        "LICENSE-DATA.txt": pathlib.Path("${../LICENSE-DATA.txt}"),
+        "assets/atlas.nix": pathlib.Path("${../assets/atlas.nix}"),
+        "en-GB.ftl": pathlib.Path("${../assets/i18n/en-GB.ftl}"),
+        "pt-BR.ftl": pathlib.Path("${../assets/i18n/pt-BR.ftl}"),
+    }
+    for name, path in places.items():
+        if not path.exists():
+            bad.append(f"{name} does not exist, and it is one of the four places "
+                       "the attribution lives")
+            continue
+        text = path.read_text()
+        if "GeoNames" not in text:
+            bad.append(f"{name} does not name GeoNames — CC BY 4.0 requires the "
+                       "attribution, and the screen is one of the four places")
+
+    # AND THE TABLE CARRIES IT TOO, which is what makes a copy of the file
+    # impossible to separate from its licence.
+    gen = pathlib.Path("${../nix/scripts/gen-atlas.py}").read_text()
+    if "--credits" not in gen:
+        bad.append("gen-atlas.py writes no credits section into the table")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print("OK: the attribution is in the licence file, the sources, the screen and the table")
+    END
+  '';
+
+  # THE METRES IN THE COMMENT ARE THE METRES IN THE CODE.
+  #
+  # AGENTS.md's own rule — *"meça de novo antes de confiar num tamanho escrito
+  # num comentário"* — mechanised on the one number this feature rests on. The
+  # quantisation is what makes six megabytes enough, and the argument for it is
+  # that 611 m sits BELOW the resolution of 1:50 m data. A step that drifted
+  # from its comment would leave that argument attached to a number that is no
+  # longer true.
+  #
+  # It also refuses the other half: the generator and the reader must use ONE
+  # grid. Two definitions of a grid is an index that finds nothing at the edges.
+  atlas-quantisation-is-declared = mkCheck "atlas-quantisation-is-declared" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    raw = pathlib.Path("${../crates/ronoctua-atlas/src}/baked.rs").read_text()
+    # THE PROSE, UNWRAPPED. A doc comment carries `//!` at the start of every
+    # line, so a sentence that wrapped has a marker in the middle of it — and a
+    # check that searched the file as it is would report a missing comment that
+    # is right there.
+    baked = re.sub(r"\n\s*//[/!]?", " ", raw)
+    gen = pathlib.Path("${../nix/scripts/gen-atlas.py}").read_text()
+    bad = []
+
+    steps = re.search(r"pub const LON_STEPS: f32 = ([\d_]+)\.0;", raw)
+    if steps is None:
+        bad.append("baked.rs no longer declares LON_STEPS")
+    else:
+        n = float(steps.group(1).replace("_", ""))
+        # One step of longitude at the equator, on a sphere of 6 371 km.
+        metres = 360.0 / n * 111_320.0
+        # ACROSS A LINE BREAK, because prose wraps: the number and the words
+        # after it are not always on one line, and a check that only matched
+        # them together would report a missing comment that is there.
+        said = re.search(r"about\s+(\d+)\s*m at the equator", baked, re.S)
+        if said is None:
+            bad.append("baked.rs no longer says how many metres a step is")
+        elif abs(int(said.group(1)) - metres) > 5:
+            bad.append(
+                f"the longitude step is {metres:.0f} m and the comment says "
+                f"{said.group(1)} m"
+            )
+
+        # AND THE GENERATOR USES THE SAME GRID.
+        theirs = re.search(r"STEPS = ([\d_]+)\.0", gen)
+        if theirs is None or float(theirs.group(1).replace("_", "")) != n:
+            bad.append("gen-atlas.py quantises on a different grid from baked.rs; "
+                       "an index built on one and read on the other finds nothing "
+                       "at the edges")
+
+    for name in ("CELLS_LON", "CELLS_LAT"):
+        mine = re.search(name + r"(?::  *usize)? = (\d+)", raw)
+        theirs = re.search(name + r" = (\d+)", gen)
+        if not mine or not theirs or mine.group(1) != theirs.group(1):
+            bad.append(f"{name} differs between the reader and the generator")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print("OK: the grid is one grid, and the metres in the comment are the metres in the code")
+    END
+  '';
+
+  # A LAKE IS A HOLE, AND ONE LINE DECIDES IT.
+  #
+  # Nothing in the data tags an inner ring: a lake inside a country and an
+  # island inside a lake are both just rings. The even-odd rule makes the answer
+  # their PARITY, which is right without anybody deciding which is which — and
+  # the winding rule would fill the Caspian with land.
+  #
+  # The same line is in two places by necessity (the lookup counts crossings,
+  # the painter fills), and this refuses the other rule in both.
+  atlas-fill-is-even-odd = mkCheck "atlas-fill-is-even-odd" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+
+    bad = []
+    painter = pathlib.Path("${../crates/ronoctua-shell/src}/globe.rs").read_text()
+    if "FillRule::Winding" in painter:
+        bad.append("globe.rs fills with the winding rule — a shapefile does not "
+                   "tag inner rings, so this puts land in the Caspian")
+    if "FillRule::EvenOdd" not in painter:
+        bad.append("globe.rs no longer names EvenOdd; the fill rule is the line "
+                   "that decides whether a lake is a hole")
+
+    lookup = pathlib.Path("${../crates/ronoctua-atlas/src}/lookup.rs").read_text()
+    if "crossings % 2 == 1" not in lookup:
+        bad.append("lookup.rs no longer answers by parity; a point inside a lake "
+                   "inside a country would come back as being in neither")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print("OK: parity decides what is inside, in the lookup and in the painter")
+    END
+  '';
+
+  # THE GLOBE'S TEXTURE KEY CARRIES ITS OWNER — the one silent failure.
+  #
+  # A texture is named by what it is OF, how big it is and which theme painted
+  # it. With two views able to show a globe, that is not enough: one coordinate
+  # at one size in one theme resolves to a single key, both views redraw under
+  # it every frame, and they overwrite each other — with nothing on screen and
+  # nothing in any log saying so. `Images` has no remove-by-key either, so the
+  # collision would outlive one of them closing.
+  #
+  # The owner enum exists before its second variant is reached for exactly this
+  # reason: a key that gains a part later is a key that was colliding until it
+  # did.
+  globe-keys-are-unique-per-owner = mkCheck "globe-keys-are-unique-per-owner" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    globe = pathlib.Path("${../crates/ronoctua-shell/src}/globe.rs").read_text()
+    bad = []
+
+    key = re.search(r"pub fn texture_key\(&self\) -> String \{(.*?)\n    \}", globe, re.S)
+    if key is None:
+        bad.append("globe.rs no longer builds a texture key")
+    else:
+        body = key.group(1)
+        for part, why in [
+            ("owner", "two views showing one coordinate would overwrite each "
+                      "other's frame every tick"),
+            ("key", "two files would share one picture"),
+            ("size", "a resized panel would draw the texture it had before"),
+            ("theme", "a theme change would leave the old ink on the GPU"),
+        ]:
+            if part not in body:
+                bad.append(f"the globe's texture key does not carry its {part}: {why}")
+
+    if "pub fn new(owner: Owner)" not in globe:
+        bad.append("Globe::new does not take an Owner; the key could then be "
+                   "built without one")
+    if re.search(r"impl Default for Globe", globe):
+        bad.append("Globe has a Default; an owner that can be defaulted is an "
+                   "owner two views can share by accident")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print("OK: a globe's texture is named by its owner, its subject, its size and its theme")
+    END
+  '';
+
+  # THE MANAGER DRAWS TWO PICTURES, AND THE CEILING KNOWS IT.
+  #
+  # `Images::prepare` takes what fits and DROPS the rest, with no error
+  # anywhere. So a ceiling one too low means the globe simply never reaches the
+  # GPU on a full region — the one failure in this whole feature with no
+  # symptom at all.
+  files-panels-have-two-pictures = mkCheck "files-panels-have-two-pictures" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    image = pathlib.Path("${../crates/ronoctua-render/src}/image.rs").read_text()
+    window = pathlib.Path("${../crates/ronoctua-shell/src}/files_window.rs").read_text()
+    bad = []
+
+    if "MANAGER_PICTURES" not in image:
+        bad.append("image.rs no longer says how many pictures the manager draws")
+    ceiling = re.search(r"const CEILING: usize =(.*?);", image, re.S)
+    if ceiling is None or "MANAGER_PICTURES" not in ceiling.group(1):
+        bad.append(
+            "the image ceiling does not count the manager's pictures; the globe "
+            "would be dropped silently on a full region"
+        )
+    if "pub pictures: Vec<(String, ronoctua_render::image::Area)>" not in window:
+        bad.append("Painted still carries ONE picture; the globe and the preview "
+                   "cannot both be drawn")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print("OK: the manager may draw two pictures, and the ceiling counts them")
+    END
+  '';
+
+  # A PANEL'S RESERVED LINES ARE NOT ITS ROWS.
+  #
+  # `Section::above` used to be the listing's alone — the path and the header.
+  # The globe takes lines off the top of the info panel the same way, so every
+  # place that turned a LINE into a ROW had to learn it: the pointer on the
+  # picture answered for the first fact, and paging by the region's height
+  # stepped past facts nobody had seen.
+  files-panel-rows-skip-the-reserve = mkCheck "files-panel-rows-skip-the-reserve" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+
+    files = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
+    bad = []
+
+    if "_ if inside < sec.above => usize::MAX," not in files:
+        bad.append("hit() does not skip a panel's reserved lines; the pointer on "
+                   "the globe would answer for the first fact")
+    if "_ => sec.offset + inside - sec.above," not in files:
+        bad.append("hit() adds a panel's reserve to its row index")
+    if "pub fn info_room(&self)" not in files:
+        bad.append("there is no one answer for how many ROWS the info panel has")
+    if "self.info_room()" not in files:
+        bad.append("nothing asks info_room(); the facts would page by the "
+                   "region's lines and step past what the globe covers")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print("OK: a panel's reserved lines are not counted as its rows")
+    END
+  '';
 
   # THE FOOTER'S LOG OUTLIVES THE TERMINAL.
   #
@@ -15849,7 +16761,17 @@ let
 
     # What the SHELL reads at runtime and no build bakes. A variable that
     # arrives late is a variable that did not arrive.
-    AT_RUNTIME = ["RONOCTUA_ICONS", "RONOCTUA_FILES_START", "RONOCTUA_FILES_SIDEBAR", "RONOCTUA_THEME", "RONOCTUA_THEMES"]
+    AT_RUNTIME = [
+        "RONOCTUA_ICONS",
+        "RONOCTUA_FILES_START",
+        "RONOCTUA_FILES_SIDEBAR",
+        "RONOCTUA_THEME",
+        "RONOCTUA_THEMES",
+        # THE WORLD. A variable that arrives after the footer makes the globe
+        # work on an installed machine and do nothing in the loop, which is the
+        # first place anybody looks.
+        "RONOCTUA_ATLAS",
+    ]
 
     text = pathlib.Path("${../nix/dev.nix}").read_text()
     lines = text.splitlines()
@@ -16000,16 +16922,20 @@ let
         python3 - <<'END'
         import pathlib, re, sys
 
-        # THE SENTENCE UNDER THE HINT LINE IS DRAWN IN ELEVEN PLACES, and it has to
+        # THE SENTENCE UNDER THE HINT LINE IS DRAWN IN TWELVE PLACES, and it has to
         # read the same in all of them.
         #
         # It was `Register::Prose` — the hint's OWN words — in every one, and the
         # owner read it off the screen: *"a cor do texto está igual à dos textos dos
-        # outros atalhos, assim não criando uma boa distinção visual"*. Eleven doors
+        # outros atalhos, assim não criando uma boa distinção visual"*. A dozen doors
         # writing the same line by hand is exactly the shape of `the-cursor-is-a-
-        # colour`, which found a third view nobody had looked at: the twelfth door
-        # will be written by copying one of these, and copying the wrong colour is
-        # silent.
+        # colour`, which found a third view nobody had looked at.
+        #
+        # THE COUNT IS EXACT ON PURPOSE, and the twelfth door proved it works from
+        # both sides: `geo_window.rs` was written by copying one of these — which is
+        # what the sentence above predicted — and this check is what made the new
+        # door announce itself instead of arriving unread. A floor would have let a
+        # door STOP explaining; the number moves when a door is added, once.
         src = pathlib.Path("${../crates/ronoctua-shell/src}")
         bad = []
         doors = []
@@ -16028,9 +16954,9 @@ let
                         "`Register::Explain` — it reads as one more shortcut on the "
                         "row above it"
                     )
-        if len(doors) != 11:
+        if len(doors) != 12:
             bad.append(
-                f"{len(doors)} doors draw the sentence, and there are eleven; the "
+                f"{len(doors)} doors draw the sentence, and there are twelve; the "
                 "sweep is reading the wrong thing or a door has stopped explaining"
             )
 
@@ -16493,6 +17419,8 @@ let
       audio-names-have-text
       one-syncthing-boundary
       one-http-writer
+      one-zip-reader
+      every-view-follows-its-cursor
       syncthing-options-are-declared
       syncthing-flake-owned-rows-refuse
       syncthing-mark-is-silent-by-default
@@ -16587,6 +17515,18 @@ let
       reload-command-is-defined
       dev-exports-what-the-build-bakes
       footer-is-single
+      a-dead-footer-stays-dead
+      the-dev-loop-ends-with-the-session
+      the-pointer-lights-what-the-click-takes
+      atlas-crate-is-pure
+      atlas-returns-a-role
+      atlas-is-at-run-time
+      atlas-credits-are-carried
+      atlas-quantisation-is-declared
+      atlas-fill-is-even-odd
+      globe-keys-are-unique-per-owner
+      files-panels-have-two-pictures
+      files-panel-rows-skip-the-reserve
       footer-logs-to-file
       dev-exits-clean
       english-names
@@ -16668,8 +17608,21 @@ let
       reload-command-is-defined
       dev-exports-what-the-build-bakes
       # And that restarting RESTARTS: `reload-reloads` proves that the command
-      # fires, this one proves that exactly one footer is left.
+      # fires, this one proves that exactly one footer is left — and the third
+      # proves that when the session ends, the restarting ENDS.
       footer-is-single
+      a-dead-footer-stays-dead
+      the-dev-loop-ends-with-the-session
+      the-pointer-lights-what-the-click-takes
+      atlas-crate-is-pure
+      atlas-returns-a-role
+      atlas-is-at-run-time
+      atlas-credits-are-carried
+      atlas-quantisation-is-declared
+      atlas-fill-is-even-odd
+      globe-keys-are-unique-per-owner
+      files-panels-have-two-pictures
+      files-panel-rows-skip-the-reserve
       footer-logs-to-file
       dev-exits-clean
       # The two GPU-independent gates of section 9.3, which protect this

@@ -144,7 +144,7 @@ fn weigh(work: &Work, switch: &Arc<Control>) -> Result<u64> {
         // `serve` routes by `Work::engine()`, so reaching this means the router
         // and the model disagree. An error puts that on the row where somebody
         // sees it; a panic would take the unit down and every copy with it.
-        Work::Fetch { .. } | Work::Media { .. } | Work::Torrent { .. } => {
+        Work::Fetch { .. } | Work::Media { .. } | Work::Torrent { .. } | Work::Atlas { .. } => {
             anyhow::bail!("a network job handed to the local engine")
         }
     })
@@ -214,7 +214,7 @@ fn carry_out(work: &Work, w: &mut Watch<'_>) -> Result<Option<u64>> {
         // `serve` routes by `Work::engine()`, so reaching this means the router
         // and the model disagree. An error puts that on the row where somebody
         // sees it; a panic would take the unit down and every copy with it.
-        Work::Fetch { .. } | Work::Media { .. } | Work::Torrent { .. } => {
+        Work::Fetch { .. } | Work::Media { .. } | Work::Torrent { .. } | Work::Atlas { .. } => {
             anyhow::bail!("a network job handed to the local engine")
         }
     }

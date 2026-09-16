@@ -124,6 +124,28 @@ pub fn all_of() -> &'static [Action] {
             tier: Tier::Free,
             confirms: false,
         },
+        // WHERE THE FILE SAYS IT WAS MADE, on a map.
+        //
+        // The owner asked for it beside the globe: *"deve contar com a opção de
+        // clicar na coordenada para abrir no Google Maps do navegador"*. It is
+        // the one action in this menu that leaves the machine, and the sentence
+        // under the cursor says so before the key is pressed.
+        //
+        // `Applies::File` and not a variant of its own: whether a file carries
+        // a coordinate is not a property of its TYPE — two photographs from one
+        // camera differ — so it cannot be answered here. A row drawn and then
+        // refusing with a sentence is the arrangement the formatter's XFS line
+        // already uses, and it is better than a row that is missing: from the
+        // outside, a missing row and a key that does nothing are the same.
+        Action {
+            id: "open-map",
+            label: key::FILES_OPEN_MAP,
+            does: key::FILES_DOES_OPEN_MAP,
+            key: "g",
+            applies: Applies::File,
+            tier: Tier::Free,
+            confirms: false,
+        },
         Action {
             id: "open-with",
             label: key::FILES_OPEN_WITH,

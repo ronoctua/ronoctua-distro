@@ -1,0 +1,32 @@
+[package]
+name = "ronoctua-atlas"
+description = "Where a coordinate is, and how to draw a globe of it. Zero dependencies, no_std."
+# EVERYTHING SPELLED OUT, and never `version.workspace = true` — the same
+# reason `ronoctua-syntax` and `ronoctua-design` write out: a crate that is a
+# member of this workspace AND could be a path dependency of a buffer (which is
+# a workspace of its own) fails there with `failed to load manifest ...
+# workspace ... not found`, an error naming neither the field nor the buffer.
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+# ZERO DEPENDENCIES, and `no_std` besides.
+#
+# This crate belongs to no app. It is what `ronoctua-syntax` is one subject
+# along: a pure function from bytes and a coordinate to geometry and a role,
+# with no filesystem, no clock, no thread, no environment and no colour. The
+# file manager is its FIRST caller and never its owner — the glance, the locale
+# view and the installer all hold coordinates today and could ask it the same
+# question tomorrow.
+#
+# `no_std` makes that "the names do not exist" rather than "we agreed not to",
+# and it is also what keeps the crate able to compile for `wasm32-wasip2`.
+# NOTE that it is deliberately NOT listed in invariant 12: adding a fourth
+# crate to that sentence is the owner's decision, and `atlas-crate-is-pure`
+# proves the capability without claiming it.
+[dependencies]
+
+[lints]
+workspace = true

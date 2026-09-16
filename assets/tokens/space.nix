@@ -62,6 +62,36 @@
   # The modeline has an `edgeRight` of its own, and for the same reason — but
   # they stay two numbers: a table is not a status line, and the day one of them
   # wants two cells the other must not follow.
+  # -------------------------------------------------------------------
+  # The globe
+  # -------------------------------------------------------------------
+  #
+  # IN PIXELS, which is the fourth block in this file that is — the reason
+  # `files.pictureAir` gives: what these measure is a picture, and a picture is
+  # not made of cells.
+  atlas = {
+    # Air round the disc, so the rim is not flush with the panel's edge.
+    air = 6;
+    # THE COORDINATE'S DOT, in TENTHS of a pixel.
+    #
+    # Tenths because this file generates integers — `files.meshWireWidth` makes
+    # the same move one figure along, and for the same reason: a radius of
+    # three-and-a-half is a real answer and `u16` is not.
+    dotRadius = 35;
+    # A line of the globe, in tenths of a pixel.
+    stroke = 11;
+    # How many lines of the info panel the globe takes.
+    #
+    # SIX, and the reason is the panel and not the picture: the panel is
+    # twenty-four to forty cells wide and the region has a twelve-line ceiling
+    # in the footer, so a globe that took more would leave no facts. Below the
+    # disc there is one line for the address.
+    lines = 6;
+    # Region borders are drawn only when the country's box is at least this
+    # wide in pixels — below it they are mud.
+    regionsFrom = 240;
+  };
+
   files = {
     gutter = 1;
     edgeRight = 1;

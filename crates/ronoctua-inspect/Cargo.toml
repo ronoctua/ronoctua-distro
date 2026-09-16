@@ -63,18 +63,27 @@ rustix = { workspace = true, features = [ "event" ] }
 # buys and what it costs.
 image.workspace = true
 resvg.workspace = true
-# THE TWO A 3MF NEEDS, and neither is a new store path.
+# THE ZIP, which is a crate now and was a module here.
 #
-# A 3MF is a zip of XML. `flate2` is already in the lock under `png` and is
-# pure Rust through `miniz_oxide`, and `roxmltree` is already built under
-# `usvg`, which this crate depends on one line up. Naming them here costs
-# compile time that was already being paid and adds nothing to the closure —
-# which is the bar the workspace's own `image` line sets, and what
+# A 3MF, the six office formats, an `.epub` and a REGION PACK for the atlas are
+# all zips, and the last of those is baked by a crate that must not depend on
+# this one. `src/zip.rs` is what is left: the translation from its trouble to
+# this crate's refusal.
+ronoctua-zip = { path = "../ronoctua-zip" }
+# THE XML A 3MF AND THE OFFICE FORMATS NEED, and the deflate that WRITES one.
+#
+# `roxmltree` is already built under `usvg`, which this crate depends on one
+# line up, and `flate2` arrives under `png`: naming them here costs compile
+# time that was already being paid and adds nothing to the closure, which is
+# the bar the workspace's own `image` line sets and what
 # `files-closure-has-no-mime-db` measures.
 #
-# What is deliberately NOT here is a zip crate: walking a central directory and
-# inflating one member is two hundred lines, and a lock entry for that is a
-# dependency taken because it exists rather than because it is needed.
+# `flate2` is now only in `mesh::fixture::zip_of`, under `#[cfg(test)]` — the
+# READING moved to `ronoctua-zip`, and a test that built its zip through the
+# reader would be a test of nothing. What is deliberately NOT here, still, is a
+# zip CRATE: walking a central directory and inflating one member is two
+# hundred lines, and a lock entry for that is a dependency taken because it
+# exists rather than because it is needed.
 flate2 = "1.1"
 roxmltree = "0.21"
 

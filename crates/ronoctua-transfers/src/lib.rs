@@ -37,6 +37,7 @@
 #![forbid(unsafe_code)]
 
 pub mod aria2;
+pub mod atlas;
 pub mod auth;
 pub mod browser;
 pub mod client;

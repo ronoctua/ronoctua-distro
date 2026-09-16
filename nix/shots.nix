@@ -256,6 +256,12 @@ pkgs.testers.runNixOSTest {
 
     FOOTER = ${toString footerPx}
     LINE = ${toString linePx}
+    # THE LINE UNROUNDED, because a HEIGHT is a sum of them and not a multiple
+    # of the rounded one. `LINE` is the ceiling (27) and is right for aiming a
+    # pointer or cropping a strip; two real lines are 52.2, which the shell
+    # asks for as 53. Measuring a surface with the ceiling reads a footer at
+    # rest as one pixel too short and refuses it — see the subtest below.
+    LINE_EXACT = ${toString (typography.size.base * typography.lineHeight)}
     CELL = ${toString cellPx}
     STRIP = ${toString (import ../assets/tokens/space.nix).files.stripLines}
     AIR = ${toString (import ../assets/tokens/space.nix).files.pictureAir}
@@ -315,7 +321,7 @@ pkgs.testers.runNixOSTest {
         )
 
 
-    def has_colour(hex_value, at_least=1, of="/tmp/panel-before.png"):
+    def has_colour(hex_value, at_least=1, of="/tmp/panel-before.png", fuzz=12):
         """How many pixels of `of` are that colour.
 
         A LOOSE MATCH on purpose: the surface is drawn through wgpu and the
@@ -324,10 +330,19 @@ pkgs.testers.runNixOSTest {
         body of a letter and narrow enough that green does not answer for
         purple — the two furthest apart in this palette are `syntax.string`
         and `syntax.keyword`, and they differ by far more than that.
+
+        AND IT IS LOOSE ENOUGH TO LIE ABOUT A FILLED SHAPE. Twelve per cent is
+        a Euclidean distance of about fifty-three in eight-bit units, and
+        `surface.atlas.land` (`#D7D2CA`) sits twenty-eight from
+        `text.primary` (`#E0E0E0`) — so a panel of ordinary WORDS answers
+        "there are continents here". What needs the width is a GLYPH, whose
+        edges are blends; a disc's interior is the flat token, so an assertion
+        about a filled region passes a small `fuzz` and stops being answerable
+        by text.
         """
         n = int(
             machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick {of} -fuzz 12% "
+                f"${pkgs.imagemagick}/bin/magick {of} -fuzz {fuzz}% "
                 f"-fill '#000000' +opaque '{hex_value}' -fill '#FFFFFF' "
                 f"-opaque '{hex_value}' -format '%[fx:int(mean*w*h+0.5)]' info:"
             ).strip()
@@ -391,6 +406,12 @@ pkgs.testers.runNixOSTest {
         "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
         "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_notify=debug "
         "--setenv=RONOCTUA_SWAPPY=${pkgs.swappy}/bin/swappy "
+        # AND THE TAG READER, which `nix/modules/media.nix` puts on the footer's
+        # unit in production. Without it `ronoctua-inspect` answers
+        # `Refusal::Missing` for every photograph, so a file with GPS in it
+        # draws a panel of plain facts — and the globe, which is the whole
+        # subject of one scene here, could not be photographed at all.
+        "--setenv=RONOCTUA_EXIFTOOL=${pkgs.exiftool}/bin/exiftool "
         # The theme's floor and the generator's fragments, as the module
         # exports them — the chooser's shots copy a fragment and assert it.
         "--setenv=RONOCTUA_THEME=${defaultTheme} "
@@ -587,8 +608,19 @@ pkgs.testers.runNixOSTest {
             # AND IT IS REALLY AT REST, which is this subtest's whole name: two
             # lines, the glance and the brain's row at most. Twelve of them is
             # a view still open, and the click below would rightly do nothing.
-            assert 2 * LINE <= at_rest < 5 * LINE, (
-                f"the footer is {at_rest} px — that is not a footer at rest"
+            #
+            # IN LINES, AND NOT IN PIXELS, because the sentence above is about
+            # lines and the arithmetic has to say the same thing. It read
+            # `2 * LINE <= at_rest`, and `LINE` is the line rounded UP: fifty-four
+            # against the fifty-three a two-line footer actually is, so the
+            # condition could never hold for the state this subtest is NAMED
+            # for. It passed while the brain's row was up and the surface was
+            # three lines — which in a full battery it is not, because the
+            # brain's own scene comes nine scenes later.
+            at_rest_lines = round(at_rest / LINE_EXACT)
+            assert 2 <= at_rest_lines <= 4, (
+                f"the footer is {at_rest} px, {at_rest_lines} lines"
+                " — that is not a footer at rest"
             )
             top = y_f + h_f - at_rest
             # THE LEFT HALF OF THE LINE: the chevron that opens it lives at the
@@ -869,6 +901,76 @@ pkgs.testers.runNixOSTest {
             )
             machine.sleep(1)
             shot("15-hover-on-the-windows-facts")
+
+            # AND THE SENTENCE ABOUT THAT FACT COMES OUT IN TWO INKS.
+            #
+            # The owner read a cut label in this very panel and asked for both
+            # halves in full on the message line *and* told apart — *"a cor da
+            # legenda e do valor devem se diferenciar"*. The line used to be one
+            # run in one token, so the only way to see the fix is to count both
+            # tokens ON THAT LINE.
+            #
+            # CROPPED TO THE LINE, and to this window's own half: the whole
+            # frame carries `text.subtle.default` in every hint on screen, so a
+            # measurement of the frame would pass with the sentence in a single
+            # colour. The message line of this door is its FIRST.
+            def sentence_inks(into):
+                """The two registers on this door's message line."""
+                crop(f"{w_w // 2}x{LINE}+{x_w}+{y_w}", into=into)
+                return (
+                    has_colour(
+                        "#" + token_hex("text.subtle.default"), at_least=8, of=into
+                    ),
+                    has_colour(
+                        "#" + token_hex("text.subtle.strong"), at_least=8, of=into
+                    ),
+                )
+
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            here = sentence_inks("/tmp/two-inks-here.png")
+
+            # AND THE SAME LINE OVER ANOTHER FACT, because two inks ALONE prove
+            # nothing.
+            #
+            # A hint carries both registers too — the key in `strong`, the prose
+            # around it in `default` — so a measurement of one line would go
+            # green with the sentence never drawn at all, which is the shape of
+            # every empty assertion this file has been bitten by. What a hint
+            # cannot do is CHANGE when the pointer moves from one fact to
+            # another: two facts have different names and different values, so
+            # the ink they cover differs. The hint would give the same two
+            # numbers twice.
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_w + 450} {y_w + h_w - 5 * LINE - 6}"
+            )
+            machine.sleep(1)
+            # A FRESH FRAME, because `crop` cuts the LAST screenshot and the
+            # pointer has moved since it was taken.
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            there = sentence_inks("/tmp/two-inks-there.png")
+
+            assert here != there, (
+                "the message line reads the same over two different facts "
+                f"({here} and {there}) — it is not showing the fact under the "
+                "pointer"
+            )
+
+            # AND THE CUT LABEL ITSELF, which is the case the owner reported.
+            #
+            # A panel twenty-four cells wide gives the label a third of them, so
+            # `permission` arrives as `permissi…` and `owner:group` as
+            # `owner:gr…`. The value always said itself in full on this line and
+            # the label said nothing at all — *"ao colocar o cursor do mouse
+            # sobre a legenda e sobre o valor, o texto deles deve aparecer por
+            # completo no minibuffer"*. The pointer goes on the LABEL column,
+            # which is the left third of the panel.
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_w + 340} {y_w + h_w - 5 * LINE - 6}"
+            )
+            machine.sleep(1)
+            shot("22-the-cut-label-says-itself")
 
             # AND THE FACTS SCROLLED TO THE END, which is the photograph the owner
             # sent twice.
@@ -1619,6 +1721,223 @@ pkgs.testers.runNixOSTest {
                 timeout=30,
             )
             machine.sleep(2)
+
+    if wanted("globe"):
+        with subtest("the globe, and the address under it"):
+            # A PHOTOGRAPH WITH A COORDINATE IN IT, made here.
+            #
+            # Nothing of the owner's goes into this battery (invariant 13), and
+            # nothing of his is needed: exiftool writes the two tags onto a
+            # picture ImageMagick draws, and the coordinate is LONDON — which
+            # `assets/world.nix` already declares in the open.
+            machine.succeed(
+                "${pkgs.imagemagick}/bin/magick -size 240x160 "
+                "gradient:'#3C6E9F-#D8B36A' /root/where.jpg"
+            )
+            machine.succeed(
+                "${pkgs.exiftool}/bin/exiftool -overwrite_original "
+                "-GPSLatitude=51.51 -GPSLatitudeRef=N "
+                "-GPSLongitude=-0.13 -GPSLongitudeRef=W "
+                "/root/where.jpg"
+            )
+            # AND THE WINDOW THE SCENE BEFORE LEFT, out of the way: two
+            # managers on screen is two pictures in the crop, and the second one
+            # is at another directory.
+            machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
+            machine.sleep(2)
+            control("files-window")
+            # WAITED ON THE PROCESS, and not on the journal.
+            #
+            # The scene above greps the footer's log for the window announcing
+            # itself, which is fine there and wrong here: the manager was just
+            # killed, so an announcement inside the last lines is the OLD
+            # window's, and a `tail` short enough to exclude it is a `tail` that
+            # misses the new one behind everything the film scene logged. The
+            # process is a fact from outside the picture and the kill above
+            # makes it unambiguous — which is the rule `AGENTS.md` records for
+            # the white mouse pointer.
+            machine.wait_until_succeeds(
+                "pgrep -f '[b]in/ronoctua-shell files'", timeout=60
+            )
+            machine.sleep(3)
+            # TYPED AND NOT ENTERED. A letter is a QUERY and it goes on the
+            # end of the path; the cursor lands on the first match by itself,
+            # which is what puts the photograph in the info panel. `Return`
+            # would OPEN it, and an image viewer over the window is not this
+            # picture.
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'where'"
+            )
+            # LONG ENOUGH FOR THE THREAD TO ANSWER: exiftool runs, the atlas is
+            # read once (six megabytes, on the first coordinate of the session)
+            # and the globe is projected and painted.
+            machine.sleep(6)
+
+            # THE STRIP FIRST, and it is not an aside.
+            #
+            # Below `space.files.panelsFrom` cells the panels are the four-line
+            # strip at the bottom, which is where a window at half a 1280-pixel
+            # screen puts them — and the strip GROWS for a globe now. It did not
+            # for a round, and the owner photographed exactly this window with a
+            # coordinate, an atlas, a panel and no globe.
+            shot("41-the-globe-in-the-strip")
+            w_s, h_s, x_s, y_s = niri_geometry()
+            crop(f"{w_s}x{8 * LINE}+{x_s}+{y_s + h_s - 8 * LINE}", into="/tmp/strip.png")
+            # THE SEA, AND A THOUSAND PIXELS OF IT.
+            #
+            # Not `surface.atlas.land`, and the reason was measured on this very
+            # crop: at four per cent fuzz the light warm grey of the land is
+            # within reach of the ANTIALIASED EDGES of ordinary text, and three
+            # hundred and sixty-six glyph pixels answered an assertion about
+            # continents. The sea is a dark violet no text in this panel wears,
+            # and a disc of it is thousands of pixels — a number letters cannot
+            # reach.
+            has_colour(
+                "#" + token_hex("surface.atlas.ocean"),
+                at_least=1000,
+                of="/tmp/strip.png",
+                fuzz=4,
+            )
+
+            # AND THEN MAXIMISED, because the columns are the other half of the
+            # layout and the disc gets the room to be a disc.
+            control("window-maximize")
+            machine.sleep(3)
+            w_g, h_g, x_g, y_g = niri_geometry()
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_g + 300} {y_g + 4 * LINE}"
+            )
+            machine.sleep(2)
+            shot("39-the-globe-and-its-address")
+
+            # THE SEA AND THE LAND ARE DRAWN, and it is the assertion this
+            # scene exists for.
+            #
+            # THE INFO COLUMN ONLY, and the reason is the trap this file has
+            # fallen into twice: an assertion answered by something else on
+            # screen. `surface.atlas.ocean` is a dark violet and so is
+            # `surface.selection`, the band under the cursor in the LISTING —
+            # crop the listing out and the question can only be answered by the
+            # panel the globe is in. The quarter is the panel: the manager puts
+            # the facts in the rightmost column.
+            #
+            # AND THE FUZZ IS TIGHT, because a disc is a filled region rather
+            # than a glyph: at the default twelve per cent every light letter on
+            # the panel answers for `surface.atlas.land`.
+            crop(f"{w_g // 4}x{h_g}+{x_g + 3 * (w_g // 4)}+{y_g}", into="/tmp/globe.png")
+            has_colour(
+                "#" + token_hex("surface.atlas.ocean"),
+                at_least=200,
+                of="/tmp/globe.png",
+                fuzz=4,
+            )
+            has_colour(
+                "#" + token_hex("surface.atlas.land"),
+                at_least=200,
+                of="/tmp/globe.png",
+                fuzz=4,
+            )
+
+            # AND THE DOT IS ON IT. The accent at its loudest, drawn nowhere
+            # else in this panel — so this says the coordinate was PLACED and
+            # not merely read.
+            has_colour(
+                "#" + token_hex("mark.atlas.dot"),
+                at_least=4,
+                of="/tmp/globe.png",
+                fuzz=4,
+            )
+
+            # AND THE HAND TURNS IT, which is the half no unit test reaches.
+            #
+            # The owner reported the whole of the mouse as dead — *"ao tentar
+            # clicar e arrastar nada ocorre"* — and the cause was that the
+            # picture's rows carried a field of NO WIDTH, so the press found
+            # nothing to grab. What proves the fix is not a target in a table:
+            # it is pressing on the figure, moving, and the pixels being
+            # different afterwards.
+            #
+            # `mousedown`/`mousemove`/`mouseup` and not `click`, because a drag
+            # is exactly what `xdotool click` is not — the file already records
+            # that `xdotool key` releases what it presses.
+            def picture_of(into):
+                crop(f"{w_g // 4}x{h_g}+{x_g + 3 * (w_g // 4)}+{y_g}", into=into)
+
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+                f"{x_g + 3 * (w_g // 4) + w_g // 8} {y_g + 3 * LINE}"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousedown 1")
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove_relative -- 60 20"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mouseup 1")
+            machine.sleep(2)
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            picture_of("/tmp/turned.png")
+            shot("42-the-globe-turned-by-the-hand")
+
+            def signature(path):
+                return machine.succeed(
+                    f"${pkgs.imagemagick}/bin/magick {path} -format '%#' info:"
+                ).strip()
+
+            assert signature("/tmp/globe.png") != signature("/tmp/turned.png"), (
+                "the globe drew the same pixels after a press and a drag across "
+                "it — the picture is not answering the pointer"
+            )
+            # AND IT IS STILL A GLOBE afterwards: a drag that turned it into an
+            # empty box would also pass the test above.
+            has_colour(
+                "#" + token_hex("surface.atlas.ocean"),
+                at_least=1000,
+                of="/tmp/turned.png",
+                fuzz=4,
+            )
+
+            machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
+            machine.sleep(2)
+
+    if wanted("geo"):
+        with subtest("the regions, and the streets this machine does not have"):
+            # THE SECOND HALF OF THE GLOBE, and the half a person drives: what
+            # is installed, the catalogue of everything the baked world carries,
+            # and the filter that is the way through five hundred rows.
+            #
+            # NOTHING IS INSTALLED HERE, and that is the state worth
+            # photographing: the sentence saying an address stops at the
+            # nearest town is what somebody sees the first time they open this.
+            control("geo-open")
+            machine.sleep(2)
+            shot("40-the-regions-and-their-streets", lines=12)
+
+            # THE VIEW IS REALLY OPEN, asked OUTSIDE the picture: the footer
+            # resolves a layout every time its height changes, and twelve lines
+            # is this view asking for the region's ceiling. A crop cannot be
+            # answered by the white mouse pointer; a height can be answered by
+            # nothing else.
+            said = machine.succeed(
+                "journalctl -u footer --no-pager"
+                " | grep -o 'footer layout resolved [^ ]* height=[0-9]*'"
+                " | tail -1"
+            ).strip()
+            tall = int(said.rsplit("=", 1)[1])
+            assert round(tall / LINE_EXACT) > 4, (
+                f"the footer is {tall} px — the regions' view did not open"
+            )
+
+            # AND A ROW THAT ACTS WEARS THE INK THAT SAYS SO. Every catalogue
+            # row is a door, so `text.answer` is most of this picture; a screen
+            # of facts would have none of it.
+            w_r, h_r, x_r, y_r = niri_geometry()
+            crop(f"{w_r}x{12 * LINE}+{x_r}+{y_r + h_r - 12 * LINE}", into="/tmp/geo.png")
+            has_colour("#" + token_hex("text.answer"), at_least=20, of="/tmp/geo.png")
+
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.sleep(1)
 
     if wanted("brain"):
         with subtest("the brain's line, with the countdown and the two answers"):

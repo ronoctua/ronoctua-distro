@@ -1,0 +1,22 @@
+[package]
+name = "ronoctua-zip"
+description = "Walk a zip's central directory and inflate one member, with a ceiling on the way out."
+# EVERYTHING SPELLED OUT, for the reason `ronoctua-atlas` writes out one line
+# along: a member of this workspace that could also be a path dependency of a
+# buffer cannot use `version.workspace = true`.
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+# ONE DEPENDENCY, and it was already in the lock.
+#
+# `flate2` is pure Rust through `miniz_oxide` and arrives under `png` anyway,
+# so this crate costs no store path and nothing new in the lock — which is the
+# bar the workspace sets for a dependency.
+[dependencies]
+flate2 = "1.1"
+
+[lints]
+workspace = true

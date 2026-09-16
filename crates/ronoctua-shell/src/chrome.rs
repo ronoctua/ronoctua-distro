@@ -362,6 +362,30 @@ pub enum Register {
     /// registers above it, and the content that begins on the row below. See
     /// `text.subtle.explain` for why the answer is no colour at all.
     Explain,
+    /// WHAT THE MINIBUFFER IS SAYING — the answer, rather than the words
+    /// around it.
+    ///
+    /// It resolves to the same token [`Register::Key`] does, and that is
+    /// deliberate rather than a duplicate: `colors.nix` makes the same
+    /// decision about `label.acts` and `state.accent`, and for the same
+    /// reason. A key and an answer are drawn at the same weight and they are
+    /// NOT the same thing — `laid` splits a key at its modifier so no ligature
+    /// can cross it, and doing that to a filename would cut it in half.
+    ///
+    /// It exists because a sentence on that line has two halves and they were
+    /// drawn as one: the owner read a cut label in the panel and asked that
+    /// *"a cor da legenda e do valor devem se diferenciar"*. The half that
+    /// NAMES a fact takes [`Register::Prose`], the half that IS the fact takes
+    /// this one — which is the pair the hint line already puts side by side,
+    /// and which every theme therefore already keeps apart.
+    Said,
+    /// THE CHORD THAT IS WAITING for its next key.
+    ///
+    /// Blue is what says where the next key goes, and that is not a matter of
+    /// register: it is the one exception `colors.nix` already names. Named all
+    /// the same, because a `_` arm would let the next register added arrive at
+    /// `laid` without anybody deciding how it is shaped.
+    Pending,
 }
 
 impl Register {
@@ -375,6 +399,8 @@ impl Register {
             Self::Prose => tokens::color::TEXT_SUBTLE_DEFAULT,
             Self::Separator => tokens::color::TEXT_SUBTLE_FAINT,
             Self::Explain => tokens::color::TEXT_SUBTLE_EXPLAIN,
+            Self::Said => tokens::color::TEXT_SUBTLE_STRONG,
+            Self::Pending => tokens::color::STATE_ACCENT,
         }
     }
 }
@@ -412,6 +438,30 @@ impl Piece {
         Self {
             text: text.into(),
             register: Register::Prose,
+            id: None,
+        }
+    }
+
+    /// The chord that is waiting, in the one register that is a colour.
+    #[must_use]
+    pub fn pending(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            register: Register::Pending,
+            id: None,
+        }
+    }
+
+    /// A whole line that the minibuffer is SAYING, in one run.
+    ///
+    /// For the sentences that do not come from an `Explanation` — an echo,
+    /// what is being typed, a message a view raised. They have no halves to
+    /// tell apart, and saying so here is what keeps the drawing to one shape.
+    #[must_use]
+    pub fn said(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            register: Register::Said,
             id: None,
         }
     }
@@ -656,15 +706,63 @@ pub fn clock_text(
     clock: crate::locale::Clock,
     texts: &ronoctua_i18n::Texts,
 ) -> String {
-    let c = ronoctua_files::when::civil(secs, zone);
+    clock_of(
+        &ronoctua_files::when::civil(secs, zone),
+        clock,
+        false,
+        texts,
+    )
+}
+
+/// The same clock, with its seconds.
+///
+/// For the line that EXPLAINS, never for a column: a column is scanned and has
+/// to line up, and three more cells on every row of it buy nothing. The
+/// pointer's sentence has a whole line and was asked for the exact instant.
+#[must_use]
+pub fn clock_exact(
+    c: &ronoctua_files::when::Civil,
+    clock: crate::locale::Clock,
+    texts: &ronoctua_i18n::Texts,
+) -> String {
+    clock_of(c, clock, true, texts)
+}
+
+/// Both clocks, from a wall clock that is already local.
+///
+/// # Why the arithmetic is in one function and not two
+///
+/// Because noon and midnight are the cases that go wrong — `0` is twelve at
+/// night and `12` is twelve at noon, and a bare `hour % 12` gives zero for
+/// both — and a second copy of that is a second chance to get it wrong. The
+/// signature of `clock_text` does not change either, because it has five
+/// callers outside this file and none of them is about this.
+fn clock_of(
+    c: &ronoctua_files::when::Civil,
+    clock: crate::locale::Clock,
+    exact: bool,
+    texts: &ronoctua_i18n::Texts,
+) -> String {
+    let seconds = format!("{:02}", c.second);
     match clock {
-        crate::locale::Clock::TwentyFour => texts.t_with(
-            ronoctua_i18n::key::LOCALE_CLOCK_SAMPLE_24,
-            &[
-                ("hh", &format!("{:02}", c.hour)),
-                ("mm", &format!("{:02}", c.minute)),
-            ],
-        ),
+        crate::locale::Clock::TwentyFour => {
+            let mut args: Vec<(&str, &str)> = Vec::with_capacity(3);
+            let hh = format!("{:02}", c.hour);
+            let mm = format!("{:02}", c.minute);
+            args.push(("hh", &hh));
+            args.push(("mm", &mm));
+            if exact {
+                args.push(("ss", &seconds));
+            }
+            texts.t_with(
+                if exact {
+                    ronoctua_i18n::key::LOCALE_CLOCK_EXACT_24
+                } else {
+                    ronoctua_i18n::key::LOCALE_CLOCK_SAMPLE_24
+                },
+                &args,
+            )
+        }
         crate::locale::Clock::Twelve => {
             // NOON AND MIDNIGHT ARE THE CASES THAT GO WRONG. `0` is twelve at
             // night and `12` is twelve at noon; a bare `hour % 12` gives zero
@@ -678,13 +776,22 @@ pub fn clock_text(
             } else {
                 ronoctua_i18n::key::LOCALE_CLOCK_PM
             });
+            let hh = hour.to_string();
+            let mm = format!("{:02}", c.minute);
+            let mut args: Vec<(&str, &str)> = Vec::with_capacity(4);
+            args.push(("hh", &hh));
+            args.push(("mm", &mm));
+            if exact {
+                args.push(("ss", &seconds));
+            }
+            args.push(("half", &half));
             texts.t_with(
-                ronoctua_i18n::key::LOCALE_CLOCK_SAMPLE_12,
-                &[
-                    ("hh", &hour.to_string()),
-                    ("mm", &format!("{:02}", c.minute)),
-                    ("half", &half),
-                ],
+                if exact {
+                    ronoctua_i18n::key::LOCALE_CLOCK_EXACT_12
+                } else {
+                    ronoctua_i18n::key::LOCALE_CLOCK_SAMPLE_12
+                },
+                &args,
             )
         }
     }
@@ -714,6 +821,160 @@ pub fn date_text(
         },
         &args,
     )
+}
+
+/// THE ARGUMENT THAT NAMES A FACT, rather than being it.
+///
+/// Every other argument of an explanation IS the fact — a filename, an owner,
+/// a byte count, a date — so it takes the loud register and the words around
+/// it take the quiet one. `$label` is the exception, and there is exactly ONE
+/// key in the tree that interpolates it (`files-fact-says`): it is the NAME of
+/// the fact, the quiet half in the panel, and it stays the quiet half here.
+///
+/// The alternative was carrying a register on `mode::Explanation`, which would
+/// have put a drawing decision inside `ronoctua-files` and touched thirty call
+/// sites to say nothing at twenty-nine of them.
+const NAMES_RATHER_THAN_SAYS: &str = "label";
+
+/// An explanation, as the runs the message line draws.
+///
+/// # Why the halves are told apart here and not in the sentence
+///
+/// Because the ORDER is the language's. `ronoctua_i18n::Marked` hands back one
+/// byte range per interpolated argument **in reading order**, which is the
+/// only honest source for where a translation put each one — searching the
+/// finished sentence for the value is what `t_marked`'s own doc rejects, and
+/// for good reason.
+///
+/// # How a range is matched to the argument that made it
+///
+/// By its value, consuming each argument once, in the order they were passed.
+/// The ranges are authoritative — Fluent said where each argument landed — so
+/// this is not a search through prose; it is asking which of two or three
+/// known strings a known slice is.
+///
+/// The one thing that can go wrong is two arguments whose values are
+/// byte-identical, and then the two are swapped. That is invisible by
+/// construction: the runs read the same, and the only difference is which of
+/// them is drawn quiet — which for `label: value` would mean a fact whose name
+/// is its own value.
+#[must_use]
+pub fn sentence(e: &ronoctua_files::mode::Explanation, texts: &ronoctua_i18n::Texts) -> Vec<Piece> {
+    let borrowed = e.borrowed();
+    let marked = texts.t_marked(e.key, &borrowed);
+    let mut taken = vec![false; borrowed.len()];
+    let mut out = Vec::with_capacity(marked.at.len() * 2 + 1);
+    for (run, is_arg) in marked.pieces() {
+        let register = if is_arg {
+            let which = borrowed
+                .iter()
+                .enumerate()
+                .find(|(n, (_, v))| !taken[*n] && *v == run)
+                .map(|(n, (name, _))| {
+                    taken[n] = true;
+                    name
+                });
+            match which {
+                Some(name) if *name == NAMES_RATHER_THAN_SAYS => Register::Prose,
+                // AN ARGUMENT WITH NO MATCH IS STILL AN ARGUMENT. Fluent may
+                // have reshaped it — a number formatted for the language, a
+                // selector's branch — and what it is does not change: it is
+                // the thing the sentence is about.
+                _ => Register::Said,
+            }
+        } else {
+            Register::Prose
+        };
+        out.push(Piece {
+            text: run.to_owned(),
+            register,
+            id: None,
+        });
+    }
+    out
+}
+
+/// A date written out, with the month as a WORD.
+///
+/// # Why this exists beside `date_text`
+///
+/// Because a column and a sentence are asked different questions. `date_text`
+/// answers the COLUMN — an order, two digits a field, everything the same
+/// width so the eye can scan down it. This answers the pointer, which has a
+/// whole line and asked *which day is this*, and the owner asked for it in as
+/// many words: *"em vez de mostrar no minibuffer algo como 'e 20 segundos',
+/// quero que mostre a data completa no idioma do usuário"*.
+///
+/// # Why the ORDER is still the person's
+///
+/// The obvious argument is that a written-out date has no ambiguity to undo —
+/// `3 de setembro` cannot be read two ways, which is the whole reason the
+/// preference exists for `03/09`. It is wrong on the side that matters:
+/// somebody who chose *month first* and got `3 de setembro` would read a
+/// preference being ignored. So there are three keys here as there are three
+/// there, and each language writes its three as that language writes them.
+///
+/// The day and the year are NOT padded here, unlike `Civil::args`: `03 de
+/// setembro` is a column's spelling, and this is not a column.
+#[must_use]
+pub fn date_long(
+    c: &ronoctua_files::when::Civil,
+    order: crate::locale::Order,
+    texts: &ronoctua_i18n::Texts,
+) -> String {
+    // THE MONTH ARRIVES AS A NUMBER, and that is load-bearing: the twelve
+    // names are one key with a Fluent selector — which numbers get a word of
+    // their own is the LANGUAGE's business — and `"01"` does not match `[1]`.
+    let month = texts.t_args(
+        ronoctua_i18n::key::LOCALE_MONTH,
+        &[("m", ronoctua_i18n::Arg::Number(i64::from(c.month)))],
+    );
+    texts.t_with(
+        match order {
+            crate::locale::Order::BigEndian => ronoctua_i18n::key::LOCALE_DATE_LONG_YMD,
+            crate::locale::Order::DayFirst => ronoctua_i18n::key::LOCALE_DATE_LONG_DMY,
+            crate::locale::Order::MonthFirst => ronoctua_i18n::key::LOCALE_DATE_LONG_MDY,
+        },
+        &[
+            ("d", &c.day.to_string()),
+            ("month", &month),
+            ("y", &c.year.to_string()),
+        ],
+    )
+}
+
+/// A whole instant in words, from a wall clock.
+///
+/// # Why it takes a `Civil` and never a `(secs, zone)`
+///
+/// Because the other caller of this is a date a CAMERA wrote, and a camera
+/// writes no offset: `DateTimeOriginal` is the wall clock where the shutter
+/// opened. Turning it into seconds-since-the-epoch so it could share the
+/// signature below is the tempting edit and it is the wrong one — it would
+/// show a photograph taken in Tokyo at a London hour, silently, and no test
+/// running in one zone would ever catch it. Taking the six numbers as written
+/// is what makes that edit impossible rather than merely discouraged.
+#[must_use]
+pub fn civil_long(c: &ronoctua_files::when::Civil, texts: &ronoctua_i18n::Texts) -> String {
+    // THE SHAPE IS THE PERSON'S, from the process-wide value the theme is
+    // adopted by — see `locale::prefs::current`.
+    let choice = crate::locale::prefs::current();
+    let date = date_long(c, choice.order, texts);
+    let time = clock_exact(c, choice.clock, texts);
+    texts.t_with(
+        ronoctua_i18n::key::FILES_WHEN_LONG,
+        &[("date", date.as_str()), ("time", time.as_str())],
+    )
+}
+
+/// The same sentence, for an instant this machine can place in a zone.
+#[must_use]
+pub fn when_long(
+    secs: i64,
+    zone: &ronoctua_files::when::Zone,
+    texts: &ronoctua_i18n::Texts,
+) -> String {
+    civil_long(&ronoctua_files::when::civil(secs, zone), texts)
 }
 
 /// The name of the zone `/etc/localtime` points at — `Europe/London`.
@@ -1119,7 +1380,14 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
             // from `Hinted::said`. It is named all the same — a `_` arm would
             // let the next register added arrive here without anybody
             // deciding how it is shaped.
-            Register::Prose | Register::Separator | Register::Explain => vec![p.text.as_str()],
+            // AND `Said` IS NOT SPLIT EITHER, which is the whole reason it is
+            // not `Key`: what it carries is a filename, a date or a path, and
+            // a `+` inside one of those is a character rather than a modifier.
+            Register::Prose
+            | Register::Separator
+            | Register::Explain
+            | Register::Said
+            | Register::Pending => vec![p.text.as_str()],
         };
         for run in runs {
             if left == 0 {
@@ -1800,9 +2068,10 @@ mod meter_tests {
 mod tests {
     use super::{
         BAR_CELLS, FIELDS_LEAD, Frame, INSET, Piece, Register, SHELF_PAD, SHELF_ROOM, cell_width,
-        content_left_px, field_pair, hint_marks, hint_of, hint_sentence, hint_spans, key_text,
-        list_bar, list_offset_at, list_scroll, on_the_band, on_the_list_bar, shelf_bar, shelf_box,
-        shelf_ground, split_at_the_modifier, value_column,
+        clock_exact, clock_text, content_left_px, date_long, field_pair, hint_marks, hint_of,
+        hint_sentence, hint_spans, key_text, list_bar, list_offset_at, list_scroll, on_the_band,
+        on_the_list_bar, sentence, shelf_bar, shelf_box, shelf_ground, split_at_the_modifier,
+        value_column,
     };
     use ronoctua_tokens as tokens;
 
@@ -2549,5 +2818,143 @@ mod tests {
             assert!(ends <= 2 + 40, "a field ran to {ends} in a row of 40");
         }
         assert_eq!(fields.len(), 2, "the value disappeared: {fields:?}");
+    }
+
+    /// FAILS IF: a written-out date loses its month, its second, or the
+    /// person's order.
+    ///
+    /// The owner asked for the whole date in his own language — *"3 de
+    /// setembro de 2026 às 12:45:20"* — where the line used to say `and 20
+    /// seconds`, which is the seconds-of-the-minute the column has no room
+    /// for, pinned to a cell the sentence never names.
+    #[test]
+    fn a_long_date_names_its_month_and_its_second() {
+        let en = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        let pt = ronoctua_i18n::Texts::fresh("pt-BR").unwrap();
+        // 2026-09-03 12:45:20 UTC, which is the owner's own example.
+        let c = ronoctua_files::when::civil(1_788_439_520, &ronoctua_files::when::Zone::utc());
+        assert_eq!((c.year, c.month, c.day), (2026, 9, 3));
+        assert_eq!((c.hour, c.minute, c.second), (12, 45, 20));
+
+        // THE MONTH IS A WORD, in both languages, and it comes from a key.
+        let day_first = date_long(&c, crate::locale::Order::DayFirst, &en);
+        assert!(
+            day_first.contains("September")
+                && day_first.contains('3')
+                && day_first.contains("2026"),
+            "en-GB day-first reads {day_first}"
+        );
+        let pt_day_first = date_long(&c, crate::locale::Order::DayFirst, &pt);
+        assert!(
+            pt_day_first.contains("setembro"),
+            "pt-BR day-first reads {pt_day_first}"
+        );
+
+        // AND THE ORDER IS STILL THE PERSON'S: the three do not read alike.
+        let month_first = date_long(&c, crate::locale::Order::MonthFirst, &en);
+        let big_endian = date_long(&c, crate::locale::Order::BigEndian, &en);
+        assert_ne!(day_first, month_first, "the order preference does nothing");
+        assert_ne!(day_first, big_endian, "the order preference does nothing");
+
+        // THE SECOND SURVIVES THE JOURNEY, on both clocks.
+        let exact = clock_exact(&c, crate::locale::Clock::TwentyFour, &en);
+        assert_eq!(exact, "12:45:20");
+        let twelve = clock_exact(&c, crate::locale::Clock::Twelve, &en);
+        assert!(
+            twelve.contains(":20"),
+            "the twelve-hour clock reads {twelve}"
+        );
+        // AND THE COLUMN'S FORM DOES NOT GROW ONE: three more cells on every
+        // row buy nothing, and `Civil::args` is that contract.
+        assert_eq!(
+            clock_text(
+                1_788_439_520,
+                &ronoctua_files::when::Zone::utc(),
+                crate::locale::Clock::TwentyFour,
+                &en
+            ),
+            "12:45"
+        );
+    }
+
+    /// FAILS IF: a pre-epoch instant counts its seconds backwards.
+    ///
+    /// `rem_euclid` is what makes this right, and a truncating remainder would
+    /// put every date before 1970 one second out in the other direction.
+    #[test]
+    fn the_second_before_the_epoch_counts_forwards() {
+        let c = ronoctua_files::when::civil(-1, &ronoctua_files::when::Zone::utc());
+        assert_eq!((c.hour, c.minute, c.second), (23, 59, 59));
+    }
+
+    /// FAILS IF: a fact's sentence comes out in one register.
+    ///
+    /// The owner read a cut label in the info panel and asked for both halves
+    /// in full and told apart — *"a cor da legenda e do valor devem se
+    /// diferenciar"*. The panel already drew them in two tones; the line that
+    /// explains them drew the whole sentence in one.
+    #[test]
+    fn a_fact_says_its_name_and_its_value_in_two_registers() {
+        let en = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        let e = ronoctua_files::mode::Explanation {
+            key: ronoctua_i18n::key::FILES_FACT_SAYS,
+            args: vec![
+                ("label", "modified".to_owned()),
+                ("value", "3 September 2026 at 12:45:20".to_owned()),
+            ],
+        };
+        let pieces = sentence(&e, &en);
+        let name = pieces
+            .iter()
+            .find(|p| p.text == "modified")
+            .expect("the label is not a run of its own");
+        let said = pieces
+            .iter()
+            .find(|p| p.text == "3 September 2026 at 12:45:20")
+            .expect("the value is not a run of its own");
+        assert_eq!(
+            name.register,
+            Register::Prose,
+            "the name of the fact is the QUIET half"
+        );
+        assert_eq!(
+            said.register,
+            Register::Said,
+            "the fact itself is the LOUD half"
+        );
+        assert_ne!(
+            name.register.color(),
+            said.register.color(),
+            "the two halves resolve to one ink"
+        );
+        // AND THE RUNS ARE THE SENTENCE, exactly: a caller that draws them one
+        // after another draws what `t_with` would have produced.
+        let joined: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        assert_eq!(joined, en.t_with(e.key, &e.borrowed()));
+    }
+
+    /// FAILS IF: two arguments of one sentence collapse into one register.
+    ///
+    /// Everything that is not the NAME of a fact is the fact, whatever it is
+    /// called — there is exactly one key in the tree that interpolates
+    /// `$label`, and that is what makes the rule provable rather than magic.
+    #[test]
+    fn an_argument_that_is_not_a_name_is_the_answer() {
+        let en = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        let e = ronoctua_files::mode::Explanation {
+            key: ronoctua_i18n::key::FILES_EXPLAIN_OWNER,
+            args: vec![("who", "noctua".to_owned())],
+        };
+        let pieces = sentence(&e, &en);
+        assert!(
+            pieces
+                .iter()
+                .any(|p| p.text == "noctua" && p.register == Register::Said),
+            "the owner's name is not drawn as the answer"
+        );
+        assert!(
+            pieces.iter().any(|p| p.register == Register::Prose),
+            "the words around it lost their own register"
+        );
     }
 }

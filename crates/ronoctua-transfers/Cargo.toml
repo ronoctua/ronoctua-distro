@@ -37,6 +37,16 @@ serde_json.workspace = true
 # A `[[bin]]` so `nix/rust.nix` can extract JUST this: a derivation references
 # what its BYTES cite, and shipping the whole workspace to run a copy would put
 # the renderer, wgpu and the wasm runtime inside a unit that has no screen.
+# THE REGION PACKS, for the engine that bakes one.
+#
+# It brings `ronoctua-zip` and nothing else — no `ronoctua-atlas`, so the
+# globe's geometry does not follow a download queue into the ISO, which is the
+# whole reason `rust.transfers` is extracted from the workspace.
+ronoctua-atlas-packs = { path = "../ronoctua-atlas-packs" }
+# The atomic write, and the only thing this daemon uses it for: a pack is
+# installed whole or not at all.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+
 [[bin]]
 name = "ronoctua-transfers"
 path = "src/bin/daemon.rs"

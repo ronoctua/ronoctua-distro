@@ -54,6 +54,63 @@ onde, e com o quê. Nada disso está decidido.
 - **o que NÃO fazer sem decidir**: mandar log a lugar nenhum por padrão. O invariante 13 vale aqui
   como em qualquer outro lugar, e um backtrace carrega caminhos de arquivo.
 
+### 0.0000001-A. Os pacotes de rua — o que ficou de fora depois de entregues · pequeno
+
+As ruas por região EXISTEM: `LEADER s g` (duas portas), `Work::Atlas` na fila, o leitor de
+`.shp`/`.dbf` no `ronoctua-atlas-packs` e o `ronoctua-zip` descido de crate. O que sobrou é menor
+que a entrega e fica escrito para não voltar como pergunta:
+
+- **O tamanho do download não aparece ANTES de começar.** Não dá offline: o `index-v1.json` da
+  Geofabrik traz id, nome e URL e nenhum tamanho, e a única resposta offline seria inventada. A
+  tela diz onde o número aparece — a fila responde o total assim que o servidor o manda, e desistir
+  lá custa uma tecla. Medidos: Andorra 6,3 MB, Portugal 803 MB, Sudeste 2 131 MB.
+- **A janela da fila diz "baixar" e não "instalar uma região".** O `ronoctua_protocol::Errand`
+  atravessa o WIT para um buffer wasip2, então uma variante própria é mudança de WIT, binding
+  regerado e rebuild de todos os buffers — por uma palavra. A porta do RODAPÉ, que não é buffer, já
+  diz a frase inteira (`transfers-work-region`).
+- **Assar um pacote grande come memória proporcional à região.** O baker lê a camada de vias
+  inteira (teto de 2 GiB por membro do zip) e monta os segmentos em RAM antes de escrever. Medido
+  só em Andorra; Portugal e o Sudeste não foram assados aqui. Se doer, o conserto é escrever os
+  segmentos em disco por célula e só então montar o índice.
+- **Nada consulta a rede sozinho, nem para saber se há pacote novo** — e isso é decisão, não
+  pendência: é uma tecla (`RET` na região de novo), nunca um relógio.
+
+### 0.0000001-B. O globo — o que ele deliberadamente NÃO faz · registro
+
+Tudo abaixo é decisão, não esquecimento.
+
+- **A base para em 611 m**, que é o passo da quantização de 4 bytes por vértice. Sem pacote de ruas,
+  aproximar além de `Pose::LOCAL` só mostraria a escada da grade, e a linha do endereço diz até onde
+  ela consegue ir em vez de desenhar uma rua que não existe.
+- **Não há busca por endereço.** O globo responde *onde é isto*, nunca *onde fica a Rua Augusta* —
+  uma busca quer índice sobre nomes, tokenizador e ranqueamento, que é um segundo produto.
+- **Uma projeção só**, ortográfica, sem alternativa plana: o dono pediu um globo.
+- **Sem relevo, sem nome escrito no globo.** O `resvg` desta árvore está sem motor de texto
+  (`default-features = false`), então texto sobre a figura teria de vir numa segunda passada pelo
+  `ronoctua-render`.
+- **E o `ronoctua-atlas` NÃO está no invariante 12.** Ele é `no_std`, sem dependência e capaz de
+  `wasm32-wasip2` — o `atlas-crate-is-pure` cobra as três coisas —, mas acrescentar um quarto crate
+  àquela frase é **editar um invariante**, e isso é do dono. Um buffer que quisesse o globo emitiria
+  sete `command::svg` (um por `Ink`, um token cada, sem mudar o WIT) com a malha de 110 m, sem ruas
+  e sem ponteiro, porque buffer não tem disco nem recebe valor de token.
+
+### 0.0000003. Tirar a coordenada de um arquivo antes de enviá-lo · pequeno
+
+A ficha mostra onde a fotografia foi tirada, porque esconder um fato de quem já tem o arquivo não
+protegia ninguém (o `docs/ARCHITECTURE.md` guarda o argumento inteiro). O que MUDOU com isso é a
+escala: cinco decimais numa linha passam despercebidos numa tela compartilhada, um globo apontando
+para a casa de alguém não passa.
+
+O que resolve isso não é esconder de novo — é um COMANDO que remove o GPS do arquivo antes de ele
+sair daqui, no menu de ações do gerenciador, ao lado de copiar e renomear. O `exiftool` que o flake
+já pina faz (`-gps:all=`), então não há programa novo; o que falta é decidir se ele escreve no
+arquivo ou numa cópia, e dizer na tela qual dos dois.
+
+- **como saber que acabou**: uma ação no `C-m` que apaga a coordenada, e a linha do lugar
+  desaparecendo da ficha do mesmo arquivo em seguida.
+- **o que NÃO fazer sem decidir**: mexer no arquivo original sem perguntar. O gesto que se desfaz
+  com `Esc` é o padrão da casa, e este não se desfaz.
+
 ### 0.0000002. Um rodapé que TRAVA não é um rodapé que morre · pequeno
 
 `OnFailure=` vê processo que morre. Um que para de responder — laço apertado, GPU travada, espera

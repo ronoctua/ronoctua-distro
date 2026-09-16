@@ -78,8 +78,8 @@ imprime `hot reload ligado` na partida — se não imprimir, você não está na
 
 ## Mexer em arquivos sem sair do teclado
 
-`LEADER .` abre o gerenciador na região do rodapé; `LEADER f w` abre a mesma coisa numa janela, sem o
-teto de doze linhas. As duas desenham a mesma vista — o que muda é só o tamanho.
+`LEADER . .` abre o gerenciador na região do rodapé; `LEADER . w` abre a mesma coisa numa janela, sem
+o teto de doze linhas. As duas desenham a mesma vista — o que muda é só o tamanho.
 
 Dentro dele, a tecla que resolve tudo é a **vírgula**: ela abre o menu de ações, e cada linha mostra
 a tecla que a roda. Não há uma segunda tabela para decorar, e isso é de propósito: o menu sai da

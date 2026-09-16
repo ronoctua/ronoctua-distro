@@ -83,6 +83,16 @@
     id = "miniplayer";
     needs = [ "manager-window" ];
   }
+  # THE GLOBE, which rides on the window door for the same reason the two above
+  # do: it is drawn in the info panel of the manager that scene opened, and on
+  # its own it would photograph an empty desktop.
+  {
+    id = "globe";
+    needs = [ "manager-window" ];
+  }
+  # THE REGIONS' VIEW, which opens its own door: `geo-open` is a command, so
+  # this scene needs nothing from the ones before it.
+  { id = "geo"; }
   { id = "brain"; }
   { id = "update"; }
   { id = "theme"; }

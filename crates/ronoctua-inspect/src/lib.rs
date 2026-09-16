@@ -517,9 +517,6 @@ pub mod key {
     pub const VALUE_SECONDS: &str = "files-value-seconds";
     /// Value: `{ $lat }, { $lon }` in signed decimal degrees.
     pub const VALUE_COORDINATES: &str = "files-value-coordinates";
-    /// Value: this file says where it was made, and the coordinates are not
-    /// being shown.
-    pub const VALUE_PLACE_WITHHELD: &str = "files-value-place-withheld";
     /// Value: one page, or `{ $n }` pages.
     pub const VALUE_PAGES: &str = "files-value-pages";
 
@@ -618,7 +615,7 @@ pub mod key {
     pub const VALUE_MESH_OPEN: &str = "files-value-mesh-open";
 
     /// Every key this crate can produce, for the check that keeps them honest.
-    pub const ALL: [&str; 103] = [
+    pub const ALL: [&str; 102] = [
         NO_PREVIEW,
         PREVIEW_NOT_TEXT,
         PREVIEW_EMPTY,
@@ -677,7 +674,6 @@ pub mod key {
         VALUE_MILLIMETRES,
         VALUE_SECONDS,
         VALUE_COORDINATES,
-        VALUE_PLACE_WITHHELD,
         VALUE_PAGES,
         FACT_FORMAT,
         FACT_UNIT,

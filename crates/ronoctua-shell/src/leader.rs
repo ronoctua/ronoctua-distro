@@ -735,12 +735,12 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // was free: `.` appears only at the second level (`TAB .`), and the
         // tree branches on the first key.
         //
-        // A MANAGER AND NOT A PICKER, and `f f` IS this manager: the key
+        // A MANAGER AND NOT A PICKER, and `. .` IS this manager: the key
         // used to open the editor's file picker — hand a path over and stop
         // there — and it was given to the manager, which lists everything a
         // directory holds (permissions, owner, group, size, date, and a glyph
-        // for what each thing is) and acts on it. This comment used to say
-        // `f f` was still the picker, eight hundred lines above the binding
+        // for what each thing is) and acts on it. This comment used to say the
+        // key was still the picker's, eight hundred lines above the binding
         // that says otherwise.
         Command {
             id: "files-open",
@@ -1042,9 +1042,11 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // the MACHINE is doing (its memory, its disks, its power, its
         // network), and a radio with a keyboard on it is exactly that. The
         // group's own key is `s b b`, doubled the way `s n n`, `t t` and
-        // `f f` are — a prefix cannot also be a command, and the tree refuses
-        // it. (`r r` was the network's, and the same change that made this
-        // group killed the first-level `r`.)
+        // `. .` are — a prefix cannot also be a command, and the tree refuses
+        // it. That refusal is why the file manager's bare `.` had to become
+        // `. .` the day `.` was asked to be a group. (`r r` was the network's,
+        // and the same change that made this group killed the first-level
+        // `r`.)
         // THE DEVICE PAGE'S THREE, which are the view's own arrows and the key
         // that crosses to the other half. They are in the registry for the
         // reason every view key is: the hint line is generated from the table
@@ -1600,6 +1602,36 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // screens and the clock's zone, and not something one does WITH the
         // machine.
         Command {
+            id: "geo-open",
+            label: key::CMD_GEO_OPEN,
+        },
+        Command {
+            id: "geo-window",
+            label: key::CMD_GEO_WINDOW,
+        },
+        Command {
+            id: "geo-up",
+            label: key::CMD_GEO_UP,
+        },
+        Command {
+            id: "geo-down",
+            label: key::CMD_GEO_DOWN,
+        },
+        Command {
+            id: "geo-enter",
+            label: key::CMD_GEO_ENTER,
+        },
+        // THE TWO THE MINIBUFFER AND THE QUESTION ANSWER. `geo-find` runs
+        // twice, like the language view's three: once to ask, once to be told.
+        Command {
+            id: "geo-find",
+            label: key::CMD_GEO_FIND,
+        },
+        Command {
+            id: "geo-remove",
+            label: key::CMD_GEO_REMOVE,
+        },
+        Command {
             id: "locale-open",
             label: key::CMD_LOCALE_OPEN,
         },
@@ -1954,12 +1986,12 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // keys, the person goes back to opening everything through the terminal.
         ("a", "apps-open", None),
         // `LEADER t` IS THE TRANSFER QUEUE. `t t` opens the panel in the
-        // footer's region, doubling the key the way `s n n` and `f f` already do
+        // footer's region, doubling the key the way `s n n` and `. .` already do
         // — because `t` is a PREFIX, and hanging a command off a prefix is the
         // collision `PrefixWithCommand` exists to flag.
         ("t t", "transfers-open", None),
         // `t w` — the same queue, in a window. `w` for window, and it is the
-        // second door of one thing, exactly like the file manager's `f w`.
+        // second door of one thing, exactly like the file manager's `. w`.
         ("t w", "transfers-window", None),
         // `t a` — add whatever was copied: a link, a magnet, a `.torrent`.
         ("t a", "transfers-add", None),
@@ -1976,28 +2008,35 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("t i v", "transfers-video-as-me", None),
         ("t i u", "transfers-audio-as-me", None),
         ("t i l", "transfers-subtitles-as-me", None),
-        // `f f` IS THE MANAGER, in the footer's region — the same thing `.`
-        // opens, and deliberately the same thing.
+        // `LEADER .` IS THE MANAGER'S PREFIX, and `.` is Doom's own key for
+        // reaching a file.
         //
-        // It used to be the editor's file PICKER, and that was reported from
-        // the screen as "a different and inferior file manager". The reading
-        // was right: whoever types `f f` in a group called "file" is looking
-        // for files, and what came up was a flat list of names that could only
-        // do one thing with the one you chose.
-        ("f f", "files-open", None),
-        // `w` for WINDOW — the same manager as `f f`, in one of its own,
-        // because the footer's region has a twelve-line ceiling
-        // (`space.expansion`, invariant 14) and that is right for a footer and
-        // not for the job people open a manager to do.
+        // It held the footer's door DIRECTLY and the two doors also hung off a
+        // group called `f`, so one thing was reachable by three sequences and
+        // the letter `f` said nothing that `.` did not. The owner asked for the
+        // one shape: *"não quero que `LEADER f` exista; quero que `LEADER .`
+        // seja um submenu"*. `f` is free now.
+        //
+        // THE DOUBLED KEY IS THE CONVENTION, and it is the one `s n n`, `t t`
+        // and `n n` already keep: the group's own first door repeats the key
+        // that opened the group. It costs one keystroke more than the bare `.`
+        // did and buys the second door a home that is not a second group.
+        //
+        // A MANAGER AND NOT A PICKER, which is what `f f` used to open: that
+        // was reported from the screen as "a different and inferior file
+        // manager", and the reading was right — whoever reaches for files is
+        // looking for files, not for a flat list of names that can do one thing
+        // with the one you choose.
+        (". .", "files-open", None),
+        // `w` for WINDOW — the same manager, in one of its own, because the
+        // footer's region has a twelve-line ceiling (`space.expansion`,
+        // invariant 14) and that is right for a footer and not for the job
+        // people open a manager to do.
         //
         // It was `m` for "manager" and the letter was never written down; being
         // asked "why m?" is what earned it these lines — and the answer was that
         // `w` says which of the two DOORS it is, which is the actual difference.
-        ("f w", "files-window", None),
-        // `LEADER .` — Doom's own key for reaching a file, at the first level
-        // because that is how often it is used. A manager that costs two keys
-        // is a manager people go back to the terminal for.
-        (".", "files-open", None),
+        (". w", "files-window", None),
         // `m` FOR MISCELLANEOUS — the drawer for what belongs to no other one.
         //
         // The owner asked for it, and it is what frees `c` for the clipboard
@@ -2033,7 +2072,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         //
         // `b b` and not `b` alone: `b` is a PREFIX, and hanging a command off
         // a prefix is the collision `PrefixWithCommand` exists to flag.
-        // Doubling the letter is the convention `s n n`, `t t`, `f f` and `n n`
+        // Doubling the letter is the convention `s n n`, `t t`, `. .` and `n n`
         // already follow.
         ("b b", "brain-open", None),
         // AND THE TWO THE BAND DRAWS, beside the screen under the same prefix:
@@ -2046,7 +2085,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // somebody looks for "do something to this machine".
         ("s u", "system-update", None),
         // `LEADER s d` — THE SCREENS. `s d d` opens the view (the doubled
-        // letter, the convention `s p p`, `s n n`, `t t` and `f f` already
+        // letter, the convention `s p p`, `s n n`, `t t` and `. .` already
         // use) and `s d w` the window; everything about ONE screen is a letter
         // INSIDE the view, where the row under the cursor says which screen
         // the letter is about.
@@ -2084,7 +2123,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("s b y", "bluetooth-accept", None),
         ("s b n", "bluetooth-refuse", None),
         // `s w` — `w` for WINDOW, the letter every view with a second door
-        // already uses: `t w`, `f w`, `n w`, `s n w`, `s p w`, `s b w`. Seven
+        // already uses: `t w`, `. w`, `n w`, `s n w`, `s p w`, `s b w`. Seven
         // doors, one letter, and this is the seventh.
         ("s w", "update-watch", None),
         // `t` for theme, under `s` because a theme is the SYSTEM's skin and not
@@ -2094,6 +2133,12 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `w` for WINDOW, the letter every view with a second door uses.
         ("s l l", "locale-open", None),
         ("s l w", "locale-window", None),
+        // `s g` — GEOGRAPHY, and the letter was free under `s`: the taken ones
+        // are `a b d f h k l m n p q s t u w`. What it holds is data about the
+        // MACHINE — which regions' streets are on this disk — which is the
+        // sentence the `s` group is defined by.
+        ("s g g", "geo-open", None),
+        ("s g w", "geo-window", None),
         // `d` for DATE — the first free letter of the first level, and a
         // glance is asked for often enough to earn one.
         ("d", "world-glance", None),
@@ -2120,7 +2165,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // terminal. A feature with no path is a feature nobody
         // finds.
         //
-        // `n n` — the doubled letter, which is what `s n n`, `t t` and `f f`
+        // `n n` — the doubled letter, which is what `s n n`, `t t` and `. .`
         // already do for the view that belongs to a prefix. It was `n h` for
         // "history", and the owner asked for the convention instead.
         (NOTIF_OPEN_KEYS, "notif-open", None),
@@ -2200,10 +2245,15 @@ pub fn default_of() -> Result<(Tree, Registry)> {
     const GROUPS: &[(&str, &str)] = &[
         // `b` FOR BRAIN — the buffer commands it used to hold live under `w`.
         ("b", key::GROUP_BRAIN),
-        // `f` HAD NO LABEL until now. `f f` existed and the group it hangs off
-        // showed up in which-key with `keymap.no-label` — a prefix that says
-        // nothing about where it leads. It has two items now, and a name.
-        ("f", key::GROUP_FILE),
+        // `.` FOR FILES, and it is the only prefix in this table that is not a
+        // letter.
+        //
+        // It was `f`, which said nothing `.` does not and left one thing
+        // reachable three ways; the owner asked for the group to be `.` itself.
+        // A prefix is a prefix whatever character it is — the tree is built
+        // from the sequences and `TAB .` already put a `.` in one — and what a
+        // group owes is a LABEL, which this one has.
+        (".", key::GROUP_FILE),
         ("w", key::GROUP_WINDOW),
         ("TAB", key::GROUP_WORKSPACE),
         ("TAB m", key::GROUP_WORKSPACE_MOVE),
@@ -2235,6 +2285,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("s p", key::GROUP_POWER),
         ("s b", key::GROUP_BLUETOOTH),
         ("s l", key::GROUP_LOCALE),
+        ("s g", key::GROUP_GEO),
         ("s q", key::GROUP_QUIT),
     ];
 
@@ -2342,6 +2393,9 @@ pub const GLANCE_KEYS: &str = "d";
 /// [`GLANCE_KEYS`] for why a sentence may not spell them out.
 pub const LOCALE_KEYS: &str = "s l l";
 
+/// The regions' view's keys, BESIDE its binding — see [`GLANCE_KEYS`].
+pub const GEO_KEYS: &str = "s g g";
+
 pub const OF_LAUNCHER_VIEW: &[(&str, &str)] = &[("C-s", "apps-pin")];
 
 // THE CLIPBOARD VIEW'S KEYS USED TO LIVE HERE, and they live in the view now.
@@ -2414,6 +2468,7 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     // arrangement as the four emergency keys just above.
     out.extend(crate::actions::media().into_iter().map(|(_, _, id)| id));
     out.extend(crate::locale::OF_THE_VIEW.iter().map(|(_, id)| *id));
+    out.extend(crate::geo::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(crate::display::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::bluetooth::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::network::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
@@ -2854,6 +2909,53 @@ mod tests {
         assert!(!l.active_one());
     }
 
+    /// FAILS IF: the file manager stops being a submenu of `.`, or `f` comes
+    /// back.
+    ///
+    /// The owner asked for the shape in as many words — *"não quero que
+    /// `LEADER f` exista; quero que `LEADER .` seja um submenu; `LEADER . .`
+    /// deve abrir o filemanager no rodapé; e `LEADER . w` deve abrir a versão
+    /// janela"*. Before it, one thing was reachable by `.`, by `f f` and — the
+    /// window — by `f w`.
+    ///
+    /// It also pins the half that is easy to lose: `.` ALONE must no longer
+    /// run anything. A prefix that also executes runs a command while somebody
+    /// is still typing, which is the rule `keymap` refuses in writing and the
+    /// reason the doubled key exists at all.
+    #[test]
+    fn the_manager_is_a_submenu_of_the_dot() {
+        let (tree, _) = default_of().unwrap();
+        let walk = |seq: &[char]| {
+            let mut l = Leader::default();
+            l.activate();
+            let mut last = Effect::Close { other_case: None };
+            for c in seq {
+                last = l.key(&tree, Key::simple(Sym::Char(*c)));
+            }
+            last
+        };
+        assert_eq!(walk(&['.', '.']), Effect::Run("files-open", None));
+        assert_eq!(walk(&['.', 'w']), Effect::Run("files-window", None));
+        // `.` ALONE IS A GROUP NOW, so it runs nothing and stays open.
+        assert!(
+            !matches!(walk(&['.']), Effect::Run(..)),
+            "`.` still executes, so it cannot honestly be a prefix"
+        );
+        // AND `f` LEADS NOWHERE, which is what "I do not want it to exist"
+        // means: not a group with nothing in it, not a key that runs the
+        // manager by another road.
+        assert!(
+            !matches!(walk(&['f']), Effect::Run(..)),
+            "`f` runs something"
+        );
+        for c in ['f', 'w'] {
+            assert!(
+                !matches!(walk(&['f', c]), Effect::Run(..)),
+                "`f {c}` still reaches a command"
+            );
+        }
+    }
+
     #[test]
     fn the_numbers_carry_the_workspace_in_the_argument() {
         // NINE KEYS, ONE COMMAND. The alternative would be `workspace-ir-1`…`-9`:
@@ -3057,6 +3159,13 @@ mod tests {
             "world-glance",
             "locale-open",
             "locale-window",
+            "geo-open",
+            "geo-window",
+            "geo-up",
+            "geo-down",
+            "geo-enter",
+            "geo-find",
+            "geo-remove",
             "locale-less",
             "locale-more",
             "locale-zone",

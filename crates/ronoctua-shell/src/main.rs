@@ -65,6 +65,9 @@ mod files;
 mod files_window;
 mod fold;
 mod foreign;
+mod geo;
+mod geo_window;
+mod globe;
 mod hidpi;
 mod history;
 mod history_window;
@@ -313,6 +316,9 @@ fn main() -> Result<()> {
         }
         Some("locale") => {
             return locale_window::host_it().context("host the language and region view");
+        }
+        Some("geo") => {
+            return geo_window::host_it().context("host the regions' view");
         }
         // `ronoctua-shell network` — the network in a window of its own. The
         // SAME `network::View` the footer draws from; what it cannot do here

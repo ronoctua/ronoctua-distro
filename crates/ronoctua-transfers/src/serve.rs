@@ -128,6 +128,7 @@ fn answer(shared: &Arc<Shared>, ask: &Ask, out: &mut impl Write) -> Result<()> {
                     Engine::Fetch => crate::aria2::run(&mine, id, &switch, work),
                     Engine::Media => crate::media::run(&mine, id, &switch, work),
                     Engine::Torrent => crate::torrent::run(&mine, id, &switch, work),
+                    Engine::Atlas => crate::atlas::run(&mine, id, &switch, work),
                 })
             {
                 tracing::error!(error = %e, "could not start the job's thread");
