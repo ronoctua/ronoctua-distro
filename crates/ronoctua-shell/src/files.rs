@@ -1766,7 +1766,7 @@ pub fn picture_in(
 /// "nothing leaks" is the one rule that never gives way. Every caller passes
 /// the same `to`, which is what [`Panes`] exists to guarantee.
 ///
-/// `details` is whether the three columns one LOOKS UP — the permission
+/// `details` is whether the four columns one LOOKS UP — the permission
 /// triplet and the two names — are asked for at all. They are off until
 /// somebody asks, and the argument is [`GIVE_WAY`]'s own, applied one step
 /// earlier: a listing is navigated by NAME, and those three are read
@@ -1806,7 +1806,12 @@ pub fn layout_beside(width: u16, from: u16, to: u16, details: bool) -> Layout {
         // filtered out of a finished layout: removed here their cells go to
         // the name, filtered afterwards they would be a hole where the column
         // used to be.
-        if !details && matches!(c, Column::Perms | Column::Owner | Column::Group) {
+        if !details
+            && matches!(
+                c,
+                Column::Perms | Column::Owner | Column::Group | Column::Modified
+            )
+        {
             continue;
         }
         // THE RANK IS `GIVE_WAY` READ BACKWARDS. The first to go is the one
@@ -2445,7 +2450,14 @@ impl Row {
 /// which is how the doors came to disagree about it. [`View::chrome_lines`] is
 /// the only reader now, because whether the chrome is THERE is a question only
 /// the view can answer.
-pub const CHROME: usize = 2;
+/// # And it is no longer a NUMBER, because one of the two lines is a choice
+///
+/// The path is always there — it says where one IS — and the row that names the
+/// columns is now shown and hidden by a key, starting hidden at the owner's
+/// word. So the constant is the path's own line and [`View::chrome_lines`] adds
+/// the other when it is drawn; nothing else may spell either, which is the
+/// whole of the paragraph above.
+pub const CHROME: usize = 1;
 
 /// How many cells the eject glyph needs on a sidebar row — two, or none.
 ///
@@ -3123,6 +3135,14 @@ pub struct View {
     /// Off at the start. See [`layout_beside`] for the argument; the key that
     /// turns it on is `files-columns`, and the hint line names it.
     details_on: bool,
+    /// Whether the row that NAMES the columns is drawn. `C-D`.
+    ///
+    /// Off to begin with, at the owner's word. What it costs while it is there
+    /// is a line of the region — which in the footer is one of twelve — and
+    /// what it buys is the sort's own arrow and a target for the mouse; the
+    /// keys that sort (`C-s`, `C-S`) reach the same thing without it, so
+    /// nothing is unreachable while it is away.
+    header_on: bool,
     /// What the tools said about the file the cursor was on.
     ///
     /// ONE, and not a map. The panels are about the focused entry and there is
@@ -3608,6 +3628,7 @@ impl View {
             // same decision seen from the other side: what the manager shows
             // without being asked is what one navigates by.
             details_on: false,
+            header_on: false,
             looked: None,
             asked: None,
             drawn_at: std::cell::Cell::new(0),
@@ -3848,7 +3869,7 @@ impl View {
             .columns
             .iter()
             .filter(|(c, _, _)| !matches!(c, Column::Icon))
-            .map(|(c, at, w)| {
+            .flat_map(|(c, at, w)| {
                 let sorting = self.sort.by == c.sorts_by();
                 // The ARROW says the direction, and only on the column that is
                 // actually sorting. On all of them it would be four arrows
@@ -3858,18 +3879,52 @@ impl View {
                 } else {
                     ""
                 };
+                // THE ARROW IS LOUD AND THE WORD IS NOT, which is two fields
+                // and not one.
+                //
+                // The owner asked for it after reading the header: *"a cor
+                // super chamativa de destaque atual seja aplicada apenas na
+                // seta que aparece ao lado do texto, e o texto se destaque …
+                // porém sem utilizar as cores super chamativas"*. The accent is
+                // the loudest ink this system has and a whole word wearing it
+                // shouts a column name at somebody who is reading file names;
+                // what has to be found at a glance is WHICH way the order goes,
+                // and that is the arrow.
+                //
+                // So the word climbs one step of the SAME achromatic scale the
+                // unsorted ones are on — `text.dim` to `text.primary` — and the
+                // accent is spent on the one glyph that needs it. Hierarchy by
+                // colour and never by size, which is the rule every buffer in
+                // this system already keeps.
                 let label = texts.t(c.label());
-                Field {
+                let room = w.saturating_sub(width_of(mark));
+                let shown = ronoctua_render::layout::elide_end(&label, room);
+                let wide = width_of(&shown);
+                let mut out = vec![Field {
                     at: *at,
-                    text: ronoctua_render::layout::elide_end(&format!("{label}{mark}"), *w),
+                    text: shown,
                     color: if sorting {
-                        ronoctua_tokens::color::STATE_ACCENT
+                        ronoctua_tokens::color::TEXT_PRIMARY
                     } else {
                         ronoctua_tokens::color::TEXT_DIM
                     },
                     hit: Hit::Sort(*c),
                     explain: None,
+                }];
+                if !mark.is_empty() {
+                    // AND IT CARRIES THE SAME TARGET, because it is the same
+                    // control: what the eye reads as one word-and-arrow is one
+                    // thing to press. `lit_field` walks from the RIGHT, so the
+                    // arrow keeps the cell it is drawn in.
+                    out.push(Field {
+                        at: at.saturating_add(wide),
+                        text: mark.to_owned(),
+                        color: ronoctua_tokens::color::STATE_ACCENT,
+                        hit: Hit::Sort(*c),
+                        explain: None,
+                    });
                 }
+                out
             })
             .collect();
         Row {
@@ -7804,12 +7859,26 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("C-k", "files-zoom-in", Where::OnAShapeOrAPlace),
     ("C-j", "files-zoom-out", Where::OnAShapeOrAPlace),
     ("C-r", "files-reframe", Where::OnAShapeOrAPlace),
-    // THE THREE COLUMNS ONE LOOKS UP, hidden until asked for.
+    // THE FOUR COLUMNS ONE LOOKS UP, hidden until asked for.
+    //
+    // THE DATE JOINED THEM at the owner's word — *"não quero mais que a coluna
+    // modified seja mostrada por padrão"* — and it belongs with them by the
+    // same rule the other three do: what a listing shows without being asked is
+    // what one navigates BY, and a modification time is something one looks UP.
     //
     // `C-d` for the DETAIL, and a letter for the reason the sidebar's four
     // are: `Footer::press_key` sends an arrow held with the right `Ctrl` to
     // `navigate` before the view sees it.
     ("C-d", "files-columns", Where::Anywhere),
+    // AND `C-D` IS WHETHER THEY ARE NAMED, which is the shifted pair of the key
+    // above the way `C-S` is `C-s`'s and `C-W` is `C-w`'s: `C-d` decides WHICH
+    // columns are drawn and this decides whether their names are.
+    //
+    // IT STARTS HIDDEN, at the owner's word. The line costs one of the footer's
+    // twelve and what it carries — the column names and the sort's arrow — is
+    // reachable without it: `C-s` and `C-S` order the listing, and the order
+    // itself is what one reads off the rows.
+    ("C-D", "files-header", Where::Anywhere),
     // AND THE FOUR SECTIONS, WALKED BY `TAB`.
     //
     // `TAB` ALREADY MEANT THIS ONE ROOM AWAY: the notification manager's own
@@ -8186,6 +8255,10 @@ impl View {
             Some("files-pane-previous") => self.cycle_pane(false),
             Some("files-columns") => {
                 self.details_on = !self.details_on;
+                Step::Changed
+            }
+            Some("files-header") => {
+                self.header_on = !self.header_on;
                 Step::Changed
             }
             _ => Step::Nothing,
@@ -8942,16 +9015,22 @@ impl View {
         if !self.plain() {
             return Vec::new();
         }
-        let rows = vec![
-            Row {
-                fields: self.crumbs(width),
-                marked: false,
-                foot: false,
-                focused: false,
-            },
-            self.header(width, texts),
-        ];
-        debug_assert_eq!(rows.len(), CHROME, "the listing's chrome is two lines");
+        let mut rows = vec![Row {
+            fields: self.crumbs(width),
+            marked: false,
+            foot: false,
+            focused: false,
+        }];
+        // AND THE COLUMNS' NAMES ONLY WHEN THEY ARE ASKED FOR. See
+        // `View::header_shown`.
+        if self.header_on {
+            rows.push(self.header(width, texts));
+        }
+        debug_assert_eq!(
+            rows.len(),
+            self.chrome_lines(),
+            "the chrome drawn and the chrome counted are different heights"
+        );
         rows
     }
 
@@ -9597,11 +9676,28 @@ impl View {
     /// How many lines of the listing are its chrome right now.
     ///
     /// None at all with a menu, a picker or a sheet up: there are no columns
-    /// to name, so [`View::plain`] is the whole question. Both doors and every
-    /// piece of scrolling arithmetic ask this rather than spelling the number.
+    /// to name, and the path of a listing nobody is looking at is not the
+    /// question either. Both doors and every piece of scrolling arithmetic ask
+    /// this rather than spelling the number — which is what lets the row of
+    /// column names come and go without any of them learning about it.
     #[must_use]
     pub const fn chrome_lines(&self) -> usize {
-        if self.plain() { CHROME } else { 0 }
+        if self.plain() {
+            CHROME + if self.header_on { 1 } else { 0 }
+        } else {
+            0
+        }
+    }
+
+    /// Whether the row that names the columns is drawn. `C-D`.
+    ///
+    /// `#[cfg(test)]` because nothing on screen reads it: what the doors need is
+    /// [`View::chrome_rows`], which is the row itself. It is here because the
+    /// toggle has to be provable — the same reason `View::preview_showing` is.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn header_shown(&self) -> bool {
+        self.header_on
     }
 
     /// Keeps the cursor inside the listing's visible rows.
@@ -17562,11 +17658,144 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// FAILS IF: the row that names the columns is drawn without being asked
+    /// for, or the key does not bring it back — or the chrome DRAWN and the
+    /// chrome COUNTED come out different heights.
+    ///
+    /// The owner asked for the key and for the default: *"um atalho para
+    /// mostrar e esconder a linha dos filtros, e por padrão deixe a linha
+    /// escondida"*.
+    ///
+    /// The third assertion is the one with teeth. `View::chrome_lines` is what
+    /// every piece of scrolling arithmetic subtracts — a region of `R` lines
+    /// shows `R - chrome` entries — and the owner has already found the cost of
+    /// that number being wrong by one: *"os dois últimos arquivos não
+    /// apareceram, mas com as setas do teclado eu consegui ir mais para
+    /// baixo"*. A line that comes and goes is a number that comes and goes with
+    /// it.
+    #[test]
+    fn the_row_that_names_the_columns_starts_hidden_and_a_key_brings_it_back() {
+        let dir = scratch("header-toggle");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let b = bundle();
+        let mut v = view_at(&dir);
+        v.reread();
+        let width = 120u16;
+        let sorts = |v: &View| -> usize {
+            v.chrome_rows(width, &b)
+                .iter()
+                .flat_map(|r| r.fields.iter())
+                .filter(|f| matches!(f.hit, Hit::Sort(_)))
+                .count()
+        };
+
+        assert!(!v.header_shown(), "the row is on without anybody asking");
+        assert_eq!(
+            v.chrome_rows(width, &b).len(),
+            1,
+            "the chrome is more than the path with the names hidden"
+        );
+        assert_eq!(sorts(&v), 0, "a column name was drawn with the row hidden");
+        assert_eq!(
+            v.chrome_rows(width, &b).len(),
+            v.chrome_lines(),
+            "the chrome drawn and the chrome counted are different heights"
+        );
+
+        // AND THE KEY BRINGS IT BACK, with its targets — which is what makes it
+        // worth a line of the region.
+        assert!(matches!(v.key(of_view("C-D")), Step::Changed));
+        assert!(v.header_shown(), "`C-D` did not bring the row back");
+        assert_eq!(v.chrome_rows(width, &b).len(), 2, "the row was not drawn");
+        assert!(sorts(&v) > 0, "the row came back with nothing to press");
+        assert_eq!(
+            v.chrome_rows(width, &b).len(),
+            v.chrome_lines(),
+            "the chrome drawn and the chrome counted are different heights"
+        );
+
+        // AND THE SAME KEY TAKES IT AWAY AGAIN.
+        assert!(matches!(v.key(of_view("C-D")), Step::Changed));
+        assert_eq!(v.chrome_rows(width, &b).len(), 1, "`C-D` is one-way");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the whole column name wears the accent, or the sorting one is
+    /// drawn the same as the columns that are not.
+    ///
+    /// THE OWNER ASKED FOR THE SPLIT AFTER READING THE HEADER: *"a cor super
+    /// chamativa de destaque atual seja aplicada apenas na seta que aparece ao
+    /// lado do texto, e o texto se destaque em comparação aos filtros
+    /// selecionados, porém sem utilizar as cores super chamativas"*.
+    ///
+    /// Both halves matter and they pull against each other: an accent on the
+    /// word is too loud, and a word drawn like its neighbours says nothing at
+    /// all. So the word climbs the SAME achromatic scale the others are on and
+    /// the accent is spent on the arrow — and the two are one control, which is
+    /// what the shared `Hit` says.
+    #[test]
+    fn the_arrow_is_loud_and_the_column_name_is_not() {
+        let root = scratch("header-ink");
+        std::fs::write(root.join("um.txt"), b"x").unwrap();
+        let mut v = view_at(&root);
+        v.click(usize::MAX, &Hit::Sort(Column::Size));
+        let header = v.header(120, &bundle());
+        let arrows: Vec<&Field> = header
+            .fields
+            .iter()
+            .filter(|f| f.text.contains('↑') || f.text.contains('↓'))
+            .collect();
+        assert_eq!(arrows.len(), 1, "the arrow is not one field: {arrows:?}");
+        assert_eq!(
+            arrows[0].color,
+            ronoctua_tokens::color::STATE_ACCENT,
+            "the arrow is not the loud one"
+        );
+        assert_eq!(
+            arrows[0].hit,
+            Hit::Sort(Column::Size),
+            "the arrow does not press what the word presses"
+        );
+
+        // THE WORD: not the accent, and not the ink of the ones beside it.
+        let word = header
+            .fields
+            .iter()
+            .find(|f| f.hit == Hit::Sort(Column::Size) && !f.text.contains('↑'))
+            .expect("the sorting column has a name");
+        assert_ne!(
+            word.color,
+            ronoctua_tokens::color::STATE_ACCENT,
+            "the column name is still wearing the loudest ink there is"
+        );
+        assert_ne!(
+            word.color,
+            ronoctua_tokens::color::TEXT_DIM,
+            "the sorting column is drawn exactly like the ones that are not"
+        );
+        // AND THE OTHERS ARE THE DIM ONE, which is what makes the step above a
+        // step at all.
+        for other in header
+            .fields
+            .iter()
+            .filter(|f| f.hit != Hit::Sort(Column::Size))
+        {
+            assert_eq!(
+                other.color,
+                ronoctua_tokens::color::TEXT_DIM,
+                "a column nobody is sorting by is not dim: {other:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn the_header_marks_the_column_that_is_sorting_and_only_it() {
         // Four arrows would be four columns each claiming to be the order.
         let root = scratch("mark");
         std::fs::write(root.join("um.txt"), b"x").unwrap();
+        // `view_at` HAS THE COLUMNS ONE LOOKS UP ALREADY ON — see `plainly` —
+        // and the date is one of them, so there is a header of it to mark.
         let mut v = view_at(&root);
         v.click(usize::MAX, &Hit::Sort(Column::Modified));
         let header = v.header(120, &bundle());
@@ -18295,10 +18524,10 @@ mod tests {
         v.key(of_view("ESC"));
         assert!(!v.menu_open());
 
-        // And a cell inside the listing — line 2, because the listing's first
-        // two lines are its chrome.
+        // And a cell inside the listing — past its chrome, which is the path
+        // alone until `C-D` puts the column names back.
         let cell = split + RULE + GUTTER + 1;
-        let t = v.hit(120, 12, 2, cell, &b);
+        let t = v.hit(120, 12, v.chrome_lines(), cell, &b);
         v.menu_at(t.as_ref());
         assert!(v.menu_open());
         assert!(matches!(v.pane(), Pane::Listing));
@@ -18306,10 +18535,15 @@ mod tests {
         v.key(of_view("ESC"));
         assert!(!v.menu_open());
 
-        // AND THE CHROME HAS NONE. The path line and the column headers are
-        // not about a file, and a menu of file actions over them would act on
+        // AND THE CHROME HAS NONE. The path line and the column names are not
+        // about a file, and a menu of file actions over them would act on
         // whatever the cursor happened to be on.
-        for line in [0, 1] {
+        //
+        // BOTH OF THEM, so `C-D` puts the names back first: with the row hidden
+        // the loop would be asking about a line of the listing, and a listing
+        // row is exactly where the menu SHOULD open.
+        assert!(matches!(v.key(of_view("C-D")), Step::Changed));
+        for line in 0..v.chrome_lines() {
             let t = v.hit(120, 12, line, cell, &b);
             v.menu_at(t.as_ref());
             assert!(!v.menu_open(), "line {line} of the chrome opened a menu");
@@ -19762,8 +19996,8 @@ mod tests {
         let chrome = v.chrome_rows(w, &b);
         assert_eq!(
             chrome.len(),
-            2,
-            "the listing's chrome is the path and the header"
+            1,
+            "the listing's chrome is the path alone until `C-D` names the columns"
         );
         let seen = region - chrome.len();
         let total = v.amount();
@@ -20007,7 +20241,10 @@ mod tests {
         );
 
         // 3. A FOLDER IN THE LISTING SELECTS — it does not go to the parent.
-        let first = CHROME;
+        //
+        // ASKED OF THE VIEW, because the row that names the columns comes and
+        // goes with `C-D` and the listing's first line moves with it.
+        let first = v.chrome_lines();
         let name = v
             .hit(w, room, first, listing_cell, &b)
             .expect("the listing's first line");
@@ -20780,7 +21017,7 @@ mod tests {
     }
 
     #[test]
-    fn the_three_columns_one_looks_up_start_hidden_and_a_key_shows_them() {
+    fn the_four_columns_one_looks_up_start_hidden_and_a_key_shows_them() {
         // The other half of the same decision: what the listing shows without
         // being asked is what one navigates BY, and the permission triplet and
         // the two names are what one looks UP.
@@ -20809,7 +21046,13 @@ mod tests {
                 .collect()
         };
         let hidden = named(&v);
-        for c in [Column::Perms, Column::Owner, Column::Group] {
+        for c in [
+            Column::Perms,
+            Column::Owner,
+            Column::Group,
+            // THE DATE IS ONE OF THEM NOW, at the owner's word.
+            Column::Modified,
+        ] {
             assert!(
                 !hidden.contains(&c),
                 "{c:?} appeared without anybody asking: {hidden:?}"
@@ -20819,7 +21062,12 @@ mod tests {
         // makes them worth showing.
         assert!(matches!(v.key(of_view("C-d")), Step::Changed));
         let shown = named(&v);
-        for c in [Column::Perms, Column::Owner, Column::Group] {
+        for c in [
+            Column::Perms,
+            Column::Owner,
+            Column::Group,
+            Column::Modified,
+        ] {
             assert!(shown.contains(&c), "{c:?} did not come back: {shown:?}");
         }
         // ROW ONE: on `..` every cell answers the way out, by design.
@@ -21112,9 +21360,10 @@ mod tests {
         // the line ON SCREEN whatever the listing's offset is, so the region's
         // first line answers with the same fact either way.
         v.scroll_listing_to(20);
-        let scrolled = v.hit(w, 12, CHROME, cell, &b).map(|t| t.explain);
+        let first = v.chrome_lines();
+        let scrolled = v.hit(w, 12, first, cell, &b).map(|t| t.explain);
         v.scroll_listing_to(0);
-        let top = v.hit(w, 12, CHROME, cell, &b).map(|t| t.explain);
+        let top = v.hit(w, 12, first, cell, &b).map(|t| t.explain);
         assert_eq!(
             scrolled, top,
             "the panel's first line really changed on scroll"

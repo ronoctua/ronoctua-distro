@@ -190,7 +190,17 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   para NFS, que o inotify não vê —; a janela não ganhou relógio (em repouso não acorda NENHUMA vez,
   que é o custo de ter várias abertas), só se o observador não subir. Fechar DESCANSA o watch, e os
   dois lugares que largam a vista chamam — o segundo é perder o FOCO. A ficha ROLA (`C-.`, e a barra diz que cortou);
-  permissão, dono e grupo nascem OCULTOS na listagem (`C-d`), e no painel de infos os campos são
+  **A linha que NOMEIA as colunas nasce escondida**, e `C-D` a mostra — o par shiftado do
+  `C-d` como `C-S` é do `C-s`: um decide QUAIS colunas são desenhadas, o outro se os nomes delas
+  são. A linha custa uma das doze do rodapé e o que ela carrega é alcançável sem ela (`C-s` e `C-S`
+  ordenam, e a ordem se lê nas linhas). **E a seta é a única coisa ali com o acento** — o texto da
+  coluna ordenada sobe um degrau da MESMA escala acromática das outras (`text.dim` → `text.primary`)
+  porque uma palavra inteira no tom mais alto do sistema grita um nome de coluna para quem está
+  lendo nomes de arquivo; o que se procura de relance é para que lado a ordem vai. São dois campos
+  com o MESMO alvo: o que o olho lê como uma coisa é uma coisa de se clicar.
+  Permissão, dono, grupo e DATA nascem OCULTOS na listagem (`C-d`) — o que a listagem mostra sem
+  ser pedida é por onde se NAVEGA, e uma data de modificação é coisa que se olha —, e no painel de
+  infos os campos são
   os MESMOS da linha — mesma `Hit`, mesma máquina. **E a ficha EXPANDE** (`C-W`, o par shiftado do
   `C-w` da prévia): a região inteira vira a ficha, e lá os fatos se dividem em quantas COLUNAS a
   largura couber — nunca mais do que eles precisam para caber nas linhas, senão uma coluna que

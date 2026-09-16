@@ -10722,20 +10722,32 @@ impl Footer {
         if !plain {
             return Vec::new();
         }
-        vec![
-            ExpansionRow {
-                click: Some(Click::FilesPath),
-                fields: files.crumbs(width),
+        // THROUGH THE VIEW'S OWN CHROME, and that is a repair.
+        //
+        // This door built the two rows by hand — a SECOND builder for lines the
+        // view already assembles — and the day the row that names the columns
+        // became a choice (`C-D`, hidden to begin with) the footer went on
+        // drawing it while `View::chrome_lines` counted one. Photographed: the
+        // window door obeyed and the footer did not.
+        //
+        // The CLICK is the door's, because it is the door's own routing table
+        // and the view has no word for it: the first line is the path and the
+        // rest is the listing's own.
+        files
+            .chrome_rows(width, &self.texts)
+            .into_iter()
+            .enumerate()
+            .map(|(n, row)| ExpansionRow {
+                click: Some(if n == 0 {
+                    Click::FilesPath
+                } else {
+                    Click::Files
+                }),
+                fields: row.fields,
                 foot: false,
                 ..ExpansionRow::empty_one()
-            },
-            ExpansionRow {
-                click: Some(Click::Files),
-                fields: files.header(width, &self.texts).fields,
-                foot: false,
-                ..ExpansionRow::empty_one()
-            },
-        ]
+            })
+            .collect()
     }
 
     /// The expansion's lines from `skip`, at most `take` of them.
