@@ -43,6 +43,8 @@
   snowflake,
   # The update sequence, generated from `assets/updates.nix`.
   updatesRs,
+  # The cache policy, generated from `assets/cache.nix`.
+  cacheRs,
   syntaxRs,
   mimeDb,
   i18nRs,
@@ -250,6 +252,13 @@ let
     # declares, so a run that stopped at `flake-update` drew a bracketed key on
     # screen. Two files saying what the update does is one file too many.
     RONOCTUA_UPDATES_RS = "${updatesRs}/updates.rs";
+    # THE CACHE POLICY, and three crates read it rather than three crates
+    # deciding. How long a cached file may live is the sweep's business, how
+    # often it happens is the brain's, and when a thumbnail is remade is the
+    # file manager's — but `freshDays < keepDays` is a promise none of the three
+    # can keep alone, so the number comes from one file and the build refuses
+    # the pair that breaks it.
+    RONOCTUA_CACHE_RS = "${cacheRs}/cache.rs";
     # THE SYNTAX TABLE, and it is one file for the same reason the update
     # sequence is: what crosses to Rust is the finished table, not the
     # declaration. `crates/ronoctua-syntax`'s `build.rs` copies it into
@@ -895,6 +904,19 @@ rec {
     chmod +w $out/bin/ronoctua-brain
     # The graphics rpath belongs to the footer; this program opens no window.
     patchelf --shrink-rpath $out/bin/ronoctua-brain
+  '';
+
+  # THE CACHE SWEEP, extracted for the brain's own reason and one of its own.
+  #
+  # It walks a directory and calls `unlink`. What it is allowed to link is part
+  # of its argument: no D-Bus, no renderer, no reader of `/proc` — whether the
+  # machine is busy is decided before this is ever started. Shipping `workspace`
+  # to it would put the whole shell in the closure of a unit that deletes files.
+  cacheSweep = pkgs.runCommand "ronoctua-cache-sweep" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-cache-sweep $out/bin/
+    chmod +w $out/bin/ronoctua-cache-sweep
+    patchelf --shrink-rpath $out/bin/ronoctua-cache-sweep
   '';
 
   # Tests. A separate derivation so it can say WHAT broke.

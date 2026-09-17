@@ -1,0 +1,22 @@
+[package]
+name = "ronoctua-cache-sweep"
+description = "Walks a cache root and deletes what nothing has used for a while. Reads a policy, never decides one."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ronoctua-cache-sweep"
+path = "src/main.rs"
+
+# THE ROOTS, AND NOTHING ELSE. This binary deletes files for a living, so what
+# it is allowed to link is part of its argument: no D-Bus, no renderer, no
+# reader of `/proc`. Whether the machine is busy is the brain's question and is
+# answered before this is ever started — see `runner::judge`.
+[dependencies]
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+
+[lints]
+workspace = true

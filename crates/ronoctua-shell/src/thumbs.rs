@@ -104,6 +104,15 @@ pub struct Made {
     /// worker is off the event loop — and without it the pointer resting on one
     /// would find a picture and nothing to play, which the owner reported.
     pub inside: Option<ronoctua_inspect::motion::Inside>,
+    /// Whether this answer REPLACES one that was already on screen.
+    ///
+    /// The renewal: a picture that came out of the cache is drawn at once and,
+    /// when it has been sitting there a while, made again behind the one the
+    /// person is already looking at. The second answer arrives under the SAME
+    /// key, so nothing in the grid moves and nothing waits — but the texture
+    /// has to be uploaded again, and the door cannot tell that from a key it
+    /// has already seen. This is what tells it. See `Kept::again`.
+    pub again: bool,
     /// Whether this file MOVES, and can be moved in process.
     ///
     /// Answered by the worker because it has the file open anyway, and the test
@@ -150,6 +159,16 @@ pub fn pool(
 ) -> Option<mpsc::Sender<Ask>> {
     let (queue, asks) = mpsc::channel::<Ask>();
     let asks = Arc::new(Mutex::new(asks));
+    // HOW OLD A CACHED PICTURE MAY BE BEFORE IT IS MADE AGAIN.
+    //
+    // From `assets/cache.nix`, which is also where the sweep's own retention
+    // comes from — and the build refuses the pair where this is not the smaller
+    // of the two. That is the whole relationship: a thumbnail somebody actually
+    // looks at is renewed here and so never reaches the age at which the sweep
+    // would take it.
+    let renew = std::time::Duration::from_secs(
+        u64::from(ronoctua_inspect::cache::policy::FRESH_DAYS) * 24 * 60 * 60,
+    );
     let mut born = 0;
     for n in 0..hands() {
         let asks = Arc::clone(&asks);
@@ -200,7 +219,49 @@ pub fn pool(
                             )
                         })
                     };
-                    let made = kept.or_else(|| {
+                    // AND HOW OLD THE CACHED ONE IS.
+                    //
+                    // A cache can be right about the FILE and wrong about the
+                    // WORLD: the key says which file, what size and what ink,
+                    // and none of those moves when the rule for drawing
+                    // changes. This repository met it — the rule for a sound
+                    // with no cover art changed, the code was right, and the
+                    // owner went on seeing waveforms, because three of them
+                    // were already on disk.
+                    //
+                    // So a picture that has been there longer than the policy
+                    // allows is DRAWN AT ONCE and then made again behind it.
+                    // Nobody waits for anything, and every future change of
+                    // rule reaches the screen by itself.
+                    let stale = kept
+                        .as_ref()
+                        .is_some_and(|k| k.stale(std::time::SystemTime::now(), renew));
+                    if let Some(k) = &kept
+                        && stale
+                        && out
+                            .send(Made {
+                                key: ask.key.clone(),
+                                rgba: Some(ronoctua_render::image::Rgba {
+                                    width: k.picture.width,
+                                    height: k.picture.height,
+                                    pixels: k.picture.pixels.clone(),
+                                }),
+                                // NOTHING ELSE IS ANSWERED YET. What the old
+                                // picture is worth is the pixels; whether the
+                                // file moves, how long it runs and what is
+                                // inside it all cost a probe, and the second
+                                // answer is a moment away with all four.
+                                seconds: None,
+                                inside: None,
+                                again: false,
+                                moves: false,
+                            })
+                            .is_err()
+                    {
+                        return;
+                    }
+                    let kept = if stale { None } else { kept };
+                    let made = kept.map(|k| k.picture).or_else(|| {
                         // A SHAPE IS DRAWN, NOT DECODED, and that is why it gets
                         // a thumbnail here when the panel's preview leaves it to
                         // the turning stage: the stage exists to turn ONE piece
@@ -286,12 +347,36 @@ pub fn pool(
                     let carried = carried.flatten().filter(|m| m.inside.is_some());
                     let seconds = seconds.or_else(|| carried.as_ref()?.shape.seconds);
                     let inside = carried.and_then(|m| m.inside);
+                    // A REMAKE THAT CAME BACK WITH NOTHING SAYS NOTHING.
+                    //
+                    // THE DEFECT THIS IS: `Made { rgba: None }` is an ANSWER —
+                    // *this file has no picture* — and the second answer
+                    // arrives under the key of the first. So a renewal that
+                    // failed would write that answer over the picture already
+                    // on the screen, and the cell would fall back to its glyph
+                    // for no reason a person could see.
+                    //
+                    // Found on screen, with the five readers pointed at
+                    // `/nonexistent`: the cache was hit, the old picture was
+                    // sent, the remake could not run, and the cover became a
+                    // music glyph. A file being rewritten while the grid is
+                    // open, a full disk or one bad `ffmpeg` would do the same.
+                    //
+                    // The first answer stands. What is lost is only what the
+                    // remake would have learned — whether it moves, how long it
+                    // runs — and that is what it already said a moment ago.
+                    if stale && rgba.is_none() {
+                        continue;
+                    }
                     if out
                         .send(Made {
                             key: ask.key,
                             rgba,
                             seconds,
                             inside,
+                            // A SECOND ANSWER FOR THE SAME CELL, when the first
+                            // one came out of the cache and was old.
+                            again: stale,
                             moves,
                         })
                         .is_err()
@@ -509,6 +594,9 @@ impl Slot {
             rgba: Some(picture),
             seconds: None,
             inside: None,
+            // A FRAME, not a replacement: `moves` already tells the door to
+            // upload this key every time, which is what an animation is.
+            again: false,
             moves: true,
         })
     }
@@ -588,6 +676,12 @@ pub struct Kept {
     /// Kept apart from `made` because it survives a frame replacing a picture:
     /// an animator sends frame after frame under one key, and each of them is a
     /// `Made` whose `moves` says the same thing.
+    /// Keys whose picture was REPLACED and has not been uploaded since.
+    ///
+    /// Emptied once a frame by [`Kept::keep_only`], which is the one thing that
+    /// already runs exactly once per frame per door — so a replacement is
+    /// uploaded on the next frame and never on every frame after it.
+    fresh: HashSet<String>,
     moving: HashSet<String>,
     bytes: usize,
 }
@@ -620,11 +714,36 @@ impl Kept {
         if made.moves {
             self.moving.insert(made.key.clone());
         }
+        // A REPLACEMENT HAS TO BE UPLOADED AGAIN. The door decides whether to
+        // send a picture to the GPU by asking whether it has seen the key, and
+        // a renewal arrives under the key it is renewing — so without this the
+        // new picture sits in this map and the old one stays on screen until
+        // something else evicts it. `Kept::again` is what the two painters ask.
+        if made.again {
+            self.fresh.insert(made.key.clone());
+        }
         if let Some(seconds) = made.seconds {
             self.films.insert(made.key.clone(), seconds);
         }
         if let Some(inside) = made.inside {
             self.carried.insert(made.key.clone(), inside);
+        }
+        // AND A PICTURE IS NEVER UNMADE UNDER THE SAME KEY.
+        //
+        // `None` is an answer — *this file has no picture* — but it can only
+        // ever be the FIRST answer about a key, because the key carries the
+        // file's modification time and its size: a file that changed is a
+        // different key, not the same one with a different answer. So a `None`
+        // arriving where a picture already is comes from a remake that failed,
+        // and writing it down would take a cover off the screen and put a glyph
+        // in its place for no reason anybody could see.
+        //
+        // Read off the screen with the five readers pointed at `/nonexistent`:
+        // a cache hit drew the album cover, the renewal could not run, and the
+        // cell went back to a music glyph. The worker no longer sends that
+        // second answer at all; this is the same rule where a test can hold it.
+        if made.rgba.is_none() && self.made.get(&made.key).is_some_and(Option::is_some) {
+            return;
         }
         self.bytes += made.rgba.as_ref().map_or(0, |r| r.pixels.len());
         if let Some(old) = self.made.insert(made.key, made.rgba) {
@@ -655,6 +774,31 @@ impl Kept {
     #[must_use]
     pub fn moves(&self, key: &str) -> bool {
         self.moving.contains(key)
+    }
+
+    /// Forget which pictures were replaced — the frame that had to draw them
+    /// has been drawn.
+    ///
+    /// # Why this is not done where the frame is PREPARED
+    ///
+    /// Because the preparing happens first. `look_again` asks for thumbnails
+    /// and then `draw` and `paint` run, so a flag cleared while the asks are
+    /// being made is a flag the painter never sees — the renewed picture would
+    /// sit in this map with the old one still on the screen until something
+    /// else evicted it. It is cleared where the upload has already happened.
+    pub fn uploaded(&mut self) {
+        self.fresh.clear();
+    }
+
+    /// Whether this key's picture was replaced since the last frame.
+    ///
+    /// The door asks it for the reason it asks [`Kept::moves`]: both mean
+    /// "upload this one even though you have seen the key". The difference is
+    /// that a moving cell says it every frame for ever and a renewed one says
+    /// it once.
+    #[must_use]
+    pub fn again(&self, key: &str) -> bool {
+        self.fresh.contains(key)
     }
 
     /// Every key this cache holds a picture for.
@@ -715,6 +859,106 @@ impl Kept {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_remake_that_failed_does_not_take_the_picture_off_the_screen() {
+        // THE DEFECT THIS CATCHES, and it was found on screen rather than here:
+        // the grid draws what is in the cache at once and remakes an old
+        // picture behind it, and a remake that comes back with NOTHING was
+        // writing that nothing over the picture already being looked at. With
+        // the five readers pointed at `/nonexistent` — a stand-in for a file
+        // being rewritten, a full disk, one bad `ffmpeg` — an album cover
+        // became a music glyph.
+        //
+        // `None` can only ever be the FIRST answer about a key, because the key
+        // carries the file's mtime and size: a file that changed is a different
+        // key, not the same one answering differently.
+        let mut kept = Kept::default();
+        let answer = |rgba: Option<ronoctua_render::image::Rgba>| Made {
+            key: "k".to_owned(),
+            rgba,
+            seconds: None,
+            inside: None,
+            again: false,
+            moves: false,
+        };
+        let picture = ronoctua_render::image::Rgba {
+            width: 1,
+            height: 1,
+            pixels: vec![1, 2, 3, 4],
+        };
+
+        kept.took(answer(Some(picture)));
+        assert!(kept.get("k").is_some(), "the picture did not go in");
+        let weight = kept.weight();
+
+        kept.took(answer(None));
+        assert!(
+            kept.get("k").is_some(),
+            "a failed remake took the picture off the screen"
+        );
+        assert_eq!(kept.weight(), weight, "and it lost count of the bytes");
+
+        // AND A FIRST `None` IS STILL AN ANSWER, which is what keeps a document
+        // from being asked about on every frame for ever.
+        kept.took(Made {
+            key: "doc".to_owned(),
+            ..answer(None)
+        });
+        assert!(
+            kept.knows("doc"),
+            "a file with no picture was not written down"
+        );
+        assert!(kept.get("doc").is_none());
+    }
+
+    #[test]
+    fn a_replaced_picture_is_uploaded_once_and_not_for_ever() {
+        // THE DEFECT THIS CATCHES, in both directions. The door decides whether
+        // to send a picture to the GPU by asking whether it has SEEN the key,
+        // and a renewal arrives under the key it renews — so without a flag the
+        // new picture sits in this map and the old one stays on screen. With a
+        // flag that is never cleared, a screenful is re-uploaded on every frame
+        // for the rest of the session, which is tens of mebibytes a second
+        // across the bus for a picture that is not moving.
+        let mut kept = Kept::default();
+        let picture = || ronoctua_render::image::Rgba {
+            width: 1,
+            height: 1,
+            pixels: vec![0, 0, 0, 255],
+        };
+        let made = |again: bool| Made {
+            key: "k".to_owned(),
+            rgba: Some(picture()),
+            seconds: None,
+            inside: None,
+            again,
+            moves: false,
+        };
+
+        kept.took(made(false));
+        assert!(!kept.again("k"), "a first answer asked to be re-uploaded");
+
+        kept.took(made(true));
+        assert!(kept.again("k"), "a replacement was not announced");
+
+        kept.uploaded();
+        assert!(
+            !kept.again("k"),
+            "the flag survived the frame that drew it, so every frame re-uploads"
+        );
+
+        // AND A MOVING CELL IS UNAFFECTED: it says the same thing every frame,
+        // which is what an animation is.
+        kept.took(Made {
+            again: false,
+            moves: true,
+            ..made(false)
+        });
+        assert!(kept.moves("k"));
+        kept.uploaded();
+        assert!(kept.moves("k"), "clearing a renewal stopped an animation");
+    }
     use super::*;
 
     fn a_picture(side: u32) -> ronoctua_render::image::Rgba {
@@ -738,6 +982,7 @@ mod tests {
             rgba: None,
             seconds: None,
             inside: None,
+            again: false,
             moves: false,
         });
         assert!(kept.knows("doc"), "the refusal was not written down");
@@ -753,6 +998,7 @@ mod tests {
             rgba: Some(a_picture(64)),
             seconds: None,
             inside: None,
+            again: false,
             moves: false,
         });
         let once = kept.weight();
@@ -762,6 +1008,7 @@ mod tests {
             rgba: Some(a_picture(64)),
             seconds: None,
             inside: None,
+            again: false,
             moves: false,
         });
         assert_eq!(kept.weight(), once, "the same key was counted twice");
@@ -777,6 +1024,7 @@ mod tests {
             rgba: Some(a_picture(64)),
             seconds: None,
             inside: None,
+            again: false,
             moves: false,
         });
         kept.keep_only(&HashSet::new());
@@ -799,6 +1047,7 @@ mod tests {
                 rgba: Some(a_picture(side)),
                 seconds: None,
                 inside: None,
+                again: false,
                 moves: false,
             });
         }

@@ -118,6 +118,20 @@ impl Prefs {
         self.tasks.get(task).cloned().unwrap_or_default()
     }
 
+    /// The same, but falling back to what the TASK chose rather than to what
+    /// every task shares.
+    ///
+    /// The person's file still wins: an entry here is something they changed,
+    /// and a task's own default is only what fills the gap where they have not.
+    /// See [`crate::task::Task::defaults`] for why a task gets a say at all.
+    #[must_use]
+    pub fn of_task(&self, task: &dyn crate::task::Task) -> TaskPrefs {
+        self.tasks
+            .get(task.id())
+            .cloned()
+            .unwrap_or_else(|| task.defaults())
+    }
+
     /// The entry to change, created from the default if it is not there yet.
     pub fn mine(&mut self, task: &str) -> &mut TaskPrefs {
         self.tasks.entry(task.to_owned()).or_default()
@@ -266,6 +280,27 @@ impl PartOfDay {
             Self::Morning => (8, 12),
             Self::Afternoon => (13, 18),
             Self::Evening => (19, 23),
+        }
+    }
+
+    /// The window a word names — the inverse of [`PartOfDay::word`].
+    ///
+    /// # Why it takes a word at all
+    ///
+    /// Because `assets/cache.nix` declares WHEN the sweep runs, and a
+    /// declaration in Nix can only say a word. `nix/cache.nix` refuses a word
+    /// this enum does not know, at BUILD time, so the fallback below is
+    /// unreachable from the catalogue — it is here for a preferences file
+    /// somebody edited by hand, where "whenever the gate allows" is the
+    /// harmless answer and a panic would be a daemon that will not start.
+    #[must_use]
+    pub fn from_word(word: &str) -> Self {
+        match word {
+            "night" => Self::Night,
+            "morning" => Self::Morning,
+            "afternoon" => Self::Afternoon,
+            "evening" => Self::Evening,
+            _ => Self::Any,
         }
     }
 

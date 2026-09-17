@@ -78,6 +78,27 @@ pub trait Task: Send + Sync {
     /// interrupts nothing.
     fn countdown(&self, prefs: &Prefs) -> u16;
 
+    /// What the DISTRO chose for it, when the person has chosen nothing.
+    ///
+    /// # Why a task gets a say in its own cadence
+    ///
+    /// Because [`crate::prefs::TaskPrefs::default`] is one struct for every
+    /// task — weekly, in the afternoon, with a minute of countdown — and that
+    /// is right for the one that rebuilds the system and wrong for a sweep that
+    /// interrupts nothing and wants a night every five days.
+    ///
+    /// Answering it inside `due` instead would be a LIE ON SCREEN: the brain's
+    /// row draws `interval_days` and `part_of_day` as `Prefs` resolved them, so
+    /// it would say "every seven days, afternoon" about a task running every
+    /// five at night. One answer, asked here, and the person's file still wins
+    /// over it — [`crate::prefs::Prefs::of_task`].
+    ///
+    /// The default is the distro's own default, which is what every task that
+    /// has no opinion should have.
+    fn defaults(&self) -> crate::prefs::TaskPrefs {
+        crate::prefs::TaskPrefs::default()
+    }
+
     /// What it runs, in order — DATA, so the screen can draw it and the person
     /// can switch one off.
     ///

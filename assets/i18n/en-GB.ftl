@@ -2403,6 +2403,8 @@ brain-needs-root = it runs as root, with the whole machine's permissions
 # THE ONE TASK THERE IS, and under the cursor the quiet line saying what that
 # actually means — the rule the disk formatter's menus already follow, where
 # every row carries a second register.
+brain-task-cache-sweep = Sweep the caches
+brain-task-cache-sweep-does = it walks everything under your cache directory and deletes the files nothing has opened for a while, counting from the last time each one was USED and not from the day it was made. It never follows a link out of that directory, never leaves the filesystem it started on, takes ordinary files only and keeps anything stamped in the future. A cache is what can always be made again, so nothing is lost — only time, the next time something needs it.
 brain-task-system-update = Update the system
 brain-task-system-update-does = the machine brings its own software forward and builds the new system as a boot entry, without switching to it: nothing changes underneath a session that is open, and what starts it is the next reboot — a moment you choose.
 

@@ -13,6 +13,7 @@
 //! at construction, so a mistake is a daemon that does not start rather than a
 //! bracketed key on somebody's screen.
 
+pub mod sweep;
 pub mod update;
 
 use std::sync::Arc;
@@ -33,6 +34,7 @@ use crate::task::Task;
 pub fn tasks(zone: Arc<dyn Offset>) -> Vec<Box<dyn Task>> {
     vec![
         // ONE LINE PER FEATURE. This is the door.
-        Box::new(update::SystemUpdate::with(zone)),
+        Box::new(update::SystemUpdate::with(Arc::clone(&zone))),
+        Box::new(sweep::CacheSweep::with(zone)),
     ]
 }

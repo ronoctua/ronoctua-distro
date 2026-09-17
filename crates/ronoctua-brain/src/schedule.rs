@@ -41,7 +41,6 @@ pub fn next_moment(
     prefs: &TaskPrefs,
     zone: &dyn Offset,
 ) -> Moment {
-    let (from, to) = prefs.part_of_day.hours();
     let today = local_day(now, zone);
     // The earliest day it is allowed on: `interval_days` LOCAL days after the
     // one it last ran on. A run at 23:00 and the next at 01:00 are two days
@@ -52,6 +51,30 @@ pub fn next_moment(
         local_day(l, zone) + i64::from(prefs.interval_days)
     });
     let mut day = today.max(earliest);
+    // AND A TASK THAT IS REALLY LATE MAY RUN AT ANY HOUR.
+    //
+    // The window is a preference about a good moment, not a condition. On a
+    // laptop that is asleep at four every night, a task wanting `night` would
+    // wake up each morning to find the window shut and put itself off until
+    // tomorrow — for ever, silently, and the row would go on showing a date it
+    // never honours. The owner asked for the other behaviour in as many words:
+    // it stays OWED and runs at the next quiet moment.
+    //
+    // A WHOLE INTERVAL LATE and not a minute late, so an ordinary day where the
+    // machine happened to be busy at 02:00 still waits for the next night. Past
+    // that, the window opens to the whole day and the thing that decides
+    // "quiet" is the one that always decided it: `runner::judge`, against the
+    // gate the person configured.
+    //
+    // It costs nothing when nothing is late, which is why it lives here and not
+    // in a task: every task gets it, including the update, whose own schedule
+    // had exactly this hole.
+    let overdue = today >= earliest.saturating_add(i64::from(prefs.interval_days));
+    let (from, to) = if overdue {
+        (0, 24)
+    } else {
+        prefs.part_of_day.hours()
+    };
     let last_day = day + HORIZON;
     while day <= last_day {
         let opens = at_local_hour(day, from, zone);
@@ -142,6 +165,49 @@ mod tests {
         let at = next_moment(last + 60, Some(last), &every(1, PartOfDay::Morning), &zone);
         // Day 1, 08:00 local, which is 06:00 UTC.
         assert_eq!(at, DAY + 6 * 3600);
+    }
+
+    #[test]
+    fn a_task_a_whole_interval_late_may_run_at_any_hour() {
+        // THE DEFECT THIS CATCHES: a laptop that is asleep at four in the
+        // morning never sweeping anything, ever. A task wanting `night` finds
+        // the window shut every time it wakes, puts itself off until tomorrow,
+        // and the row goes on showing a date nothing ever honours.
+        //
+        // It ran on day 0 and may run every five days at night (02:00–05:00).
+        // On day 5 at 11:00 the window has passed, so the answer is day 6 at
+        // 02:00 — it is on time, and on time means the window.
+        let mine = every(5, PartOfDay::Night);
+        let on_time = next_moment(5 * DAY + 11 * 3600, Some(0), &mine, &Fixed(0));
+        assert_eq!(
+            on_time,
+            6 * DAY + 2 * 3600,
+            "a task on time skipped its window"
+        );
+
+        // AND ONE DAY LATE IS NOT LATE. A day where the machine happened to be
+        // busy at 02:00 still waits for the next night — otherwise "at night"
+        // would mean "at night, once" and then whenever, which is a preference
+        // that stops being one after its first miss.
+        assert_eq!(
+            next_moment(6 * DAY + 11 * 3600, Some(0), &mine, &Fixed(0)),
+            7 * DAY + 2 * 3600,
+            "one missed window was enough to give up on the window"
+        );
+
+        // AND ON DAY 10 AT 11:00 it is a whole interval late, so it runs NOW —
+        // subject to the gate, which is the thing that decides "quiet".
+        let late = 10 * DAY + 11 * 3600;
+        assert_eq!(
+            next_moment(late, Some(0), &mine, &Fixed(0)),
+            late,
+            "a task five days overdue was made to wait for the small hours again"
+        );
+
+        // AND `Any` IS UNCHANGED, which is the proof this only widens: a task
+        // with no window at all answered `now` before and still does.
+        let anytime = every(5, PartOfDay::Any);
+        assert_eq!(next_moment(late, Some(0), &anytime, &Fixed(0)), late);
     }
 
     #[test]

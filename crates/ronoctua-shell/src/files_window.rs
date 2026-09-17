@@ -1571,6 +1571,10 @@ impl FilesWindow {
         // there is a name to walk is written down by the layout, and the
         // layout is this frame.
         self.arm_the_walk();
+        // AND THE REPLACED PICTURES HAVE NOW BEEN UPLOADED. After the frame for
+        // the same reason: what asks for thumbnails runs at the TOP of this
+        // function, and a flag cleared there is a flag the painter never sees.
+        self.view.thumbs_uploaded();
     }
 
     /// Hangs the clock that walks a name too long for its column.

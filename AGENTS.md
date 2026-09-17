@@ -293,6 +293,14 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   num painel e é um borrão cinza em seis células. Quem diz isso é a AUSÊNCIA DE TINTA — o `wave` do
   pedido vai vazio, e o `pixels` recusa desenhar ondas sem ela. O painel continua passando a tinta e
   continua tendo as suas.
+  **E O CACHE FOI O QUE FEZ ISSO NÃO ACONTECER.** O código estava certo e a tela do dono continuou
+  mostrando ondas em três arquivos — *"as waves continuam"* —, porque as figuras já estavam no disco
+  sob uma chave que diz QUAL arquivo, QUE tamanho e QUE tema, e nada sobre o que foi DESENHADO
+  dentro delas. **Cache é a única coisa capaz de estar certa no fonte e errada na tela.** A metade
+  durável do conserto é de quem pede (`View::grid_tint`, um lugar só, nomeia também a tinta da onda
+  — que NÃO sai do tema: a grade não passa nenhuma seja qual for o tema, e isso é decisão de quem
+  chama); o `VERSION` do nosso formato subiu para 2 e é o que joga fora tudo o que já estava escrito
+  sob a regra velha, inclusive o que ninguém pensou.
   **E UMA FOTOGRAFIA COM FILME DENTRO ANIMA SOB O PONTEIRO.** Ela é um `image/*` por toda outra
   resposta — só o `Moving::inside` a distingue —, então um portão pelo media type passava por cima de
   todas elas. O trabalhador lê isso dos bytes do próprio arquivo (uma janela XMP e a cauda), sem
@@ -989,6 +997,50 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   posiciona o niri (inv. 4); não conhecem Wayland, cor nem idioma (inv. 11). Estado vive na
   `Instance`. Cinco primitivas: texto, régua, grade, seleção e **`svg`** (TRAVA `vector`), e **campo
   de record cruza por POSIÇÃO** e só depois pelo nome.
+- **NADA EM CACHE FICA PARA SEMPRE** (`assets/cache.nix` → `nix/cache.nix` → `ronoctua-cache-sweep`
+  + `brain/tasks/sweep.rs`). O dono perguntou como o cache funcionava e a resposta honesta era que
+  **nenhum dos dois de disco era limpo alguma vez** — sem timer, sem tmpfiles, sem varredura. A
+  regra dele: *"Todos os caches devem ter limite, jamais podem ficar no sistema para sempre."*
+  **O alcance é TODO o `$XDG_CACHE_HOME`, por decisão dele e contra a minha ressalva** — que fica
+  registrada: lá moram 254 GB de target do cargo e 36 GB do yay, e nossas miniaturas são 4,6 MB.
+  As miniaturas nunca foram o problema, e uma regra que só governasse o que nós escrevemos teria
+  liberado quatro megabytes. Medido em ensaio na máquina dele: **423 933 arquivos, 150,3 GiB, em
+  9,5 s.**
+  **A IDADE É O ÚLTIMO USO, e é o MAIOR entre `atime` e `mtime`.** O `atime` sozinho é armadilha num
+  sistema montado `noatime`, onde ele é carimbado na criação e nunca mais anda: lá, o arquivo
+  ESCRITO hoje traz um acesso do dia em que foi feito, e a regra o apagaria chamando-o de velho. O
+  `max` é o que faz "último uso" querer dizer a mesma coisa nas duas montagens. Aqui é btrfs com
+  `relatime` e os acessos andam — medido.
+  **As recusas são o desenho**, porque isto apaga arquivo de gente: nunca segue link simbólico
+  (`symlink_metadata`, sempre — e um link para `/home` seguido seria a pior coisa que este código
+  pode fazer), nunca sai do sistema de arquivos onde começou, só arquivo REGULAR, **carimbo no
+  futuro FICA** (a regra do `notify::prune`: o relógio pode ter estado errado), diretório que já
+  estava vazio fica, e **ensaia** sem `--execute`. O `ProtectSystem=strict` + `ProtectHome=read-only`
+  + `ReadWritePaths=%C` da unidade é a segunda tranca na mesma porta — a que segura se o código
+  estiver errado. Cobra o `the-sweep-only-looks-at-links`.
+  **É UMA UNIDADE E NÃO ALGO QUE O BRAIN FAZ**: `Task::run` bloqueia a thread do runner, e uma
+  caminhada de um quarto de milhão de arquivos ali é um daemon que não desenha e não dá para parar;
+  e a unidade ganha `IOSchedulingClass=idle`, que é o argumento que o `memory.nix` já faz sobre a
+  coleta do store. **Duas unidades e não um flag** — a segunda conta e não apaga, que é o que o
+  `m e` pergunta, e aqui vale mais do que na atualização: *"quanto isto levaria?"* é a pergunta que
+  se quer respondida antes de deixar algo apagar 150 GiB.
+  **O PORTÃO DE RAM/CPU/BATERIA É O QUE JÁ EXISTE** (`runner::judge` contra o `Gate` do arquivo do
+  dono), e a varredura NÃO tem opinião própria — o pedido de "esse cheque também nas outras rotinas"
+  já estava satisfeito, e o que faltava era a varredura herdá-lo. O check recusa uma segunda.
+  **E VENCIDA, A JANELA ABRE** (`schedule.rs`): passado um intervalo inteiro além do dia devido, a
+  parte do dia vira o dia todo. Num laptop que dorme às 4 da manhã, `night` significaria NUNCA — e a
+  atualização automática tinha o mesmo buraco. Uma janela perdida ainda espera a próxima noite; é
+  uma preferência sobre um bom momento, não uma condição.
+  **UMA TAREFA ESCOLHE A PRÓPRIA CADÊNCIA** (`Task::defaults`, a sexta porta, aberta de propósito):
+  `TaskPrefs::default()` é um struct só para todas — semanal, à tarde, um minuto de contagem — e
+  isso é certo para quem reconstrói o sistema e errado para uma varredura. Responder dentro do
+  `due()` seria MENTIRA NA TELA, porque a linha do brain desenha o que o `Prefs` resolveu.
+  **E A GRADE RENOVA O QUE JÁ TEM** (`cache::Kept::stale`, `space` nenhum: `assets/cache.nix`): a
+  miniatura do cache é desenhada NA HORA e, se está lá há mais de `freshDays`, refeita atrás da que
+  já está na tela. Ninguém espera nada, e **toda mudança de regra passa a chegar à tela sozinha** —
+  que é exatamente o defeito da onda desta mesma sessão, onde o código estava certo e o disco não
+  sabia. `freshDays < keepDays` é a relação inteira: o que se olha é renovado aos dez e por isso
+  nunca chega aos vinte. O build recusa o par que a quebra.
 - **`LEADER b b` é o cérebro** (`ronoctua-brain`; `b a`/`b p` são as duas respostas da faixa — o `b` era o grupo BUFFER, e buffer é janela (inv. 4), então os dois grupos viraram `w`: `w w` troca, `w n` próximo, `w d` fecha, `w s` estado, `w o`/`w O` terminal), o daemon que decide QUANDO a máquina mexe em si
   mesma — molde do `ronoctua-transfers`: unidade de usuário, `session.slice`, socket JSON por linha,
   estado inteiro e nunca delta. A porta para features novas é o `trait Task`, e ela é uma promessa de

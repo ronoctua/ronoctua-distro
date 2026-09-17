@@ -5170,6 +5170,40 @@ impl View {
         lines
     }
 
+    /// THE WAVEFORM'S INK IN A CELL, and there is none.
+    ///
+    /// A sound with artwork shows it; one without shows the glyph for "this is
+    /// music". The owner asked in those terms — *"para os áudios sem uma imagem
+    /// de capa, em vez de mostrar a wave mostre apenas um glifo"* — and he is
+    /// right about why: a waveform is a picture of a SOUND, which reads in a
+    /// panel and is a grey smudge in a cell six cells wide. `pixels` refuses to
+    /// draw waves without an ink, so the empty string is how the grid says it.
+    /// The preview panel still passes an ink and still gets its waves.
+    const GRID_WAVE: &'static str = "";
+
+    /// EVERYTHING A CELL'S PICTURE WAS PAINTED WITH, as one string.
+    ///
+    /// It is the disk cache's only defence against a picture drawn under a rule
+    /// that has since changed — the stamp carries the file and the size, and
+    /// neither of those moves when the RULE does. The owner found the hole the
+    /// hard way: the waveform was turned off, the code was right, and his
+    /// screen went on showing waves for three sound files because the pictures
+    /// were already on disk under a key that said nothing about whether a
+    /// waveform had been drawn into them. *"As waves continuam."*
+    ///
+    /// So it carries the theme's position — a waveform and a lit shape are both
+    /// painted in token VALUES — AND the waveform's ink, which is NOT derived
+    /// from the theme: the grid passes none whatever the theme is, and that is
+    /// a decision of the caller's. Written as two spellings of one expression
+    /// it would drift, which is why the key and the ask both come through here.
+    fn grid_tint() -> String {
+        format!(
+            "{}:{}",
+            ronoctua_tokens::theme::current().position(),
+            Self::GRID_WAVE
+        )
+    }
+
     /// How many cells the widest sidebar row wants.
     fn side_content(&self) -> u16 {
         self.side
@@ -6879,10 +6913,7 @@ impl View {
         Some((
             // THROUGH THE ONE KEY FUNCTION, which lives beside the map it keys
             // — see `thumbs::thumb_key`.
-            crate::thumbs::thumb_key(
-                &stamp,
-                &ronoctua_tokens::theme::current().position().to_string(),
-            ),
+            crate::thumbs::thumb_key(&stamp, &Self::grid_tint()),
             stamp,
             // WHAT IT OPENS AS, and never what it is: a link to a film has a
             // film's thumbnail. See `View::opens`.
@@ -6933,18 +6964,11 @@ impl View {
         // It runs with `&self` and has no pixel of its own — the same
         // arrangement, and the same argument, as `drawn_grid` beside it.
         self.drawn_side.set(side);
-        // NO INK, AND SO NO WAVEFORM.
-        //
-        // A sound with artwork shows it; one without shows the glyph for "this
-        // is music". The owner asked in those terms — *"para os áudios sem uma
-        // imagem de capa, em vez de mostrar a wave mostre apenas um glifo"* —
-        // and he is right about why: a waveform is a picture of a SOUND, which
-        // reads in a panel and is a grey smudge in a cell six cells wide. The
-        // preview panel still passes an ink and still gets its waves.
-        let wave = String::new();
-        // WHICH THEME'S INKS THESE ARE, for the disk cache — see
-        // `thumbs::Ask::tint`.
-        let tint = ronoctua_tokens::theme::current().position().to_string();
+        // NO INK, AND SO NO WAVEFORM. See [`View::GRID_WAVE`].
+        let wave = Self::GRID_WAVE.to_string();
+        // WHAT THESE PICTURES WERE PAINTED WITH, for the disk cache — see
+        // [`View::grid_tint`] and `thumbs::Ask::tint`.
+        let tint = Self::grid_tint();
         let mut asks = Vec::new();
         let mut keys = Vec::new();
         let mut alive = std::collections::HashSet::new();
@@ -7031,7 +7055,19 @@ impl View {
     /// a moving one replaces its texture under the SAME key every frame.
     #[must_use]
     pub fn thumb_moves(&self, key: &str) -> bool {
-        self.thumbs.moves(key)
+        // OR IT WAS REPLACED. Both answers mean the same thing to the door —
+        // *upload this one even though you have seen the key* — and they differ
+        // only in for how long: a moving cell says it every frame for as long
+        // as it is on screen, and a renewed one says it once. Two questions
+        // there would be two places for a painter to forget one.
+        self.thumbs.moves(key) || self.thumbs.again(key)
+    }
+
+    /// The frame that had to draw the replaced pictures has been drawn.
+    ///
+    /// Called after the PAINT and never before it — see [`crate::thumbs::Kept::uploaded`].
+    pub fn thumbs_uploaded(&mut self) {
+        self.thumbs.uploaded();
     }
 
     /// THE VISIBLE CELLS THAT MOVE BY THEMSELVES, in reading order.
@@ -7193,6 +7229,9 @@ impl View {
                     inside: None,
                     // IT MOVES, so the door replaces the texture rather than
                     // uploading once — the same flag the ambient animator sets.
+                    // `again` is that flag's cousin for a picture that is not
+                    // moving and was replaced once; a frame says `moves`.
+                    again: false,
                     moves: true,
                 };
                 self.thumbs.took(made);
@@ -20694,6 +20733,7 @@ mod tests {
             rgba: ronoctua_render::image::Rgba::new(4, 4, vec![9; 64]),
             seconds: None,
             inside: None,
+            again: false,
             moves: false,
         });
         let sec = the_shelves(&v, room, width, &b);
@@ -21283,6 +21323,66 @@ mod tests {
             "a region {three} lines taller showed {} more facts",
             after - before
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cell_asks_for_no_waveform_and_says_so_in_the_key() {
+        // THE OWNER FOUND THIS ONE TWICE. The first time the grid was drawing
+        // waveforms; that was fixed, and he checked again and they were still
+        // there — *"as waves continuam"* — because three of them were already
+        // on his disk, filed under a key that carried the file, the size and
+        // the theme and said nothing about whether a waveform had been drawn
+        // into the picture. A cache is the one thing that can be right in the
+        // source and wrong on the screen.
+        assert!(
+            View::GRID_WAVE.is_empty(),
+            "the grid asked for an ink, and `pixels` draws waves whenever it has one"
+        );
+        // AND THE KEY SAYS IT. Two runs that paint differently must not read
+        // each other's pictures back, and what tells them apart is this
+        // string — the stamp cannot, because neither the file nor the size
+        // moves when the RULE does.
+        let with_ink = format!(
+            "{}:{}",
+            ronoctua_tokens::theme::current().position(),
+            "#8A7FB8"
+        );
+        assert_ne!(
+            View::grid_tint(),
+            with_ink,
+            "a cell that drew a waveform and one that did not share a key"
+        );
+        // AND IT IS NOT THE BARE THEME EITHER, which is what it used to be and
+        // is exactly the string the stale pictures on his disk carry.
+        assert_ne!(
+            View::grid_tint(),
+            ronoctua_tokens::theme::current().position().to_string(),
+            "the key is the one the retired rule wrote its pictures under"
+        );
+        // AND THE ASK CARRIES THE SAME NOTHING the key promises: the two are
+        // written once each and would otherwise be two spellings that drift.
+        let dir = scratch("grade-som-sem-capa");
+        std::fs::write(dir.join("a.mp3"), b"not really an mp3").unwrap();
+        let mut v = view_at(&dir);
+        v.reread();
+        v.key(of_view("C-g"));
+        let b = bundle();
+        let sec = the_shelves(&v, TALL, 120, &b);
+        assert!(sec.grid.is_some(), "the entries are not side by side");
+        let asked = v.wants_thumbs(120, TALL, 10.8, 26.1);
+        assert!(!asked.is_empty(), "no cell asked for a picture");
+        for ask in &asked {
+            assert!(
+                ask.wave.is_empty(),
+                "a cell asked for a waveform in {:?}",
+                ask.stamp.path
+            );
+            assert!(
+                ask.key.ends_with(&View::grid_tint()),
+                "the ask and the key were painted with different things"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

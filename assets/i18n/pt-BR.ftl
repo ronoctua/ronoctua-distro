@@ -2394,6 +2394,8 @@ brain-needs-root = roda como root, com a permissão da máquina inteira
 # A ÚNICA TAREFA QUE EXISTE, e sob o cursor a linha discreta dizendo o que
 # aquilo quer dizer de verdade — a regra que os menus do formatador já seguem,
 # em que toda linha carrega um segundo registro.
+brain-task-cache-sweep = Limpar os caches
+brain-task-cache-sweep-does = ele percorre tudo o que está na sua pasta de cache e apaga os arquivos que ninguém abre há um tempo, contando da última vez que cada um foi USADO e não do dia em que foi feito. Nunca segue um link para fora dessa pasta, nunca sai do sistema de arquivos onde começou, leva só arquivo comum e mantém o que tiver carimbo no futuro. Cache é o que sempre dá para refazer, então nada se perde — só tempo, na próxima vez que algo precisar.
 brain-task-system-update = Atualizar o sistema
 brain-task-system-update-does = a máquina traz o próprio software para frente e monta o sistema novo como entrada de boot, sem trocar: nada muda debaixo de uma sessão aberta, e quem passa a valer é o próximo boot — uma hora que você escolhe.
 

@@ -32,7 +32,7 @@ use std::time::Duration;
 use crate::journal::Journal;
 use crate::mind::{Announcement, Shared, Standing, StepState, TaskState};
 use crate::moment::{Clock, Moment};
-use crate::prefs::{Gate, Prefs, Where};
+use crate::prefs::{Gate, Prefs, TaskPrefs, Where};
 use crate::pulse::{Meter, Pulse};
 use crate::registry::Registry;
 use crate::task::{Due, Hold, Report, RunRecord, Verdict};
@@ -223,12 +223,16 @@ impl Runner {
         // middle produce a screen where two rows disagree about what the
         // person chose.
         let prefs = self.shared.snapshot().0.prefs;
-        let rows: Vec<(&'static str, Due, &'static [crate::task::Step])> = self
+        // AND WHAT EACH TASK CHOSE FOR ITSELF travels with its row, because the
+        // row is built inside `change` where the tasks are no longer in reach —
+        // and a row that resolved the preferences some other way would draw a
+        // cadence the schedule does not use. See `Task::defaults`.
+        let rows: Vec<(&'static str, Due, &'static [crate::task::Step], TaskPrefs)> = self
             .tasks
             .all()
             .map(|t| {
                 let due = t.due(now, &prefs, self.journal.last(t.id()));
-                (t.id(), due, t.steps())
+                (t.id(), due, t.steps(), prefs.of_task(t))
             })
             .collect();
 
@@ -240,8 +244,8 @@ impl Runner {
             let old: Vec<TaskState> = std::mem::take(&mut mind.tasks);
             mind.tasks = rows
                 .iter()
-                .map(|(id, due, steps)| {
-                    let mine = prefs.of(id);
+                .map(|(id, due, steps, mine)| {
+                    let mine = mine.clone();
                     let was = old.iter().find(|t| t.id == *id);
                     let standing = if running == *id {
                         Standing::Running
@@ -403,8 +407,12 @@ impl Runner {
                 m.rehearsing = None;
             }
         });
+        // AND THE PATIENCE IS THE TASK'S OWN, for the reason `Task::defaults`
+        // gives: two hours is right for a rebuild and absurd for a sweep, and a
+        // number resolved differently here from the one on the row would be the
+        // screen saying one thing and the watcher doing another.
         let patience = Duration::from_secs(
-            u64::from(self.shared.snapshot().0.prefs.of(id).runaway_minutes) * 60,
+            u64::from(self.shared.snapshot().0.prefs.of_task(task).runaway_minutes) * 60,
         );
         let mut report = Report::at(
             self.report_path(id),

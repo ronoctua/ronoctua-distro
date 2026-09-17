@@ -452,6 +452,7 @@
           atuinOptionsRs
           keyboardsRs
           updatesRs
+          cacheRs
           syntaxRs
           niriActions
           ;
@@ -520,6 +521,14 @@
       # compilation's environment — the whole attrset also carries the negative
       # fixture and the runner factory, neither of which belongs in a build.
       updatesRs = updatesTable.table;
+
+      # THE CACHE POLICY, generated from `assets/cache.nix` — four numbers the
+      # brain, the sweep and the file manager all have to agree about, and one
+      # relationship between two of them that the build refuses to let go
+      # wrong. No generator script: four integers and a word do not need one.
+      cacheRs = pkgs.callPackage ./nix/cache.nix {
+        cacheFile = ./assets/cache.nix;
+      };
 
       # THE SYNTAX TABLE, generated from `assets/syntax.nix` — the same shape
       # again, and it takes `mimeDb` because a language claims MIME TYPES and
@@ -688,6 +697,7 @@
         # start the units that module declares. Nix does not care about the
         # order; a person reading the list does.
         ./nix/modules/brain.nix
+        ./nix/modules/cache.nix
         # The file manager's privileged half: one unit, one polkit rule, and
         # where it opens. Everything else about it needs no configuration.
         ./nix/modules/files.nix
@@ -771,6 +781,10 @@
               # come with the whole workspace. `brain-unit-is-narrow` measures
               # that rather than asserting it.
               brain = rust.brain;
+              # The cache sweep, extracted for the brain's reason and one of
+              # its own: a program whose job is `unlink` must not have the
+              # whole shell in its closure.
+              cacheSweep = rust.cacheSweep;
               # The browser extension, already generated: `nix/modules/browser-extension.nix`
               # packs and signs it on the machine, because the id comes from a
               # key that may not live in this repository.

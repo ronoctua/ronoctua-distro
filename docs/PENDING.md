@@ -101,6 +101,28 @@ Entregues no modo grade (`C-g`). O que ficou de fora, com o preço de cada um:
 **Miniatura de pasta como mosaico do conteúdo.** Seriam N decodificações por pasta, e uma pasta de
 pastas seria N². A pasta fica com o glifo dela.
 
+**Teto por BYTES no cache, além da idade.** A varredura do brain apaga por IDADE e só por ela — foi
+a escolha do dono quando perguntei. Fica o furo, com o número: uma pasta de 10 000 fotos navegada
+ontem são ~1 GB de miniaturas e nenhuma delas tem vinte dias, então nada as alcança. O conserto
+seria um teto em bytes no NOSSO diretório (`$XDG_CACHE_HOME/ronoctua`) com descarte do mais antigo
+até caber, na mesma caminhada — nunca no compartilhado, que é de outros programas.
+**Como saber que acabou:** `ronoctua-cache-sweep` relatando bytes liberados por teto, e não só por
+idade.
+
+**Notificação do resultado da varredura.** A primeira roda libera ~150 GiB e isso merece uma frase.
+O brain não tem caminho de notificação nenhum hoje (nada nele depende do `ronoctua-notify`, e o
+`brain-unit-is-narrow` mede o fecho dele), então o resultado sai no journal
+(`journalctl --user -u ronoctua-cache-sweep`) e a linha do `LEADER b b` diz que rodou e quando. Quem
+poderia falar sem engordar o brain é a própria UNIDADE, que é outro processo.
+**Como saber que acabou:** uma notificação do catálogo dizendo quantos bytes voltaram.
+
+**Esvaziar a lixeira por idade.** O `files/trash.rs` grava `DeletionDate` em todo arquivo que manda
+para a lixeira e **nada nunca a esvazia** — é o mesmo defeito que a varredura acabou de fechar, num
+diretório que a varredura não toca (é `$XDG_DATA_HOME`, que não é cache: ali o arquivo é a única
+cópia). Precisa de uma decisão do dono sobre o prazo antes de existir.
+**Como saber que acabou:** um arquivo mandado para a lixeira há mais tempo que o prazo não estar
+mais lá.
+
 **Documento de escritório** (`.odt`, `.docx`, `.ppt`, `.odp`) — não há rasterizador para eles na
 árvore; só o PDF tem (`pdftoppm`). Ficam com o glifo do tipo.
 

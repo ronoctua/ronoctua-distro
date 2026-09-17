@@ -8885,6 +8885,133 @@ let
     END
   '';
 
+  # THE SWEEP ONLY EVER LOOKS AT A LINK, NEVER THROUGH ONE.
+  #
+  # This is the one thing in the tree that deletes a person's files by the
+  # thousand, and the worst thing it could do is follow `~/.cache/x -> /home`.
+  # The unit test plants exactly that and watches it survive; this is the other
+  # half — the SOURCE rule, so the defect cannot come back through a call that
+  # no fixture happens to exercise.
+  #
+  # `std::fs::metadata` follows links. `canonicalize` and `read_link` resolve
+  # them. None of the three has any business here, and `symlink_metadata` is
+  # what has to be present: a walk with neither would be one that does not look
+  # at all.
+  the-sweep-only-looks-at-links = mkCheck "the-sweep-only-looks-at-links" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    sweep = pathlib.Path("${../crates}") / "ronoctua-cache-sweep" / "src"
+    wrong = []
+
+    THROUGH = ("std::fs::metadata(", "fs::canonicalize(", "fs::read_link(", ".canonicalize()")
+    looked = False
+
+    for f in sorted(sweep.rglob("*.rs")):
+        text = f.read_text()
+        # THE TESTS MAY DO WHAT THE WALK MAY NOT: one of them stats a planted
+        # file to read its stamps back, which is a fixture checking itself.
+        cut = list(re.finditer(r"^#\[cfg\(test\)\]\s*\nmod tests", text, re.M))
+        if cut:
+            text = text[: cut[-1].start()]
+        if "symlink_metadata(" in text:
+            looked = True
+        for name in THROUGH:
+            if name in text:
+                wrong.append(
+                    f"{f.name} calls `{name}`, which RESOLVES a symbolic link — "
+                    "a sweep that follows one leaves its root"
+                )
+
+    if not looked:
+        wrong.append(
+            "nothing in the sweep calls `symlink_metadata`; either it stopped "
+            "looking at what it deletes, or the walk has moved"
+        )
+
+    # AND IT NEVER SAYS WHETHER THE MACHINE IS BUSY. That question has one
+    # answer in this tree — `ronoctua_brain::runner::judge`, against a gate the
+    # person configured in one file — and it is asked before this is started.
+    # A second opinion here would be a second policy that drifts from the first,
+    # which is the refusal `tasks/update.rs` already writes out about itself.
+    GATE = ("pressure", "on_battery", "ram_used", "cpu_stall", "/proc", "loadavg")
+    for f in sorted(sweep.rglob("*.rs")):
+        text = f.read_text()
+        for name in GATE:
+            if name in text:
+                wrong.append(
+                    f"{f.name} mentions `{name}`: whether this is a good moment "
+                    "is the brain's question, asked once, before this runs"
+                )
+
+    if wrong:
+        for line in wrong:
+            print("ERROR:", line, file=sys.stderr)
+        sys.exit(1)
+    print("OK: the sweep looks at links and never through them, and judges no machine")
+    END
+    touch $out
+  '';
+
+  # THE CACHE'S FOUR NUMBERS COME FROM ONE FILE.
+  #
+  # `assets/cache.nix` declares how long a cached file may live, how often the
+  # sweep runs, when in the day, and when a thumbnail is remade. Two of them
+  # cross to Rust and two to a unit's arguments — and `freshDays < keepDays` is
+  # a promise no single consumer can keep, which is why `nix/cache.nix` refuses
+  # the build when it stops holding.
+  #
+  # What this adds is the other direction: nobody writing one of those numbers
+  # down again somewhere else, where it would go stale in silence.
+  cache-has-one-list = mkCheck "cache-has-one-list" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    root = pathlib.Path("${../.}")
+    declared = (root / "assets" / "cache.nix").read_text()
+    wrong = []
+
+    # THE DECLARATION ITSELF, so this check knows what it is guarding.
+    fields = dict(re.findall(r"^\s*(\w+) = (\d+);$", declared, re.M))
+    for name in ("keepDays", "everyDays", "freshDays"):
+        if name not in fields:
+            wrong.append(f"assets/cache.nix no longer declares `{name}`")
+    if "partOfDay" not in declared:
+        wrong.append("assets/cache.nix no longer declares `partOfDay`")
+
+    # AND THE GENERATOR REFUSES THE ONE RELATIONSHIP. Read here too, because a
+    # generator that stopped asserting would be a build that stopped refusing,
+    # and nothing else in the tree would notice.
+    generator = (root / "nix" / "cache.nix").read_text()
+    if "freshDays < declared.keepDays" not in generator:
+        wrong.append(
+            "nix/cache.nix no longer refuses `freshDays >= keepDays`: a thumbnail "
+            "somebody looks at would be swept on a schedule"
+        )
+
+    # AND NOBODY WRITES THEM AGAIN. The generated table is the only place a
+    # number appears in Rust; a literal beside a name that means one of these is
+    # a second answer waiting to disagree.
+    NAMES = ("KEEP_DAYS", "EVERY_DAYS", "FRESH_DAYS", "PART_OF_DAY")
+    for f in sorted((root / "crates").rglob("*.rs")):
+        text = f.read_text()
+        for name in NAMES:
+            for line in text.splitlines():
+                if re.search(rf"\b{name}\s*[:=]\s*\S", line) and "policy::" not in line:
+                    wrong.append(
+                        f"{f.relative_to(root)} writes `{line.strip()}` — the cache's "
+                        "numbers come from assets/cache.nix, through nix/cache.nix"
+                    )
+
+    if wrong:
+        for line in wrong:
+            print("ERROR:", line, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: the cache policy is one declaration — {fields}")
+    END
+    touch $out
+  '';
+
   one-zip-reader = mkCheck "one-zip-reader" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -17868,6 +17995,8 @@ let
       one-syncthing-boundary
       one-http-writer
       one-zip-reader
+      the-sweep-only-looks-at-links
+      cache-has-one-list
       numeric-selectors-get-numbers
       every-view-follows-its-cursor
       syncthing-options-are-declared

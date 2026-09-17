@@ -39,7 +39,32 @@ const MAGIC: &[u8; 4] = b"RNTH";
 /// that does not know a layout must not guess at it. An unknown version is a
 /// miss, so a newer shell's cache costs an older one a decode and never a
 /// wrong picture.
-const VERSION: u8 = 1;
+///
+/// # And it went to TWO without the layout moving
+///
+/// Because what a picture in here MEANS changed. The file manager's grid drew
+/// waveforms for sounds with no artwork, the owner asked for the glyph
+/// instead, the code was changed — and his screen went on showing waves,
+/// because three of them were already on disk under a key that says what file
+/// and what size and nothing about what was drawn. *"As waves continuam."*
+///
+/// The durable half of that repair is the caller's (`View::grid_tint` now
+/// names the waveform's ink, so this can never go stale silently again); this
+/// byte is what throws away every picture ALREADY written under the old rule,
+/// including the ones nobody thought of. A cache is the one thing that can be
+/// right in the source and wrong on the screen.
+const VERSION: u8 = 2;
+
+/// The cache policy, generated from `assets/cache.nix` by `nix/cache.nix`.
+///
+/// It lives HERE, beside the cache it is about, so the file manager can ask
+/// `cache::policy::FRESH_DAYS` instead of carrying a table of its own. The
+/// other three numbers in it are the sweep's and the brain's — one declaration,
+/// because `freshDays < keepDays` is a promise no single crate can keep alone.
+#[allow(dead_code)]
+pub mod policy {
+    include!(concat!(env!("OUT_DIR"), "/cache.rs"));
+}
 
 /// The most a cached picture may weigh.
 ///
@@ -85,8 +110,13 @@ pub fn file_in(root: &Path, stamp: &Stamp) -> PathBuf {
 /// move is the same in all of them — decode it — so telling them apart would be
 /// a distinction nothing could act on.
 #[must_use]
-pub fn read(root: &Path, stamp: &Stamp, tint: &str) -> Option<Rgba> {
+pub fn read(root: &Path, stamp: &Stamp, tint: &str) -> Option<Kept> {
     let mut file = std::fs::File::open(file_in(root, stamp)).ok()?;
+    // WHEN THIS PICTURE WAS MADE, taken from the file that is already open.
+    //
+    // It costs nothing and it is what lets the caller remake a picture that is
+    // getting old without ever making the person wait for one. See [`Kept`].
+    let made = file.metadata().and_then(|m| m.modified()).ok();
     let mut head = [0u8; 5];
     file.read_exact(&mut head).ok()?;
     if &head[..4] != MAGIC || head[4] != VERSION {
@@ -128,11 +158,52 @@ pub fn read(root: &Path, stamp: &Stamp, tint: &str) -> Option<Rgba> {
     }
     let mut pixels = vec![0u8; want];
     file.read_exact(&mut pixels).ok()?;
-    Some(Rgba {
-        width,
-        height,
-        pixels,
+    Some(Kept {
+        picture: Rgba {
+            width,
+            height,
+            pixels,
+        },
+        made,
     })
+}
+
+/// A picture that came back out of a cache, and when it was PUT there.
+///
+/// # Why the age travels with it
+///
+/// Because a cache can be right about the file and wrong about the world. The
+/// key says which file, what size and what ink — and none of those moves when
+/// the RULE for drawing changes. This repository met it: the rule for a sound
+/// with no cover art changed, the code was right, and the owner went on seeing
+/// waveforms for days because three of them were already on disk.
+///
+/// A caller that knows how old a picture is can draw it AT ONCE and quietly
+/// make it again behind the one on screen, which turns every future change of
+/// rule into something that reaches the screen by itself.
+///
+/// `made` is `None` when the filesystem would not say — which a caller should
+/// read as "old enough", never as "fresh".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Kept {
+    /// The pixels.
+    pub picture: Rgba,
+    /// When the cache file was written, if the filesystem said.
+    pub made: Option<std::time::SystemTime>,
+}
+
+impl Kept {
+    /// Whether this picture has been sitting here for `older_than` or more.
+    ///
+    /// A picture the filesystem will not date, or one stamped in the FUTURE,
+    /// answers YES: remaking one needlessly costs a decode, and trusting a
+    /// stamp nobody can read costs a screen that never corrects itself.
+    #[must_use]
+    pub fn stale(&self, now: std::time::SystemTime, older_than: std::time::Duration) -> bool {
+        self.made
+            .and_then(|made| now.duration_since(made).ok())
+            .is_none_or(|age| age >= older_than)
+    }
 }
 
 /// Keeps `picture` for `stamp`, under `root`.
@@ -231,9 +302,9 @@ mod tests {
         );
         write(&root, &stamp, INK, &a_picture());
         let back = read(&root, &stamp, INK).expect("it was just written");
-        assert_eq!(back.width, 2);
-        assert_eq!(back.height, 2);
-        assert_eq!(back.pixels, a_picture().pixels);
+        assert_eq!(back.picture.width, 2);
+        assert_eq!(back.picture.height, 2);
+        assert_eq!(back.picture.pixels, a_picture().pixels);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -274,6 +345,79 @@ mod tests {
         assert!(
             read(&root, &stamp, INK).is_some(),
             "the right one went away"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_picture_painted_under_another_rule_is_a_miss() {
+        // THE DEFECT THIS CATCHES, and the owner caught it first: a rule about
+        // WHAT IS DRAWN changing while the key stays the same. The stamp
+        // carries the file, the size and the modification time — none of them
+        // moves when the drawing does — so the only thing standing between a
+        // retired rule and a screen full of it is this string.
+        let root = scratch("regra-velha");
+        let stamp = a_stamp("/tmp/sound.mp3");
+        // A WAVEFORM, drawn in a token's ink, by yesterday's rule.
+        write(&root, &stamp, "0:#8A7FB8", &a_picture());
+        // AND TODAY'S RULE DRAWS NO WAVES AT ALL, which is an empty ink in the
+        // same theme — the one case a bare theme position could not tell apart.
+        assert!(
+            read(&root, &stamp, "0:").is_none(),
+            "a waveform came back for a grid that has stopped drawing them"
+        );
+        // AND THE OTHER WAY ROUND TOO, so this is about the string and not
+        // about which of the two is empty.
+        write(&root, &stamp, "0:", &a_picture());
+        assert!(
+            read(&root, &stamp, "0:#8A7FB8").is_none(),
+            "a picture with no waveform came back where one was asked for"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_picture_that_has_been_sitting_here_a_while_says_so() {
+        // WHAT THIS BUYS: the file manager draws what is in the cache AT ONCE
+        // and then, for one that has been there a while, makes it again behind
+        // the picture already on screen. Nobody waits, and a change to the RULE
+        // for drawing reaches the screen by itself — which is the defect this
+        // repository met and could not detect: the rule for a sound with no
+        // cover art changed, the code was right, and the owner went on seeing
+        // waveforms because three of them were already on disk.
+        let root = scratch("velhinha");
+        let stamp = a_stamp("/tmp/old.jpg");
+        write(&root, &stamp, INK, &a_picture());
+        let back = read(&root, &stamp, INK).expect("it came back");
+        let now = std::time::SystemTime::now();
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+
+        assert!(
+            !back.stale(now, day),
+            "a picture written a moment ago was called stale"
+        );
+        // Ten days later it is, which is what sends the worker back to the file.
+        assert!(back.stale(now + 10 * day, day));
+
+        // AND A PICTURE NOBODY CAN DATE IS STALE. Remaking one needlessly costs
+        // a decode; trusting a stamp that cannot be read costs a screen that
+        // never corrects itself.
+        let undated = Kept {
+            picture: a_picture(),
+            made: None,
+        };
+        assert!(undated.stale(now, day), "an undated picture was trusted");
+
+        // AND SO IS ONE FROM THE FUTURE, for the same reason — and note this is
+        // the OPPOSITE of the sweep's rule about a future stamp, on purpose:
+        // there the cost of being wrong is a file deleted, here it is a decode.
+        let ahead = Kept {
+            picture: a_picture(),
+            made: Some(now + 10 * day),
+        };
+        assert!(
+            ahead.stale(now, day),
+            "a picture from the future was trusted"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -325,8 +469,11 @@ mod tests {
         assert_eq!(mode, 0o600, "the thumbnail is readable by somebody else");
 
         let back = shared::read(&root, path, 7, 128).expect("it was just written");
-        assert_eq!((back.width, back.height), (picture.width, picture.height));
-        assert_eq!(back.pixels, picture.pixels);
+        assert_eq!(
+            (back.picture.width, back.picture.height),
+            (picture.width, picture.height)
+        );
+        assert_eq!(back.picture.pixels, picture.pixels);
 
         // AND A FILE THAT CHANGED IS A MISS, which is the whole of what the
         // recorded modification time is for.
@@ -513,7 +660,7 @@ pub mod shared {
     /// disk now. A thumbnail of an older version of a file is the one thing
     /// this must never hand back, and it is exactly what a stale entry is.
     #[must_use]
-    pub fn read(root: &Path, path: &Path, mtime: i64, target: u32) -> Option<Rgba> {
+    pub fn read(root: &Path, path: &Path, mtime: i64, target: u32) -> Option<super::Kept> {
         let at = file_for(root, path, target)?;
         let bytes = std::fs::read(&at).ok()?;
         if bytes.len() > CEILING {
@@ -539,10 +686,19 @@ pub mod shared {
         if pixels.len() != (width as usize) * (height as usize) * 4 {
             return None;
         }
-        Some(Rgba {
-            width,
-            height,
-            pixels,
+        Some(super::Kept {
+            picture: Rgba {
+                width,
+                height,
+                pixels,
+            },
+            // WHEN THE OTHER PROGRAM PUT IT THERE, for the reason the module
+            // above gives: a picture can be right about the file and stale
+            // about the rule that drew it. Here it is doubly worth having —
+            // half of this directory was written by a file manager that is not
+            // ours, and the oldest entry on the owner's machine is from
+            // October.
+            made: std::fs::metadata(&at).and_then(|m| m.modified()).ok(),
         })
     }
 

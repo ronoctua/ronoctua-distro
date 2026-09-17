@@ -8323,6 +8323,12 @@ impl Footer {
         self.look_again();
         self.draw();
         self.paint();
+        // AND THE REPLACED PICTURES HAVE NOW BEEN UPLOADED. After the paint and
+        // not before it: `look_again` above is what asks for thumbnails, and a
+        // flag cleared there is a flag the painter never sees.
+        if let Some(view) = self.files.as_mut() {
+            view.thumbs_uploaded();
+        }
         // AND ONCE MORE IF THE OPENED LINE CHANGED SIZE.
         //
         // The height is asked for before the frame and the wrap is only known

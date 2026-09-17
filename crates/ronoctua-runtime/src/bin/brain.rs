@@ -47,12 +47,27 @@ const COLUMNS: u16 = 100;
 /// A moment far enough from the epoch that a countdown is not negative.
 const NOW: u64 = 1_800_000_000;
 
-/// The one task this system declares today.
+/// The task whose STEPS this driver draws.
 ///
-/// From `assets/updates.nix`, through the brain's own table. If it ever grows a
-/// second, this driver keeps working — the mind is a list — and the check gains
-/// its labels for free.
+/// From `assets/updates.nix`, through the brain's own table.
 const TASK: &str = "system-update";
+
+/// EVERY TASK THE BRAIN DECLARES, so every one of them is drawn.
+///
+/// # Why this list is here and not one name
+///
+/// Because it was one name, and that made the check blind to the thing it is
+/// best placed to catch. The buffer builds a task's label as
+/// `format!("brain-task-{}", task.id)`, which `buffer-keys-have-text` cannot
+/// see — it reads `const` literals — and `i18n-complete` only compares the two
+/// languages with each other. So a task added without its two keys would have
+/// drawn `[brain-task-cache-sweep]` on screen with every check in the tree
+/// green. Driving all of them is what closes that.
+///
+/// A LIST AND NOT A READ of `crates/ronoctua-brain/src/tasks/`: this binary
+/// runs inside a check with no source tree, and the day a third task arrives
+/// the line here is the same line the registry needs.
+const TASKS: &[&str] = &["system-update", "cache-sweep"];
 
 /// The update sequence's table, as the build generated it.
 ///
@@ -203,7 +218,29 @@ fn mind(one: TaskState, announcement: Announcement) -> Mind {
                 },
             ],
         },
-        tasks: vec![one],
+        // THE ONE BEING ASKED ABOUT, AND THEN EVERY OTHER TASK THE BRAIN HAS.
+        //
+        // The extra rows are drawn plainly — nothing running, nothing held —
+        // and they are here for one reason: their LABELS. A task whose two text
+        // keys were forgotten draws a bracketed key, and this is the only check
+        // in the tree positioned to see that, because the buffer assembles the
+        // key with `format!` and no scan of `const` literals can find it.
+        tasks: std::iter::once(one)
+            .chain(TASKS.iter().filter(|id| **id != TASK).map(|id| TaskState {
+                id: (*id).to_owned(),
+                standing: Standing::Idle,
+                enabled: true,
+                interval_days: 5,
+                part_of_day: DayPart::Night,
+                next: NOW + 3600,
+                next_text: "tomorrow, 03:00".to_owned(),
+                hold: HoldKind::None,
+                why_not: String::new(),
+                ran: false,
+                last: RunRecord::default(),
+                steps: Vec::new(),
+            }))
+            .collect(),
         queue,
         running,
         rehearsing: String::new(),
