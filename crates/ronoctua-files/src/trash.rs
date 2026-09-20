@@ -172,6 +172,99 @@ impl Bin {
         Ok(origin)
     }
 
+    /// Throw away what has been in here for `days` or longer.
+    ///
+    /// # Why this is counted from `DeletionDate` and from nothing else
+    ///
+    /// Because it is the only timestamp that answers the question. A document
+    /// last written a year ago and thrown away this morning has been in the
+    /// trash for a MORNING; a rule reading the file's own `mtime` would delete
+    /// it before the person had finished regretting it, and a rule reading its
+    /// `atime` would be reading when some indexer last touched it.
+    ///
+    /// The spec already writes `DeletionDate` into every `.trashinfo`, in local
+    /// time with no zone marker, and this reads it back through the same
+    /// [`Zone`] that wrote it.
+    ///
+    /// # Why this is not the cache sweep
+    ///
+    /// Because nothing here can be made again. `ronoctua-cache-sweep` deletes
+    /// what a program can rebuild and deliberately never goes near
+    /// `$XDG_DATA_HOME`; this deletes the only copy, which is why its number is
+    /// four days rather than forty and why the note is read rather than a
+    /// timestamp guessed at.
+    ///
+    /// # The note goes LAST
+    ///
+    /// The mirror of [`Bin::put`], and the same crash argument: a file in `files/`
+    /// with no note is a file nobody can restore, so the note must outlive the
+    /// file it describes until the file is gone. Deleted the other way round, a
+    /// crash in between leaves something unrestorable.
+    ///
+    /// An orphan note — one whose file is already gone — is taken whenever it
+    /// is old enough, because a note about nothing is what a crash leaves.
+    /// # `take` is what makes a rehearsal honest
+    ///
+    /// It counts exactly what it would throw away and throws nothing — one
+    /// path, so the rehearsal cannot answer differently from the run. The shape
+    /// `nix run .#install` and `ronoctua-cache-sweep` already have, and it
+    /// matters most here: this is the only thing in the tree that deletes
+    /// something nobody can make again.
+    pub fn expire(&self, now: i64, days: u16, zone: &Zone, take: bool) -> Emptied {
+        let mut out = Emptied::default();
+        let Ok(notes) = std::fs::read_dir(self.info()) else {
+            // NO TRASH IS NOT A FAILURE: a machine that has thrown nothing away
+            // has nothing to empty.
+            return out;
+        };
+        let cutoff = i64::from(days) * 24 * 60 * 60;
+        for note in notes.flatten() {
+            let at = note.path();
+            if at.extension().is_none_or(|e| e != "trashinfo") {
+                continue;
+            }
+            let Ok(body) = std::fs::read_to_string(&at) else {
+                out.refused += 1;
+                continue;
+            };
+            let Some(gone_at) = deleted_at(&body, zone) else {
+                // A NOTE WITH NO DATE IS NOT INFINITELY OLD. It is a note this
+                // cannot judge, and the safe answer about something that cannot
+                // be made again is to leave it.
+                out.refused += 1;
+                continue;
+            };
+            // AND A DATE IN THE FUTURE KEEPS IT, for the reason the cache
+            // sweep's own rule gives: the clock may have been wrong.
+            if now.saturating_sub(gone_at) < cutoff {
+                out.kept += 1;
+                continue;
+            }
+            let Some(name) = at.file_stem().and_then(|n| n.to_str()) else {
+                out.refused += 1;
+                continue;
+            };
+            let body = self.files().join(name);
+            let weight = weigh(&body);
+            if take {
+                let gone = match std::fs::symlink_metadata(&body) {
+                    Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&body).is_ok(),
+                    Ok(_) => std::fs::remove_file(&body).is_ok(),
+                    // ALREADY GONE: an orphan note, which a crash leaves behind.
+                    Err(_) => true,
+                };
+                if !gone {
+                    out.refused += 1;
+                    continue;
+                }
+                let _ = std::fs::remove_file(&at);
+            }
+            out.taken += 1;
+            out.bytes += weight;
+        }
+        out
+    }
+
     /// A name nothing in `files/` is using.
     fn free_name(&self, wanted: &str) -> String {
         let taken = |n: &str| {
@@ -192,6 +285,76 @@ impl Bin {
         }
         format!("{wanted}.{}", std::process::id())
     }
+}
+
+/// What one emptying took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Emptied {
+    /// Entries thrown away for good.
+    pub taken: u64,
+    /// What they weighed.
+    pub bytes: u64,
+    /// Entries still young enough to stay.
+    pub kept: u64,
+    /// Notes that could not be read, or dated, or whose file would not go.
+    ///
+    /// A count and not a failure: this is the only copy of what it deletes, so
+    /// anything it cannot judge is left alone and said out loud.
+    pub refused: u64,
+}
+
+/// `DeletionDate=` out of a note, as epoch seconds.
+///
+/// The spec's shape is local time with no zone marker — `2026-01-31T09:05:00` —
+/// which is what [`Bin::put`] writes. Reading it back needs the same zone, so
+/// the one that wrote it is handed in rather than guessed at.
+fn deleted_at(note: &str, zone: &Zone) -> Option<i64> {
+    let line = note
+        .lines()
+        .find_map(|l| l.strip_prefix("DeletionDate="))?
+        .trim();
+    let (date, time) = line.split_once('T')?;
+    let mut date = date.split('-');
+    let year: i64 = date.next()?.parse().ok()?;
+    let month: u32 = date.next()?.parse().ok()?;
+    let day: u32 = date.next()?.parse().ok()?;
+    let mut time = time.split(':');
+    let hour: i64 = time.next()?.parse().ok()?;
+    let minute: i64 = time.next()?.parse().ok()?;
+    let second: i64 = time.next().unwrap_or("0").parse().ok()?;
+    let local = crate::when::epoch_of(year, month, day)?
+        .checked_mul(24 * 60 * 60)?
+        .checked_add(hour * 3600 + minute * 60 + second)?;
+    // BACK OUT OF LOCAL TIME through the same zone that put it in. The offset
+    // is asked for at the instant being converted, which is what keeps a file
+    // thrown away the hour the clocks moved from reading an hour out.
+    Some(local - i64::from(zone.offset_at(local)))
+}
+
+/// What a file or a whole directory weighs.
+fn weigh(at: &Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(at) else {
+        return 0;
+    };
+    if !meta.is_dir() {
+        return meta.len();
+    }
+    let mut total = 0;
+    let mut stack = vec![at.to_path_buf()];
+    while let Some(here) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&here) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                total += meta.len();
+            }
+        }
+    }
+    total
 }
 
 /// `Path=` out of a note, decoded.
@@ -265,6 +428,100 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the test directory");
         dir
+    }
+
+    #[test]
+    fn the_trash_empties_itself_of_what_has_been_in_it_long_enough() {
+        // WHAT IS DELETED HERE IS THE ONLY COPY, which is the whole reason this
+        // reads `DeletionDate` and not a timestamp: a document last written a
+        // year ago and thrown away this morning has been in the trash for a
+        // morning.
+        let home = scratch("expira");
+        let trash = Bin::of_home(Some(&home), None).expect("a trash");
+        trash.ensure().unwrap();
+        let zone = Zone::utc();
+        let now = 1_800_000_000_i64;
+        let day = 24 * 60 * 60;
+
+        // THROWN AWAY LONG AGO, and its file written this morning: the note is
+        // what decides, so this goes.
+        let old = home.join("old.txt");
+        std::fs::write(&old, b"gone").unwrap();
+        let old_name = trash.put(&old, now - 9 * day, &zone).unwrap();
+
+        // AND THROWN AWAY YESTERDAY, its file a year old: this stays.
+        let fresh = home.join("fresh.txt");
+        std::fs::write(&fresh, b"keep").unwrap();
+        let fresh_name = trash.put(&fresh, now - day, &zone).unwrap();
+
+        // AND A NOTE WITH NO DATE, which this cannot judge and must not take.
+        std::fs::write(
+            trash.info().join("mystery.trashinfo"),
+            "[Trash Info]\nPath=/tmp/mystery\n",
+        )
+        .unwrap();
+        std::fs::write(trash.files().join("mystery"), b"?").unwrap();
+
+        // THE REHEARSAL FIRST, and it must count the same and take nothing.
+        let said = trash.expire(now, 4, &zone, false);
+        assert!(
+            trash.files().join(&old_name).exists(),
+            "a rehearsal threw something away"
+        );
+
+        let took = trash.expire(now, 4, &zone, true);
+        assert_eq!(
+            (said.taken, said.bytes),
+            (took.taken, took.bytes),
+            "the rehearsal's number and the real one disagree"
+        );
+
+        assert!(
+            !trash.files().join(&old_name).exists(),
+            "something thrown away nine days ago is still there"
+        );
+        assert!(
+            !trash.info().join(format!("{old_name}.trashinfo")).exists(),
+            "its note outlived it"
+        );
+        assert!(
+            trash.files().join(&fresh_name).exists(),
+            "something thrown away yesterday was taken"
+        );
+        assert!(
+            trash.files().join("mystery").exists(),
+            "a note it could not date was acted on anyway"
+        );
+        assert_eq!(took.taken, 1);
+        assert_eq!(took.kept, 1);
+        assert_eq!(took.refused, 1, "it did not say what it could not judge");
+        assert!(took.bytes > 0, "it weighed nothing");
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_deletion_date_reads_back_as_the_instant_that_wrote_it() {
+        // THE ROUND TRIP, because the spec's shape has no zone marker: a note
+        // written by `put` in a zone has to come back out of `deleted_at` in
+        // the same one, or a file is judged hours out — and at four days, hours
+        // are what stands between a mistake and a deletion.
+        let zone = Zone::utc();
+        for at in [0_i64, 1_800_000_000, 1_700_000_000, 946_684_800] {
+            let note = format!("[Trash Info]\nPath=/x\nDeletionDate={}\n", stamp(at, &zone));
+            assert_eq!(deleted_at(&note, &zone), Some(at), "{note}");
+        }
+        // AND A NOTE THAT SAYS NOTHING READABLE IS NOT A DATE.
+        assert_eq!(deleted_at("[Trash Info]\nPath=/x\n", &zone), None);
+        assert_eq!(
+            deleted_at("[Trash Info]\nDeletionDate=not a date\n", &zone),
+            None
+        );
+        assert_eq!(
+            deleted_at("[Trash Info]\nDeletionDate=2026-13-01T00:00:00\n", &zone),
+            None,
+            "a thirteenth month was accepted"
+        );
     }
 
     #[test]

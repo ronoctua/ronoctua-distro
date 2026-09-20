@@ -165,6 +165,19 @@ fn resolver_current_color(svg: &str, color: tokens::Color) -> String {
     svg.replace("currentColor", &hex)
 }
 
+/// A bar of the last frame, held for as long as it is being dragged.
+///
+/// Its numbers are COPIED at the press and not looked up again: the display
+/// list is rebuilt on every frame — and this drag causes frames — so a bar
+/// found by index would be a different bar a moment later.
+///
+/// It is `paint::Grab`, whole, and not a shape of this module's own: the
+/// rectangle a press is tested against has to be the rectangle the thumb was
+/// painted in, and the surest way to say that is to hold the same value. The
+/// version of this that kept its own `(column, line)` could not match a bar in
+/// the last column at all — see [`crate::paint::Grab`].
+type DraggedBar = crate::paint::Grab;
+
 /// The state of the window hosting a buffer.
 struct Host {
     conn: Connection,
@@ -213,6 +226,57 @@ struct Host {
     /// the matching size, and the only such commit is the present inside
     /// `Gpu::frame` — see [`crate::hidpi::told_before_present`].
     scale_told: i32,
+    /// What the wheel has earned and not yet spent, in LINES.
+    ///
+    /// The fraction has to survive between events or a slow gesture moves
+    /// nothing and then jumps — see [`crate::surface::wheel_arrived`], which
+    /// carries the whole of that argument and is the only place this is added
+    /// to.
+    wheel_left: f64,
+    /// Which cell of the BUFFER the pointer is resting on.
+    ///
+    /// `None` when it is outside the window or on the margin. It is kept so an
+    /// event crosses the wall only when the cell CHANGES — the pointer arrives
+    /// in pixels and there are a few dozen of them to a cell.
+    cell_under_pointer: Option<(u16, u16)>,
+    /// Which bar of the last frame is being dragged, and where its block is.
+    ///
+    /// # Why the host answers a drag at all
+    ///
+    /// Because it is the only side that CAN. The thumb is a fraction of a
+    /// track in pixels, and a component counts cells (invariant 11) — so the
+    /// bar crosses as three numbers and the host resolves it, which is the
+    /// whole argument `ronoctua_design::Scroll` is written on. The inverse
+    /// belongs on the same side as the forward: `Scroll::offset_at`.
+    ///
+    /// The owner reported the missing half in one sentence — *"o clicar e
+    /// arrastar a scrollbar com o mouse não está funcionando"* — and the wheel
+    /// already crossed, so the shape was there.
+    ///
+    /// It holds the bar's own `Command::Bar` numbers, copied at the press: the
+    /// list is rebuilt on every frame and the drag outlives a frame.
+    dragging: Option<DraggedBar>,
+    /// A frame is owed, and it is drawn once the queue is empty.
+    ///
+    /// # Why the pointer does not draw where it is handled
+    ///
+    /// Because presenting blocks on the vertical blank. This door used to ask
+    /// the component and paint INSIDE the handler, once per event — and a
+    /// pointer sweep arrives as a burst of motion in one `pointer_frame`. So a
+    /// single sweep cost one wasm call, one layout and one blocked `present`
+    /// per CELL crossed, and every one of those frames drew a position the
+    /// pointer had already left. The owner reported it in those words: the
+    /// highlight trails the mouse, and worse the faster you move.
+    ///
+    /// It is the same defect the file manager had on its scrollbar and the
+    /// footer had on its hover, and the cure is the one both of them already
+    /// carry: a handler MARKS, and the `calloop` callback — the one place that
+    /// knows the batch is finished — draws once, from the last event.
+    ///
+    /// The render is deferred with the paint, and deliberately: asking the
+    /// component per event and drawing once would still cross the wall N
+    /// times to produce one frame.
+    owed: bool,
     quit: bool,
     /// The file this buffer was opened with, when there is one.
     ///
@@ -884,7 +948,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     let list = instance.render(80, 24, Host::heights())?;
     tracing::info!(
         commands = list.commands.len(),
-        height = list.height(),
+        height = list.height(crate::paint::heights()),
         "component rendered"
     );
 
@@ -948,6 +1012,10 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     let mut cycle: EventLoop<Host> = EventLoop::try_new().context("calloop")?;
     let mut state = Host {
         handle: cycle.handle(),
+        wheel_left: 0.0,
+        owed: false,
+        cell_under_pointer: None,
+        dragging: None,
         system,
         queue,
         disks,
@@ -1031,8 +1099,9 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
                     t.draw_at(ronoctua_tokens::text::size());
                 }
                 // THE COMPONENT HAS TO BE ASKED AGAIN — and `paint` does
-                // not ask it, it draws the list it already has. `render` is
-                // what asks, and `request_redraw` is what calls it.
+                // not ask it, it draws the list it already has. `settle` is
+                // what asks, once the queue is empty, and `ask_paint` is what
+                // tells it there is something to ask about.
                 //
                 // It matters most HERE, of all ten doors: this is the one
                 // whose content comes from another process. It is told how
@@ -1041,7 +1110,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
                 // column positions and the cells it reserved by scale are all
                 // for a grid that no longer exists. Invariant 11 is what
                 // makes it invisible from this side.
-                state.request_redraw();
+                state.ask_paint();
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the text size channel: {e}"))?;
@@ -1262,6 +1331,9 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     let signal = cycle.get_signal();
     cycle
         .run(None, &mut state, |e| {
+            // THE ONE PLACE THAT KNOWS THE BATCH IS OVER. Everything else
+            // marks a frame owed; here it is drawn, once. See `Host::owed`.
+            e.settle();
             if e.quit {
                 signal.stop();
             }
@@ -1534,6 +1606,8 @@ impl Host {
         // A second calculation here would make the drawing land in one place and the click find it
         // in another, with the error growing with the distance from the origin.
         let (cell_px, line_height) = cell();
+        #[allow(clippy::cast_possible_truncation)]
+        let rows = crate::paint::Rows::of(&self.list.commands, self.height as f32);
         let mut out = Vec::new();
         for c in &self.list.commands {
             let Command::Svg {
@@ -1579,7 +1653,10 @@ impl Host {
             // is (invariant 11). Without it the drawing would come out shifted from the
             // text beside it, and only diagonally — the hardest kind to detect.
             let x = f32::from(column.saturating_add(tokens::space::CONTENT_INSET)) * cell_px;
-            let y = f32::from(line.saturating_add(tokens::space::CONTENT_INSETY)) * line_height;
+            // THE SAME ROWS THE INK AND THE GROUNDS USE: a drawing inside an
+            // anchored block moves with it, or it is a picture sitting a
+            // residue above the row that names it.
+            let y = rows.top(*line);
             out.push(VectorDrawing {
                 area: ronoctua_render::image::Area {
                     x,
@@ -1604,8 +1681,8 @@ impl Host {
         if self.gpu.is_none() {
             self.assemble_gpu();
         }
-        let (columns, _) = self.context_of();
-        let spans = spans_of(&self.list, &self.texts, columns);
+        let (columns, lines) = self.context_of();
+        let spans = spans_of(&self.list, &self.texts, columns, lines);
         let vector_ones = self.vector_ones();
         let selections = self.selections();
         // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
@@ -1778,10 +1855,20 @@ impl Host {
     /// another, with the error growing away from the origin.
     /// The focused rows' bands, for THIS window's width.
     ///
-    /// The window is what knows how wide it is; everything else about the band
-    /// is in `paint`, next to the conversion that draws the text over it.
+    /// The window is what knows how wide and how TALL it is; everything else
+    /// about the band is in `paint`, next to the conversion that draws the
+    /// text over it. The height goes with it because a scrollbar's track ends
+    /// at the surface's bottom edge — the number the compositor gave — and
+    /// never at a count of lines times a line.
     fn selections(&self) -> Vec<ronoctua_render::quad::Quad> {
-        quads_of(&self.list, self.width as f32)
+        let (columns, _) = self.context_of();
+        quads_of(
+            &self.list,
+            self.width as f32,
+            self.height as f32,
+            &self.texts,
+            columns,
+        )
     }
 
     /// Which cell OF THE BUFFER a point in the window landed in.
@@ -1792,16 +1879,65 @@ impl Host {
     /// The origin is the **buffer's** (0,0) cell, and not the window's corner — it is the
     /// same origin `spans_of` uses when drawing, and that is why the margin
     /// comes in here as a subtraction.
-    fn cell_at(x: f64, y: f64) -> Option<(u16, u16)> {
-        let (width, height) = cell();
+    fn cell_at(&self, x: f64, y: f64) -> Option<(u16, u16)> {
+        let (width, _) = cell();
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let column = (x / f64::from(width)) as u32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let line = (y / f64::from(height)) as u32;
+        // THE LINE COMES FROM THE FRAME'S OWN ARITHMETIC, because a buffer
+        // whose window ends in a footer places that block from the BOTTOM edge
+        // — see `paint::Rows`. A click there resolved by `y / line` alone
+        // answers the line the footer would have been on had the residue not
+        // moved it, which is a click landing one row off exactly where the
+        // rows are fewest.
+        #[allow(clippy::cast_possible_truncation)]
+        let line =
+            crate::paint::Rows::of(&self.list.commands, self.height as f32).line_at(y as f32)?;
         Some((
             u16::try_from(column.checked_sub(u32::from(tokens::space::CONTENT_INSET))?).ok()?,
-            u16::try_from(line.checked_sub(u32::from(tokens::space::CONTENT_INSETY))?).ok()?,
+            line,
         ))
+    }
+
+    /// The bar of the last frame under this POINT of the surface, if any.
+    ///
+    /// # Why pixels, and not the cell the pointer is in
+    ///
+    /// Because a bar in the last column is PAINTED past the last cell — that
+    /// is what makes it touch the border, and it is deliberate — while the
+    /// pointer's cell is `floor(x / cell) − margin`, which in that strip
+    /// answers a column the component never drew in. The two numbers could
+    /// not be equal, so `column == column` never matched and a press on the
+    /// thumb fell through to the row behind it. Measured on the owner's
+    /// screen: the bar was column 81 and the press reported 83.
+    ///
+    /// There is one placement now and both doors read it: see
+    /// [`crate::paint::Grab`]. Nothing is found when the list FITS, which is
+    /// `Scroll::cut`'s decision and nobody else's.
+    fn bar_under(&self, x: f64, y: f64) -> Option<DraggedBar> {
+        #[allow(clippy::cast_possible_truncation)]
+        let (columns, _) = self.context_of();
+        crate::paint::bar_grabbed(
+            &self.list.commands,
+            x as f32,
+            y as f32,
+            self.width as f32,
+            self.height as f32,
+            &self.texts,
+            columns,
+        )
+    }
+
+    /// Where a drag at this height puts the first row, in the component's rows.
+    ///
+    /// The inverse of the thumb, asked of the track the thumb was drawn in —
+    /// which is the whole reason the rectangle is one answer. Written as a
+    /// second sum here it would come back somewhere other than under the
+    /// finger, and a drag IS the finger.
+    #[allow(clippy::unused_self)]
+    fn row_dragged_to(&self, bar: DraggedBar, y: f64) -> u32 {
+        #[allow(clippy::cast_possible_truncation)]
+        let at = bar.row_at(y as f32);
+        u32::try_from(at).unwrap_or(u32::MAX)
     }
 
     /// How many columns and rows fit in the window right now.
@@ -1835,10 +1971,23 @@ impl Host {
         crate::paint::heights()
     }
 
-    /// Asks the component for a new frame and redraws.
-    fn request_redraw(&mut self) {
-        self.re_render();
-        self.paint();
+    /// Asks for a frame. It is drawn when the event queue empties.
+    ///
+    /// See the `owed` field for why nothing here presents directly.
+    const fn ask_paint(&mut self) {
+        self.owed = true;
+    }
+
+    /// Draws the owed frame, if one is owed.
+    ///
+    /// Called from the event loop's callback — the one place that knows the
+    /// batch is finished. A hundred motion events in one batch come out as one
+    /// frame, asked of the component once, from the LAST of them.
+    fn settle(&mut self) {
+        if std::mem::take(&mut self.owed) {
+            self.re_render();
+            self.paint();
+        }
     }
 
     /// Asks the component for a new frame and keeps it, without drawing.
@@ -1969,7 +2118,7 @@ impl Host {
         let mut verdict = None;
         for effect in effects {
             match effect {
-                ronoctua_protocol::Effect::Redraw => self.request_redraw(),
+                ronoctua_protocol::Effect::Redraw => self.ask_paint(),
                 // The component does NOT touch the clipboard: it asks,
                 // and the host does it (invariant 11).
                 ronoctua_protocol::Effect::Copy(t) => {
@@ -2100,6 +2249,29 @@ impl Host {
                             self.current.store(n, std::sync::atomic::Ordering::Relaxed);
                             tracing::info!(state = %id, "the buffer's state");
                             self.tell_the_footer();
+                            // AND IT REPAINTS, because a state is a SCREEN.
+                            //
+                            // This host repaints only on `Effect::Redraw`, and
+                            // that is right for everything else — an empty
+                            // effect list means nothing changed. But a state
+                            // change is not nothing: the modeline names the
+                            // screen, so announcing one without drawing it puts
+                            // the name of a page on the chrome while the page
+                            // underneath is still the last one.
+                            //
+                            // The owner read exactly that: `RET` on a task
+                            // flipped the modeline to `task` and left the home
+                            // page on screen until an arrow key — which
+                            // repaints unconditionally — brought the right page
+                            // up, already scrolled one row. The brain's guest
+                            // had forgotten its `Redraw`; the guest is fixed
+                            // too, and this is the half that keeps the NEXT
+                            // buffer from falling in the same hole.
+                            //
+                            // No frame is wasted: the guard is `n != self.now()`
+                            // already, so a buffer re-announcing the state it is
+                            // on costs nothing.
+                            self.ask_paint();
                         }
                     }
                     // An id outside the descriptor would put a word on the
@@ -2353,18 +2525,41 @@ impl Host {
                 Knob::Enabled(on) => mine.enabled = *on,
                 // A SET OF EXCEPTIONS, and not a list of what runs: the order
                 // and the contents belong to the task, so a step added by a
-                // later version is on by default instead of missing from
-                // everybody's file. `on` is the state the screen wants, and not
-                // a toggle — a toggle sent twice by a key that repeated would
-                // land back where it started with nobody the wiser.
+                // later version takes its declared default instead of being
+                // missing from everybody's file. `on` is the state the screen
+                // wants, and not a toggle — a toggle sent twice by a key that
+                // repeated would land back where it started with nobody the
+                // wiser.
+                //
+                // AND THE STATE HAS TO BE TURNED INTO AN EXCEPTION, which
+                // needs the declared default. The default is in the mind this
+                // host is holding; without it the file was written as though
+                // every step ships on, which is what put "you changed" on six
+                // untouched rows. A step this host has never heard of is left
+                // alone rather than guessed at.
                 Knob::Step(switch) => {
-                    if switch.on {
-                        mine.steps_off.remove(&switch.id);
+                    let ships_on = b.last.as_ref().and_then(|m| {
+                        m.tasks
+                            .iter()
+                            .find(|t| t.id == setting.task)
+                            .and_then(|t| t.steps.iter().find(|s| s.id == switch.id))
+                            .map(|s| s.on_by_default)
+                    });
+                    if let Some(ships_on) = ships_on {
+                        if switch.on == ships_on {
+                            mine.steps_flipped.remove(&switch.id);
+                        } else {
+                            mine.steps_flipped.insert(switch.id.clone());
+                        }
                     } else {
-                        mine.steps_off.insert(switch.id.clone());
+                        tracing::warn!(
+                            task = %setting.task,
+                            step = %switch.id,
+                            "a step this host has not been told about; left alone"
+                        );
                     }
                 }
-                Knob::ResetSteps => mine.steps_off.clear(),
+                Knob::ResetSteps => mine.steps_flipped.clear(),
             }
         }
         Self::tell_brain(&ronoctua_brain::Ask::Tune {
@@ -2407,9 +2602,9 @@ impl Host {
             b.tasks.clear();
             b.tasks.extend(mind.tasks.iter().map(|t| t.id.clone()));
             b.prefs.clone_from(&mind.prefs);
-            crate::brain::mind_of(mind, &b.zone)
+            crate::brain::mind_of(mind, &b.zone, &self.texts)
         };
-        self.deliver(&ronoctua_protocol::Input::Mind(over));
+        self.deliver(&ronoctua_protocol::Input::Mind(Box::new(over)));
     }
 
     /// A fresh queue arrived from the unit.
@@ -3223,7 +3418,7 @@ impl WindowHandler for Host {
         // guessed 80x24; without this the component would draw for a window
         // that is not its own — few lines on a large screen, exactly
         // what was seen in the glyph browser.
-        self.request_redraw();
+        self.ask_paint();
     }
 }
 
@@ -3264,7 +3459,7 @@ impl CompositorHandler for Host {
             // the buffer can SHOW. The eight doors with a `recount` do that; this is the
             // one whose content comes from another process, and the argument
             // is already written beside `text_size_changed`.
-            self.request_redraw();
+            self.ask_paint();
         }
     }
     fn transform_changed(
@@ -3321,9 +3516,27 @@ impl PointerHandler for Host {
     /// one pasting text into a glyph browser would be a search typed
     /// by accident.
     ///
-    /// There is no hover: highlighting the item under the mouse would ask for a frame per pixel
-    /// of movement, and here the highlight already has an owner — it is the cursor, and it belongs to the
-    /// component.
+    /// # The hover, and the argument that kept it out
+    ///
+    /// What used to be written here was that *"highlighting the item under the
+    /// mouse would ask for a frame per pixel of movement, and here the
+    /// highlight already has an owner — it is the cursor"*. Both halves were
+    /// wrong, and the owner said so: a buffer with no hover cannot have an
+    /// elaborate interface at all.
+    ///
+    /// The pointer moves in PIXELS and a buffer counts CELLS, so an event is
+    /// sent only when the CELL changes — a traversal of a hundred-column
+    /// window is a hundred events, not one per pixel of a thousand. That is
+    /// what every other window in this shell has done since it was written
+    /// (`files_window`, `network_window`, `power_window` all keep an
+    /// `under_pointer` and aim on `Enter | Motion`); the buffer window was the
+    /// one exception, and the exception was an assumption rather than a
+    /// measurement.
+    ///
+    /// And the cursor is not the same highlight. The cursor is where the
+    /// KEYBOARD is; the hover is where a click would land. Every view in the
+    /// system draws both, in two different tones, because they answer two
+    /// different questions.
     fn pointer_frame(
         &mut self,
         _: &Connection,
@@ -3332,13 +3545,153 @@ impl PointerHandler for Host {
         events: &[PointerEvent],
     ) {
         for e in events {
+            // THE POINTER AT REST. `Leave` puts the highlight out; `Enter` and
+            // `Motion` move it, and only across a cell boundary.
+            match e.kind {
+                PointerEventKind::Leave { .. } => {
+                    if self.cell_under_pointer.take().is_some() {
+                        self.deliver(&ronoctua_protocol::Input::Unhover);
+                    }
+                    // AND THE DRAG ENDS WITH THE POINTER. Wayland's implicit
+                    // grab usually delivers the release, but a broken grab
+                    // drops it — and a drag left standing makes the next
+                    // ENTER, with no button held, throw the list to wherever
+                    // the pointer came in. The five list windows all carry
+                    // this line; see `audio_window.rs`.
+                    self.dragging = None;
+                    continue;
+                }
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    // A BAR BEING DRAGGED TAKES THE MOTION, and the hover does
+                    // not: the pointer is on the control, not on a row, and a
+                    // highlight following it down the track would light every
+                    // row the drag passed over.
+                    if let Some(bar) = self.dragging {
+                        let first = self.row_dragged_to(bar, e.position.1);
+                        self.deliver(&ronoctua_protocol::Input::Scrolled {
+                            column: bar.column,
+                            line: bar.first_line,
+                            first,
+                        });
+                        continue;
+                    }
+                    let now = self.cell_at(e.position.0, e.position.1);
+                    if now != self.cell_under_pointer {
+                        self.cell_under_pointer = now;
+                        match now {
+                            Some((column, line)) => {
+                                self.deliver(&ronoctua_protocol::Input::Hover { column, line })
+                            }
+                            // THE MARGIN IS NOT THE WINDOW. A pointer resting
+                            // on the inset is on no cell, and saying "cell
+                            // zero" there would light the first row whenever
+                            // somebody's hand crossed the border.
+                            None => self.deliver(&ronoctua_protocol::Input::Unhover),
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            // THE WHEEL, and it is the only pointer event besides the click
+            // that crosses. It exists because `Command::Bar` does: a
+            // scrollbar nobody can turn is a picture of a control.
+            if let PointerEventKind::Axis {
+                vertical,
+                horizontal,
+                ..
+            } = &e.kind
+            {
+                // THE ONE ARITHMETIC, the same `crate::surface` uses for the
+                // footer and its five list windows. It keeps the leftover
+                // fraction between events, which is what makes a slow gesture
+                // move at all: five windows each wrote `(px / line) * 3`,
+                // threw the fraction away, and the owner read the result off
+                // the screen as a page that jumps.
+                crate::surface::wheel_arrived(&mut self.wheel_left, vertical, horizontal);
+                let lines = crate::surface::wheel_lines(&mut self.wheel_left);
+                if lines == 0 {
+                    continue;
+                }
+                // A SENTENCE THAT IS CUT TAKES THE WHEEL, and the host
+                // answers it: a paragraph's total is the host's, because the
+                // host is what wrapped it. See `paint::sentence_wheeled`.
+                let (columns, _) = self.context_of();
+                #[allow(clippy::cast_possible_truncation)]
+                if let Some(said) = crate::paint::sentence_wheeled(
+                    &self.list.commands,
+                    e.position.0 as f32,
+                    e.position.1 as f32,
+                    self.height as f32,
+                    &self.texts,
+                    columns,
+                    i16::try_from(lines).unwrap_or(if lines < 0 { i16::MIN } else { i16::MAX }),
+                ) {
+                    self.deliver(&ronoctua_protocol::Input::Scrolled {
+                        column: said.column,
+                        line: said.line,
+                        first: said.first,
+                    });
+                    continue;
+                }
+                let Some((column, line)) = self.cell_at(e.position.0, e.position.1) else {
+                    continue;
+                };
+                // CLAMPED RATHER THAN WRAPPED. A gesture that earned more
+                // lines than an `i16` holds is a gesture nobody made, and the
+                // buffer subtracts this from an offset — a wrap would send it
+                // the other way.
+                let lines =
+                    i16::try_from(lines).unwrap_or(if lines < 0 { i16::MIN } else { i16::MAX });
+                self.deliver(&ronoctua_protocol::Input::Wheel {
+                    column,
+                    line,
+                    lines,
+                });
+                continue;
+            }
+            if let PointerEventKind::Release { button, .. } = e.kind
+                && button == LEFT_BUTTON
+            {
+                self.dragging = None;
+                continue;
+            }
             let PointerEventKind::Press { button, .. } = e.kind else {
                 continue;
             };
             if button != LEFT_BUTTON {
                 continue;
             }
-            let Some((column, line)) = Self::cell_at(e.position.0, e.position.1) else {
+            // A PRESS ON A BAR IS A DRAG, and never a click on the row behind
+            // it. It is asked FIRST for that reason: the bar is drawn over the
+            // block's own rows, and whichever question is asked second answers
+            // about something the pointer is not on.
+            //
+            // AND IT IS ASKED IN PIXELS, before the cell — the conversion to a
+            // cell is what loses a bar drawn in the right margin, which is
+            // every bar in the last column. See `Host::bar_under`.
+            if let Some(bar) = self.bar_under(e.position.0, e.position.1) {
+                self.dragging = Some(bar);
+                let first = self.row_dragged_to(bar, e.position.1);
+                tracing::debug!(
+                    column = bar.column,
+                    line = bar.first_line,
+                    first,
+                    "a bar grabbed"
+                );
+                // THE BAR'S OWN CELL, never the pointer's: what the component
+                // does with this is route it to one of its lists, and the
+                // pointer may be past the last column when it does it. The
+                // motion below has always sent the bar's; the press sent the
+                // pointer's, which is a second way to answer one question.
+                self.deliver(&ronoctua_protocol::Input::Scrolled {
+                    column: bar.column,
+                    line: bar.first_line,
+                    first,
+                });
+                continue;
+            }
+            let Some((column, line)) = self.cell_at(e.position.0, e.position.1) else {
                 // A click on the margin. There is no content there, and sending cell 0
                 // would make clicking the border select the first item.
                 continue;
@@ -3406,7 +3759,169 @@ fn advance_sequence(
 #[cfg(test)]
 mod tests {
     use super::{Escape, EscapeAct};
+    use crate::paint::{bar_grabbed, cell, quads_of};
     use smithay_client_toolkit::seat::keyboard::Keysym;
+
+    /// A surface with a RESIDUE on both axes, which is every real window: a
+    /// compositor hands out pixels and the grid is `floor` of them.
+    fn a_surface() -> (f32, f32, u16) {
+        let (cell_w, line_h) = cell();
+        let width = cell_w.mul_add(100.0, cell_w * 0.4);
+        let height = line_h.mul_add(24.0, line_h * 0.37);
+        // The last column the COMPONENT was told about, derived the way
+        // `context_of` derives it: the window's cells less the margin on both
+        // sides. This is the column every list bar in a buffer sits in.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let across = (width / cell_w) as u16 - tokens::space::CONTENT_INSET * 2;
+        (width, height, across - 1)
+    }
+
+    /// One bar over eight rows of a list of forty, and one over a list that
+    /// fits — whose bar is never drawn, and may not be grabbed either.
+    fn a_bar(column: u16) -> ronoctua_protocol::DisplayList {
+        let mut d = ronoctua_protocol::DisplayList::fresh_one();
+        d.push(ronoctua_protocol::Command::Bar {
+            line: 16,
+            lines: 8,
+            column,
+            total: 40,
+            shown: 8,
+            offset: 0,
+            color: ronoctua_protocol::Color::name("rule-raised"),
+        });
+        d.push(ronoctua_protocol::Command::Bar {
+            line: 2,
+            lines: 13,
+            column,
+            total: 3,
+            shown: 13,
+            offset: 0,
+            color: ronoctua_protocol::Color::name("rule-default"),
+        });
+        d
+    }
+
+    /// FAILS IF: a pixel of the thumb the host PAINTED is not a pixel the host
+    /// answers a press on.
+    ///
+    /// # The law this is here to keep
+    ///
+    /// A control is grabbed where it is drawn. This one was not, and could not
+    /// be: the thumb of a bar in the last column is painted past the last cell
+    /// — deliberately, so it touches the border — and the press was resolved
+    /// into a CELL, which in that strip names a column the component never
+    /// drew in. `bar.column == pointer.column` could not match. Measured on the
+    /// owner's screen: column 81 drawn, column 83 reported, and every drag in
+    /// every buffer fell through to the row behind the bar.
+    ///
+    /// Nothing smaller than this catches it. A unit test of the placement
+    /// passes, a unit test of the hit test passes, and the defect is the
+    /// distance between them — so the assertion has to cross from one to the
+    /// other, which is what reading the painted quad does.
+    #[test]
+    fn every_pixel_of_a_drawn_bar_can_be_grabbed() {
+        let (width, height, last) = a_surface();
+        // THE LAST COLUMN AND A MIDDLE ONE. The first is what every buffer
+        // draws; the second is the manager's, down a section, and it must not
+        // be pushed to the edge.
+        for column in [last, last / 2] {
+            let list = a_bar(column);
+            let texts = ronoctua_i18n::Texts::fresh("pt-BR").unwrap();
+            let quads = quads_of(&list, width, height, &texts, 100);
+            assert_eq!(quads.len(), 1, "column {column}: one bar is drawn");
+            let thumb = quads[0];
+            // EVERY PIXEL OF IT, corners included.
+            let mut x = thumb.x;
+            while x < thumb.x + thumb.width {
+                let mut y = thumb.y;
+                while y < thumb.y + thumb.height {
+                    let got = bar_grabbed(&list.commands, x, y, width, height, &texts, 100);
+                    assert!(
+                        got.is_some_and(|g| g.column == column),
+                        "column {column}: the pointer at ({x}, {y}) is on the thumb and grabs nothing"
+                    );
+                    y += 1.0;
+                }
+                x += 1.0;
+            }
+            // AND THE TRACK AROUND IT, because a one-cell thumb is a target
+            // nobody can hit: pressing the track jumps there, as every
+            // scrollbar does.
+            let grab = bar_grabbed(&list.commands, thumb.x, thumb.y, width, height, &texts, 100)
+                .expect("the thumb is on the track");
+            assert_eq!(
+                grab.row_at(grab.y),
+                0,
+                "the top of the track is the first row"
+            );
+            assert_eq!(
+                grab.row_at(grab.y + grab.height),
+                40 - 8,
+                "the bottom of the track is the last window"
+            );
+            // A CELL TO THE LEFT IS THE PAGE, not the bar: a window may have
+            // two lists side by side, and a press on one may not move the
+            // other.
+            let (cell_w, line_h) = cell();
+            assert!(
+                bar_grabbed(
+                    &list.commands,
+                    grab.x - cell_w,
+                    thumb.y,
+                    width,
+                    height,
+                    &texts,
+                    100
+                )
+                .is_none(),
+                "column {column}: the cell beside the bar grabbed it"
+            );
+            // AND ABOVE AND BELOW THE BAND IS THE PAGE TOO.
+            assert!(
+                bar_grabbed(
+                    &list.commands,
+                    thumb.x,
+                    grab.y - line_h,
+                    width,
+                    height,
+                    &texts,
+                    100
+                )
+                .is_none(),
+                "column {column}: the row above the band grabbed it"
+            );
+            assert!(
+                bar_grabbed(
+                    &list.commands,
+                    thumb.x,
+                    grab.y + grab.height + 1.0,
+                    width,
+                    height,
+                    &texts,
+                    100
+                )
+                .is_none(),
+                "column {column}: the row below the band grabbed it"
+            );
+            // AND A LIST THAT FITS HAS NO BAR AT ALL. Row 2 is inside the
+            // second command's band; `Scroll::cut` is the one place that
+            // decides a bar exists, and a control that does nothing may not be
+            // grabbed either.
+            assert!(
+                bar_grabbed(
+                    &list.commands,
+                    thumb.x,
+                    crate::paint::Rows::of(&list.commands, height).top(2),
+                    width,
+                    height,
+                    &texts,
+                    100
+                )
+                .is_none(),
+                "column {column}: a list that fits was grabbed"
+            );
+        }
+    }
 
     /// A TAP of `Esc` is still `Esc`, and it acts when the key comes back up.
     #[test]

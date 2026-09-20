@@ -912,6 +912,15 @@ rec {
   # of its argument: no D-Bus, no renderer, no reader of `/proc` — whether the
   # machine is busy is decided before this is ever started. Shipping `workspace`
   # to it would put the whole shell in the closure of a unit that deletes files.
+  # AND THE ONE THAT EMPTIES THE TRASH, for the sweep's reason and one sharper:
+  # what it deletes is the only copy.
+  emptyTrash = pkgs.runCommand "ronoctua-empty-trash" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-empty-trash $out/bin/
+    chmod +w $out/bin/ronoctua-empty-trash
+    patchelf --shrink-rpath $out/bin/ronoctua-empty-trash
+  '';
+
   cacheSweep = pkgs.runCommand "ronoctua-cache-sweep" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
     mkdir -p $out/bin
     cp ${workspace}/bin/ronoctua-cache-sweep $out/bin/

@@ -19,17 +19,46 @@
 //! atlas and the shaper are the production ones. What is different is only
 //! where the pixels land: a texture instead of a `wl_surface`.
 //!
-//! Two things it does NOT draw, and it says so rather than pretending:
+//! One thing it does NOT draw, and it says so rather than pretending:
+//! `Command::Svg`, which needs the rasterised pixmap cache the window keeps.
 //!
-//!   - `Command::Svg`, which needs the rasterised pixmap cache the window keeps;
-//!   - anything that depends on the host answering the buffer back — a disk
-//!     rack, a transfer queue, a memory survey. Those buffers draw their empty
-//!     screen here, which is the honest picture of what they have.
+//! # What the host would have answered
+//!
+//! A buffer whose screen IS the host's answer — the brain, a disk rack, a
+//! transfer queue — used to draw its empty state here, and this file called
+//! that "the honest picture of what they have". It was honest and it was
+//! useless. The brain's entire screen is the mind: without one, every
+//! photograph of it was a title over the words "no tasks yet", so the buffer
+//! this repository most needed to review was the one it could not open.
+//!
+//! `--mind <file>` closes that for the brain. The file is the daemon's own
+//! JSON — one line off `$XDG_RUNTIME_DIR/ronoctua-brain.sock` is a valid
+//! argument — and the conversion is the production one, so nothing here is a
+//! second shape invented for the tool. The other three still draw empty, and
+//! the same door is what they will use.
 //!
 //! Usage: `ronoctua-render-png <component.wasm> [options]`, `--help` for the list.
 
+// THE POINTER'S HALF OF IT IS UNUSED HERE, and that is the tool: this one
+// photographs a frame and answers no press. The module is the shell's own —
+// one arithmetic for the ink, the grounds and the grab — and taking a copy of
+// the half this binary wants is exactly the second arithmetic it exists to
+// prevent.
+#[allow(dead_code)]
 #[path = "../paint.rs"]
 mod paint;
+
+// THE BRAIN'S RECORDS, TURNED INTO THE WIT'S — the pure half, which is why it
+// is its own file. Without it this tool could not photograph the brain at all:
+// that buffer draws nothing until a mind arrives, so every picture of it was a
+// title over the words "no tasks yet".
+//
+// `dead_code` is allowed HERE and not in the file: this tool needs one function
+// out of it, the footer needs the rest, and a blanket allow in `mind_wire.rs`
+// would stop the shell's own build from reporting a conversion nobody calls.
+#[allow(dead_code)]
+#[path = "../mind_wire.rs"]
+mod mind_wire;
 
 use anyhow::{Context as _, Result, bail};
 use ronoctua_protocol::Input;
@@ -37,6 +66,11 @@ use ronoctua_tokens as tokens;
 
 /// What was asked for on the command line.
 struct Ask {
+    /// The mind to hand over, and where among the inputs it belongs.
+    ///
+    /// It is not an `Input` yet because converting one needs the language's
+    /// bundle; see the note at `--mind`.
+    mind: Option<(usize, ronoctua_brain::Mind, ronoctua_files::when::Zone)>,
     wasm: String,
     out: std::path::PathBuf,
     columns: u16,
@@ -73,6 +107,13 @@ struct Ask {
     text: u16,
     /// In order: everything to send the component before drawing.
     inputs: Vec<Input>,
+    /// Print what the buffer emitted instead of drawing it.
+    ///
+    /// A picture answers "does this look right"; it does not answer "what is
+    /// this made of". A stray band, a run nobody can see because another one
+    /// is on top of it, a row drawn at a line past the window — those are all
+    /// one line in the list and a guess in the photograph.
+    list: bool,
 }
 
 const USAGE: &str = "\
@@ -86,6 +127,9 @@ usage: ronoctua-render-png <component.wasm> [options]
   --text <percent>    text size, in percent     (default: 100)
   --scale <n>         physical px per logical   (default: 1)
 
+  --mind <file>       a brain mind, as JSON, delivered before drawing
+  --hover <col,line>  rests the pointer on a cell before drawing
+  --list              prints the display list instead of drawing it
   --state <id>        enters a state before drawing
   --command <id>      fires a command of the buffer
   --key <name>        up, down, left, right, enter, esc, tab, backspace
@@ -121,6 +165,7 @@ fn parse() -> Result<Ask> {
         std::process::exit(0);
     }
     let mut me = Ask {
+        mind: None,
         wasm: first,
         out: std::path::PathBuf::from("buffer.png"),
         columns: 90,
@@ -130,6 +175,7 @@ fn parse() -> Result<Ask> {
         text: tokens::text::NORMAL,
         scale: 1,
         inputs: Vec::new(),
+        list: false,
     };
     while let Some(flag) = args.next() {
         // Each flag consumes its own argument, and a missing one is a mistake
@@ -201,6 +247,63 @@ fn parse() -> Result<Ask> {
                 );
                 me.scale = asked;
             }
+            // WHAT THE HOST WOULD HAVE ANSWERED, out of a file.
+            //
+            // This is the door that was missing, and its absence is why the
+            // module header above used to say some buffers "draw their empty
+            // screen here, which is the honest picture of what they have". It
+            // was honest and it was useless: the brain's whole screen is the
+            // mind, so no picture of it could ever be reviewed.
+            //
+            // The file is `ronoctua_brain::Mind` in the spelling its OWN
+            // socket uses — `socat` one line out of `$XDG_RUNTIME_DIR/
+            // ronoctua-brain.sock` and it is a valid argument here. That is
+            // what keeps the fixture honest: it is not a second shape invented
+            // for the tool, it is what the daemon actually says.
+            //
+            // And the conversion is the production one (`mind_wire::mind_of`),
+            // so a field the footer formats differently cannot be formatted
+            // some other way in a photograph.
+            "--mind" => {
+                let file = value()?;
+                let raw = std::fs::read_to_string(&file)
+                    .with_context(|| format!("could not read `{file}`"))?;
+                let mind: ronoctua_brain::Mind = serde_json::from_str(&raw)
+                    .with_context(|| format!("`{file}` is not a brain mind"))?;
+                // THE MACHINE'S OWN ZONE, like the footer. A photograph is
+                // deterministic in theme and language and NOT in this: what
+                // a date reads as is the machine's, and pinning it to UTC
+                // here would photograph a screen no door can be in.
+                let zone =
+                    ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime"));
+                // CONVERTED IN `main`, AND NOT HERE, because the conversion
+                // now resolves a task's NAME — and the bundle that resolves it
+                // is built from `--language`, which may come later in the
+                // argument list than this flag does. What is remembered is the
+                // POSITION as well as the mind: the inputs are delivered in
+                // order, and a `--key` after a `--mind` means something
+                // different from one before it.
+                me.mind = Some((me.inputs.len(), mind, zone));
+            }
+            "--list" => me.list = true,
+            // WHERE THE POINTER IS RESTING, as `column,line` in the buffer's
+            // own cells.
+            //
+            // A screen this tool cannot reach is a screen nobody reviews, and
+            // that is not a limit of the buffer — it is a hole in the
+            // photographer. The wall grew a pointer at rest and this is how it
+            // is driven, the same way `--click` would be if anything needed
+            // one: the host sends a cell, so the picture takes a cell.
+            "--hover" => {
+                let at = value()?;
+                let (column, line) = at
+                    .split_once(',')
+                    .with_context(|| format!("`--hover` wants `column,line`, not `{at}`"))?;
+                me.inputs.push(Input::Hover {
+                    column: column.trim().parse().context("the hover's column")?,
+                    line: line.trim().parse().context("the hover's line")?,
+                });
+            }
             "--state" => me.inputs.push(Input::EnterState(value()?)),
             "--command" => me.inputs.push(Input::Command(value()?)),
             "--type" => me.inputs.extend(value()?.chars().map(Input::Char)),
@@ -238,6 +341,15 @@ fn main() -> Result<()> {
     tokens::text::set(ask.text);
     let texts = ronoctua_i18n::Texts::fresh(&ask.language)
         .with_context(|| format!("the language `{}` does not exist", ask.language))?;
+
+    let mut ask = ask;
+    if let Some((at, mind, zone)) = ask.mind.take() {
+        ask.inputs.insert(
+            at,
+            Input::Mind(Box::new(mind_wire::mind_of(&mind, &zone, &texts))),
+        );
+    }
+    let ask = ask;
 
     let wasm = std::fs::read(&ask.wasm).with_context(|| format!("could not read {}", ask.wasm))?;
     let rt = ronoctua_runtime::Runtime::fresh()?;
@@ -287,15 +399,46 @@ fn main() -> Result<()> {
         bail!("the frame was refused by the host's own gate: {e}");
     }
 
+    // THE LIST ITSELF, when it is the list that is in question.
+    //
+    // A photograph answers "does this look right". It does not answer "what is
+    // this made of": a band nobody can see because a run sits on it, a row
+    // drawn past the last line, two runs in the same cells — each of those is
+    // one line here and an argument about pixels otherwise. It prints and
+    // stops, because a caller that wanted both would rather have two runs than
+    // a file it has to remember was also written.
+    if ask.list {
+        println!(
+            "{} lines asked for, {} drawn",
+            ask.lines,
+            list.height(paint::heights())
+        );
+        for c in &list.commands {
+            println!("{c:?}");
+        }
+        return Ok(());
+    }
+
     // THE WINDOW'S SIZE IS THE INVERSE OF `Host::context_of`: it takes a window
     // and works out how many cells fit; here the cells are given and the window
     // follows. The margins count twice — one on each side — which is what makes
     // the picture have the same air around it as the screen does.
+    //
+    // AND IT ROUNDS UP, which is not tidiness. A window of `n × line` pixels
+    // truncated to a whole number is a hair SHORT of `n` lines, and the
+    // painter's own count — `floor(height / line)`, the same one
+    // `Host::context_of` gives the component — then answers `n − 1`. Twenty-six
+    // lines asked for, six hundred and seventy-eight pixels, and the last row
+    // of the footer was placed at the pixel after the last one there is: the
+    // photograph came out with the values missing and nothing anywhere saying
+    // why. On a real screen the two never disagree, because both read the
+    // height the compositor gave; here the tool builds the height, so it is
+    // the tool's business to build one that holds what it asked for.
     let (cell_w, cell_h) = paint::cell();
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let width = (f32::from(ask.columns + tokens::space::CONTENT_INSET * 2) * cell_w) as u32;
+    let width = (f32::from(ask.columns + tokens::space::CONTENT_INSET * 2) * cell_w).ceil() as u32;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let height = (f32::from(ask.lines + tokens::space::CONTENT_INSETY * 2) * cell_h) as u32;
+    let height = (f32::from(ask.lines + tokens::space::CONTENT_INSETY * 2) * cell_h).ceil() as u32;
     // AND THE TEXTURE IS PHYSICAL, exactly as a door's buffer is: the picture
     // is the same picture with more pixels in it. A door multiplies the size
     // the compositor configured; here the size comes from the cells asked for,
@@ -339,7 +482,7 @@ fn main() -> Result<()> {
     let mut quads =
         ronoctua_render::quad::Quads::new(&gpu.device, ronoctua_render::offscreen::FORMAT)?;
 
-    let spans = paint::spans_of(&list, &texts, ask.columns);
+    let spans = paint::spans_of(&list, &texts, ask.columns, ask.lines);
     // THE RECTANGLES ARE LOGICAL, like a door's — see `crate::hidpi`, which
     // carries the whole of why, and the text is given the PHYSICAL viewport.
     //
@@ -351,7 +494,13 @@ fn main() -> Result<()> {
     let by = u32::from(ask.scale);
     let (logical_w, logical_h) = (gpu.width / by, gpu.height / by);
     #[allow(clippy::cast_precision_loss)]
-    let bands = paint::quads_of(&list, logical_w as f32);
+    let bands = paint::quads_of(
+        &list,
+        logical_w as f32,
+        logical_h as f32,
+        &texts,
+        ask.columns,
+    );
     text.prepare(
         &gpu.device,
         &gpu.queue,

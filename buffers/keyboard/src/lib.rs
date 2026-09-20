@@ -30,7 +30,7 @@ use std::cell::RefCell;
 use ronoctua_design::guest::Wit;
 use ronoctua_design::types::{
     Binding, Board, Boards, BufferState, Capability, Command, Context, Descriptor, Effect, Guest,
-    Icon, Input, Remap, Run, Screen, Tone,
+    Icon, Input, Remap, Role, Run, Screen, Scroll, Tone,
 };
 
 /// The text keys this buffer draws. Every one of them is owed by both
@@ -110,6 +110,27 @@ struct State {
     level: Level,
     /// Which row the cursor is on, within whichever level is open.
     cursor: usize,
+    /// The first row of the list that is drawn.
+    offset: usize,
+    /// Whether the window still owes the cursor a move.
+    ///
+    /// A KEY asks for it; the wheel does not. The wheel scrolls the page and
+    /// leaves the cursor where it is — which is what every window in the shell
+    /// does — and a window that followed unconditionally would put it back on
+    /// the next frame.
+    follows: bool,
+    /// The cell the pointer is on, if it is on one.
+    hover: Option<(u16, u16)>,
+    /// WHERE THE LIST WAS DRAWN, remembered where it was measured.
+    ///
+    /// The first line depends on the heading's own arithmetic, which depends
+    /// on the window's height — so it cannot be recomputed from nothing, and
+    /// a click resolved by a second guess lands on a different row from the
+    /// band. It is the footer's `region_can_spare_a_row` idiom: what the
+    /// drawing learned, written down where it learned it.
+    list_top: u16,
+    /// How many rows of it are on the screen.
+    list_lines: u16,
 }
 
 thread_local! {
@@ -189,6 +210,104 @@ impl State {
         })
     }
 
+    /// How many rows of the list are shown, and the first of them.
+    ///
+    /// ONE arithmetic: the drawing walks this window and the pointer is
+    /// resolved against the same two numbers. Written twice, a click lands on
+    /// the row the band is not on.
+    fn window(&mut self, top: u16, height: u16) -> (usize, usize) {
+        // WHAT THE LEVEL DRAWS UNDER ITS LIST, which the list may not take:
+        // the list level ends with the sentence about what this screen cannot
+        // do, and a keyboard's own page ends with the technical word under the
+        // cursor and the warning about two of a model.
+        let after = match self.level {
+            Level::List => 2,
+            Level::One(_) => 4,
+        };
+        let room = usize::from(height.saturating_sub(top + after).max(1));
+        let rows = self.rows();
+        if self.follows {
+            if self.cursor < self.offset {
+                self.offset = self.cursor;
+            } else if self.cursor >= self.offset + room {
+                self.offset = self.cursor + 1 - room;
+            }
+        }
+        self.offset = self.offset.min(rows.saturating_sub(room.min(rows)));
+        (self.offset, room)
+    }
+
+    /// Which row of the list a line of the screen is, if it is one.
+    fn row_at(&self, line: u16) -> Option<usize> {
+        if line < self.list_top || line >= self.list_top + self.list_lines {
+            return None;
+        }
+        let n = self.offset + usize::from(line - self.list_top);
+        (n < self.rows()).then_some(n)
+    }
+
+    /// What `RET` does where the cursor is.
+    ///
+    /// Its own function because the POINTER does it too: a second click on a
+    /// row is the row's own key, which is the rule the file manager already
+    /// has written down and the one the owner asked to be absolute.
+    fn confirm(&mut self) -> Vec<Effect> {
+        match self.level {
+            Level::List if self.rows() > 0 => {
+                let Some(id) = self.board().map(|k| k.id.clone()) else {
+                    return Vec::new();
+                };
+                self.level = Level::One(id);
+                self.cursor = 0;
+                self.offset = 0;
+                vec![Effect::Redraw]
+            }
+            Level::List => Vec::new(),
+            Level::One(_) => self.turn(true).map(Effect::Remap).into_iter().collect(),
+        }
+    }
+
+    /// A click on a row: the first SELECTS, the second does what `RET` does.
+    fn reach(&mut self, n: usize) -> Vec<Effect> {
+        if self.cursor == n {
+            return self.confirm();
+        }
+        self.cursor = n;
+        self.follows = true;
+        vec![Effect::Redraw]
+    }
+
+    /// Which row of the list the pointer is on, if it is on one.
+    fn hovered_row(&self) -> Option<usize> {
+        let (_, line) = self.hover?;
+        self.row_at(line)
+    }
+
+    /// THE BAR, in the lane kept for it, when the list does not fit.
+    ///
+    /// A list one cannot see the length of is the defect
+    /// `every-list-window-has-a-bar` names on the host's side; a buffer owes
+    /// the same thing, and a list with no bar and no wheel is a list whose end
+    /// the mouse cannot reach at all.
+    /// THE BAND AND THE WINDOW ARE ONE NUMBER, and it is how many rows were
+    /// DRAWN. The host says so out loud when they differ — a thumb against a
+    /// track the band does not have — and with a list shorter than the room it
+    /// is the difference between two and thirty-five.
+    fn draw_bar(&self, screen: &mut Screen<Wit>, columns: u16, total: usize) {
+        let shown = usize::from(self.list_lines);
+        screen.bar(
+            self.list_top,
+            self.list_lines,
+            columns.saturating_sub(1),
+            Scroll {
+                total,
+                lines: shown,
+                offset: self.offset,
+                top: 0,
+            },
+        );
+    }
+
     /// Keeps the cursor on a row that exists — the list changes under it when
     /// a keyboard is unplugged, and a cursor past the end focuses nothing.
     fn settle(&mut self) {
@@ -254,9 +373,30 @@ impl Guest for Component {
     }
 
     fn render(ctx: Context) -> Vec<Command> {
-        STATE.with_borrow(|s| {
-            let mut screen = Screen::<Wit>::of(&ctx);
+        STATE.with_borrow_mut(|s| s.draw(&ctx))
+    }
+
+    fn event(e: Input) -> Vec<Effect> {
+        STATE.with_borrow_mut(|s| s.act(e))
+    }
+}
+
+impl State {
+    /// THE WHOLE FRAME, and the only place it is laid out.
+    ///
+    /// `render` calls it and so do the tests — a test that assembled its own
+    /// frame would be proving a screen nobody is shown.
+    #[allow(clippy::too_many_lines)]
+    fn draw(&mut self, ctx: &Context) -> Vec<Command> {
+        {
+            let s = self;
+            let mut screen = Screen::<Wit>::of(ctx);
             let columns = screen.columns();
+            // A CELL IS KEPT FOR THE BAR, and every band stops before it. The
+            // band is full-bleed and the bar is drawn after, so without this
+            // the control sits on top of the selected row — which is what the
+            // owner reported of the brain, in those words.
+            let body = columns.saturating_sub(1);
             // WHERE THE SECOND COLUMN STARTS. A third of the width, floored so
             // a narrow window still leaves the name something to be read in.
             let second = (columns / 3).max(12);
@@ -267,7 +407,12 @@ impl Guest for Component {
             };
             let mut line = screen.heading(Icon::Keyboard, heading);
 
-            let Some(b) = s.boards.as_ref() else {
+            // CLONED, because the drawing asks the state where its window is
+            // and that answer is remembered where it is measured — see
+            // `State::list_top`. A borrow held across the walk would make the
+            // question unaskable, and the second place to ask it from is the
+            // place the click and the band come to disagree.
+            let Some(b) = s.boards.clone() else {
                 return screen.finish_wit();
             };
 
@@ -288,10 +433,20 @@ impl Guest for Component {
                         screen.put(line, Run::label(key::NONE).dim());
                         return screen.finish_wit();
                     }
-                    for (n, board) in b.boards.iter().enumerate() {
+                    let (from, room) = s.window(line, ctx.lines);
+                    s.list_top = line;
+                    let shown = room.min(b.boards.len().saturating_sub(from));
+                    s.list_lines = u16::try_from(shown).unwrap_or(u16::MAX);
+                    for (n, board) in b.boards.iter().enumerate().skip(from).take(room) {
                         let here = n == s.cursor;
                         if here {
-                            screen.band(line);
+                            screen.ground_in(line, 0, body, Role::Band);
+                        } else if s.hovered_row() == Some(n) {
+                            // THE ROW UNDER THE POINTER, in a tone of its own:
+                            // the cursor is where the KEYBOARD is and the hover
+                            // is where a click would land, and every window in
+                            // the shell answers the two separately.
+                            screen.ground_in(line, 0, body, Role::Hover);
                         }
                         let name = Run::datum(&board.name).within(second.saturating_sub(1));
                         screen.put(line, if here { name.accent() } else { name });
@@ -317,7 +472,11 @@ impl Guest for Component {
                         // with no arguments to put a number in (invariant 11)
                         // — so the two are two runs on one line.
                         let changed = board.decided.len();
-                        let last = columns.saturating_sub(second * 2);
+                        // AND THE LAST COLUMN STOPS BEFORE THE BAR'S LANE: a
+                        // field measured against the whole width reaches the
+                        // cell the control is in, and no bar draws over
+                        // content nor content over a bar.
+                        let last = body.saturating_sub(second * 2);
                         if changed == 0 {
                             screen.put(
                                 line,
@@ -335,6 +494,7 @@ impl Guest for Component {
                         }
                         line += 1;
                     }
+                    s.draw_bar(&mut screen, columns, b.boards.len());
                     // AND WHAT THIS SCREEN CANNOT DO, said rather than left to
                     // be discovered. The layout and the repeat rate are the
                     // compositor's, one of each for every keyboard there is —
@@ -344,7 +504,7 @@ impl Guest for Component {
                     screen.put(line, Run::label(key::GLOBAL).dim());
                 }
                 Level::One(_) => {
-                    let Some(board) = s.board() else {
+                    let Some(board) = s.board().cloned() else {
                         return screen.finish_wit();
                     };
                     screen.put(line, Run::datum(&board.name).quiet());
@@ -366,14 +526,20 @@ impl Guest for Component {
                             .dim(),
                     );
                     line += 1;
-                    for (n, word) in b.keys.iter().enumerate() {
+                    let (from, room) = s.window(line, ctx.lines);
+                    s.list_top = line;
+                    let shown = room.min(b.keys.len().saturating_sub(from));
+                    s.list_lines = u16::try_from(shown).unwrap_or(u16::MAX);
+                    for (n, word) in b.keys.iter().enumerate().skip(from).take(room) {
                         let here = n == s.cursor;
                         if here {
-                            screen.band(line);
+                            screen.ground_in(line, 0, body, Role::Band);
+                        } else if s.hovered_row() == Some(n) {
+                            screen.ground_in(line, 0, body, Role::Hover);
                         }
                         let label = Run::label(&word.text).within(second.saturating_sub(1));
                         screen.put(line, if here { label.accent() } else { label });
-                        let now = s.becomes(board, &word.keyd);
+                        let now = s.becomes(&board, &word.keyd);
                         let said = b
                             .choices
                             .iter()
@@ -390,12 +556,13 @@ impl Guest for Component {
                                 line,
                                 Run::label(key::HOLDS)
                                     .at(second * 2)
-                                    .within(columns.saturating_sub(second * 2))
+                                    .within(body.saturating_sub(second * 2))
                                     .dim(),
                             );
                         }
                         line += 1;
                     }
+                    s.draw_bar(&mut screen, columns, b.keys.len());
                     // THE TECHNICAL WORD, UNDER THE CURSOR AND NOWHERE ELSE.
                     //
                     // keyd's own name for the key and for what it becomes. It
@@ -414,7 +581,7 @@ impl Guest for Component {
                         screen.put(line, Run::label(key::IS_THE_LEADER).accent());
                     }
                     if let Some(word) = b.keys.get(s.cursor) {
-                        let now = s.becomes(board, &word.keyd);
+                        let now = s.becomes(&board, &word.keyd);
                         let shown = if now.is_empty() {
                             word.keyd.clone()
                         } else {
@@ -434,11 +601,13 @@ impl Guest for Component {
                 }
             }
             screen.finish_wit()
-        })
+        }
     }
 
-    fn event(e: Input) -> Vec<Effect> {
-        STATE.with_borrow_mut(|s| {
+    /// One input, answered.
+    fn act(&mut self, e: Input) -> Vec<Effect> {
+        {
+            let s = self;
             // WHAT LEVEL THIS STARTED ON, and it is read for EVERY input.
             //
             // It used to be read only for a key, which left two paths that
@@ -472,27 +641,67 @@ impl Guest for Component {
                     if s.cursor + 1 < s.rows() {
                         s.cursor += 1;
                     }
+                    // A PERSON MOVED IT, so the window owes it a move.
+                    s.follows = true;
                     vec![Effect::Redraw]
                 }
                 Input::Up => {
                     s.cursor = s.cursor.saturating_sub(1);
+                    s.follows = true;
+                    vec![Effect::Redraw]
+                }
+                // THE POINTER, and all four of its questions. A screen only
+                // the keyboard can reach is half a screen — the rule is
+                // absolute, and this buffer had no click at all.
+                Input::Click(p) => match s.row_at(p.line) {
+                    Some(n) => s.reach(n),
+                    None => Vec::new(),
+                },
+                Input::Hover(p) => {
+                    let now = Some((p.column, p.line));
+                    if s.hover == now {
+                        return Vec::new();
+                    }
+                    s.hover = now;
+                    vec![Effect::Redraw]
+                }
+                Input::Unhover => {
+                    if s.hover.is_none() {
+                        return Vec::new();
+                    }
+                    s.hover = None;
+                    vec![Effect::Redraw]
+                }
+                // THE WHEEL SCROLLS THE WINDOW and leaves the cursor where it
+                // is: this page explains whatever the cursor is on, and a
+                // wheel that moved it would change the explanation while
+                // somebody is reading it.
+                Input::Wheel(w) => {
+                    let rows = s.rows();
+                    let room = usize::from(s.list_lines.max(1));
+                    let most = rows.saturating_sub(room);
+                    s.offset = if w.lines < 0 {
+                        s.offset.saturating_sub(w.lines.unsigned_abs() as usize)
+                    } else {
+                        (s.offset + w.lines as usize).min(most)
+                    };
+                    s.follows = false;
+                    vec![Effect::Redraw]
+                }
+                // AND THE BAR IS DRAGGED. The host built the thumb and owns
+                // the inverse; this says which list the row belongs to, which
+                // is the half only this side knows.
+                Input::Scrolled(d) => {
+                    let rows = s.rows();
+                    let room = usize::from(s.list_lines.max(1));
+                    s.offset = (d.first as usize).min(rows.saturating_sub(room.min(rows)));
+                    s.follows = false;
                     vec![Effect::Redraw]
                 }
                 // `RET` OPENS A KEYBOARD, and on a key it is one step round the
                 // ring — the same thing the right arrow does, because a row
                 // with an order has one obvious meaning for `RET`.
-                Input::Confirm | Input::Right => match s.level {
-                    Level::List if s.rows() > 0 => {
-                        let Some(id) = s.board().map(|k| k.id.clone()) else {
-                            return vec![];
-                        };
-                        s.level = Level::One(id);
-                        s.cursor = 0;
-                        vec![Effect::Redraw]
-                    }
-                    Level::List => vec![],
-                    Level::One(_) => s.turn(true).map(Effect::Remap).into_iter().collect(),
-                },
+                Input::Confirm | Input::Right => s.confirm(),
                 Input::Left => match s.level {
                     Level::One(_) => s.turn(false).map(Effect::Remap).into_iter().collect(),
                     Level::List => vec![],
@@ -556,8 +765,149 @@ impl Guest for Component {
             let mut out = effects;
             out.push(Effect::StateChanged(now.into()));
             out
-        })
+        }
     }
 }
 
 ronoctua_design::bindings::export!(Component with_types_in ronoctua_design::bindings);
+
+#[cfg(test)]
+mod tests {
+    use super::{Level, State};
+    use ronoctua_design::types::{
+        Board, Boards, Context, Effect, Heights, Input, Position, WheelEvent, Word,
+    };
+
+    fn a_context(lines: u16, columns: u16) -> Context {
+        Context {
+            lines,
+            columns,
+            heights: Heights {
+                small: 1,
+                base: 1,
+                normal: 1,
+                large: 2,
+                huge: 2,
+            },
+        }
+    }
+
+    fn a_board(n: usize) -> Board {
+        Board {
+            id: format!("0001:000{n}"),
+            name: format!("keyboard {n}"),
+            built_in: n == 0,
+            decided: Vec::new(),
+        }
+    }
+
+    fn a_word(n: usize) -> Word {
+        Word {
+            keyd: format!("k{n}"),
+            text: format!("key {n}"),
+            holds: false,
+        }
+    }
+
+    /// Nine keyboards and nine keys, which is more than any window here shows:
+    /// a list that FITS proves nothing about a window.
+    fn a_state() -> State {
+        State {
+            boards: Some(Boards {
+                keys: (0..9).map(a_word).collect(),
+                choices: vec![a_word(0), a_word(1)],
+                boards: (0..9).map(a_board).collect(),
+                trouble: String::new(),
+                leader: "k0".to_owned(),
+            }),
+            ..State::default()
+        }
+    }
+
+    /// Draws the frame the way `render` does, so the state learns where its
+    /// list went — which is what the pointer is then resolved against.
+    fn drawn(s: &mut State, lines: u16, columns: u16) {
+        let _ = s.draw(&a_context(lines, columns));
+    }
+
+    fn click(s: &mut State, line: u16) -> Vec<Effect> {
+        s.act(Input::Click(Position { column: 2, line }))
+    }
+
+    /// FAILS IF: a row the keyboard can reach cannot be reached with the
+    /// pointer.
+    ///
+    /// This buffer had no `Input::Click` arm at all: every row of it was
+    /// keyboard-only, and the rule is absolute — what the keyboard reaches,
+    /// the pointer reaches.
+    #[test]
+    fn every_drawn_row_is_reachable_by_the_pointer() {
+        for lines in [10_u16, 16, 30] {
+            for scrolled in [0_i16, 2] {
+                let mut s = a_state();
+                drawn(&mut s, lines, 80);
+                // AND FROM A SCROLLED WINDOW TOO. With the list at its top,
+                // "the row on screen line N" and "row N of the list" are the
+                // same number, so a click that forgot the window would pass —
+                // which is the defect, not the test.
+                let _ = s.act(Input::Wheel(WheelEvent {
+                    at: Position { column: 2, line: 5 },
+                    lines: scrolled,
+                }));
+                drawn(&mut s, lines, 80);
+                assert!(s.list_lines > 0, "at {lines} lines the list drew nothing");
+                for row in 0..s.list_lines {
+                    let line = s.list_top + row;
+                    let want = s.offset + usize::from(row);
+                    s.cursor = usize::MAX; // somewhere no row is
+                    click(&mut s, line);
+                    assert_eq!(
+                        s.cursor, want,
+                        "at {lines} lines scrolled by {scrolled}, a click on screen line \
+                     {line} chose row {}",
+                        s.cursor
+                    );
+                }
+                // AND A LINE ABOVE THE LIST IS NOT A ROW OF IT.
+                if s.list_top > 0 {
+                    let above = s.list_top - 1;
+                    s.cursor = 3;
+                    click(&mut s, above);
+                    assert_eq!(s.cursor, 3, "the heading answered as a row");
+                }
+            }
+        }
+    }
+
+    /// FAILS IF: the second click on a row does not do what `RET` does.
+    #[test]
+    fn a_second_click_opens_the_keyboard() {
+        let mut s = a_state();
+        drawn(&mut s, 20, 80);
+        let line = s.list_top + 1;
+        click(&mut s, line);
+        assert!(matches!(s.level, Level::List), "one click opened a page");
+        click(&mut s, line);
+        assert!(
+            matches!(s.level, Level::One(_)),
+            "the second click did not open the keyboard"
+        );
+    }
+
+    /// FAILS IF: the wheel moves the cursor, or the window cannot reach the
+    /// end of a list that does not fit.
+    #[test]
+    fn the_wheel_moves_the_window_and_not_the_cursor() {
+        let mut s = a_state();
+        drawn(&mut s, 10, 80);
+        let room = usize::from(s.list_lines);
+        assert!(room < 9, "the window has to be smaller than the list");
+        let before = s.cursor;
+        let _ = s.act(Input::Wheel(WheelEvent {
+            at: Position { column: 2, line: 5 },
+            lines: 3,
+        }));
+        assert_eq!(s.cursor, before, "the wheel moved the cursor");
+        assert_eq!(s.offset, 3, "the wheel did not move the window");
+    }
+}

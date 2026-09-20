@@ -52,7 +52,7 @@ use ronoctua_design::sheet_split;
 use ronoctua_design::types::{
     AIR, Binding, BufferState, Capability, Command, Consumer, ConsumerKind, Context, Demand,
     Descriptor, Effect, GAP, Gauge, Guard, GuardMode, Guest, ICON, Icon, Input, Pressure, Request,
-    Role, Run, Screen, Survey, Tone,
+    Role, Run, Screen, Scroll, Survey, Tone,
 };
 
 /// Every text key this buffer names.
@@ -188,6 +188,15 @@ struct State {
     /// reported — and a click that lands on the wrong row here closes the wrong
     /// thing.
     list_top: Option<u16>,
+    /// How many rows of the list the last frame drew.
+    ///
+    /// Remembered where it was measured, for the same reason `list_top` is:
+    /// the block above the list is a different height on every screen, so the
+    /// window's size cannot be recomputed from nothing — and the wheel, the
+    /// drag and the bar all count in it.
+    list_lines: u16,
+    /// The cell the pointer is on, if it is on one.
+    hover: Option<(u16, u16)>,
 }
 
 impl State {
@@ -201,6 +210,8 @@ impl State {
             asked: false,
             lines: 24,
             list_top: None,
+            list_lines: 0,
+            hover: None,
         }
     }
 }
@@ -425,10 +436,7 @@ fn entry(screen: &mut Screen<Wit>, e: Entry) {
         screen.skip(cells.max(AIR));
         return;
     };
-    let mut cells = screen.put(
-        at,
-        Run::label(e.label).small().dim().at(0).within(split.label),
-    );
+    let mut cells = screen.put(at, Run::label(e.label).dim().at(0).within(split.label));
     cells = cells.max(screen.put(at, e.value.playing(e.role).at(split.value).within(value)));
     cells = cells.max(
         screen.put(
@@ -455,17 +463,25 @@ fn entry(screen: &mut Screen<Wit>, e: Entry) {
 /// length and it is what one came to read; a path cut at twenty cells with
 /// sixty empty ones beside it is the spacing complaint this whole change came
 /// from, seen from the other side.
-fn consumer(screen: &mut Screen<Wit>, c: &Consumer, focused: bool) {
+fn consumer(screen: &mut Screen<Wit>, c: &Consumer, focused: bool, under: bool) {
     if !above_the_footer(screen) {
         return;
     }
     let at = screen.row();
+    // A CELL IS KEPT FOR THE BAR: the band is full-bleed and the bar is drawn
+    // after it, so without this the control sits on top of the selected row.
+    let body = screen.columns().saturating_sub(1);
     if focused {
         // THE SELECTION IS A LINE, not a box: there is no rectangle in this
         // protocol, and a box would be the card invariant 15 refuses.
-        screen.band(at);
+        screen.ground_in(at, 0, body, Role::Band);
+    } else if under {
+        screen.ground_in(at, 0, body, Role::Hover);
     }
-    let split = sheet_split(screen.columns());
+    // AND THE COLUMNS ARE MEASURED IN WHAT IS LEFT, not in the whole width:
+    // the lane above is kept for the bar, and a row laid out against the full
+    // width would put its last field under the control.
+    let split = sheet_split(body);
     let name_at = ICON.saturating_add(GAP);
     // Where the number goes: the third column when there is one, and the
     // second when the window only has two — the same fallback an [`Entry`]
@@ -604,7 +620,7 @@ impl State {
             line_of(screen, Run::label(waiting(s)).quiet());
         } else {
             for c in s.consumers.iter().take(BIGGEST) {
-                consumer(screen, c, false);
+                consumer(screen, c, false, false);
             }
         }
 
@@ -655,7 +671,10 @@ impl State {
     /// it looks like it landed on. Computing that offset twice — once here and
     /// once in `event` — is how a cursor ends up one row off from what the eye
     /// picked, on a screen where the cursor decides what gets closed.
-    fn full(&self, tab: Tab, screen: &mut Screen<Wit>) -> u16 {
+    /// Returns where the list started and how many rows of it were drawn —
+    /// the two numbers the pointer is resolved against, remembered where they
+    /// were measured.
+    fn full(&self, tab: Tab, screen: &mut Screen<Wit>) -> (u16, u16) {
         let s = &self.survey;
         screen.heading(
             match tab {
@@ -683,14 +702,40 @@ impl State {
         // them would be two runs on one row.
         let first = screen.row();
         let until = last_row(screen).saturating_sub(u16::from(s.scanning));
+        let mut drew = 0;
         if first < until {
             if s.consumers.is_empty() {
                 line_of(screen, Run::label(waiting(s)).quiet());
             } else {
                 let room = usize::from(until.saturating_sub(first));
+                let shown = room.min(s.consumers.len().saturating_sub(self.top));
+                drew = u16::try_from(shown).unwrap_or(u16::MAX);
                 for (i, c) in s.consumers.iter().enumerate().skip(self.top).take(room) {
-                    consumer(screen, c, i == self.cursor);
+                    // THE ROW UNDER THE POINTER, in a tone of its own: the
+                    // cursor is where the KEYBOARD is and the hover is where a
+                    // click would land, and every window in the shell answers
+                    // the two separately.
+                    let under = self.hovered_row() == Some(i);
+                    consumer(screen, c, i == self.cursor, under);
                 }
+                // AND THE BAR, over the rows it belongs to. A list one cannot
+                // see the length of is a list with no end in sight, and one
+                // with no bar and no wheel is a list the mouse cannot reach
+                // the end of at all.
+                // THE BAND AND THE WINDOW ARE ONE NUMBER, and it is how many
+                // rows were DRAWN: the host says so out loud when they differ,
+                // and with a list shorter than the room they do.
+                screen.bar(
+                    first,
+                    drew,
+                    screen.columns().saturating_sub(1),
+                    Scroll {
+                        total: s.consumers.len(),
+                        lines: usize::from(drew),
+                        offset: self.top,
+                        top: 0,
+                    },
+                );
             }
         }
 
@@ -700,7 +745,7 @@ impl State {
         }
 
         self.footer(screen, key::HELP_FULL);
-        first
+        (first, drew)
     }
 
     /// The RAM breakdown — what the memory is made of.
@@ -848,6 +893,23 @@ impl State {
             }
             None => help(screen, help_key),
         }
+    }
+
+    /// Which row of the list the pointer is on, if it is on one.
+    fn hovered_row(&self) -> Option<usize> {
+        let (_, line) = self.hover?;
+        let first = self.list_top?;
+        if line < first || line >= first.saturating_add(self.list_lines) {
+            return None;
+        }
+        let n = self.top + usize::from(line - first);
+        (n < self.survey.consumers.len()).then_some(n)
+    }
+
+    /// How many rows of the list the window holds.
+    fn room(&self) -> usize {
+        let first = self.list_top.unwrap_or(0);
+        usize::from(self.lines.saturating_sub(1).saturating_sub(first)).max(1)
     }
 
     /// Keeps the cursor on screen after a move.
@@ -1072,13 +1134,17 @@ impl Guest for Component {
                 // guessing.
                 Panel::Overview => {
                     s.list_top = None;
+                    s.list_lines = 0;
                     s.overview(&mut screen);
                 }
                 Panel::Full(tab) => {
-                    s.list_top = Some(s.full(tab, &mut screen));
+                    let (top, many) = s.full(tab, &mut screen);
+                    s.list_top = Some(top);
+                    s.list_lines = many;
                 }
                 Panel::Guard => {
                     s.list_top = None;
+                    s.list_lines = 0;
                     s.guard(&mut screen);
                 }
             }
@@ -1181,6 +1247,44 @@ impl State {
             // A click puts the cursor on the row that was clicked, when there
             // is one there: the buffer knows its own layout, and the host does
             // not get to guess it.
+            // THE POINTER AT REST, and the two gestures that move the window.
+            // A panel only the keyboard can drive is half a panel.
+            Input::Hover(p) => {
+                let now = Some((p.column, p.line));
+                if s.hover == now {
+                    return vec![];
+                }
+                s.hover = now;
+                vec![Effect::Redraw]
+            }
+            Input::Unhover => {
+                if s.hover.is_none() {
+                    return vec![];
+                }
+                s.hover = None;
+                vec![Effect::Redraw]
+            }
+            // THE WHEEL SCROLLS THE WINDOW and leaves the cursor where it is:
+            // on this panel the cursor decides what gets CLOSED, and a wheel
+            // that moved it would move the target while somebody reads the
+            // list.
+            Input::Wheel(w) => {
+                let most = s.survey.consumers.len().saturating_sub(s.room());
+                s.top = if w.lines < 0 {
+                    s.top.saturating_sub(w.lines.unsigned_abs() as usize)
+                } else {
+                    (s.top + w.lines as usize).min(most)
+                };
+                vec![Effect::Redraw]
+            }
+            // AND THE BAR IS DRAGGED. The host built the thumb and owns the
+            // inverse; this says which list the row belongs to.
+            Input::Scrolled(d) => {
+                let room = s.room();
+                let total = s.survey.consumers.len();
+                s.top = (d.first as usize).min(total.saturating_sub(room.min(total)));
+                vec![Effect::Redraw]
+            }
             Input::Click(p) => {
                 // THE ROW THE LIST STARTED ON, recorded by the last `render` —
                 // never a constant. The detail above the list has a different

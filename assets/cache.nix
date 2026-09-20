@@ -1,5 +1,21 @@
 # What a cache is worth keeping, in one place.
 #
+# WHAT THE SWEEP LOOKS AT: the entries in the ROOT of the cache, each one whole.
+#
+# It walked every file and weighed each on its own, and the owner stopped it for
+# a reason worth writing down: a cache is rarely a heap of independent files. It
+# is an index and the things the index names, a manifest and its blobs, a
+# database and its write-ahead log. Take the ones nobody read lately and leave
+# the rest, and you have not freed a cache — you have left a program holding
+# half of something, which is a class of failure nobody can debug from a
+# directory listing.
+#
+# Nearly every program here keeps its cache in a directory of its own under the
+# root, and that is what makes the coarse rule the SAFE one: the unit of
+# deletion becomes the unit the program created. A directory is as old as its
+# YOUNGEST file, so a cache anything still touches is never taken, however much
+# of it is ancient.
+#
 # THE RULE THIS FILE EXISTS FOR: nothing cached stays for ever. The owner said
 # it in those words — *"Todos os caches devem ter limite, jamais podem ficar no
 # sistema para sempre"* — after asking how this distro's cache worked and being
@@ -12,11 +28,20 @@
 #   ~/.cache                       254 GB of `ronoctua-distro/target` alone,
 #                                  36 GB of `yay`, 2 GB of Chromium
 #   our two thumbnail caches       4,6 MB (ours) + 451 MB (the shared one)
-#   files unread for 20 days       101 894, and 148 GiB
+#   whole root entries unused      52 directories and 2 files, 4,2 GiB
+#     for 40 days
 #
 # The thumbnails were never the problem. That is why the sweep's reach is the
 # whole of `$XDG_CACHE_HOME` and not a directory of ours: a rule that only
 # governs what we wrote would have freed four megabytes.
+#
+# AND THE COARSE RULE FREES FAR LESS, which is the price of it being safe: 4,2
+# GiB against the 150,3 the file-by-file rule would have taken. The difference
+# is almost entirely the two biggest caches on the machine — a cargo tree and a
+# package manager's downloads — which hold a hundred gigabytes of dead
+# artefacts AND something touched this week, so they stay. That is the trade
+# the owner asked for, said out loud: a program is never left holding half of
+# its own cache.
 #
 # FOUR NUMBERS AND ONE PLACE. Two of them reach Rust (the brain's schedule and
 # the file manager's renewal), two reach a systemd unit's arguments, and one —
@@ -30,20 +55,21 @@
   # for why the sweep takes the later of the two timestamps, and what a machine
   # mounted `noatime` would otherwise lose.
   #
-  # Twenty is the owner's number and it is a good one: long enough that a
-  # project picked up again after a fortnight still finds its build cache, short
-  # enough that a hundred gigabytes of dead artefacts do not sit there for a
-  # year. Measured at twenty on this machine: 148 GiB would go, and the oldest
-  # thing still reachable in the browser's cache would be three weeks old.
-  keepDays = 20;
+  # FORTY, and it went up from twenty when the sweep started taking whole
+  # DIRECTORIES: the age of a directory is its youngest file's, so the number
+  # now governs "nothing in here has been touched in six weeks" rather than
+  # "this one file is old". Measured on this machine at both — 150,3 GiB of
+  # individual files at twenty days, 76,2 GiB of whole directories at forty.
+  # Less taken, and nothing taken out from under a program still using the rest.
+  keepDays = 40;
 
   # HOW OFTEN THE SWEEP HAPPENS, in days.
   #
-  # Five. It is not a fraction of `keepDays` on purpose: the sweep is cheap
-  # (a walk and some `unlink`s, at idle priority) and running it more often
-  # only means each run has less to do. Once a month would mean a month's
-  # worth of garbage arriving in one night.
-  everyDays = 5;
+  # Ten. It is not a fraction of `keepDays` on purpose: the sweep is cheap — a
+  # walk and some `unlink`s at idle priority — and running it more often only
+  # means each run has less to do. Once a month would mean a month's worth of
+  # rubbish arriving in one night.
+  everyDays = 10;
 
   # WHEN IN THE DAY, as one of the brain's named windows.
   #
@@ -74,4 +100,27 @@
   # thumbnail one actually looks at is renewed at ten and so never reaches
   # twenty, and the sweep only ever takes pictures of folders nobody opens.
   freshDays = 10;
+
+  # HOW LONG SOMETHING STAYS IN THE TRASH, in days.
+  #
+  # FOUR, and the owner asked for it in those words. The trash is NOT a cache —
+  # what is in there is the only copy, which is why the sweep above does not go
+  # near `$XDG_DATA_HOME` — so this is the one number here that decides
+  # something irreversible, and it is small on purpose: four days is long enough
+  # to notice a mistake and short enough that a bin nobody empties stops being a
+  # second disk.
+  #
+  # AND IT IS COUNTED FROM `DeletionDate`, which the freedesktop spec already
+  # writes into every `.trashinfo`. Not from the file's own timestamps: a
+  # document last written a year ago and thrown away this morning has been in
+  # the trash for a morning, and any rule reading its mtime would delete it
+  # before the person had finished regretting it.
+  trashDays = 4;
+
+  # AND HOW OFTEN THAT IS CHECKED, in days.
+  #
+  # The same four. Here the two numbers SHOULD match, unlike the cache's: a file
+  # is removed as soon as it is eligible, so a longer cadence would only mean
+  # things living up to twice as long as the number a person reads.
+  trashEveryDays = 4;
 }

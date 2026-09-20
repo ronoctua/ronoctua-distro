@@ -41,6 +41,20 @@ pub fn next_moment(
     prefs: &TaskPrefs,
     zone: &dyn Offset,
 ) -> Moment {
+    // A CADENCE IN MINUTES SHORT-CIRCUITS THE WHOLE CALENDAR.
+    //
+    // A watch has no good hour — it has an interval — so there is no window to
+    // find, no day to walk and no zone to consult. It is also the one shape
+    // where the arithmetic below would be wrong rather than merely elaborate:
+    // `local_day` would round a five-minute cadence to "today", and every
+    // answer would be the same moment.
+    //
+    // It is first because it is total: a task that declares one never wants
+    // the rest of this function.
+    if let Some(minutes) = prefs.every_minutes {
+        let wait = i64::from(minutes).saturating_mul(60);
+        return last.map_or(now, |l| l.saturating_add(wait));
+    }
     let today = local_day(now, zone);
     // The earliest day it is allowed on: `interval_days` LOCAL days after the
     // one it last ran on. A run at 23:00 and the next at 01:00 are two days

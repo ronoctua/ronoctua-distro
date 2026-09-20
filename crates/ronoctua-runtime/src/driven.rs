@@ -274,6 +274,50 @@ pub fn every_label_fits(
     on_purpose: &[(&str, &str)],
     to_the_edge: u16,
 ) -> Result<usize> {
+    fits_in(i18n, on_purpose, to_the_edge, None)
+}
+
+/// Everything this run looked at fits in ONE language.
+///
+/// # Why a buffer might need this instead
+///
+/// Because a buffer can now MEASURE the words it was given. `Input::Phrases`
+/// hands over the translated text, and the brain's header uses it to pack its
+/// shortcuts tight instead of charging every phrase a fixed column — which is
+/// what made that header's spacing the owner's complaint.
+///
+/// A measured budget is the width of ONE language's word. There is no number
+/// that fits every language, and there does not need to be: the budget is the
+/// text. So the driver hands the phrases of one language, walks the screens,
+/// asks this, and then does it again for the next — and the guarantee is the
+/// same guarantee, per language, rather than a weaker one for all of them.
+///
+/// Call [`forget`] between languages, or the second pass measures the first
+/// one's reservations.
+pub fn every_label_fits_in(
+    i18n: &str,
+    on_purpose: &[(&str, &str)],
+    to_the_edge: u16,
+    language: &str,
+) -> Result<usize> {
+    fits_in(i18n, on_purpose, to_the_edge, Some(language))
+}
+
+/// Forget what the frames so far reserved.
+///
+/// For a driver that runs the buffer once per language: the reservations of
+/// one pass say nothing about the next, because the buffer was told different
+/// words.
+pub fn forget() {
+    SEEN.with_borrow_mut(Vec::clear);
+}
+
+fn fits_in(
+    i18n: &str,
+    on_purpose: &[(&str, &str)],
+    to_the_edge: u16,
+    only: Option<&str>,
+) -> Result<usize> {
     let seen = SEEN.with_borrow(|s| {
         let mut v = s.clone();
         v.sort_unstable();
@@ -286,7 +330,10 @@ pub fn every_label_fits(
          check would pass on a buffer with no text at all"
     );
     let mut bad = Vec::new();
-    let spoken = languages(i18n)?;
+    let spoken = match only {
+        Some(one) => vec![one.to_owned()],
+        None => languages(i18n)?,
+    };
     for language in &spoken {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for (key, budget) in &seen {

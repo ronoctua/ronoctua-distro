@@ -58,5 +58,14 @@ serde_json.workspace = true
 name = "ronoctua-files-root"
 path = "src/bin/root.rs"
 
+# AND THE ONE THAT EMPTIES THE TRASH, extracted for the same reason: what
+# deletes the only copy of somebody's file must not have the whole shell in its
+# closure. It is here and not beside the cache sweep because this crate owns the
+# freedesktop trash layout — a second reader of `.trashinfo` would be a second
+# thing to keep in step with the spec.
+[[bin]]
+name = "ronoctua-empty-trash"
+path = "src/bin/empty-trash.rs"
+
 [lints]
 workspace = true

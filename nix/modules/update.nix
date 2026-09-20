@@ -112,7 +112,7 @@ let
       throw (
         "ronoctua.update.steps cites a step that does not exist: "
         + lib.concatStringsSep ", " unknown
-        + ". Ha: "
+        + ". The steps are: "
         + lib.concatStringsSep ", " ids
         + "."
       );

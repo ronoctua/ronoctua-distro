@@ -78,6 +78,21 @@ pub trait Task: Send + Sync {
     /// interrupts nothing.
     fn countdown(&self, prefs: &Prefs) -> u16;
 
+    /// Whether it repeats, or happens once and is then gone.
+    ///
+    /// # Why this exists before there is a one-shot task
+    ///
+    /// Because the list has to be able to SAY which is which before the first
+    /// one arrives. Add it the day a one-shot lands and every row on the page
+    /// changes meaning at once — a list that never distinguished two kinds is
+    /// a list a person has read as one kind. A glyph says it, and a colour
+    /// says it again, from the day there is nothing to distinguish.
+    ///
+    /// Every task today is a routine, which is why this has a default.
+    fn kind(&self) -> Kind {
+        Kind::Routine
+    }
+
     /// What the DISTRO chose for it, when the person has chosen nothing.
     ///
     /// # Why a task gets a say in its own cadence
@@ -115,6 +130,55 @@ pub trait Task: Send + Sync {
     /// writes as it goes, and watching it is a `stat` on a beat — not
     /// `journalctl`, not `systemctl show` in a loop.
     fn run(&self, report: &Report) -> Outcome;
+}
+
+/// Something the brain wants said, without anybody having asked.
+///
+/// # Why a task can raise one at all
+///
+/// Because some tasks are WATCHES. A sweep and a rebuild report what they did
+/// and are done with it; a watch's whole output is a sentence, and a sentence
+/// that only appeared on a screen somebody had to open would be a watch nobody
+/// hears. The owner asked for the Emacs one to reach the band.
+///
+/// It is not a notification: it does not go to the bus, it does not queue, it
+/// does not expire on a clock. It is one line on the footer's own surface —
+/// the same line the countdown uses, which is already there and already
+/// clickable (invariant 14: there is no second chrome).
+///
+/// # Why it carries keys and not sentences
+///
+/// A notice crosses to a component and to the footer, and neither of them is
+/// allowed to invent words: `says` and `act` are text keys, translated by
+/// whoever draws. The same rule every other string on this path follows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Notice {
+    /// Whose it is.
+    pub task: String,
+    /// What to say, as a text key.
+    pub says: String,
+    /// The COMMAND a button runs, when there is something to offer.
+    ///
+    /// `None` is a notice that only tells. That is not a lesser kind: the
+    /// standalone-Emacs one has no button on purpose, because what is open is
+    /// somebody's work and nothing here knows whether it is saved.
+    pub act: Option<String>,
+}
+
+/// Whether a task repeats, or happens once and is then gone.
+///
+/// A `Copy` enum with no payload, for the reason [`OutcomeKind`] gives: what
+/// the screen wants is a glyph and a colour, and a shape that carried anything
+/// more would be a shape the WIT has to carry too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Kind {
+    /// It comes round again.
+    #[default]
+    Routine,
+    /// It happens once and then it is gone.
+    Once,
 }
 
 /// Whether a task wants to run, and when.
@@ -268,6 +332,14 @@ pub enum OutcomeKind {
     Done,
     /// It ran and something did not.
     Failed,
+    /// Nothing ran: the machine was in no state for it.
+    ///
+    /// Not a failure — the moment came, the gate said no, and the next moment
+    /// will be along. It is written ONCE per episode and not once per tick:
+    /// the runner looks every thirty seconds, so a line per look would make
+    /// the activity log a wall of "RAM is busy" with everything that actually
+    /// happened buried in it.
+    Held,
 }
 
 impl OutcomeKind {
@@ -278,6 +350,7 @@ impl OutcomeKind {
             Self::Done => "done",
             Self::Failed => "failed",
             Self::Skipped => "skipped",
+            Self::Held => "held",
         }
     }
 }
@@ -378,6 +451,21 @@ pub struct Report {
     beat: Duration,
     stop: Arc<AtomicBool>,
     rehearsal: bool,
+    /// What the run wants said on the brain's line, if anything.
+    ///
+    /// # Why it comes back through here
+    ///
+    /// Because `Task::run` takes `&self` and returns an `Outcome`, and a
+    /// notice is neither: it is not what the run DID. The two other ways out
+    /// were a fourth `Outcome` variant, which would make every reader of an
+    /// outcome learn about notices, and a second method on the trait, which a
+    /// task could not answer because it has nowhere to remember what it just
+    /// found.
+    ///
+    /// The report is already the channel a run talks back through, and it is
+    /// already shared across the thread that watches. One more slot on it
+    /// costs nothing and adds no vocabulary anywhere else.
+    said: Arc<std::sync::Mutex<Option<Notice>>>,
 }
 
 /// How watching ended.
@@ -405,6 +493,7 @@ impl Report {
             beat,
             stop,
             rehearsal: false,
+            said: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -437,6 +526,23 @@ impl Report {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Says something on the brain's line when this run is over.
+    ///
+    /// `None` clears it, which is how a watch that finds nothing wrong takes
+    /// its own line down — a notice that had to be cancelled by a second call
+    /// would be a line that stayed up after the thing it was about was fixed.
+    pub fn say(&self, notice: Option<Notice>) {
+        if let Ok(mut slot) = self.said.lock() {
+            *slot = notice;
+        }
+    }
+
+    /// What it said, for the runner to publish.
+    #[must_use]
+    pub fn said(&self) -> Option<Notice> {
+        self.said.lock().ok().and_then(|s| s.clone())
     }
 
     /// What the file says now, or `None` when it is not there or is half

@@ -101,6 +101,16 @@ impl<I> Run<I> {
         self
     }
 
+    /// Put it in this register, whatever it was in.
+    ///
+    /// Not a builder anybody calls: it is how [`Pen`] applies the ground's
+    /// own answer (see [`on_ground`]) without every draw site having to ask.
+    #[must_use]
+    pub(crate) const fn in_role(mut self, role: Role) -> Self {
+        self.role = role;
+        self
+    }
+
     /// Make it the subject of its block.
     #[must_use]
     pub const fn title(mut self) -> Self {
@@ -196,10 +206,45 @@ enum Part<I> {
         /// `Role::Body`, which is what any other line of a buffer takes.
         role: Option<ronoctua_syntax::Role>,
     },
-    /// A one-line rule.
-    Ruled { line: u16 },
-    /// The band under a focused row.
-    Banded { line: u16 },
+    /// A one-line rule, across the row or across part of it.
+    Ruled {
+        line: u16,
+        column: u16,
+        columns: u16,
+        /// Which rule — the one that reads against the chrome, or the one that
+        /// reads against a raised ground. It travels here for the reason the
+        /// ground's own role does: a rule is a SIGNAL drawn on something, and
+        /// the something is not a fact this can be looked up from later.
+        role: Role,
+    },
+    /// A ground under one line, or under part of one — the band under a
+    /// focused row, a container's own, a column's.
+    Banded {
+        line: u16,
+        column: u16,
+        columns: u16,
+        role: Role,
+    },
+    /// A sentence wrapped into a rectangle, from this wrapped row down.
+    Wrapped {
+        line: u16,
+        lines: u16,
+        /// The first WRAPPED row to draw. Only the host knows how many there
+        /// are, so this side keeps the offset and the host clamps it — see
+        /// [`ronoctua_protocol::Command::Paragraph`].
+        from: u16,
+        run: Run<I>,
+    },
+    /// A scrollbar down one column of a block of rows.
+    Barred {
+        line: u16,
+        lines: u16,
+        column: u16,
+        scroll: crate::Scroll,
+        /// The same question a rule answers, and the same answer: a bar drawn
+        /// down a container is drawn ON the container.
+        role: Role,
+    },
 }
 
 /// The frame under construction.
@@ -215,6 +260,40 @@ pub struct Screen<P: Palette> {
     heights: Heights,
     row: u16,
     parts: Vec<Part<P::Icon>>,
+    /// The blocks this frame was divided into, in the order they were asked
+    /// for. Empty until [`Screen::split`] is called — a buffer that never
+    /// divides its window keeps the flat surface it always had.
+    regions: Vec<crate::Region>,
+    /// The first line that is anchored to the window's FOOT, if any.
+    ///
+    /// Set by [`Screen::split`] when the window ends in a FIXED block, which
+    /// is what a footer is. See [`ronoctua_protocol::Command::Anchor`] for the
+    /// residue this exists to put somewhere nobody is looking.
+    foot_from: Option<u16>,
+    /// How many runs were put in a COLUMN at a size that is not the grid's.
+    ///
+    /// # Why this is counted at all
+    ///
+    /// Because a buffer lays out in CELLS and `Scale::Small` does not advance
+    /// one: it is 0,81 of a cell, so a run of eleven clusters budgeted eleven
+    /// cells draws nine and leaves two of slack — and whatever the layout puts
+    /// after it starts where the layout says, not where the ink stopped. The
+    /// slack is proportional to the PHRASE, so two columns of different
+    /// lengths open different gaps, and the owner read exactly that off the
+    /// brain's header: *"espaços desproporcionais entre os atalhos"*, and a
+    /// separator with more air on one side than the other.
+    ///
+    /// Measured on that screen: `Switch step` was budgeted 118,6 px and drew
+    /// 96, which put 3,2 cells before the dot and 1,6 after it.
+    ///
+    /// A small run that owns the rest of its line is fine — nothing follows it
+    /// to be pushed. This counts the one case where something does: a column.
+    mismeasured: u32,
+    /// How many draws fell outside the region that was drawing them.
+    ///
+    /// A count and not a flag, because the number is what makes a failing test
+    /// say how bad it is. [`Screen::check`] refuses any frame with one.
+    refused: u32,
 }
 
 impl<P: Palette> Screen<P> {
@@ -227,6 +306,10 @@ impl<P: Palette> Screen<P> {
             heights: ctx.heights,
             row: 0,
             parts: Vec::new(),
+            regions: Vec::new(),
+            foot_from: None,
+            mismeasured: 0,
+            refused: 0,
         }
     }
 
@@ -411,15 +494,169 @@ impl<P: Palette> Screen<P> {
     /// twice, because the host has already moved everything in by
     /// `space.buffer.marginX` and a full-bleed quad must not be moved at all.
     pub fn rule(&mut self, line: u16) {
-        self.parts.push(Part::Ruled { line });
+        self.rule_in(line, 0, 0);
     }
 
-    /// The band under a list's focused row.
+    /// The same rule, across PART of the row.
     ///
-    /// A change of colour, not a box and not an outline (invariant 15), which
-    /// is why it has neither width nor column either.
+    /// `columns: 0` is to the edge, which is what [`Self::rule`] asks for. A
+    /// rule under a heading inside one of two side-by-side columns has to stop
+    /// where the column does — full-bleed it would run through its neighbour.
+    pub fn rule_in(&mut self, line: u16, column: u16, columns: u16) {
+        self.rule_as(line, column, columns, Role::Rule);
+    }
+
+    /// The same rule, in the register a RAISED ground asks for.
+    ///
+    /// Not public, and deliberately: nothing that draws a rule should be
+    /// choosing between the two. [`Pen::rule`] is the one caller, and it
+    /// chooses from the ground the block was filled with — see
+    /// [`Role::RuleRaised`].
+    fn rule_as(&mut self, line: u16, column: u16, columns: u16, role: Role) {
+        self.parts.push(Part::Ruled {
+            line,
+            column,
+            columns,
+            role,
+        });
+    }
+
+    /// The band under a list's focused row, across the whole of it.
+    ///
+    /// [`Self::ground_in`] is the one that takes a column and a width — a list
+    /// that is one of two side by side wants its band to end where it does.
     pub fn band(&mut self, line: u16) {
-        self.parts.push(Part::Banded { line });
+        self.ground(line, Role::Band);
+    }
+
+    /// A sentence, WRAPPED, in a rectangle of cells.
+    ///
+    /// # Why this cannot be a `Run`
+    ///
+    /// Because a `Run` is one row and the host elides it at the budget, which
+    /// is right for a label and useless for a description: cut at the width of
+    /// a column, a description is a thing nobody can read. Wrapping needs the
+    /// TRANSLATED string, and this side never has one (invariant 11).
+    ///
+    /// So the rectangle crosses and the host fills it, with the same
+    /// `layout::wrap` a long file name already goes through. It is what lets a
+    /// buffer have a footer that explains the thing under the cursor — the
+    /// shape every view in the shell has and no buffer could have.
+    pub fn paragraph(&mut self, line: u16, lines: u16, run: Run<P::Icon>) {
+        self.paragraph_from(line, lines, 0, run);
+    }
+
+    /// The same sentence, from this wrapped row down.
+    ///
+    /// A sentence longer than the rectangle it was given is a sentence
+    /// somebody cannot read, and the owner asked for the obvious answer: the
+    /// footer scrolls. What this side can hold is the OFFSET; the total is the
+    /// host's, because the host is what wraps.
+    pub fn paragraph_from(&mut self, line: u16, lines: u16, from: u16, run: Run<P::Icon>) {
+        self.parts.push(Part::Wrapped {
+            line,
+            lines,
+            from,
+            run,
+        });
+    }
+
+    /// A scrollbar down the right of a block of rows.
+    ///
+    /// # Why a buffer could not have one before
+    ///
+    /// It was written down as a rule — *a buffer has five primitives and none
+    /// of them is a scrollable region* — and the rule was wrong twice over. A
+    /// buffer already draws whatever window of a list it likes: it owns the
+    /// offset, it emits the rows it wants, and the host clips nothing. What it
+    /// could not do was draw the THUMB, because a thumb is a fraction of a
+    /// track in pixels and this side counts cells. Built out of block
+    /// characters it would have been a sixth scrollbar that resembles the five
+    /// real ones and matches none of them.
+    ///
+    /// So the bar crosses as numbers and the host draws it with [`Scroll`] —
+    /// the same arithmetic, compiled on both sides of this wall since it was
+    /// written, which is what makes a buffer's bar the system's bar.
+    ///
+    /// # What the caller owes
+    ///
+    /// The COLUMN. A bar is one cell wide and it must not be drawn over
+    /// content, so whoever asks for one has already taken that cell out of its
+    /// rows' budget. Nothing here can check it — the runs were placed before
+    /// this is called — but `DisplayList::nothing_overlaps` will, and it names
+    /// both the bar and what it landed on.
+    ///
+    /// Nothing is drawn when the list fits: [`Scroll::cut`] decides, on the
+    /// host's side, and the whole shell agrees a bar over a list that fits is
+    /// a control that does nothing.
+    pub fn bar(&mut self, line: u16, lines: u16, column: u16, scroll: crate::Scroll) {
+        self.bar_as(line, lines, column, scroll, Role::Rule);
+    }
+
+    /// The same bar, in the register a RAISED ground asks for. [`Pen::bar`] is
+    /// the one caller, for the reason [`Self::rule_as`] gives.
+    fn bar_as(&mut self, line: u16, lines: u16, column: u16, scroll: crate::Scroll, role: Role) {
+        // A LIST THAT FITS HAS NO BAR, and it has none HERE rather than on the
+        // far side of the wall.
+        //
+        // `Scroll::cut` was always the one place that decided it, and the host
+        // honoured it — it drew nothing. But the command still crossed, and a
+        // command that draws nothing still has a BOX: two lines of a column
+        // that the frame's own guard then finds somebody else's text inside.
+        // The keyboard buffer's list of two, in a window with room for
+        // thirty-five, is where it showed.
+        //
+        // Deciding it on this side also means a buffer's own tests see the
+        // same frame the screen does, which is the whole contract of `check`.
+        if !scroll.cut() {
+            return;
+        }
+        self.parts.push(Part::Barred {
+            line,
+            lines,
+            column,
+            scroll,
+            role,
+        });
+    }
+
+    /// The ground under one line, in a register the caller names.
+    ///
+    /// [`Self::band`] and [`Self::shelf`] are the two a list needs and are
+    /// spelled out because they are the two anybody reaches for. A header is a
+    /// third, and a fourth is a matter of time — this is the one door, and the
+    /// two above it are the names that made the common cases readable.
+    pub fn ground(&mut self, line: u16, role: Role) {
+        self.ground_in(line, 0, 0, role);
+    }
+
+    /// The ground under PART of a line.
+    ///
+    /// `columns: 0` is to the edge, which is what [`Self::ground`] asks for.
+    ///
+    /// # Why a band is not always a stripe
+    ///
+    /// Because two columns side by side, each with its own selection, is an
+    /// ordinary layout — and it is unreachable from a ground that always spans
+    /// the row. The rule that said a ground "paints the whole row, and that is
+    /// all" was a description of the only shape the type could carry, written
+    /// down as though it were a decision.
+    pub fn ground_in(&mut self, line: u16, column: u16, columns: u16, role: Role) {
+        self.parts.push(Part::Banded {
+            line,
+            column,
+            columns,
+            role,
+        });
+    }
+
+    /// The ground under one line of a CONTAINER.
+    ///
+    /// The same primitive and a different register: a band says *this one* and
+    /// a shelf says *these*. See [`Role::Shelf`] for why five rows of history
+    /// drawn in the band's colour would read as five selected rows.
+    pub fn shelf(&mut self, line: u16) {
+        self.ground(line, Role::Shelf);
     }
 
     /// **The** heading: a glyph, a title, and the air around them.
@@ -476,8 +713,8 @@ impl<P: Palette> Screen<P> {
     ///
     /// What makes a line a title is not how big it is: it is the accent glyph
     /// in front of it and the air around it — emphasis by colour, separation by
-    /// whitespace, which is what `colors.nix` prescribes and invariant 15
-    /// leaves as the only option. At the body's size it also costs ONE cell
+    /// whitespace, which is what `colors.nix` prescribes and what a heading
+    /// wants whether or not a rule is available to it. At the body's size it also costs ONE cell
     /// instead of two, and in a footer with a ceiling that row goes back to the
     /// content.
     ///
@@ -513,6 +750,101 @@ impl<P: Palette> Screen<P> {
         Row::new(self, line, layout)
     }
 
+    /// Divide the window into blocks that TILE it, and remember them.
+    ///
+    /// The regions come back in the order they were asked for. From here on
+    /// every draw should go through [`Self::region`] — and [`Self::check`]
+    /// will say so, because once a frame has declared its blocks a part
+    /// outside all of them is a part nobody owns.
+    ///
+    /// See [`crate::region::split`] for what happens on a window too short.
+    pub fn split(&mut self, spec: &[crate::Slice]) -> Vec<crate::Region> {
+        self.regions = crate::region::split(self.lines, spec);
+        // AND A WINDOW THAT ENDS IN A FIXED BLOCK IS ANCHORED TO ITS FOOT.
+        //
+        // A footer IS a fixed block at the end — that is what makes it a
+        // footer — and the residue of a surface falls under the last row,
+        // which is where its last row is. The owner read it as a space after
+        // the values *"que varia de tamanho conforme a altura disponível"*.
+        // See [`ronoctua_protocol::Command::Anchor`].
+        //
+        // `Slice::Rest` at the end is a TAIL and not a footer: it is whatever
+        // is left over, it has no bottom of its own to sit against, and
+        // anchoring it would open the gap above a block that nothing pins.
+        self.foot_from = match (spec.last(), self.regions.last()) {
+            (Some(crate::Slice::Fixed(n)), Some(last)) if *n > 0 && last.lines > 0 => {
+                Some(last.top)
+            }
+            _ => None,
+        };
+        self.regions.clone()
+    }
+
+    /// The first line anchored to the window's foot, if the window ends in a
+    /// fixed block.
+    #[must_use]
+    pub const fn foot_from(&self) -> Option<u16> {
+        self.foot_from
+    }
+
+    /// The blocks this frame was divided into.
+    #[must_use]
+    pub fn regions(&self) -> &[crate::Region] {
+        &self.regions
+    }
+
+    /// How many draws were refused for falling outside their region.
+    ///
+    /// Zero on every frame that is right. A buffer's own tests read this: it
+    /// turns "the footer did not spill" from something somebody looked at into
+    /// a number.
+    #[must_use]
+    pub const fn refused(&self) -> u32 {
+        self.refused
+    }
+
+    /// How many runs were put in a column at a size that is not the grid's.
+    #[must_use]
+    pub const fn mismeasured(&self) -> u32 {
+        self.mismeasured
+    }
+
+    /// Count one, and hand the run back at the grid's size.
+    ///
+    /// # Why this CLAMPS where a pen refuses
+    ///
+    /// Because the two defects are not the same defect. A pen refuses a draw
+    /// that falls outside its block, and it refuses because the alternative is
+    /// ink in a plausible WRONG PLACE, which nobody would look for. Here the
+    /// place is exactly right — what is wrong is the size, and drawn at the
+    /// grid the run is where the layout says it is. Turning it away would cost
+    /// the row a whole column to fix a gap of two cells.
+    ///
+    /// It is still a defect and it is still counted: [`Screen::check`] refuses
+    /// the frame, and every buffer's own tests ask it.
+    pub(crate) fn measured(&mut self, run: Run<P::Icon>) -> Run<P::Icon> {
+        if run.scale == Scale::Small {
+            self.mismeasured = self.mismeasured.saturating_add(1);
+            return run.base();
+        }
+        run
+    }
+
+    /// Draw inside one block, in ITS OWN rows.
+    ///
+    /// Row zero is the region's first line, whatever line of the window that
+    /// is. Nothing a pen draws can land outside — which is the whole point,
+    /// and the reason the footer can no longer be painted over the list above
+    /// it however the arithmetic above goes wrong.
+    pub fn region(&mut self, region: crate::Region) -> Pen<'_, P> {
+        Pen {
+            screen: self,
+            region,
+            keeps: 0,
+            ground: None,
+        }
+    }
+
     /// The frame as the protocol spells it.
     ///
     /// On the host this **is** the frame: the roles resolve through
@@ -525,6 +857,11 @@ impl<P: Palette> Screen<P> {
     #[must_use]
     pub fn as_protocol(&self) -> DisplayList {
         let mut list = DisplayList::fresh_one();
+        // THE ANCHOR FIRST, because it is a fact about the frame and the host
+        // reads it before it places anything in it.
+        if let Some(foot_from) = self.foot_from {
+            list.push(Command::Anchor { foot_from });
+        }
         for part in &self.parts {
             list.push(match part {
                 Part::Ran { line, run } => Command::Text {
@@ -556,13 +893,74 @@ impl<P: Palette> Screen<P> {
                     scale: ronoctua_protocol::Scale::Normal,
                     max_width: 0,
                 },
-                Part::Ruled { line } => Command::Rule {
+                Part::Ruled {
+                    line,
+                    column,
+                    columns,
+                    role,
+                } => Command::Rule {
                     line: *line,
-                    color: Tokens::color(Role::Rule),
+                    column: *column,
+                    columns: *columns,
+                    color: Tokens::color(*role),
                 },
-                Part::Banded { line } => Command::Selection {
+                // THE ROLE TRAVELS, because `band-command` already carries a
+                // colour: a container's ground and a focused row's are the same
+                // primitive in two registers, and adding a sixth command for
+                // the second would be a new thing every buffer has to learn.
+                Part::Banded {
+                    line,
+                    column,
+                    columns,
+                    role,
+                } => Command::Selection {
                     line: *line,
-                    color: Tokens::color(Role::Band),
+                    column: *column,
+                    columns: *columns,
+                    color: Tokens::color(*role),
+                },
+                // AND THIS ONE IS NOT A LINE AT ALL, which is why it is a
+                // command of its own rather than a third register of
+                // `line-command`: it covers a block of rows, it has a column,
+                // and the three numbers it carries are what the host needs to
+                // resolve a thumb in pixels.
+                Part::Wrapped {
+                    line,
+                    lines,
+                    from,
+                    run,
+                } => Command::Paragraph {
+                    line: *line,
+                    column: run.column,
+                    lines: *lines,
+                    columns: if run.budget == 0 {
+                        self.columns.saturating_sub(run.column)
+                    } else {
+                        run.budget
+                    },
+                    content: match &run.ink {
+                        Ink::Datum(t) => Text::Data(t.clone()),
+                        Ink::Label(k) => Text::Key(k.clone()),
+                        Ink::Glyph(i) => Text::Icon(P::glyph_name(*i)),
+                    },
+                    color: Tokens::color(run.role),
+                    scale: run.scale,
+                    first_row: *from,
+                },
+                Part::Barred {
+                    line,
+                    lines,
+                    column,
+                    scroll,
+                    role,
+                } => Command::Bar {
+                    line: *line,
+                    lines: *lines,
+                    column: *column,
+                    total: scroll.total as u32,
+                    shown: scroll.lines as u32,
+                    offset: scroll.offset as u32,
+                    color: Tokens::color(*role),
                 },
             });
         }
@@ -586,9 +984,70 @@ impl<P: Palette> Screen<P> {
     /// The protocol's own sentence: which two commands, on which row, and how
     /// far the first one reaches.
     pub fn check(&self) -> Result<(), String> {
+        if self.mismeasured > 0 {
+            return Err(alloc::format!(
+                "{} run(s) were put in a column at a size that does not advance one \
+                 cell — the layout budgets cells, so what follows starts where the \
+                 budget ends and not where the ink did, and the gap grows with the \
+                 phrase",
+                self.mismeasured
+            ));
+        }
+        self.regions_are_whole()?;
         let list = self.as_protocol();
         list.nothing_is_covered(self.heights, self.columns)?;
-        list.nothing_overlaps(self.heights, self.columns)
+        list.nothing_overlaps(self.heights, self.columns)?;
+        list.nothing_is_drawn_below(self.heights, self.lines)
+    }
+
+    /// The blocks tile the window, and everything drawn belongs to one.
+    ///
+    /// Silent on a frame that never called [`Self::split`]: the five buffers
+    /// that draw on a flat surface are not wrong, they simply have one block,
+    /// and demanding they say so would be a migration with nothing at the end
+    /// of it.
+    ///
+    /// # Errors
+    ///
+    /// Which two blocks share a line, which line nobody owns, or how many
+    /// draws a pen turned away.
+    fn regions_are_whole(&self) -> Result<(), String> {
+        if self.regions.is_empty() {
+            return Ok(());
+        }
+        if self.refused > 0 {
+            return Err(alloc::format!(
+                "{} draw(s) fell outside the block that was drawing them — a pen \
+                 refuses rather than clamps, so this is ink that is missing from \
+                 the screen and not ink in the wrong place",
+                self.refused
+            ));
+        }
+        for (n, a) in self.regions.iter().enumerate() {
+            for b in self.regions.iter().skip(n + 1) {
+                if a.meets(b) {
+                    return Err(alloc::format!(
+                        "two blocks share a line: {a:?} and {b:?} — one of them is \
+                         drawing over the other, which is what a footer painted on \
+                         top of a history list looks like from here"
+                    ));
+                }
+            }
+        }
+        // AND EVERY LINE HAS AN OWNER. The sum alone does not prove it: three
+        // blocks of the right total can still leave a hole here and overlap
+        // there — and a hole is the strip of the page's own ground the owner
+        // photographed between the footer and the bottom edge.
+        for line in 0..self.lines {
+            if !self.regions.iter().any(|r| r.holds(line)) {
+                return Err(alloc::format!(
+                    "line {line} of {} belongs to no block — a window divided into \
+                     blocks has no gaps, and a gap is the page showing through",
+                    self.lines
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// The frame, finished. Host side.
@@ -614,9 +1073,303 @@ impl<P: Palette> Screen<P> {
                 text,
                 role,
             } => Frame::Coded(*line, *column, text, *role),
-            Part::Ruled { line } => Frame::Ruled(*line),
-            Part::Banded { line } => Frame::Banded(*line),
+            Part::Ruled {
+                line,
+                column,
+                columns,
+                role,
+            } => Frame::Ruled(*line, *column, *columns, *role),
+            Part::Banded {
+                line,
+                column,
+                columns,
+                role,
+            } => Frame::Banded(*line, *column, *columns, *role),
+            Part::Wrapped {
+                line,
+                lines,
+                from,
+                run,
+            } => Frame::Wrapped(*line, *lines, *from, run),
+            Part::Barred {
+                line,
+                lines,
+                column,
+                scroll,
+                role,
+            } => Frame::Barred(*line, *lines, *column, *scroll, *role),
         })
+    }
+}
+
+/// A hand drawing inside ONE block of the frame.
+///
+/// Every method takes a row of the REGION, not a line of the window, and every
+/// one of them refuses a row the region does not own. Refuses — it does not
+/// clamp: a clamped draw lands somewhere plausible and the defect that put it
+/// there goes on living. A refusal is counted, [`Screen::refused`] reports it,
+/// and [`Screen::check`] fails the frame.
+///
+/// # Why the pen owns the translation
+///
+/// Because the alternative is what this crate had: the block's first line
+/// threaded through six functions as a bare `u16` called `from`, added by hand
+/// at every draw. Every defect the owner photographed in the brain — the
+/// footer over the history, the strip of page under the footer, a click in the
+/// footer attributed to the log — was one of those additions reaching past the
+/// block it belonged to.
+pub struct Pen<'a, P: Palette> {
+    screen: &'a mut Screen<P>,
+    region: crate::Region,
+    /// How many cells on the right edge are not this block's to band.
+    ///
+    /// # Why a band has to know about the bar
+    ///
+    /// Because a band is full-bleed and a bar is drawn after it, in the last
+    /// column — so the band runs UNDER the bar and the bar reads as sitting on
+    /// top of the selected row. The owner reported exactly that, in those
+    /// words: *"a scrollbar … ficando por cima do item selecionado"*.
+    ///
+    /// It is the file manager's `EDGE_RIGHT` in one number: a list that keeps
+    /// a cell for its bar says so once, and every band it draws stops there.
+    /// The block's own GROUND still covers the whole width — a bar is a signal
+    /// drawn on the ground, and a gap behind it would be a stripe of the page
+    /// showing through.
+    keeps: u16,
+    /// The role this block's ground was filled with, if it was filled at all.
+    ///
+    /// # Why the pen remembers it
+    ///
+    /// Because a rule, a bar and the quietest step of the text ladder all
+    /// read DIFFERENTLY on a raised ground, and until this field existed the
+    /// choice was the caller's to get wrong — a thing nobody should be
+    /// deciding twice. Measured across the nine themes on 2026-09-20:
+    /// `rule.default` on `surface.header` is ΔE 0,025 (a line one cannot see)
+    /// and `text.subtle.faint` on either raised ground is Lc 0,0000 (text
+    /// one cannot see at all).
+    ///
+    /// So the pen answers it instead: [`Self::fill`] writes this down, and
+    /// [`Self::rule`], [`Self::bar_from`] and [`Self::run`] read it. A buffer
+    /// that fills a block and then draws in it gets the register that ground
+    /// asks for, by construction. Cobra o `a-rule-follows-its-ground`.
+    ground: Option<Role>,
+}
+
+/// Which register a role takes on a given ground.
+///
+/// Free of `self` and of the palette on purpose: it is a pure table, and it
+/// is the ONE place the question is answered. The two raised grounds are
+/// `Shelf` (`surface.container`) and `Header` (`surface.header`); every other
+/// fill leaves the role as it was.
+pub(crate) const fn on_ground(role: Role, ground: Option<Role>) -> Role {
+    match ground {
+        Some(Role::Shelf | Role::Header) => match role {
+            Role::Rule => Role::RuleRaised,
+            // THE QUIETEST STEP HAS NOWHERE TO GO DOWN TO. `text.subtle.faint`
+            // sits a hair above the CHROME, and a raised ground eats the hair:
+            // Lc 0,0000 in all nine themes. It lifts one step, which is the
+            // move `files::lift_onto_a_band` already makes for a dim field on
+            // a band — and `text.subtle.default` on a raised ground is
+            // measured by a gate of its own, so what it lifts INTO is known.
+            Role::Faint => Role::Prose,
+            other => other,
+        },
+        _ => role,
+    }
+}
+
+impl<P: Palette> Pen<'_, P> {
+    /// How many lines this block owns.
+    #[must_use]
+    pub const fn lines(&self) -> u16 {
+        self.region.lines
+    }
+
+    /// How wide the buffer is. The block's width is the window's — regions
+    /// divide the window by LINE; columns are the caller's own business.
+    #[must_use]
+    pub const fn columns(&self) -> u16 {
+        self.screen.columns
+    }
+
+    /// How many cells a run of this scale occupies in height.
+    #[must_use]
+    pub const fn tall(&self, scale: Scale) -> u16 {
+        tall(&self.screen.heights, scale)
+    }
+
+    /// The block this pen draws in.
+    #[must_use]
+    pub const fn region(&self) -> crate::Region {
+        self.region
+    }
+
+    /// Whether this block owns no lines, and so draws nothing.
+    #[must_use]
+    pub const fn empty(&self) -> bool {
+        self.region.empty()
+    }
+
+    /// The window line a row of this block is, or `None` — and counted as a
+    /// refusal when it is `None`, because asking is what a draw does.
+    fn at(&mut self, row: u16, rows: u16) -> Option<u16> {
+        // A BLOCK THAT CLAIMS ROWS DOWNWARD IS MEASURED WHOLE. A paragraph of
+        // four rows starting on the block's last one is three rows outside it,
+        // and the first row being inside is exactly what made that look fine.
+        let last = row.saturating_add(rows.max(1)).saturating_sub(1);
+        if last >= self.region.lines {
+            self.screen.refused = self.screen.refused.saturating_add(1);
+            return None;
+        }
+        self.region.line_of(row)
+    }
+
+    /// Put a run on a row of this block, and say how many cells it took.
+    ///
+    /// Zero when the row was refused, which is the same answer a caller gets
+    /// from a column that gave way: nothing was drawn, and the cursor must not
+    /// move as though something had been.
+    pub fn put(&mut self, row: u16, run: Run<P::Icon>) -> u16 {
+        let cells = self.tall(run.scale);
+        let role = on_ground(run.role, self.ground);
+        let Some(line) = self.at(row, cells) else {
+            return 0;
+        };
+        let run = run.in_role(role);
+        self.screen.put(line, run)
+    }
+
+    /// The ground under one row of this block, in a register the caller names.
+    ///
+    /// It stops where [`Self::keeping`] says, for the reason the band does: a
+    /// hover that ran under the bar would put the pointer's row behind it.
+    pub fn ground(&mut self, row: u16, role: Role) {
+        let columns = self.banded();
+        if let Some(line) = self.at(row, 1) {
+            self.screen.ground_in(line, 0, columns, role);
+        }
+    }
+
+    /// The ground under EVERY row of this block.
+    ///
+    /// The common case for a container, and the one that cannot be written
+    /// wrong: a loop from the block's first line to its last is where an
+    /// off-by-one puts a container's colour on its neighbour's first row.
+    pub fn fill(&mut self, role: Role) {
+        self.ground = Some(role);
+        // TO THE EDGE, AND NOT TO `banded()`: a block's own ground is what the
+        // bar is drawn ON, and a gap behind it would be a stripe of the page
+        // showing through the container. What `keeping` holds back is the
+        // BAND, which says "this row" and must not run under the control.
+        for row in 0..self.region.lines {
+            if let Some(line) = self.at(row, 1) {
+                self.screen.ground(line, role);
+            }
+        }
+    }
+
+    /// Keep this many cells of the right edge for something else — a bar.
+    ///
+    /// Said ONCE, before the rows are drawn, and every band and every hover
+    /// this pen draws afterwards stops there. See [`Self::keeps`].
+    pub const fn keeping(&mut self, cells: u16) {
+        self.keeps = cells;
+    }
+
+    /// How wide a band of this block is: its columns, less what is kept.
+    const fn banded(&self) -> u16 {
+        // ZERO IS "TO THE EDGE" in `ground_in`, so a block that keeps nothing
+        // says zero rather than its own width — the two are the same picture
+        // and only one of them survives the window being resized.
+        if self.keeps == 0 {
+            0
+        } else {
+            self.screen.columns.saturating_sub(self.keeps)
+        }
+    }
+
+    /// The band under this block's focused row.
+    pub fn band(&mut self, row: u16) {
+        let columns = self.banded();
+        if let Some(line) = self.at(row, 1) {
+            self.screen.ground_in(line, 0, columns, Role::Band);
+        }
+    }
+
+    /// The ground under one row of a container.
+    pub fn shelf(&mut self, row: u16) {
+        if let Some(line) = self.at(row, 1) {
+            self.screen.shelf(line);
+        }
+    }
+
+    /// A one-line rule at the end of a row of this block, in the register the
+    /// block's own ground asks for. See [`Pen::ground`] and [`on_ground`].
+    pub fn rule(&mut self, row: u16) {
+        let role = on_ground(Role::Rule, self.ground);
+        if let Some(line) = self.at(row, 1) {
+            self.screen.rule_as(line, 0, 0, role);
+        }
+    }
+
+    /// A sentence wrapped into a rectangle of this block's rows.
+    pub fn paragraph(&mut self, row: u16, rows: u16, run: Run<P::Icon>) {
+        self.paragraph_from(row, rows, 0, run);
+    }
+
+    /// The same sentence, from this wrapped row down. See
+    /// [`Screen::paragraph_from`].
+    pub fn paragraph_from(&mut self, row: u16, rows: u16, from: u16, run: Run<P::Icon>) {
+        let role = on_ground(run.role, self.ground);
+        let run = run.in_role(role);
+        if let Some(line) = self.at(row, rows) {
+            self.screen.paragraph_from(line, rows, from, run);
+        }
+    }
+
+    /// A scrollbar down the right of this block.
+    ///
+    /// It covers the block, which is the shape a bar always wants and the one
+    /// a caller kept having to spell out — `bar(from, to - from, …)` with the
+    /// two numbers it had already used for everything else.
+    pub fn bar(&mut self, column: u16, scroll: crate::Scroll) {
+        self.bar_from(0, column, scroll);
+    }
+
+    /// The same bar, over the block from `row` down.
+    ///
+    /// # Why a block's first rows may not scroll
+    ///
+    /// Because a container's TITLE is inside its ground and does not move with
+    /// its contents — so a track that began at the block's first line would be
+    /// one line longer than the list it belongs to. The host builds the thumb
+    /// from the band it is given and the window the `Scroll` names, and it says
+    /// so out loud when the two disagree; this is how a caller keeps them
+    /// agreeing. It is the file manager's `Section::above` in one argument.
+    pub fn bar_from(&mut self, row: u16, column: u16, scroll: crate::Scroll) {
+        let lines = self.region.lines.saturating_sub(row);
+        if lines == 0 {
+            return;
+        }
+        let role = on_ground(Role::Rule, self.ground);
+        self.screen.bar_as(
+            self.region.top.saturating_add(row),
+            lines,
+            column,
+            scroll,
+            role,
+        );
+    }
+
+    /// A row of a table, in this block's own rows.
+    ///
+    /// `None` when the row is not this block's — a caller walks its own rows
+    /// and so should never see one, and that is the point: it is provable
+    /// rather than assumed.
+    pub fn row_of<'b>(&'b mut self, row: u16, layout: &'b Layout) -> Option<Row<'b, P>> {
+        let ground = self.ground;
+        let line = self.at(row, 1)?;
+        Some(Row::on(self.screen, line, layout, ground))
     }
 }
 
@@ -626,8 +1379,10 @@ pub(crate) enum Frame<'a, I> {
     Ran(u16, &'a Run<I>),
     #[cfg(feature = "syntax")]
     Coded(u16, u16, &'a str, Option<ronoctua_syntax::Role>),
-    Ruled(u16),
-    Banded(u16),
+    Ruled(u16, u16, u16, Role),
+    Banded(u16, u16, u16, Role),
+    Wrapped(u16, u16, u16, &'a Run<I>),
+    Barred(u16, u16, u16, crate::Scroll, Role),
 }
 
 /// Where the title and the content go.
@@ -807,6 +1562,91 @@ mod tests {
         screen.check().expect("no run lands inside another's box");
     }
 
+    /// FAILS IF: a rule stops following the ground it is drawn on.
+    ///
+    /// The whole of `Role::RuleRaised`'s reason in four lines: a block that
+    /// was filled with a raised ground gets the raised rule, one that was not
+    /// gets the default one, and no buffer chooses between them. Measured,
+    /// `rule.default` on `surface.header` is ΔE 0,025 — a line one cannot see.
+    #[test]
+    fn a_rule_takes_the_register_of_its_ground() {
+        for (fill, wanted) in [
+            (Some(Role::Header), Role::RuleRaised),
+            (Some(Role::Shelf), Role::RuleRaised),
+            (Some(Role::Band), Role::Rule),
+            (None, Role::Rule),
+        ] {
+            let mut screen = Screen::<Tokens>::new(&context(40, 8));
+            let blocks = screen.split(&[crate::Slice::Rest]);
+            let mut pen = screen.region(blocks[0]);
+            if let Some(role) = fill {
+                pen.fill(role);
+            }
+            pen.rule(2);
+            pen.bar(
+                39,
+                crate::Scroll {
+                    total: 20,
+                    lines: 8,
+                    offset: 0,
+                    top: 0,
+                },
+            );
+            let list = screen.as_protocol();
+            let ruled = list
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    Command::Rule { color, .. } => Some(color.clone()),
+                    _ => None,
+                })
+                .expect("a rule");
+            let barred = list
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    Command::Bar { color, .. } => Some(color.clone()),
+                    _ => None,
+                })
+                .expect("a bar");
+            assert_eq!(ruled, token_of(wanted), "the rule on {fill:?}");
+            assert_eq!(barred, token_of(wanted), "the bar on {fill:?}");
+        }
+    }
+
+    /// FAILS IF: the quietest step of the text ladder is drawn on a ground
+    /// that eats it.
+    ///
+    /// `text.subtle.faint` measures Lc 0,0000 on both raised grounds in all
+    /// nine themes — not quiet, absent. `Pen` lifts it one step; a block with
+    /// no ground of its own leaves it where it is.
+    #[test]
+    fn the_faintest_step_lifts_off_a_raised_ground() {
+        for (fill, wanted) in [
+            (Some(Role::Header), Role::Prose),
+            (Some(Role::Shelf), Role::Prose),
+            (None, Role::Faint),
+        ] {
+            let mut screen = Screen::<Tokens>::new(&context(40, 8));
+            let blocks = screen.split(&[crate::Slice::Rest]);
+            let mut pen = screen.region(blocks[0]);
+            if let Some(role) = fill {
+                pen.fill(role);
+            }
+            pen.put(1, Run::datum("x").playing(Role::Faint));
+            let list = screen.as_protocol();
+            let drawn = list
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    Command::Text { color, .. } => Some(color.clone()),
+                    _ => None,
+                })
+                .expect("a run");
+            assert_eq!(drawn, token_of(wanted), "the faint run on {fill:?}");
+        }
+    }
+
     /// A rule names a row and nothing else — full bleed, no column, no width.
     #[test]
     fn a_rule_is_only_a_row() {
@@ -817,6 +1657,8 @@ mod tests {
             list.commands,
             vec![Command::Rule {
                 line: 3,
+                column: 0,
+                columns: 0,
                 color: token_of(Role::Rule),
             }]
         );

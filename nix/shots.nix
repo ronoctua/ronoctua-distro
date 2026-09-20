@@ -2299,6 +2299,35 @@ pkgs.testers.runNixOSTest {
             )
             shot("9-brain-line", lines=3)
 
+    if wanted("brain-buffer"):
+        with subtest("the brain's own window, with a real daemon behind it"):
+            # WHY THIS EXISTS BESIDE `--mind`.
+            #
+            # `nix run .#png --mind` draws the same component through the same
+            # `paint`, in a fifth of a second, and that is what every review of
+            # this screen uses. What it cannot prove is that the WINDOW opens:
+            # the door, the descriptor's gate, the capability, the thread that
+            # holds the daemon's socket, and the host actually pushing a mind
+            # in. This is that half, and it is the half that used to be missing
+            # in the other direction — the owner could not photograph the brain
+            # at all.
+            #
+            # It needs the `brain` scene, which is what starts the daemon.
+            control("brain-open")
+            # THE PROCESS, and not a sleep or a pixel. A buffer opens as a
+            # window of this same binary re-exec'd with `buffer <wasm>`, so
+            # its existence is the thing that says the door worked.
+            #
+            # AND THE ASSERTION IS FROM OUTSIDE THE SCREEN on purpose: a
+            # cursor is white and `text.primary` is `#E0E0E0`, so "there is
+            # text here" has been answered by the MOUSE before, on an empty
+            # desktop, with the subtest passing.
+            machine.wait_until_succeeds(
+                "pgrep -f 'ronoctua-shell buffer' >/dev/null", timeout=30
+            )
+            machine.sleep(2)
+            shot("9-brain-buffer")
+
     if wanted("update"):
         with subtest("the update's mark on the modeline, and the window it opens"):
             # NOTHING IS ASKED FOR HERE, and that is the point: the shot above left

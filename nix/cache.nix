@@ -50,6 +50,8 @@ in
 assert positive "keepDays" declared.keepDays;
 assert positive "everyDays" declared.everyDays;
 assert positive "freshDays" declared.freshDays;
+assert positive "trashDays" declared.trashDays;
+assert positive "trashEveryDays" declared.trashEveryDays;
 assert lib.assertMsg (builtins.elem declared.partOfDay windows)
   "assets/cache.nix: `partOfDay` is ${builtins.toJSON declared.partOfDay}, which is not one of ${builtins.toJSON windows}";
 # THE ONE RELATIONSHIP, and the reason this file is a derivation at all.
@@ -86,5 +88,14 @@ writeTextFile {
 
     /// When the file manager remakes a thumbnail it already has, in days.
     pub const FRESH_DAYS: u16 = ${toString declared.freshDays};
+
+    /// How long something stays in the trash, in days.
+    ///
+    /// Counted from `DeletionDate`, which the freedesktop spec writes into
+    /// every `.trashinfo` — never from the file's own timestamps.
+    pub const TRASH_DAYS: u16 = ${toString declared.trashDays};
+
+    /// How often the trash is emptied of what is past that, in days.
+    pub const TRASH_EVERY_DAYS: u16 = ${toString declared.trashEveryDays};
   '';
 }

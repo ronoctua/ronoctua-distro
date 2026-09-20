@@ -79,6 +79,10 @@ mod lifeline;
 mod locale;
 mod locale_window;
 mod manual;
+// The pure half of the brain bridge — the daemon's records turned into the
+// WIT's. Split out so `ronoctua-render-png` can link it without linking the
+// footer's line, which is what made the brain photographable at all.
+mod mind_wire;
 mod minibuffer;
 mod motion;
 mod network;
@@ -475,12 +479,21 @@ fn main() -> Result<()> {
             let reachable = leader::reachable(&tree);
             // The compositor's 141 MIRRORED actions are reachable by NAME
             // and by name only — giving them keys would spend the whole keymap on
-            // what is almost never used. It is the only exception, and it is
-            // recognisable by its prefix.
+            // what is almost never used. It is recognisable by its prefix.
+            //
+            // AND THE THREE NAMED IN `leader::BY_NAME_ONLY`, which carries
+            // the reason for each. It is that constant and not a literal here
+            // because the TEST beside it reads the same list, and two literals
+            // would be two answers the day one of them moved.
+            let by_name_only = leader::BY_NAME_ONLY;
             let orphans: Vec<&str> = registry
                 .all_ones()
                 .map(|c| c.id)
-                .filter(|id| !id.starts_with("niri-") && !reachable.contains(id))
+                .filter(|id| {
+                    !id.starts_with("niri-")
+                        && !by_name_only.contains(id)
+                        && !reachable.contains(id)
+                })
                 .collect();
             anyhow::ensure!(
                 orphans.is_empty(),

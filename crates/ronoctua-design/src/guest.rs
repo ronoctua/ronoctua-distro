@@ -36,11 +36,22 @@ impl Palette for Wit {
         match role {
             Role::Title => wit::Color::TextPrimary,
             Role::Body => wit::Color::TextSecondary,
-            // The same one token, and still two roles: see `Tokens::color`.
-            Role::Quiet | Role::Dim => wit::Color::TextDim,
+            // TWO TOKENS SINCE 2026-09-20; the argument is in `Tokens::color`,
+            // and this table is the one that has to agree with it.
+            Role::Quiet => wit::Color::TextSecondary,
+            Role::Dim => wit::Color::TextDim,
             Role::Accent => wit::Color::StateAccent,
             Role::Rule => wit::Color::RuleDefault,
+            Role::RuleRaised => wit::Color::RuleRaised,
             Role::Band => wit::Color::SurfaceSelection,
+            Role::Shelf => wit::Color::SurfaceContainer,
+            Role::Header => wit::Color::SurfaceHeader,
+            Role::Danger => wit::Color::StateError,
+            Role::Once => wit::Color::TextOnce,
+            Role::Hover => wit::Color::SurfaceHover,
+            Role::Key => wit::Color::TextSubtleStrong,
+            Role::Prose => wit::Color::TextSubtleDefault,
+            Role::Faint => wit::Color::TextSubtleFaint,
         }
     }
 
@@ -132,8 +143,14 @@ impl<P: Palette<Color = wit::Color, Icon = wit::Icon>> Screen<P> {
     /// already asked the host's two questions of.
     #[must_use]
     pub fn finish_wit(&self) -> Vec<wit::Command> {
-        self.parts()
-            .map(|part| match part {
+        // THE ANCHOR FIRST — a fact about the frame, read before anything is
+        // placed in it. See `ronoctua_protocol::Command::Anchor`.
+        let anchor = self
+            .foot_from()
+            .map(|foot_from| wit::Command::Anchor(wit::AnchorCommand { foot_from }));
+        anchor
+            .into_iter()
+            .chain(self.parts().map(|part| match part {
                 Frame::Ran(line, run) => wit::Command::Text(wit::TextCommand {
                     line,
                     column: run.column,
@@ -155,15 +172,61 @@ impl<P: Palette<Color = wit::Color, Icon = wit::Icon>> Screen<P> {
                     scale: wit::Scale::Normal,
                     max_width: 0,
                 }),
-                Frame::Ruled(line) => wit::Command::Rule(wit::LineCommand {
+                // THE ROLE TRAVELS HERE TOO, and for the same reason it does
+                // on the ground: a rule is a signal drawn ON something, and
+                // which rule reads depends on what that something is.
+                Frame::Ruled(line, column, columns, role) => wit::Command::Rule(wit::BandCommand {
                     line,
-                    color: P::color(Role::Rule),
+                    column,
+                    columns,
+                    color: P::color(role),
                 }),
-                Frame::Banded(line) => wit::Command::Selection(wit::LineCommand {
-                    line,
-                    color: P::color(Role::Band),
-                }),
-            })
+                // THE ROLE TRAVELS, for the reason the host's own conversion
+                // gives: a container's ground and a focused row's are one
+                // primitive in two registers.
+                Frame::Banded(line, column, columns, role) => {
+                    wit::Command::Selection(wit::BandCommand {
+                        line,
+                        column,
+                        columns,
+                        color: P::color(role),
+                    })
+                }
+                // AND A PARAGRAPH CROSSES AS A KEY AND A RECTANGLE, for the
+                // reason `Screen::paragraph` gives: wrapping needs the
+                // translated string, which this side does not have.
+                Frame::Wrapped(line, lines, from, run) => {
+                    wit::Command::Paragraph(wit::ParagraphCommand {
+                        line,
+                        column: run.column,
+                        lines,
+                        columns: run.budget,
+                        content: match &run.ink {
+                            Ink::Datum(t) => wit::Text::Data(t.clone()),
+                            Ink::Label(k) => wit::Text::Key(k.clone()),
+                            Ink::Glyph(i) => wit::Text::Icon(*i),
+                        },
+                        color: P::color(run.role),
+                        scale: scale(run.scale),
+                        first_row: from,
+                    })
+                }
+                // THE BAR CROSSES AS NUMBERS. What it becomes is a thumb in
+                // pixels, and only the host can resolve that — the track's
+                // residue is a fact about the surface, which is a thing this
+                // side has never been told (invariant 11).
+                Frame::Barred(line, lines, column, scroll, role) => {
+                    wit::Command::Bar(wit::BarCommand {
+                        line,
+                        lines,
+                        column,
+                        total: scroll.total as u32,
+                        shown: scroll.lines as u32,
+                        offset: scroll.offset as u32,
+                        color: P::color(role),
+                    })
+                }
+            }))
             .collect()
     }
 }

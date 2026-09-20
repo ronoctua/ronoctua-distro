@@ -27,7 +27,6 @@ cmd-session-quit = Quit session
 
 ## which-key prefix groups
 
-group-brain = brain
 group-quit = quit
 
 ## The modeline's two left segments
@@ -84,7 +83,7 @@ state-full = full
 state-guard = guard
 state-choose = choice
 state-confirm = confirmation
-state-update = update
+state-task = task
 
 ## Notifications
 
@@ -2324,7 +2323,9 @@ update-does-node-global = npm update --global: it moves what is already in the g
 update-pnpm-global = update pnpm's global packages
 update-does-pnpm-global = pnpm update --global: pnpm keeps a global store of its own, which is not npm's — which is why these are two steps and not one. Without its directory the step is skipped and says so.
 update-python-tools = update the uv tools
+update-doom-sync = Bring Doom Emacs's packages in line
 update-does-python-tools = uv tool upgrade --all: it upgrades the tools under $XDG_DATA_HOME/uv/tools, one venv each, and adds none. uv comes from the flake; they do not — without that directory the step is skipped and says so.
+update-does-doom-sync = Resolves Doom's package list against the configuration the rebuild just wrote, and byte-compiles what changed. Until it runs, the editor is still loading the previous one. It skips on a machine where Doom was never installed.
 
 # WHY A STEP WAS SKIPPED. The path or the name it is about travels beside the
 # sentence as data (`Needs::about()`), which is why none of these names one.
@@ -2348,111 +2349,148 @@ update-kind-reclaim-space = reclaims disk space
 
 
 # ===================================================================
-# THE BRAIN'S SCREEN — LEADER b b, and a window of its own
+# THE BRAIN'S SCREEN — LEADER b, and a window of its own
 #
-# What the machine does BY ITSELF, when, and what came of it last time. No
-# sentence here spells a date: the buffer draws those ISO, because a component
-# cannot translate (invariant 11) and *19 Aug* against *19 ago* is exactly the
-# kind of thing it must not invent. What is written below is the words AROUND
-# the numbers, and never the numbers.
+# What the machine does by itself, when it does it, and what came of it.
 #
-# TWO REGISTERS, and the second one is why the screen exists. `brain-hold-*`
-# says what a run is waiting FOR — a machine that is busy, not a run that broke
-# — and `brain-why-*` says why one did not happen at all. Neither of them ever
-# says that somebody was asked and did not answer: the update path never asks,
-# and `updates-never-ask` is the check that proves it. A reason on this screen
-# is the machine's, or a decision the person took on purpose.
+# No sentence here spells a date. The buffer draws those ISO, because a
+# component cannot translate (invariant 11) and *19 Aug* against *19 ago* is
+# exactly the kind of thing it must not invent. What is written below is the
+# words AROUND the numbers, and never the numbers.
+#
+# A NOTE ON HOW THESE ARE WRITTEN, because the last set was rewritten from
+# scratch and the owner said why: a title names the thing it is over, a label
+# names the field beside it, and a sentence says what something does. None of
+# them is a remark. `What it does` over a list of tasks, `The machine` over two
+# percentages and `How it last went` over one line were all the same mistake —
+# a heading talking about the screen instead of naming what is on it.
 # ===================================================================
-cmd-brain-open = What the machine does by itself
+
+# THE COMMANDS, and they are SHORT on purpose: they are the phrases in the
+# header's ladder, where each one has about a dozen cells and everything after
+# a long one falls off the end of the line.
+cmd-brain-open = Brain
 cmd-brain-run = Run it now
-cmd-brain-rehearse = Rehearse it, changing nothing
+cmd-brain-rehearse = Rehearse it
 cmd-brain-abort = Stop it
-cmd-brain-proceed = Start now, without the countdown
-cmd-brain-toggle-step = Switch this step on or off
-cmd-brain-reset-steps = Back to the steps the distro ships
-cmd-brain-interval = How often it runs
-cmd-brain-window = Which part of the day
-cmd-brain-switch = Switch this task off and on
+cmd-brain-proceed = Start now
+cmd-brain-reset-steps = Reset steps
+cmd-brain-interval = How often
+cmd-brain-window = Change time
+cmd-brain-switch = Switch it off
+cmd-brain-keys = Every key
+cmd-brain-notice = Do what it offers
 
-brain-title = What the machine does by itself
-brain-nothing = there is nothing the machine does by itself
-brain-hint = Enter opens · m r runs it now · m e rehearses · m o on and off
-brain-hint-update = m t a step on or off · m i how often · m w when · m a stops it · Esc goes back
+# THE PAGE ITSELF.
+brain-title = Brain
+brain-nothing = Nothing is set up yet
+brain-tasks = Tasks
+brain-activity = Activity
+brain-no-activity = Nothing has happened yet
+brain-schedule = Schedule
+brain-steps = Steps
+brain-history = History
 
-# THE THREE BLOCKS of the page behind, and the labels down their left edge.
-# That column is sixteen cells wide and the unit beside it is ten: these are
-# short because the columns are, and a longer word here is a word somebody
-# reads with its end cut off.
-brain-steps = what it runs
-brain-when = when it runs
-brain-doing = right now
-brain-outcome = outcome
-brain-last = the last run
-brain-every = every
+# WHAT THE HEADER TEACHES about the page's own keys. `cmd-*` covers the rest.
+brain-do-open = Open it
+brain-do-back = Back
+brain-do-pane = Other half
+brain-do-change = Change this
+brain-do-keys = Every key
+brain-do-notice = Do it
+brain-task-emacs-daemon = Watch the Emacs daemon
+brain-task-emacs-daemon-does = Looks, every few minutes, for the Emacs server that holds your session and your configuration — and for an Emacs that is running WITHOUT it, which looks the same on screen and is not: it loaded its own copy, its buffers are not the session's, and closing it loses them. It reads the process table and nothing else, and the only thing it ever starts is the distro's own service.
+emacs-no-daemon = The Emacs daemon is not running. Every editor window will load the whole configuration again, and none of them will share your buffers.
+emacs-not-the-client = This Emacs is not connected to the daemon: it loaded its own copy of the configuration, and its buffers belong to it alone. Close it and open it again with `e`, or from the file manager.
+cmd-brain-start-emacs = Start it
+
+# THE SCHEDULE'S ROWS. Each is a field's NAME, so each is a noun phrase — and
+# the value beside it is the answer, never half of a sentence that started in
+# the label.
+brain-enabled = Runs on its own
+brain-on = Yes
+brain-off = No, only when you ask
+brain-every = Runs every
 brain-days = days
-brain-part = part of the day
-brain-next = next
-brain-waiting = reason
-brain-soon = starts in
-brain-failed-at = it stopped at
-brain-rehearsal = a rehearsal — it changes nothing
-brain-never = never
-brain-changed = you changed
-brain-needs-root = it runs as root, with the whole machine's permissions
+brain-part = Runs between
+brain-next = Next run
+brain-soon = Starts in
+brain-run-now = Run it now
+brain-rehearse-it = Rehearse it
+brain-rehearsal = Rehearsing now
+brain-never = Never
+brain-needs-root = Runs as root
+brain-flake-owned = In the flake
+brain-changed = Changed by you
 
-# THE ONE TASK THERE IS, and under the cursor the quiet line saying what that
-# actually means — the rule the disk formatter's menus already follow, where
-# every row carries a second register.
-brain-task-cache-sweep = Sweep the caches
-brain-task-cache-sweep-does = it walks everything under your cache directory and deletes the files nothing has opened for a while, counting from the last time each one was USED and not from the day it was made. It never follows a link out of that directory, never leaves the filesystem it started on, takes ordinary files only and keeps anything stamped in the future. A cache is what can always be made again, so nothing is lost — only time, the next time something needs it.
+# THE FOOTER'S FIELDS.
+brain-last-run = Last run
+
+# THE TASKS. `brain-task-<id>` names one and `<id>-does` says what it does —
+# the second is a paragraph in the footer, so it has room to be a whole
+# explanation rather than a line.
 brain-task-system-update = Update the system
-brain-task-system-update-does = the machine brings its own software forward and builds the new system as a boot entry, without switching to it: nothing changes underneath a session that is open, and what starts it is the next reboot — a moment you choose.
+brain-task-system-update-does = Moves the pinned inputs forward, rebuilds the system as a boot entry and reclaims store space. Nothing changes under a session that is open: the new system starts at the next reboot, which is a moment you choose.
+brain-task-cache-sweep = Sweep the caches
+brain-task-cache-sweep-does = Deletes whole folders under your cache directory that nothing has opened for a while, counting from the last time each was USED. It never follows a link out of that directory, never leaves the filesystem it started on and keeps anything stamped in the future. A cache is what can always be made again, so what is lost is time and not work.
+brain-task-trash-expire = Empty the trash
+brain-task-trash-expire-does = Deletes for good what you threw away four days ago or longer. The clock starts when you put it in the bin and not when the file was written, so something made years ago and deleted this morning has four days. It is the one thing here that cannot be undone, which is why the number is small.
 
-# ITS STEPS, in the order they run. The real command travels beside each one as
-# data, under the cursor, so these say what the step is FOR and not what it
-# types.
+# WHERE A TASK IS RIGHT NOW. A short phrase each: they sit in a column twelve
+# cells wide on the home page.
+brain-standing-idle = Waiting
+brain-standing-queued = In the queue
+brain-standing-running = Running
 
-# WHERE A TASK IS RIGHT NOW. Fourteen cells on the home page's last column, so
-# one short phrase each.
-brain-standing-idle = waiting
-brain-standing-queued = in the queue
-brain-standing-running = running now
+# AND HOW A RUN ENDED. `failed` is the honest word for a run that did not
+# finish; whether that was a fault or a decision is the reason's job.
+brain-outcome-skipped = Did not run
+brain-outcome-done = Worked
+brain-outcome-failed = Failed
+brain-outcome-held = Waited
 
-# AND HOW THE LAST RUN ENDED. `failed` is the honest word for a run that did
-# not finish; whether that was a fault or a decision is the reason's job, on
-# the line below it.
-brain-outcome-skipped = did not run
-brain-outcome-done = it worked
-brain-outcome-failed = it failed
+# WHAT IS IN THE WAY, in the column beside a task's name.
+brain-hold-ram = Memory busy
+brain-hold-cpu = Processor busy
+brain-hold-battery = On battery
+brain-hold-busy = One at a time
+brain-hold-network = No network
+brain-hold-asleep = Asleep
 
-# WHAT A RUN IS WAITING FOR — the most important sentences on this screen.
-# NOTHING IS BROKEN AND NOTHING WAS LOST: the moment came, the machine was in
-# no state for it, and it waits for the next one. Each says what is in the way,
-# which is the thing somebody could act on if they wanted to.
-brain-hold-ram = RAM is busy
-brain-hold-cpu = CPU is busy
-brain-hold-battery = on battery
-brain-hold-busy = one at a time
-brain-hold-network = no network
-brain-hold-asleep = sleeping
+# AND THE SAME THING AS A WARNING, on the line under the header — the one
+# place on this screen that is allowed to alarm, and only while something is
+# actually in the way.
+#
+# A WHOLE SENTENCE PER REASON and not one sentence with the reason put into it:
+# a `Run` carries a key and nothing else (invariant 11). It is also the better
+# of the two — "the processor is too busy" says the thing, "held: cpu" makes
+# somebody guess.
+brain-held-ram = Nothing will start while this much of the memory is in use. It goes on by itself when the machine is quieter.
+brain-held-cpu = Nothing will start while the processor is this busy. It goes on by itself when the machine is quieter.
+brain-held-battery = Nothing will start on battery. Plug the machine in, or change that in brain.json.
+brain-held-other = Something is in the way. The task it is holding says what.
 
-# AND WHY ONE DID NOT HAPPEN AT ALL. The first two go in a column seventeen
-# cells wide, beside the row's name; the rest have the width of a sentence.
-# `aborted` is NOT an error — it is the person having decided, and the screen
-# agreeing with them.
-brain-why-off = switched off
-brain-why-no-systemctl = no systemd here
-brain-why-runaway = it stopped reporting and the waiting was given up — it may well still be going
-brain-why-aborted = you stopped it — nothing went wrong
-brain-why-postponed = you said not now, and the next moment moved
+# AND WHY A RUN DID NOT HAPPEN AT ALL. `aborted` is NOT an error — it is the
+# person having decided, and the screen agreeing with them.
+brain-why-off = Switched off
+brain-why-no-systemctl = No systemd here
+brain-why-runaway = It stopped reporting and the waiting was given up. It may well still be going.
+brain-why-aborted = You stopped it. Nothing went wrong.
+brain-why-postponed = You said not now, and the next moment moved.
+brain-why-ram = The memory was busy
+brain-why-cpu = The processor was busy
+brain-why-battery = It was on battery
+brain-why-busy = Something else was running
+brain-why-network = There was no network
+brain-why-asleep = The machine was asleep
 
-# WHICH PART OF THE DAY it may start in. The hours are the same digits in every
-# language; the words around them are not.
-brain-part-any = whenever the machine is free
-brain-part-night = night, 02:00 to 05:00
-brain-part-morning = morning, 08:00 to 12:00
-brain-part-afternoon = afternoon, 13:00 to 18:00
-brain-part-evening = evening, 19:00 to 23:00
+# WHICH PART OF THE DAY a task may start in. The hours are the same digits in
+# every language; the words around them are not.
+brain-part-any = any hour
+brain-part-night = 02:00 and 05:00
+brain-part-morning = 08:00 and 12:00
+brain-part-afternoon = 13:00 and 18:00
+brain-part-evening = 19:00 and 23:00
 
 # THE BAND UNDER THE MINIBUFFER — one line, and only while a countdown runs.
 #
@@ -2477,6 +2515,8 @@ echo-brain-postponed = Not now — it comes back at its next moment
 echo-brain-proceeding = Starting now
 echo-brain-idle = There is nothing about to happen
 echo-brain-unreachable = The brain is not answering
+echo-emacs-starting = Starting the Emacs daemon
+echo-emacs-unreachable = The Emacs daemon could not be started; see: journalctl --user -u emacs
 
 # THE UPDATE, WATCHED — the modeline's mark and the window it opens.
 #

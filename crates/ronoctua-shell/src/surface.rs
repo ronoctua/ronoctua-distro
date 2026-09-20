@@ -3591,6 +3591,14 @@ impl Footer {
         match hit {
             crate::brain::Hit::Abort => self.run_command("brain-abort"),
             crate::brain::Hit::Proceed => self.run_command("brain-proceed"),
+            // WHATEVER THE NOTICE OFFERED, by the id the notice itself named.
+            // A notice with nothing to offer draws no button, so there is
+            // nothing here to click.
+            crate::brain::Hit::Notice => {
+                if let Some(act) = self.noticed().and_then(|n| n.act.clone()) {
+                    self.run_command(&act);
+                }
+            }
         }
     }
 
@@ -6588,6 +6596,11 @@ impl Footer {
             // opening a screen first.
             "brain-abort" => self.brain_answer(false),
             "brain-proceed" => self.brain_answer(true),
+            // WHAT THE EMACS WATCH OFFERS. A USER unit, so it goes through no
+            // polkit and asks nobody anything — which is what lets the brain
+            // offer a button at all: nothing this machine does by itself may
+            // put a question in front of somebody who is not there.
+            "brain-start-emacs" => self.start_the_emacs_daemon(),
             // `LEADER s u` — the whole sequence, now, outside any schedule.
             "system-update" => self.start_the_update(),
             // `LEADER s w` — the window that watches it, and the door the
@@ -10232,13 +10245,45 @@ impl Footer {
         self.band_rows()
     }
 
-    /// A sequence as the person would type it, leader included.
+    /// A sequence as the person would type it.
     ///
-    /// The trigger's own notation comes from the ENVIRONMENT (`crate::leader`):
-    /// in the nested loop it is not `SPC`, and a line that said `SPC` there
-    /// would be teaching a key that does not exist.
+    /// # Why the leader is no longer in front of it
+    ///
+    /// Because these two are no longer leader sequences. They were `LEADER b a`
+    /// and `LEADER b p`, and the owner asked for `LEADER b` to open the brain
+    /// with nothing in between — which the keymap refuses to combine with a
+    /// sequence hanging off `b`. What they do already existed inside the
+    /// brain's own buffer, as `m a` and `m p`, and that is what this now
+    /// prints.
+    ///
+    /// The band keeps three ways to be answered, and none of them was lost:
+    /// the two buttons take a CLICK with no window open at all; the keyboard
+    /// answers from inside the brain, which `LEADER b` opens; and both remain
+    /// commands of the registry, so `LEADER :` reaches them by name from
+    /// anywhere. What changed is that the shortest keyboard path is now two
+    /// steps instead of one.
     fn brain_keys(&self, sequence: &str) -> String {
-        format!("{} {sequence}", self.leader_label)
+        sequence.to_owned()
+    }
+
+    /// Starts the Emacs daemon — the one thing the brain's watch offers.
+    ///
+    /// It is the distro's own unit (`services.emacs.enable`, which is the
+    /// upstream NixOS module) and it is a USER unit, so `systemctl --user
+    /// start` authorises through nothing and asks nobody. The echo is the
+    /// answer either way: a person who pressed a button is owed a sentence.
+    fn start_the_emacs_daemon(&mut self) {
+        match ronoctua_brain::systemd::start(ronoctua_brain::tasks::emacs::UNIT) {
+            Ok(()) => {
+                let m = self.texts.t(ronoctua_i18n::key::ECHO_EMACS_STARTING);
+                self.echo_message(m);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "could not start the Emacs daemon");
+                let m = self.texts.t(ronoctua_i18n::key::ECHO_EMACS_UNREACHABLE);
+                self.echo_message(m);
+            }
+        }
     }
 
     /// What the brain has announced, when it has announced anything.
@@ -10258,7 +10303,12 @@ impl Footer {
     /// `first_of_expansion` already carries a paragraph about. `band_rows` next
     /// door answers the same question about the band, and now they read alike.
     fn brain_rows(&self) -> u16 {
-        crate::brain::rows(self.announced())
+        crate::brain::rows(self.announced(), self.noticed())
+    }
+
+    /// What the brain wants said, when it wants anything said.
+    fn noticed(&self) -> Option<&ronoctua_brain::Notice> {
+        self.brain.as_ref()?.notice.as_ref()
     }
 
     /// Which line of the surface the modeline is on.
@@ -14584,12 +14634,14 @@ impl Footer {
             // band's is: what the cursor is over has to be what was DRAWN.
             let brain = crate::brain::lines(
                 self.announced(),
+                self.noticed(),
                 columns,
                 ronoctua_brain::Clock::now(&ronoctua_brain::moment::Wall),
                 &crate::brain::Words {
                     texts: &self.texts,
                     abort_keys: &self.brain_keys(crate::leader::BRAIN_ABORT_KEYS),
                     proceed_keys: &self.brain_keys(crate::leader::BRAIN_PROCEED_KEYS),
+                    notice_keys: &self.brain_keys(crate::leader::BRAIN_NOTICE_KEYS),
                 },
             );
             if let Some(l) = &brain {

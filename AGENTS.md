@@ -25,7 +25,13 @@ linhas. Niri como compositor, camada de shell própria em Rust. O porquê de cad
 13. **Nenhum dado pessoal** — nem `host.nix`, `facter.json`, `~/.shellrc.local`: nascem NA máquina.
 14. **Nenhuma chrome além do rodapé.** Sem barra, relógio, taskbar, menu iniciar, dock, ícone de
     desktop ou popup flutuante. Tray, notificação e expansão são A MESMA superfície crescendo.
-15. **Sem cards, sem sombra, sem elevação.**
+15. **Sem sombra e sem elevação.** CARD e LINHA SEPARATÓRIA são PERMITIDOS — a preferência por
+    um layout mais limpo é preferência, não proibição, e quem decide é o dono. Também é permitido
+    pôr COLUNAS LADO A LADO, cada uma com as suas próprias seleções, e **uma seleção não precisa
+    ocupar a linha inteira**: `selection` e `rule` levam `column` e `columns` (`0` = até a borda).
+    A regra anterior dizia "sem cards" e o tipo a reforçava — `line-command` não tinha onde pôr a
+    largura —, então duas colunas com seleções próprias eram indesenháveis. Isso nunca foi decisão
+    do dono; era a forma que o tipo carregava, escrita como se fosse lei.
 16. `noctua` e `ronoctua-distro` definidos em **um único lugar** cada — `nix/modules/base.nix`;
     os **idiomas**, em `assets/i18n/languages.nix`, e nenhum outro sítio os nomeia.
 17. **Sem Docker.**
@@ -35,6 +41,12 @@ linhas. Niri como compositor, camada de shell própria em Rust. O porquê de cad
     pt-BR **só onde o valor existe em TODOS os idiomas declarados**: os 6 docs, o VALOR de chave
     em TODOS os `.ftl`, a tag de busca e o léxico. **Onde cabe um idioma só, ele é o INGLÊS** —
     descrição de unidade, `.desktop`, manifesto da extensão, alias do shell, `Job::trouble`.
+19. **TODA IMPLEMENTAÇÃO RESPONDE AO PONTEIRO.** O que o teclado alcança, o ponteiro alcança:
+    selecionar, abrir, mudar valor, rolar e ARRASTAR a barra. Clique SELECIONA e o segundo faz o
+    que o `RET` faz; o ponteiro em repouso ACENDE a linha sob ele, que não é a faixa do cursor.
+    Não há tela só de teclado. Cobram o `a-buffer-answers-the-pointer` (buffer que desenha faixa
+    responde clique e hover; que desenha barra responde roda e arrasto) e o
+    `a-bar-is-grabbed-where-it-is-drawn`.
 
 Ao bater num invariante: **pare e reporte.** Não contorne, não peça exceção implícita.
 
@@ -943,6 +955,18 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   e o acento dividem a matiz (o forest é 150° nos dois), croma na tinta anda direto para cima da
   `surface.selection` — o que cede primeiro é ela contra `surface.hover` e `rule.default`. Escolher o DEGRAU (`text-muted` 23, `text` 48, `text-loud` 79, `text-strong` 87) é o
   passo grosso; o `shift` é o fino.
+  **E TODO FUNDO É MEDIDO, ou diz por escrito que nada é desenhado nele** (`every-ground-is-measured`).
+  `surface.container` e `surface.header` existiram uma entrega inteira sem aparecer em portão nenhum
+  — quinze tons desenhados neles nos nove temas e nada no `gen-theme.py` olhando para um só. Medido
+  no dia em que entraram: `rule.default` sobre o header dá ΔE 0,025 (uma linha que não se vê) e
+  `text.subtle.faint` dá **Lc 0,0000** nos dois fundos altos (texto que não existe). Daí três coisas:
+  o header ganhou um degrau próprio (`neutral.chrome-band`, porque o `chrome-loud` é também o
+  `notification.background`, que está congelado na referência) — sem ele a faixa do ponteiro e o
+  header mediam 0,0043 em darkside, a mesma cor duas vezes; nasceu o `rule.raised`, mesmo hex do
+  `strong` e nome próprio, porque a divisão é sobre o que a linha DIZ; e **quem escolhe é o `Pen`**,
+  a partir do papel com que a região foi PREENCHIDA (`on_ground`) — régua, barra e o degrau mais
+  quieto do texto. Escolher errado deixou de ser possível em vez de ser possível e cobrado; cobra
+  o `a-rule-follows-its-ground`.
 - **Papel novo = família em TODOS os temas** (`assets/themes/*.nix`, menos a `.reference`): sem isso
   o gerador recusa com `no family '<nome>' in the seed`. E papel novo NÃO entra na referência
   congelada — ela mede só as 52 chaves do dia em que foi capturada.
@@ -984,6 +1008,21 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   ou de um jeito (`x: margin*cell` com `width: self.width`: buraco à esquerda, cortado à direita)
   ou do outro (`linhas × altura_de_linha`, que com 26,5 px sempre para antes da borda). Quem cobra
   é o `separators-come-from-chrome`.
+  **E UM CONTROLE É PEGO ONDE ELE É DESENHADO.** Uma função diz onde o controle ficou e as duas
+  portas — a que PINTA e a que ACERTA — a LEEM. A barra de um buffer era pintada em pixels a
+  partir da borda (`right = width_px`, para tocá-la) e pega em CÉLULAS a partir da margem: na
+  última coluna o ponteiro responde duas colunas além da que o componente desenhou, a comparação
+  nunca casava, e todo arrasto caía na linha de trás — medido na tela do dono, 81 desenhada contra
+  83 relatada. Não é um bug que volta: é a ausência de uma junta. Agora é `paint::bar_box`, e as
+  duas leituras são `quads_of` e `bar_grabbed` — o molde do `chrome::hint_spans`/`hint_marks`. O
+  mesmo vale para a escada de atalhos do brain (`State::ladder`, uma caminhada lida três vezes:
+  a altura, a tinta e o ponteiro). Cobra o `a-bar-is-grabbed-where-it-is-drawn`.
+  **E UMA COLUNA DESENHA NO TAMANHO EM QUE ELA MEDE**: um buffer conta CÉLULAS e `Scale::Small`
+  anda 0,81 de uma, então o que vem depois começa onde o ORÇAMENTO acaba e não onde a tinta parou
+  — vão proporcional à frase, que o dono leu como *"espaços desproporcionais entre os atalhos"* e
+  como um ponto separatório com mais ar de um lado. Medido: `Switch step` orçou 118,6 px e desenhou
+  96. `Row::put` recusa (contando no `Screen`, que o `check` reprova), e pequeno fica só para a run
+  que não empurra nada. Cobra o `a-row-is-never-drawn-small`.
 - **O realce de sintaxe é um crate, e não é de app nenhum** (`ronoctua-syntax`): `no_std` + `alloc`,
   zero dependências, 37 linguagens declaradas em `assets/syntax.nix` que resolvem **158 tipos MIME**
   — porque a reivindicação é por TIPO e o gerador a expande pelo DAG de subclasses do freedesktop
@@ -995,8 +1034,68 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   DESLIGADA: a tabela é 55 KB de fonte contra 80-100 KB de `.wasm`.
 - **Buffers nativos são componentes wasip2.** Devolvem display list; rasteriza o `ronoctua-render`,
   posiciona o niri (inv. 4); não conhecem Wayland, cor nem idioma (inv. 11). Estado vive na
-  `Instance`. Cinco primitivas: texto, régua, grade, seleção e **`svg`** (TRAVA `vector`), e **campo
-  de record cruza por POSIÇÃO** e só depois pelo nome.
+  `Instance`. **SETE primitivas**: texto, régua, grade, seleção, `svg` (TRAVA `vector`), e as duas
+  que o dono mandou acrescentar — **`paragraph`** e **`bar`**. E **campo de record cruza por
+  POSIÇÃO** e só depois pelo nome.
+  **E A REGRA DE QUE UM BUFFER NÃO TEM HOVER TAMBÉM ERA MINHA E TAMBÉM ESTAVA ERRADA.** Estava
+  escrita no `buffer.rs`: *"There is no hover: highlighting the item under the mouse would ask for a
+  frame per pixel of movement, and here the highlight already has an owner — it is the cursor"*. As
+  duas metades são falsas. O ponteiro anda em PIXELS e o buffer conta CÉLULAS, então o host só
+  entrega quando a CÉLULA muda — algumas dezenas por travessia de tela, e toda outra janela do
+  sistema já fazia exatamente isso (`files_window`, `network_window`, `power_window` guardam um
+  `under_pointer`). E o cursor NÃO é o mesmo realce: o cursor é onde está o TECLADO, o hover é onde
+  um clique cairia, e toda vista do sistema desenha os dois em tons diferentes. Agora a parede leva
+  `input::hover(position)` e `input::unhover`, e o `Role::Hover` alcança o `surface.hover` que papel
+  nenhum alcançava. Cobra o `a-buffer-can-be-hovered`.
+  **E UM BUFFER DESENHA EM BLOCOS, não em `u16` soltos** (`ronoctua_design::Region` + `Screen::split`
+  + `Pen`). O rodapé do brain foi desenhado POR CIMA do histórico e havia uma faixa do fundo da
+  página entre ele e a borda de baixo — o dono fotografou as duas. Nenhuma era um erro de conta:
+  não havia conta. Um buffer endereçava a janela por `u16`, o `go_to` não tinha limite, a baixada
+  era um `map` 1:1, e o hospedeiro não recortava nada — linha fora da janela era diagramada e morria
+  no rasterizador **sem uma linha de log**, que era o único defeito desta árvore sem sintoma. Os
+  blocos LADRILHAM (união exata, interseção vazia, o resto da divisão vai para um `Slice::Rest`), o
+  `Pen` **RECUSA** o que cai fora em vez de aparar (aparar esconde o defeito e põe a tinta num
+  lugar plausível), e o `Screen::check` reprova o quadro que tiver uma recusa. **Nada disso cruza**:
+  é gramática do lado do buffer, provada no `cargo test` dele. Cobram o
+  `a-buffer-draws-inside-its-regions` e o `the-host-shows-what-it-draws`.
+  **E A LINHA DE ATALHOS DE UM BUFFER É A DO SISTEMA.** Ela não era, e o dono leu as duas lado a
+  lado. A COR: a dica do minibuffer é `text.subtle.*`, uma família de matiz deliberadamente fora da
+  rampa quente, e o `Palette::color` era uma tabela FECHADA de dez tokens sem nenhum deles — então
+  um buffer que ensinava teclas só tinha a rampa de CONTEÚDO (`accent` + `dim`). Entraram
+  `Role::Key`, `Role::Prose` e `Role::Faint`. O APERTO: uma frase é CHAVE e este lado não mede uma
+  sentença que não tem, então cada uma recebia coluna fixa de treze células — o `Input::Phrases`
+  entrega o TEXTO (o mesmo caminho que o campo de busca dos três navegadores usa, e quem traduz
+  continua sendo o host), e o header MEDE. O `·` virou `icon.separator`, que é token e não
+  codepoint. Cobra o `the-shortcut-line-is-the-systems`.
+  **E UMA MUDANÇA DE ESTADO REPINTA.** O `RET` numa tarefa trocava o título da modeline e deixava a
+  página velha na tela até a próxima seta — o host tratava `Effect::StateChanged` como escrituração
+  e o guest tinha esquecido o `Redraw`. Os dois foram consertados, e o do HOST é o que fecha a
+  classe: um estado É uma tela. Cobra o `a-state-change-repaints`.
+    **A REGRA DE QUE UM BUFFER NÃO PODE ROLAR ERA MINHA E ESTAVA ERRADA.** O `docs/PENDING.md` dizia
+  que nenhuma das cinco era uma região rolável e que inventar uma seria um sexto vocabulário; o dono
+  disse que não, e relendo, o raciocínio também não se sustenta: um buffer JÁ desenha a janela de
+  lista que quiser — ele é dono do deslocamento, emite as linhas que quer, e o hospedeiro não
+  recorta nada. Nada faltava no DESENHO. Faltavam duas coisas, e nenhuma é uma região:
+  **o POLEGAR**, porque ele é uma fração de um trilho em PIXELS e este lado conta células (feito de
+  blocos seria uma sexta barra parecida com as cinco de verdade e igual a nenhuma) — então a barra
+  atravessa como NÚMEROS e o hospedeiro a desenha com o `ronoctua_design::Scroll`, que compila dos
+  dois lados desde que foi escrito; e **a RODA** (`input::wheel`, em LINHAS e nunca em pixels, pela
+  aritmética única do `surface::axis_lines`), porque uma barra que ninguém pega é o retrato de um
+  controle. **A RODA ROLA A JANELA e não o cursor** (escolha do dono): o rodapé de um buffer é
+  sobre o que o cursor toca, então uma roda que movesse o cursor trocaria a explicação enquanto
+  alguém a lê. Quem SEGUE o cursor é a tecla, nunca a chegada nem a roda — a mesma divisão que o
+  `Footer::settle_region` faz no hospedeiro, aqui num campo (`State::follows`).
+  **E O ARRASTO É `input::scrolled`**: o hospedeiro sabe onde pintou cada `bar` — ele fez o polegar
+  com os três números que ela carrega —, então ele resolve o ponteiro numa LINHA (`Scroll::offset_at`,
+  a inversa que já existia) e o buffer só diz de qual lista ela é, pela célula, como faz com a roda.
+  ABSOLUTO e nunca um delta: um arrasto é onde a mão ESTÁ, e uma soma de deltas descola dela.
+  **E a FAIXA para uma célula antes da barra** (`Pen::keeping`): a faixa é sangrada e a barra é
+  desenhada depois, então a barra ficava POR CIMA do item selecionado — o dono relatou exatamente
+  isso. O FUNDO do bloco continua indo até a borda: uma barra é um sinal desenhado sobre ele. **E `paragraph` pela mesma razão do outro lado**: um buffer segura uma CHAVE, o `text`
+  desenha uma linha e o hospedeiro a elide no orçamento — certo para um rótulo e inútil para uma
+  descrição, que cortada na largura de uma coluna é uma descrição que ninguém lê. Quebrar linha
+  precisa da string TRADUZIDA, que este lado nunca tem. O retângulo atravessa e o hospedeiro o
+  preenche com o mesmo `layout::wrap` de um nome de arquivo comprido.
 - **NADA EM CACHE FICA PARA SEMPRE** (`assets/cache.nix` → `nix/cache.nix` → `ronoctua-cache-sweep`
   + `brain/tasks/sweep.rs`). O dono perguntou como o cache funcionava e a resposta honesta era que
   **nenhum dos dois de disco era limpo alguma vez** — sem timer, sem tmpfiles, sem varredura. A
@@ -1004,9 +1103,22 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   **O alcance é TODO o `$XDG_CACHE_HOME`, por decisão dele e contra a minha ressalva** — que fica
   registrada: lá moram 254 GB de target do cargo e 36 GB do yay, e nossas miniaturas são 4,6 MB.
   As miniaturas nunca foram o problema, e uma regra que só governasse o que nós escrevemos teria
-  liberado quatro megabytes. Medido em ensaio na máquina dele: **423 933 arquivos, 150,3 GiB, em
-  9,5 s.**
-  **A IDADE É O ÚLTIMO USO, e é o MAIOR entre `atime` e `mtime`.** O `atime` sozinho é armadilha num
+  liberado quatro megabytes.
+  **E A UNIDADE É A ENTRADA NA RAIZ, inteira** — a pedido dele, e a razão é boa: um cache raramente é
+  um monte de arquivos independentes. É um índice e o que o índice nomeia, um manifesto e seus
+  blocos, um banco e seu log. Levar os que ninguém leu e deixar o resto não libera um cache, deixa
+  um programa segurando METADE de um, que é uma classe de defeito que ninguém depura olhando uma
+  listagem. Quase todo programa guarda o cache dele numa pasta própria, e é isso que torna a regra
+  grossa a SEGURA: a unidade de deleção vira a unidade que o programa criou. **Uma pasta tem a idade
+  do arquivo MAIS NOVO dela**, então cache em uso nunca é levado, por mais antigo que seja o resto.
+  **E ela libera muito menos, que é o preço de ser segura**: medido em ensaio, **4,2 GiB (52 pastas
+  e 2 arquivos)** contra os 150,3 GiB que a regra arquivo-a-arquivo levaria — a diferença é quase
+  toda os dois maiores caches da máquina, que têm cem gigabytes de lixo E algo tocado esta semana.
+  **A IDADE É O ÚLTIMO USO, e é o MAIOR entre `atime` e `mtime`** — com UMA exceção, a pasta VAZIA,
+  que é datada só pelo `mtime`: o `atime` de uma pasta anda quando QUALQUER UM a lista, e quem a
+  lista com mais certeza é esta varredura. Tomando o maior dos dois, toda pasta vazia pareceria
+  recém-usada no instante em que fosse olhada — para sempre. Achado por um teste que plantou uma de
+  três meses e a viu sobreviver. O `atime` sozinho é armadilha num
   sistema montado `noatime`, onde ele é carimbado na criação e nunca mais anda: lá, o arquivo
   ESCRITO hoje traz um acesso do dia em que foi feito, e a regra o apagaria chamando-o de velho. O
   `max` é o que faz "último uso" querer dizer a mesma coisa nas duas montagens. Aqui é btrfs com
@@ -1023,7 +1135,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   e a unidade ganha `IOSchedulingClass=idle`, que é o argumento que o `memory.nix` já faz sobre a
   coleta do store. **Duas unidades e não um flag** — a segunda conta e não apaga, que é o que o
   `m e` pergunta, e aqui vale mais do que na atualização: *"quanto isto levaria?"* é a pergunta que
-  se quer respondida antes de deixar algo apagar 150 GiB.
+  se quer respondida antes de deixar algo apagar pastas inteiras de cache.
   **O PORTÃO DE RAM/CPU/BATERIA É O QUE JÁ EXISTE** (`runner::judge` contra o `Gate` do arquivo do
   dono), e a varredura NÃO tem opinião própria — o pedido de "esse cheque também nas outras rotinas"
   já estava satisfeito, e o que faltava era a varredura herdá-lo. O check recusa uma segunda.
@@ -1041,25 +1153,135 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   que é exatamente o defeito da onda desta mesma sessão, onde o código estava certo e o disco não
   sabia. `freshDays < keepDays` é a relação inteira: o que se olha é renovado aos dez e por isso
   nunca chega aos vinte. O build recusa o par que a quebra.
-- **`LEADER b b` é o cérebro** (`ronoctua-brain`; `b a`/`b p` são as duas respostas da faixa — o `b` era o grupo BUFFER, e buffer é janela (inv. 4), então os dois grupos viraram `w`: `w w` troca, `w n` próximo, `w d` fecha, `w s` estado, `w o`/`w O` terminal), o daemon que decide QUANDO a máquina mexe em si
+- **`LEADER b` é o cérebro, SEM submenu** (`ronoctua-brain` — o `b` era o grupo BUFFER, e buffer é
+  janela (inv. 4), então os dois grupos viraram `w`: `w w` troca, `w n` próximo, `w d` fecha, `w s`
+  estado, `w o`/`w O` terminal). O dono pediu a tecla direta, e uma sequência não pode ser comando e
+  prefixo ao mesmo tempo — o `keymap-no-collision` derruba o BUILD —, então `b a` e `b p` saíram. O
+  que elas faziam já existia dentro do buffer (`m a`, `m p`), e **a faixa passou a imprimir as
+  teclas do BUFFER**. Os dois continuam comandos do registro, então `LEADER :` os alcança pelo nome
+  de qualquer lugar, e a faixa continua clicável; o que mudou é que o caminho mais curto de teclado
+  virou dois passos. Estão em `leader::BY_NAME_ONLY`, uma lista de NOMES e não um prefixo — `brain-`
+  como prefixo isentaria o próximo comando que alguém esquecer de amarrar. É o daemon que decide
+  QUANDO a máquina mexe em si
   mesma — molde do `ronoctua-transfers`: unidade de usuário, `session.slice`, socket JSON por linha,
   estado inteiro e nunca delta. A porta para features novas é o `trait Task`, e ela é uma promessa de
   CINCO lugares: `src/tasks/<id>.rs`, uma linha em `tasks()`, duas chaves nos dois idiomas, uma linha
-  na home do buffer, um padrão em `prefs`. Quatro dos métodos são PUROS — é o que faz um ano de
+  na home do buffer, um padrão em `prefs`. **Uma tarefa diz que TIPO é** (`Task::kind`, rotineira ou
+  de execução única) e a listagem a desenha com glifo e cor próprios — `md-repeat` contra
+  `md-repeat_once`, um desenho de diferença, e `text.once` ao lado. Existe antes da primeira
+  tarefa de execução única de propósito: acrescentar a distinção no dia em que uma aparece muda o
+  sentido de toda linha da página de uma vez. **E uma pode ter cadência em MINUTOS**
+  (`TaskPrefs::every_minutes`, e o `schedule::next_moment` curto-circuita o calendário inteiro):
+  dias é a unidade certa para um rebuild e inútil para uma VIGIA — o daemon do Emacs pode cair às
+  dez da manhã. Quatro dos métodos são PUROS — é o que faz um ano de
   agenda caber em milissegundos de teste. Ele **não** é uma segunda fronteira com o `/proc` (é o
   `ronoctua-memory`, que ganhou `cpu_pressure` e `on_battery`), não segura teclado e não roda nada
   privilegiado: pede ao systemd. Capacidade `brain` PRÓPRIA — `system` é "quanta RAM, quem come";
   esta termina com a máquina reconstruindo o próprio sistema operacional. `tune` é efeito e não
   demanda, porque demanda é verbo mais ÍNDICE e preferência carrega VALOR.
+  **A TELA TEM QUATRO REGIÕES FIXAS E UM CORPO ENTRE ELAS**, e as três de fora nasceram de coisas
+  que o dono leu e recusou. **O HEADER** é uma linha com fundo próprio (`Role::Header`): glifo, nome,
+  e então TODOS os atalhos da página, GERADOS do `KEYMAP` — o `the-brain-header-is-generated` recusa
+  um par que não esteja amarrado, e o defeito que ele fecha é o que o dono relatou duas vezes (`m r`
+  e `m o` existiam, faziam o que diziam, e não apareciam em lugar nenhum). Abre em várias linhas com
+  um chevron, e a altura é a que os pares PRECISAM, nunca o teto. Substituiu um `heading` de três
+  linhas cujo conteúdo era um glifo e um título — e, mais que isso, uma linha de atalhos que **não
+  era desenhada**: o `foot()` montava uma tabela com CINCO `Column::fill`, o `Table::resolve` admite
+  um, nada colocava, e a página não ensinava tecla nenhuma a ninguém. **O AVISO** é uma linha em
+  `Role::Danger`, sem título, e **só existe quando há algo no caminho** — era uma seção com duas
+  percentagens e a palavra `waiting`, e um estado sem sujeito não é um estado. **O RODAPÉ** é fixo na
+  última linha visível, com fundo próprio e **SEIS LINHAS SEMPRE** (`FOOT_LINES`): nome, a linha que
+  o buffer segura (um comando, um caminho), a FRASE em três linhas, a régua e os valores. Altura
+  fixa a pedido do dono — *"um tamanho sempre fixo e não variável"* —, porque altura que segue o
+  cursor move tudo o que está acima dela a cada seta. **A FRASE é o erro da máquina quando há um**,
+  e a descrição quando não: como PARÁGRAFO, inteiro, quebrado pelo hospedeiro. Ele era desenhado por
+  último e a altura era a soma das partes limitada a seis — a soma dava sete, e o erro era a parte
+  que caía fora; o dono relatou as mensagens tendo sumido. **E os valores são a ÚLTIMA linha**,
+  contados de baixo, senão sobrava uma linha em branco embaixo deles. Ele é medido ANTES de o corpo
+  ser posto: altura que sai do que o corpo deixou é altura em função de altura, que é o laço que o
+  `Fold::held` descreve.
+  **E o CABEÇALHO MEDE O NOME em vez de reservar 26 células** (`title_cells`): o nome do HOME vem
+  por `Input::Phrases` e o de uma tarefa pelo `TaskState::name_text` do mind — traduzidos pelo
+  hospedeiro, para MEDIR; o que se desenha continua sendo a chave. Reservado às cegas, a escada de
+  atalhos começava na célula 30 para um título de 5, que é o *"repleto de espaços desproporcionais"*
+  que o dono fotografou. A coluna do nome no log segue a mesma regra (`RunRecord::task_text`).
+  **E o CURSOR de uma página de tarefa anda numa lista PLANA de `Spot`** — a agenda, os passos, o
+  histórico — e não em três regiões com `Tab` entre elas. Uma lista, um `RET`, uma pergunta para o
+  rodapé, que é o molde do `place_of` das notificações. O índice de um SPOT não é o índice de uma
+  LINHA (a lista de linhas tem brancos e títulos), e confundir os dois pôs a faixa numa coisa e o
+  rodapé em outra — cobra o `the_band_and_the_footer_agree`. **E a janela dessa lista conta LINHAS
+  DE TELA** (`row_lines`): a descrição vale três linhas e UMA linha de lista, e medida em linhas de
+  lista a janela ficava dois curta — o cursor descia ao segundo e ao terceiro item do histórico e a
+  página não andava, *"e somente após mover novamente a seleção para baixo, ao quarto item"*. A
+  janela, o `follow`, a barra e o CLIQUE somam alturas.
+  **E o ponteiro alcança tudo** (inv. 19): clique seleciona, o segundo faz o que o `RET` faz —
+  abrir a tarefa, girar o anel, ligar o passo —, e um par ensinado do cabeçalho é um CONTROLE
+  (acende sob o ponteiro e roda o comando). Por isso o `m t` morreu: era o único atalho que
+  dependia de ONDE o cursor está, então aparecia ensinado com o cursor num item do histórico.
+  **E a rubrica `History` diz o alcance** (`3 / 10`, do `journal::RECENT` que atravessa no mind),
+  como `Steps` e `Activity` já dizem o deles; **e uma execução que deu certo NÃO devolve a
+  descrição da tarefa** ao rodapé — ela já está três linhas acima, e o dono leu o mesmo parágrafo
+  duas vezes na mesma tela.
+  **E O RODAPÉ É UM SÓ DESENHO, sem régua e sem sobra.** A régua saiu a pedido do
+  dono — ela custava à frase uma linha de que a frase precisava (*"por ter espaço vazio abaixo do
+  texto, então o texto DEVE ocupar todo o espaço disponível"*) e não sabia se aparecia: desenhada
+  na ÚLTIMA linha do bloco ela toma a borda da janela (a cláusula de resto do `paint::Rows::bottom`),
+  então numa altura era um traço colado no fundo sem nada embaixo e noutra não estava lá.
+  **A frase toma tudo o que resta** — só a linha dos valores é guardada, e só quando há valores —
+  **e ROLA** (`Command::Paragraph { first-row }`): quem conta as linhas é o HOSPEDEIRO, porque é ele
+  que tem a string traduzida e é ele que quebra; este lado guarda o DESLOCAMENTO e recebe de volta
+  só números que o hospedeiro já limitou. Ele desenha o polegar na última célula do retângulo (por
+  isso a frase orça uma célula a menos, como toda lista aqui), a roda sobre as palavras volta como
+  `input::scrolled` e o arrasto no polegar é o mesmo `bar_box` de sempre. O deslocamento é esquecido
+  com o ASSUNTO (`Told::subject`), senão a próxima linha abriria já rolada além do próprio fim.
+  **E o chevron existe sempre que ele FAZ alguma coisa** — há teclas escondidas, ou ele está ABERTO
+  e o controle é o que fecha: era só a primeira, e no instante em que tudo cabia nas filas abertas
+  ele sumia e não havia volta.
+  **E o bloco do PÉ toca o pé** (`Command::Anchor`): a superfície guarda `floor(altura/linha)`
+  linhas inteiras e um resto de menos de uma, que caía sob a última — *"um espaço após o `Last
+  run` … que varia de tamanho conforme a altura disponível"*, nove pixels medidos. O fundo já
+  tomava o resto; a TINTA não. Agora o buffer diz de que linha para baixo o quadro é ancorado
+  (`Screen::split`, quando o último bloco é fixo) e o hospedeiro conta de BAIXO (`Span::foot`), com
+  o fundo de cima esticando até a costura — senão o resto vira uma tira da cor da página entre o
+  container do log e o rodapé.
+- **O EMACS TEM UMA VIGIA, e ela é a primeira tarefa que só OLHA** (`tasks/emacs.rs`). Três perguntas:
+  o daemon responde (`emacsclient -e`, um processo, e `run` é o único método impuro), há um Emacs
+  que NÃO é cliente (`ronoctua_memory::emacs`, porque o `/proc` tem uma fronteira só), e o daemon é
+  mais velho que o último `doom sync`. Um Emacs autônomo parece o cliente na tela e não é: carregou
+  uma cópia própria da configuração, os buffers não são os da sessão, e fechar perde eles —
+  `emacsclient` começa com `emacs`, então um teste de prefixo na ordem errada chama TODO cliente de
+  autônomo, e há teste. O daemon fora do ar ganha BOTÃO (`systemctl --user start emacs.service`,
+  unidade de USUÁRIO, sem polkit e sem perguntar); o Emacs autônomo **não ganha nenhum**, porque o
+  que está aberto é o trabalho de alguém. E uma máquina sem Emacs nenhum não é uma máquina com
+  problema — `worth_saying` responde isso antes de qualquer frase.
 - **A atualização é declarada, e o brain só escolhe a hora** — `assets/updates.nix` gera a tabela
   Rust, as chaves que os dois idiomas devem, os dois roteiros e a recusa. O brain LÊ essa tabela
   (`build.rs`); ele já declarou os passos por conta e os ids saíram **disjuntos** dos da sequência.
   A colisão com o invariante 6 é estrutural: passo cujo programa a flake não põe **não pode nascer
   ligado**, não roda como root e tem de declarar a própria pré-condição; e passo nenhum instala.
   **Nada disso PERGUNTA** — regra polkit devolvendo `YES`, sem `sudo`, sem `pkexec`, sem
-  `systemd-run`; e há check. **A faixa do brain fica COLADA abaixo do minibuffer** (não na última
+  `systemd-run`; e há check. **E o passo `doom-sync` é `binary` de propósito**: `ronoctua-doom-sync`
+  vem do flake, mas nomeá-lo como `package` poria o Emacs e os quinze programas do `doom doctor` —
+  0,6 GiB — dentro do perfil MÍNIMO, que não tem editor nenhum. `binary` é procurado pelo nome, o
+  gerador então o força desligado (inv. 6), e quem o liga é o `nix/modules/emacs.nix`, que é o
+  módulo que SABE que o Emacs está instalado. **O interruptor por passo alcança a execução**: o
+  `turned_on` do script gerado lê três camadas — o padrão da distro, a tabela da máquina
+  (`/etc/ronoctua/updates.conf`), e por cima delas os GIROS da pessoa, que o brain escreve de
+  `brain.json` em `$XDG_STATE_HOME/ronoctua/update-steps.conf`. Antes ele escrevia um arquivo que
+  ninguém lia: a tecla existia, gravava, e a sequência rodava exatamente o que rodava antes. **A
+  camada da pessoa é só da metade DELA** — a metade root roda como root, que não tem como achar o
+  arquivo de ninguém, e as formas de dar-lhe um acabam todas num diretório de root que um membro de
+  `users` pode escrever. Os seis passos root ficam com a opção do Nix e a página os DESENHA
+  recusando, que é a resposta que a vista do Syncthing já dá.
+  **A faixa do brain fica COLADA abaixo do minibuffer** (não na última
   linha da superfície, que se moveria com a expansão): ícone, frase, contagem no relógio de 1 s que
-  o rodapé já bate, e dois botões que têm tecla.
+  o rodapé já bate, e dois botões que têm tecla. **E ela desenha também um AVISO PERMANENTE**
+  (`task::Notice`, levantado por `Report::say`): uma VIGIA não tem outro resultado senão uma frase, e
+  uma frase que só aparecesse numa tela que alguém tem de abrir seria uma vigia que ninguém ouve. Uma
+  contagem regressiva ganha a linha quando há as duas — entre "esta máquina se reconstrói em quarenta
+  segundos" e "o daemon do seu editor caiu", a do prazo é a que espera menos. O aviso carrega CHAVES
+  e um id de COMANDO, nunca frases nem ações, e **pode não ter botão**: o do Emacs aberto sem daemon
+  não oferece nada, porque o que está aberto é o trabalho de alguém e nada aqui sabe se foi salvo.
 - **`C-v` e `C-i` são prévia e fatos no gerenciador** — colunas à direita a partir de
   `space.files.panelsFrom`, faixa embaixo abaixo disso, e **as duas viram juntas**. Só o
   `ronoctua-inspect` decodifica (crate PRÓPRIO: o `ronoctua-files` constrói o binário que roda como
@@ -1509,6 +1731,19 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   lateral sem hover nas duas primeiras linhas, a faixa acendendo a listagem, e o topo da prévia se
   mexendo ao rolar a listagem (era `chrome - offset`). **A faixa de baixo não é da região**: tem
   linhas próprias, o `row_count` não a conta e as portas a desenham por `strip_rows`.
+- **Duas grandezas que atravessam em UNIDADES diferentes, e um formatador só.**
+  `Vital::RamUsed` viaja em POR CENTO e os dois `*Stall` em POR MILLE — o protocolo diz isso em cada
+  variante — e o brain dividia os dois por dez: uma máquina com 31% da memória desenhava **3,1%**, no
+  rodapé da home e em toda página de tarefa. Três por cento é plausível, então lia-se como fato. O
+  teste era VERDE porque perguntava `percent(310)`, que é a pergunta feita na unidade que faz a função
+  acertar. Agora a unidade sai da VARIANTE (`reading(mind, of)`), o que torna escolher a errada
+  indizível. Grandeza que cruza a parede leva a unidade no nome ou no tipo.
+- **Orçamento de coluna é da LÍNGUA MAIS LONGA, nunca do inglês** — e o `*-driven` só mede o que foi
+  DESENHADO (`every_label_fits` lê o que `driven::note` viu). A coluna `note` do brain reservava 12 e
+  `brain-hold-cpu` sai `Processador ocupado`, 19 células; a bateria só acusou `ram` porque nenhuma
+  fixture segurava por processador. Com uma fixture por motivo de espera, o mesmo check passou a
+  acusar CINCO rótulos cortados — dois deles em INGLÊS. Ao criar uma vista, desenhe UM quadro por
+  variante do enum que vira chave.
 - **Spawn em unidade do systemd: use CAMINHO, nunca nome** — o `PATH` é mínimo e a falha aparece longe da causa. O caminho do store vem por `option_env!`, posto no `nix/rust.nix`. E **`min_cols` é piso de PREFERÊNCIA**; o que não cede é "nada vaza da tela". `Shrink`≠`removable`. **Upstream do Niri: `niri-wm/niri`**, por calendário — pinar tag, nunca `main`. Blur da 26.04 não.
 
 ## Como trabalhar — o dono cobrou o TEMPO duas vezes, e a causa era sempre a mesma
@@ -1521,6 +1756,13 @@ isso moram aqui, no único arquivo que chega sozinho ao contexto.
   — dizendo qual check você acrescentaria, o que ele pega e quanto custa. Quem decide o escopo é o
   dono. Não vale para o que o pedido claramente inclui, nem para deixar sem conserto um check que
   você ACABOU de ver falhar: aí é reportar, não seguir em frente.
+- **`cargo clippy --workspace` NÃO alcança os buffers, e check nenhum os lê.** O `nix/rust.nix` tira
+  `buffers/` da fonte de propósito (um comentário editado lá recompilava o workspace inteiro) e o
+  `nix/buffers.nix` os CONSTRÓI — build não é clippy. Rode à mão no buffer que tocar:
+  `cd buffers/<id> && cargo clippy --all-targets --target wasm32-wasip2 -- -D warnings`. Achou SETE
+  no brain, e duas eram uma FEATURE ausente: `brain-next` e `brain-soon` vivas nos dois idiomas com
+  nada desenhando. Os três de tabela assada (`glyphs`, `lucide`, `unicode`) pedem variáveis de build
+  e falham fora do Nix — isso não é lint.
 - **SÓ OS CHECKS DO QUE MUDOU** (drivers do que você tocou, `nix fmt -- --check`, `english-names`:
   ~3 min). O `most` são **16 minutos** e fica para antes do commit; o `gate` é do dono. E **congele a
   árvore antes de disparar bateria** — o Nix a fotografa na avaliação, e editar um comentário no meio
@@ -1573,6 +1815,36 @@ isso moram aqui, no único arquivo que chega sozinho ao contexto.
   e não diz de que depende.
 - **`nix run .#png` ANTES DA PALAVRA "PRONTO".** Verde não é prova, e desde que olhar custa 0,2 s não
   há desculpa. Teste que compara ESTADO não vê espaço em branco, sobreposição nem faixa de seleção.
+  **E TODO buffer é fotografável — se um não for, a ferramenta é que está incompleta.** Eu relatei
+  não ter conseguido fotografar a página do brain e o dono disse que isso está errado; estava. O
+  `render-png` carregava o componente, dirigia as entradas e não tinha como entregar a RESPOSTA do
+  hospedeiro, então o brain — cuja tela inteira é a `mind` — só sabia desenhar a tela de antes de
+  chegar qualquer coisa. `--mind <arquivo.json>` come a JSON do PRÓPRIO daemon (uma linha do socket
+  serve) e converte pelo caminho de produção. `--list` imprime a display list em vez de desenhar,
+  que é a pergunta que uma foto não responde: uma faixa que ninguém vê porque há uma run em cima,
+  uma linha desenhada depois do fim da janela. As outras três telas que dependem do hospedeiro —
+  disco, fila, memória — continuam desenhando vazias, e a porta para elas é a mesma.
+- **UM CHECK QUE LÊ FONTE ABRE COM O PRELÚDIO, e isso é cobrado** (`pyPrelude` em
+  `tests/checks.nix`; cobra o `checks-do-not-pass-by-coincidence`). São 126 os que leem fonte e 125
+  estão nele. Oito ferramentas, uma resposta por pergunta: `code_of` (tira comentários E literais,
+  para quando a agulha é CÓDIGO), `uncommented` (tira só os comentários, para quando a agulha É um
+  literal — um programa, um tipo MIME, uma notação de tecla), `hashless` (o `#` do Nix, do Python,
+  do shell e do `.ftl`), `body_of` (o corpo de um item, por CHAVES e a partir do NOME — nunca de uma
+  assinatura, que muda quando um parâmetro entra), `scope` (o bloco cujo CABEÇALHO casa, porque um
+  nome só é único dentro de algo), `shut_at` (os argumentos de uma chamada, pelos PARÊNTESES dela) e
+  `floor`/`must` (piso de contagem: captura vazia é RUÍDO, não um verde) e `without_tests` (o
+  arquivo SEM o `#[cfg(test)]`, porque um teste USA o que testa: o check do ponteiro achou o
+  `Input::Click` dentro do teste depois de ele ter sido apagado do produto).
+  **E o check DIZ que tipo de pergunta faz**: `# FILE-WIDE:` quando a resposta é sobre o arquivo
+  inteiro, `# PROSE:` quando o assunto SÃO as palavras (uma atribuição, uma referência a uma seção,
+  a frase ao lado de uma constante), `# PARSED:` quando o arquivo é decodificado e não varrido (um
+  PNG, um JSON, uma tabela que o compilador escreveu). Uma isenção que a regra deduz é uma que
+  ninguém revisa.
+- **SABOTAGEM É SÍNCRONA, sempre.** Quebrar, rodar o check, restaurar — os três na MESMA chamada, e
+  nunca com o build em segundo plano: o arquivo fica sabotado enquanto ele roda, e a próxima coisa
+  que compilar pega a versão quebrada. Aconteceu nesta sessão: um `cargo build` no meio pegou o
+  `render-png` sem o `--mind`, a foto seguinte saiu com a tela vazia, e a causa estava dois passos
+  atrás. Se o check é lento, ele é lento — espere.
 - **ARQUIVO NOVO PRECISA DE `git add -N`** — o que o git não rastreia não entra na fonte do flake, e
   o erro aparece como "can't find bin" minutos depois.
 - **O que eu subo, eu encerro** (daemon de teste, VM, processo solto), depois de conferir que não é

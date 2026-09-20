@@ -2325,8 +2325,15 @@ impl State {
                 | Input::Queue(_)
                 | Input::Rack(_)
                 | Input::Mind(_)
+            | Input::Hover { .. }
+            | Input::Unhover
                 | Input::Keyboards(_)
                 | Input::Formatted(_)
+
+                // A GRID THAT PAGES, not one that scrolls: `C-,` turns the
+                // page and the grid is sized to the window it is in.
+                | Input::Wheel(_)
+            | Input::Scrolled(_)
                 | Input::EnterState(_) => {
                     vec![]
                 }

@@ -171,6 +171,8 @@ mod tests {
 
     fn a_mind() -> Mind {
         Mind {
+            journal: Vec::new(),
+            notice: None,
             now: 1_700_000_000,
             pulse: crate::pulse::Pulse {
                 at: 1_700_000_000,
@@ -184,6 +186,7 @@ mod tests {
                 on_battery: Some(false),
             },
             tasks: vec![TaskState {
+                kind: crate::task::Kind::Routine,
                 id: "system-update".to_owned(),
                 standing: Standing::Queued,
                 enabled: true,
@@ -192,6 +195,7 @@ mod tests {
                 next: 1_700_003_600,
                 hold: Some(Hold::Ram),
                 why_not: String::new(),
+                history: Vec::new(),
                 last: Some(RunRecord {
                     task: "system-update".to_owned(),
                     began: 1_699_000_000,
@@ -212,7 +216,7 @@ mod tests {
                     command: "nixos-rebuild boot --flake /etc/nixos".to_owned(),
                     needs_root: true,
                     on: true,
-                    changed: false,
+                    on_by_default: true,
                 }],
             }],
             queue: vec!["system-update".to_owned()],

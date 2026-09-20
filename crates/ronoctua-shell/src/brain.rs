@@ -64,6 +64,13 @@ pub enum Hit {
     Abort,
     /// Do not wait the countdown out — start now.
     Proceed,
+    /// Do whatever the standing notice offered.
+    ///
+    /// ONE variant and not one per notice, because what it runs is named by
+    /// the notice itself — a command id, which the registry already resolves.
+    /// A variant per offer would be this enum growing every time a watch
+    /// learned to suggest something.
+    Notice,
 }
 
 /// One drawn piece of the line.
@@ -109,6 +116,12 @@ pub struct Words<'a> {
     pub abort_keys: &'a str,
     /// The same, for `brain-proceed`.
     pub proceed_keys: &'a str,
+    /// And how a standing notice's button is typed.
+    ///
+    /// The same shape as the two above and for the same reason: the band
+    /// DRAWS it, and a key that lived in the table and again in the drawing
+    /// would be two answers to "which key does this".
+    pub notice_keys: &'a str,
 }
 
 /// How many lines this region takes for what is showing.
@@ -124,10 +137,11 @@ pub struct Words<'a> {
 /// line to spill onto, which is what makes the sentence the thing that gives
 /// way rather than the layout.
 #[must_use]
-pub const fn rows(showing: Option<&Announcement>) -> u16 {
-    match showing {
-        Some(_) => 1,
-        None => 0,
+pub const fn rows(showing: Option<&Announcement>, saying: Option<&ronoctua_brain::Notice>) -> u16 {
+    if showing.is_some() || saying.is_some() {
+        1
+    } else {
+        0
     }
 }
 
@@ -163,11 +177,20 @@ pub fn seconds_left(a: &Announcement, now: i64) -> i64 {
 #[must_use]
 pub fn lines(
     showing: Option<&Announcement>,
+    saying: Option<&ronoctua_brain::Notice>,
     columns: u16,
     now: i64,
     words: &Words<'_>,
 ) -> Option<Line> {
-    let a = showing?;
+    // A COUNTDOWN WINS THE LINE. There is one line and it cannot hold two
+    // things; between "this machine is about to rebuild itself in forty
+    // seconds" and "your editor's daemon is not running", the first is the one
+    // with a deadline on it. The second comes back the moment the first is
+    // over — the watch runs every five minutes and its notice is not cleared
+    // by anything else.
+    let Some(a) = showing else {
+        return saying.map(|n| notice_line(n, columns, words));
+    };
 
     // THE MARGIN IS THE MODELINE'S, and not `chrome::INSET`.
     //
@@ -254,6 +277,56 @@ pub fn lines(
     });
 
     Some(line)
+}
+
+/// The same line, for something the brain wants said rather than a countdown.
+///
+/// # Why it is a second builder and not a branch in the first
+///
+/// Because almost nothing is shared. A countdown has a pie, two answers and a
+/// deadline; a notice has a sentence and at most one button, and the button is
+/// whatever the task named rather than one of a fixed pair. Folding them
+/// together would be a function whose every line is an `if`.
+///
+/// What IS shared is the shape — the glyph in the margin, the cluster on the
+/// right laid out before the sentence, the sentence eliding into what is left
+/// — and that is shared by calling the same `control` and the same margins.
+fn notice_line(n: &ronoctua_brain::Notice, columns: u16, words: &Words<'_>) -> Line {
+    let left = tokens::space::MODELINE_EDGELEFT;
+    let mut line = Line::default();
+    line.pieces.push(Piece {
+        at: left,
+        text: tokens::icon::BRAIN.to_string(),
+        color: tokens::color::BRAIN_TEXT,
+        hit: None,
+        explain: None,
+    });
+    let at = left + 2;
+    let mut right = columns.saturating_sub(tokens::space::MODELINE_EDGERIGHT);
+    // THE BUTTON, WHEN THERE IS ONE — and there is not always one. A notice
+    // about a second copy of Emacs offers nothing, because what is open is
+    // somebody's work and nothing here knows whether it is saved.
+    if let Some(act) = n.act.as_deref() {
+        let label = format!("cmd-{act}");
+        right = control(
+            &mut line,
+            right,
+            words.notice_keys,
+            &words.texts.t(&label),
+            Hit::Notice,
+            words.texts.t(&label),
+        );
+        right = right.saturating_sub(tokens::space::MODELINE_SEGMENTGAP);
+    }
+    let room = right.saturating_sub(at).saturating_sub(1);
+    line.pieces.push(Piece {
+        at,
+        text: layout::elide_end(&words.texts.t(&n.says), room),
+        color: tokens::color::BRAIN_TEXT,
+        hit: None,
+        explain: None,
+    });
+    line
 }
 
 /// One control — the bracketed key and the label — placed with its right edge
@@ -429,224 +502,13 @@ pub fn abort(mind: &Mind) -> ronoctua_brain::Ask {
 // The daemon's mind, as the component draws it
 // ---------------------------------------------------------------------------
 
-/// The whole mind, turned into the record the WIT carries.
+/// The conversion to the WIT's records lives in [`crate::mind_wire`].
 ///
-/// # What crosses, and what does not
-///
-/// The daemon's internal flags stay here: `postponed` is a decision in flight
-/// between two of its threads, and by the time anything is drawn the runner has
-/// already turned it into a record and a new moment — a field showing it would
-/// be a field that is empty every time anybody looks.
-///
-/// The DATES are formatted on this side. The component has no zone and no
-/// calendar (invariant 11), so it gets the number for the arithmetic and the
-/// text for the date it cannot compute. ISO, because the buffer draws it
-/// exactly as it arrives and *19 Aug* against *19 ago* is the kind of thing it
-/// must not invent.
-///
-/// And the two `Option`s become the shapes a record can carry: a hold that is
-/// nothing is [`ronoctua_protocol::HoldKind::None`], and a run that never
-/// happened is `ran: false` — `began: 0` would be a moment in 1970, which is a
-/// date the screen would draw.
-#[must_use]
-pub fn mind_of(mind: &Mind, zone: &ronoctua_files::when::Zone) -> ronoctua_protocol::Mind {
-    ronoctua_protocol::Mind {
-        now: u64::try_from(mind.now).unwrap_or(0),
-        pulse: pulse_of(&mind.pulse),
-        tasks: mind.tasks.iter().map(|t| task_of(t, zone)).collect(),
-        queue: mind.queue.clone(),
-        running: mind.running.clone(),
-        rehearsing: mind.rehearsing.clone().unwrap_or_default(),
-        announcement: mind
-            .announcement
-            .as_ref()
-            .map(announcement_of)
-            .unwrap_or_default(),
-        gate: ronoctua_protocol::Gate {
-            ram_ceiling_pct: mind.prefs.gate.ram_ceiling_pct,
-            cpu_stall_per_mille: mind.prefs.gate.cpu_stall_per_mille,
-            abort_on_battery: mind.prefs.gate.abort_on_battery,
-        },
-        // THE LADDER CROSSES, and is not a constant on the other side: which
-        // cadences are worth having is a policy with its reason written in
-        // `ronoctua_brain::prefs`, and a screen that stepped by one would take
-        // twenty-three presses to get from a month to a week.
-        cadence: ronoctua_brain::prefs::CADENCE.to_vec(),
-    }
-}
-
-/// The warning, as the WIT carries it.
-fn announcement_of(a: &Announcement) -> ronoctua_protocol::Announcement {
-    ronoctua_protocol::Announcement {
-        task: a.task.clone(),
-        total_seconds: a.total_seconds,
-        deadline: u64::try_from(a.deadline).unwrap_or(0),
-        why: a.why.clone(),
-    }
-}
-
-/// The pulse, as a LIST of what was actually measured.
-///
-/// What the machine did not measure does not report, and zero is a real
-/// reading: a kernel with no `/proc/pressure/cpu` simply has no `cpu-stall`
-/// here, and the screen draws a dash instead of a number nobody took. Turning
-/// the `None` into a zero is the one thing this conversion must not do.
-fn pulse_of(p: &ronoctua_brain::Pulse) -> ronoctua_protocol::Pulse {
-    use ronoctua_protocol::{Vital, VitalSign};
-    let mut signs = Vec::new();
-    if let Some(v) = p.ram_used_pct {
-        signs.push(VitalSign {
-            of: Vital::RamUsed,
-            amount: v,
-        });
-    }
-    if let Some(v) = p.memory_stall {
-        signs.push(VitalSign {
-            of: Vital::MemoryStall,
-            amount: v,
-        });
-    }
-    if let Some(v) = p.cpu_stall {
-        signs.push(VitalSign {
-            of: Vital::CpuStall,
-            amount: v,
-        });
-    }
-    if let Some(v) = p.on_battery {
-        signs.push(VitalSign {
-            of: Vital::OnBattery,
-            amount: u16::from(v),
-        });
-    }
-    ronoctua_protocol::Pulse {
-        at: u64::try_from(p.at).unwrap_or(0),
-        signs,
-    }
-}
-
-/// One task's row.
-fn task_of(
-    t: &ronoctua_brain::TaskState,
-    zone: &ronoctua_files::when::Zone,
-) -> ronoctua_protocol::TaskState {
-    ronoctua_protocol::TaskState {
-        id: t.id.clone(),
-        standing: match t.standing {
-            ronoctua_brain::Standing::Idle => ronoctua_protocol::Standing::Idle,
-            ronoctua_brain::Standing::Queued => ronoctua_protocol::Standing::Queued,
-            ronoctua_brain::Standing::Running => ronoctua_protocol::Standing::Running,
-        },
-        enabled: t.enabled,
-        interval_days: t.interval_days,
-        part_of_day: part_of(t.part_of_day),
-        next: u64::try_from(t.next).unwrap_or(0),
-        // ZERO IS "THERE IS NONE", and it is not a moment: a task that is
-        // switched off has no next hour, and 1970 is not the honest way to say
-        // so. The text is empty in that case, and the screen has a word for it.
-        next_text: if t.next == 0 {
-            String::new()
-        } else {
-            iso(t.next, zone)
-        },
-        hold: t.hold.map_or(ronoctua_protocol::HoldKind::None, hold_of),
-        why_not: t.why_not.clone(),
-        ran: t.last.is_some(),
-        last: t.last.as_ref().map(|r| run_of(r, zone)).unwrap_or_default(),
-        steps: t.steps.iter().map(step_of).collect(),
-    }
-}
-
-/// One run of the journal.
-fn run_of(
-    r: &ronoctua_brain::RunRecord,
-    zone: &ronoctua_files::when::Zone,
-) -> ronoctua_protocol::RunRecord {
-    ronoctua_protocol::RunRecord {
-        began: u64::try_from(r.began).unwrap_or(0),
-        ended: u64::try_from(r.ended).unwrap_or(0),
-        when_text: iso(r.began, zone),
-        outcome: match r.kind {
-            ronoctua_brain::OutcomeKind::Skipped => ronoctua_protocol::OutcomeKind::Skipped,
-            ronoctua_brain::OutcomeKind::Done => ronoctua_protocol::OutcomeKind::Done,
-            ronoctua_brain::OutcomeKind::Failed => ronoctua_protocol::OutcomeKind::Failed,
-        },
-        at: r.at.clone(),
-        why: r.why.clone(),
-        trouble: r.trouble.clone(),
-        steps: r
-            .steps
-            .iter()
-            .map(|s| ronoctua_protocol::StepOutcome {
-                id: s.id.clone(),
-                ok: s.ok,
-                seconds: s.seconds,
-                trouble: s.trouble.clone(),
-            })
-            .collect(),
-    }
-}
-
-/// One step of a task.
-fn step_of(s: &ronoctua_brain::StepState) -> ronoctua_protocol::TaskStep {
-    ronoctua_protocol::TaskStep {
-        id: s.id.clone(),
-        command: s.command.clone(),
-        needs_root: s.needs_root,
-        on: s.on,
-        changed: s.changed,
-    }
-}
-
-/// What is in the way, as the WIT names it.
-const fn hold_of(h: ronoctua_brain::Hold) -> ronoctua_protocol::HoldKind {
-    match h {
-        ronoctua_brain::Hold::Ram => ronoctua_protocol::HoldKind::Ram,
-        ronoctua_brain::Hold::Cpu => ronoctua_protocol::HoldKind::Cpu,
-        ronoctua_brain::Hold::Battery => ronoctua_protocol::HoldKind::Battery,
-        ronoctua_brain::Hold::Busy => ronoctua_protocol::HoldKind::Busy,
-        ronoctua_brain::Hold::Network => ronoctua_protocol::HoldKind::Network,
-        ronoctua_brain::Hold::Asleep => ronoctua_protocol::HoldKind::Asleep,
-    }
-}
-
-/// Which stretch of the day, as the WIT names it.
-pub(crate) const fn part_of(p: ronoctua_brain::PartOfDay) -> ronoctua_protocol::DayPart {
-    match p {
-        ronoctua_brain::PartOfDay::Any => ronoctua_protocol::DayPart::Any,
-        ronoctua_brain::PartOfDay::Night => ronoctua_protocol::DayPart::Night,
-        ronoctua_brain::PartOfDay::Morning => ronoctua_protocol::DayPart::Morning,
-        ronoctua_brain::PartOfDay::Afternoon => ronoctua_protocol::DayPart::Afternoon,
-        ronoctua_brain::PartOfDay::Evening => ronoctua_protocol::DayPart::Evening,
-    }
-}
-
-/// The reverse: what the component chose, back into the daemon's word.
-///
-/// `None` for a value this build does not know, and it is REFUSED rather than
-/// rounded to a neighbour — rounding here would move a rebuild out of the small
-/// hours into the middle of somebody's afternoon.
-pub(crate) const fn part_back(p: ronoctua_protocol::DayPart) -> ronoctua_brain::PartOfDay {
-    match p {
-        ronoctua_protocol::DayPart::Any => ronoctua_brain::PartOfDay::Any,
-        ronoctua_protocol::DayPart::Night => ronoctua_brain::PartOfDay::Night,
-        ronoctua_protocol::DayPart::Morning => ronoctua_brain::PartOfDay::Morning,
-        ronoctua_protocol::DayPart::Afternoon => ronoctua_brain::PartOfDay::Afternoon,
-        ronoctua_protocol::DayPart::Evening => ronoctua_brain::PartOfDay::Evening,
-    }
-}
-
-/// A moment as the component draws it: ISO, in the machine's own zone.
-///
-/// `ronoctua_files::when::civil` and not a second calendar — it is the one this
-/// repository already checks against `coreutils date` on the real zone, and a
-/// second implementation would be the same hundred lines with a different bug.
-fn iso(at: i64, zone: &ronoctua_files::when::Zone) -> String {
-    let c = ronoctua_files::when::civil(at, zone);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}",
-        c.year, c.month, c.day, c.hour, c.minute
-    )
-}
+/// It moved out so `ronoctua-render-png` could link it without linking this
+/// file, which reaches for smithay, `crate::band` and `crate::leader`. Re-
+/// exported here because every caller in the footer already says
+/// `crate::brain::mind_of`, and a move is not a reason to touch them.
+pub(crate) use crate::mind_wire::{mind_of, part_back};
 
 #[cfg(test)]
 mod tests {
@@ -669,16 +531,77 @@ mod tests {
     // fixture moves with them: written as literals, this test went on proving
     // that `SPC s a` was drawn for a fortnight after `s a` stopped existing.
     static ABORT: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| format!("SPC {}", crate::leader::BRAIN_ABORT_KEYS));
+        std::sync::LazyLock::new(|| crate::leader::BRAIN_ABORT_KEYS.to_owned());
     static PROCEED: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| format!("SPC {}", crate::leader::BRAIN_PROCEED_KEYS));
+        std::sync::LazyLock::new(|| crate::leader::BRAIN_PROCEED_KEYS.to_owned());
+    static NOTICE: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| crate::leader::BRAIN_NOTICE_KEYS.to_owned());
 
     fn bundle(t: &ronoctua_i18n::Texts) -> Words<'_> {
         Words {
             texts: t,
             abort_keys: &ABORT,
             proceed_keys: &PROCEED,
+            notice_keys: &NOTICE,
         }
+    }
+
+    fn a_notice(act: Option<&str>) -> ronoctua_brain::Notice {
+        ronoctua_brain::Notice {
+            task: "emacs-daemon".to_owned(),
+            says: "emacs-no-daemon".to_owned(),
+            act: act.map(ToOwned::to_owned),
+        }
+    }
+
+    /// A STANDING NOTICE GETS THE LINE WHEN NOTHING IS COUNTING DOWN.
+    ///
+    /// And loses it when something is: there is one line, and between "this
+    /// machine rebuilds itself in forty seconds" and "your editor's daemon is
+    /// not running", the one with a deadline on it wins. The second is not
+    /// lost — the watch runs every five minutes and nothing else clears its
+    /// notice, so it is back as soon as the countdown is over.
+    #[test]
+    fn a_notice_takes_the_line_only_when_nothing_is_counting_down() {
+        let t = words();
+        let w = bundle(&t);
+        let n = a_notice(Some("brain-start-emacs"));
+        assert_eq!(rows(None, Some(&n)), 1);
+        assert!(lines(None, Some(&n), 100, 0, &w).is_some());
+
+        let a = announced(60, 1_000);
+        assert_eq!(rows(Some(&a), Some(&n)), 1, "two things, still one line");
+        let both = lines(Some(&a), Some(&n), 100, 940, &w).expect("a line");
+        let said: String = both.pieces.iter().map(|p| p.text.as_str()).collect();
+        assert!(
+            !said.contains(&t.t("emacs-no-daemon")),
+            "the notice took the countdown's line: {said}"
+        );
+
+        assert_eq!(rows(None, None), 0);
+        assert!(lines(None, None, 100, 0, &w).is_none());
+    }
+
+    /// A NOTICE WITH NOTHING TO OFFER DRAWS NO BUTTON.
+    ///
+    /// The one about a second copy of Emacs has none on purpose: what is open
+    /// is somebody's work, and nothing here knows whether it is saved. A
+    /// button drawn anyway would be a button that closes it.
+    #[test]
+    fn a_notice_without_an_offer_has_no_control() {
+        let t = words();
+        let w = bundle(&t);
+        let with =
+            lines(None, Some(&a_notice(Some("brain-start-emacs"))), 100, 0, &w).expect("a line");
+        assert!(
+            with.pieces.iter().any(|p| p.hit == Some(Hit::Notice)),
+            "a notice that offers something drew no control"
+        );
+        let without = lines(None, Some(&a_notice(None)), 100, 0, &w).expect("a line");
+        assert!(
+            without.pieces.iter().all(|p| p.hit.is_none()),
+            "a notice with nothing to offer drew a control anyway"
+        );
     }
 
     #[test]
@@ -687,18 +610,18 @@ mod tests {
         // is the same height on every output, and a line that wrapped on the
         // laptop and not on the monitor would reflow every buffer when the
         // focus changed screen.
-        assert_eq!(rows(None), 0);
+        assert_eq!(rows(None, None), 0);
         let a = announced(60, 1_000);
-        assert_eq!(rows(Some(&a)), 1);
+        assert_eq!(rows(Some(&a), None), 1);
         let t = words();
         let w = bundle(&t);
         for columns in [20_u16, 40, 80, 200] {
             assert!(
-                lines(Some(&a), columns, 940, &w).is_some(),
+                lines(Some(&a), None, columns, 940, &w).is_some(),
                 "it went away at {columns} columns"
             );
         }
-        assert!(lines(None, 80, 940, &w).is_none());
+        assert!(lines(None, None, 80, 940, &w).is_none());
     }
 
     #[test]
@@ -710,7 +633,7 @@ mod tests {
         let w = bundle(&t);
         let a = announced(60, 1_000);
         for columns in [20_u16, 30, 40, 80, 120, 200] {
-            let line = lines(Some(&a), columns, 940, &w).expect("the line went away");
+            let line = lines(Some(&a), None, columns, 940, &w).expect("the line went away");
             for p in &line.pieces {
                 assert!(
                     p.at + layout::width(&p.text) <= columns,
@@ -730,7 +653,7 @@ mod tests {
         let t = words();
         let w = bundle(&t);
         let a = announced(60, 1_000);
-        let line = lines(Some(&a), 120, 940, &w).expect("the line went away");
+        let line = lines(Some(&a), None, 120, 940, &w).expect("the line went away");
         for hit in [Hit::Abort, Hit::Proceed] {
             let mine: Vec<&Piece> = line.pieces.iter().filter(|p| p.hit == Some(hit)).collect();
             assert_eq!(mine.len(), 2, "{hit:?} does not have the key and the label");
@@ -756,7 +679,7 @@ mod tests {
         let t = words();
         let w = bundle(&t);
         let a = announced(60, 1_000);
-        let line = lines(Some(&a), 120, 940, &w).expect("the line went away");
+        let line = lines(Some(&a), None, 120, 940, &w).expect("the line went away");
         let proceed = line
             .pieces
             .iter()
@@ -797,7 +720,7 @@ mod tests {
         let t = words();
         let w = bundle(&t);
         let a = announced(60, 1_000);
-        let line = lines(Some(&a), 200, 958, &w).expect("the line went away");
+        let line = lines(Some(&a), None, 200, 958, &w).expect("the line went away");
         // BY ITS COLUMN, and not by "the longest piece": the mark in the margin
         // is one character and four bytes, and a test that went looking for a
         // long `String` found the glyph.
@@ -843,7 +766,7 @@ mod tests {
             },
             ..Mind::default()
         };
-        let over = mind_of(&mind, &ronoctua_files::when::Zone::utc());
+        let over = mind_of(&mind, &ronoctua_files::when::Zone::utc(), &words());
         let of: Vec<ronoctua_protocol::Vital> = over.pulse.signs.iter().map(|s| s.of).collect();
         assert_eq!(
             of,
@@ -862,6 +785,7 @@ mod tests {
     fn a_task_that_never_ran_says_so_instead_of_dating_1970() {
         let mind = Mind {
             tasks: vec![ronoctua_brain::TaskState {
+                kind: ronoctua_brain::Kind::Routine,
                 id: "system-update".to_owned(),
                 standing: ronoctua_brain::Standing::Idle,
                 enabled: true,
@@ -870,12 +794,13 @@ mod tests {
                 next: 0,
                 hold: None,
                 why_not: "off".to_owned(),
+                history: Vec::new(),
                 last: None,
                 steps: Vec::new(),
             }],
             ..Mind::default()
         };
-        let over = mind_of(&mind, &ronoctua_files::when::Zone::utc());
+        let over = mind_of(&mind, &ronoctua_files::when::Zone::utc(), &words());
         let row = &over.tasks[0];
         assert!(!row.ran, "a run that never happened became a run");
         assert!(row.next_text.is_empty(), "no next hour, and it dated one");
@@ -884,7 +809,7 @@ mod tests {
         // has no calendar (invariant 11).
         let mut with = mind;
         with.tasks[0].next = 1_700_000_000;
-        let over = mind_of(&with, &ronoctua_files::when::Zone::utc());
+        let over = mind_of(&with, &ronoctua_files::when::Zone::utc(), &words());
         assert_eq!(over.tasks[0].next_text, "2023-11-14 22:13");
     }
 }

@@ -111,6 +111,40 @@
     # accent, so both still read on top of it.
     shelf = "neutral.window";
 
+    # THE GROUND OF A CONTAINER INSIDE A BUFFER WINDOW, and it exists because
+    # `shelf` above is INVISIBLE there.
+    #
+    # A shelf is `neutral.window`, which is right by 0,018 over the footer's
+    # `surface.chrome`. A buffer's own ground is `surface.buffer`, which is
+    # `neutral.window` — the same recipe. So a container drawn on a shelf
+    # inside a buffer is drawn in the colour of the page it sits on: the
+    # command is emitted, the quad is painted, and the pixels do not move.
+    # Measured, not reasoned: the brain's history rows emitted
+    # `selection surface-shelf` and the right edge of every one of them read
+    # `#08150A`, exactly the page. The owner asked for a container with a
+    # background of its own and got a container with no background at all.
+    #
+    # `neutral.chrome-raised` is 0,035 above the window — the next rung that
+    # exists, and the same device one step over: no border, no radius, no
+    # shadow (invariant 15). The hover row (0,070 above chrome) and the focused
+    # one (the accent) both still read on top of it.
+    container = "neutral.chrome-raised";
+
+    # AND THE GROUND OF A BUFFER'S HEADER LINE, one rung above that again.
+    #
+    # The header is chrome — a glyph, the screen's name, and every shortcut it
+    # answers to — and it has to read as chrome against a page of content. The
+    # container above is meant to be quiet; this one is meant to be a band.
+    #
+    # IT WAS `neutral.chrome-loud`, AND THAT RUNG WAS THE HOVER BAND'S.
+    # Measured on 2026-09-20 across the nine themes: `surface.header` against
+    # `surface.hover` came to 0,0043 in darkside — the page's name and the
+    # pointer's row drawn in the same colour. `chrome-loud` could not be the
+    # one to move, because it is `notification.background` too and that hex is
+    # frozen in `owl.reference.nix`; so the header took a rung of its own. The
+    # whole argument is written where the rung is, in `NEUTRAL_PAINT`.
+    header = "neutral.chrome-band";
+
     # THE ONE SURFACE WITH AN ALPHA, and it is the film's controls.
     #
     # The file manager's transport is painted ON the picture — the owner asked
@@ -518,6 +552,21 @@
     # be confused. `alternate` measures 0.079 from `mine` and 0.26 from an
     # ordinary row.
     shared = "alternate.text";
+
+    # A TASK THAT RUNS ONCE AND THEN IS GONE.
+    #
+    # The brain's list has two kinds of row and the owner asked for them to be
+    # told apart by a glyph AND a colour: a routine keeps the ordinary ramp, a
+    # one-shot does not. Same family as `shared` above, and for a reason that
+    # is nearly the same one: `alternate` is what this system spends on "the
+    # other kind of the thing you are looking at". A routine is the ramp; this
+    # is the ramp's alternative.
+    #
+    # A NAME OF ITS OWN even though the recipe matches `shared`, because the
+    # two say different things and the day one of them moves is the day a
+    # shared name would move the other with it. They never meet on a screen —
+    # `shared` is a notification filter, this is a row of the brain.
+    once = "alternate.text";
   };
 
   # -------------------------------------------------------------------
@@ -527,6 +576,26 @@
     # One line, one logical pixel. It separates the content from the footer.
     default = "neutral.border";
     strong = "neutral.border-strong";
+
+    # THE SAME LINE, ON A GROUND THAT WAS RAISED.
+    #
+    # A rule is a SIGNAL drawn on a ground, and `default` is the step that
+    # reads against the chrome. On a raised ground it does not: measured on
+    # 2026-09-20 across the nine themes, `rule.default` on `surface.header` is
+    # ΔE 0,025 and on `surface.container` 0,047 — a line one squints at, and a
+    # line the owner photographed as not being there.
+    #
+    # Same hex as `strong`, and still its own name, for the reason
+    # `state.accent` and `text.here.acts` are two names for one hex: the
+    # division is about what the line SAYS. `strong` is a rule that is louder
+    # on purpose; this one is a rule that had to climb to stay the same
+    # loudness. The day a raised ground moves, one of them follows it and the
+    # other does not.
+    #
+    # Nothing chooses between them by hand: `Pen::rule` resolves it from the
+    # role the block's ground was filled with, so a buffer cannot get it wrong
+    # — see `Role::RuleRaised` and `a-rule-follows-its-ground`.
+    raised = "neutral.border-strong";
 
     # THE LINES OF THE GLOBE. A border is stroked OVER the fill, which is also
     # what hides the one-step seam two independently quantised countries can

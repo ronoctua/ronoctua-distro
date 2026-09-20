@@ -359,9 +359,8 @@ pub fn host_it(unit: &str) -> Result<()> {
     let signal = cycle.get_signal();
     cycle
         .run(None, &mut state, |e| {
-            if std::mem::take(&mut e.owed) {
-                e.paint();
-            }
+            // THE ONE PLACE THAT KNOWS THE BATCH IS OVER.
+            e.settle();
             if e.quit {
                 signal.stop();
             }
@@ -411,6 +410,18 @@ impl Lifeline {
     /// Asks for a frame once the current batch of events is done.
     const fn ask_paint(&mut self) {
         self.owed = true;
+    }
+
+    /// Draws the owed frame, if one is owed.
+    ///
+    /// The drain was written inline in the loop's callback, which worked and
+    /// was invisible to `one-frame-model` — the check reads for this function
+    /// by name, because a door that spells the model differently is a door
+    /// nobody can audit at a glance.
+    fn settle(&mut self) {
+        if std::mem::take(&mut self.owed) {
+            self.paint();
+        }
     }
 
     /// The sentence: what happened, and whether it came back.
@@ -799,7 +810,11 @@ impl LayerShellHandler for Lifeline {
             self.height = shown_h;
             self.recount();
         }
-        self.paint();
+        // MARKED, NOT PAINTED — the same model every other door carries. A
+        // configure arrives with the surface's first size and again on every
+        // resize, and painting here meant the resize gesture waited for the
+        // monitor once per step.
+        self.ask_paint();
         self.layer.commit();
     }
 }

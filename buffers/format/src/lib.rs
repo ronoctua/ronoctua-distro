@@ -1329,6 +1329,11 @@ impl State {
             | Input::Survey(_)
             | Input::Queue(_)
             | Input::Mind(_)
+            | Input::Hover { .. }
+            | Input::Unhover
+            // NOTHING SCROLLS HERE — three questions, each of which fits.
+            | Input::Wheel(_)
+            | Input::Scrolled(_)
             | Input::Keyboards(_) => vec![],
         }
     }

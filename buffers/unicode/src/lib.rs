@@ -2486,8 +2486,14 @@ impl State {
                 | Input::Queue(_)
                 | Input::Rack(_)
                 | Input::Mind(_)
+            | Input::Hover { .. }
+            | Input::Unhover
                 | Input::Keyboards(_)
                 | Input::Formatted(_)
+                // A CATALOGUE PAGES, it does not scroll: `C-,` turns the
+                // page and the grid is sized to the window.
+                | Input::Wheel(_)
+            | Input::Scrolled(_)
                 | Input::EnterState(_) => {
                     vec![]
                 }

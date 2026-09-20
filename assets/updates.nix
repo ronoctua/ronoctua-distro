@@ -409,5 +409,49 @@
       on-failure = "carry-on";
       enable = false;
     }
+
+    # 13. DOOM EMACS, RESOLVED AGAINST WHAT WAS JUST INSTALLED.
+    #
+    # The owner asked for it: when the machine updates itself it should bring
+    # the editor's packages with it. It belongs here and not in a task of its
+    # own because it is a CONSEQUENCE of the rebuild — `nix/modules/emacs.nix`
+    # writes `init.el`, `packages.el` and `config.el` from the repository on
+    # every rebuild, and until `doom sync` runs, the framework is still
+    # resolving the previous ones.
+    #
+    # `binary` AND NOT `package`, which the generator then forces off by
+    # default. Both halves of that are right:
+    #
+    #   - `ronoctua-doom-sync` IS from the flake, but naming it as a package
+    #     would put a store path in the script on EVERY machine, and with it
+    #     Emacs and the fifteen programs `doom doctor` wants — about 0.6 GiB,
+    #     into a minimal profile that has no editor at all. `binary` is looked
+    #     up by name, so a machine without the Emacs module simply does not
+    #     find it and says so.
+    #   - and a bare binary must not ship ON (invariant 6). It does not: what
+    #     turns it on is `nix/modules/emacs.nix`, through
+    #     `ronoctua.update.steps`, which is the module that KNOWS Emacs is
+    #     installed. So a machine with the editor has this on and a machine
+    #     without it has it off, and neither of them was guessed at.
+    #
+    # THE FRAMEWORK'S DIRECTORY IS THE GATE. `$XDG_CONFIG_HOME/emacs` is where
+    # Doom itself lives — cloned by hand, once, which `nix/modules/emacs.nix`
+    # calls the only command on this system that reaches outside the flake.
+    # Without it the step skips, which is what makes this "keep an installed
+    # Doom in step" and never "install one".
+    {
+      id = "doom-sync";
+      does = "refresh-cache";
+      root = false;
+      binary = "ronoctua-doom-sync";
+      run = [ ];
+      needs = [
+        { binary = "ronoctua-doom-sync"; }
+        { directory = "$XDG_CONFIG_HOME/emacs"; }
+        { network = true; }
+      ];
+      on-failure = "carry-on";
+      enable = false;
+    }
   ];
 }

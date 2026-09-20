@@ -75,11 +75,13 @@ pub struct StepState {
     pub needs_root: bool,
     /// Whether it will run.
     pub on: bool,
-    /// Whether that differs from what the distro ships.
+    /// Whether the distro ships it on.
     ///
-    /// Drawn, because "I turned this off three months ago" is the one thing a
-    /// person cannot recover by looking at the machine.
-    pub changed: bool,
+    /// The DECLARED fact, and the only one of the two that is not derived —
+    /// "changed" is `on != on_by_default`, which anybody holding both can
+    /// work out. It travels because the screen wants to say what a step was
+    /// changed FROM, and because the host has to know what flipping one means.
+    pub on_by_default: bool,
 }
 
 /// One task, as everybody draws it.
@@ -88,6 +90,8 @@ pub struct StepState {
 pub struct TaskState {
     /// The task's id. `brain-task-<id>` names it on screen.
     pub id: String,
+    /// Whether it repeats or happens once.
+    pub kind: crate::task::Kind,
     /// Where it is.
     pub standing: Standing,
     /// Whether the person left it switched on.
@@ -114,6 +118,14 @@ pub struct TaskState {
     pub why_not: String,
     /// The last run, whatever it said.
     pub last: Option<RunRecord>,
+    /// The last few runs of THIS task, newest first.
+    ///
+    /// `last` is the first of them. Both are here for the reason the wire's own
+    /// record gives: a row on the list draws one and a page draws all of them,
+    /// and deriving either from the other would put a length check in front of
+    /// every reader.
+    #[serde(default)]
+    pub history: Vec<RunRecord>,
     /// What it runs, in order.
     pub steps: Vec<StepState>,
 }
@@ -183,6 +195,32 @@ pub struct Mind {
     /// new moment, and a field showing a decision in flight would be a field
     /// that is empty every time anybody looks.
     pub postponed: Option<String>,
+    /// Everything the brain has done, OLDEST FIRST, as the journal keeps it.
+    ///
+    /// # Why the mind carries it at all
+    ///
+    /// Because the whole mind is what crosses the socket, and the home page
+    /// shows one list of everything that has happened. The alternative was a
+    /// second `Ask` for the journal, which would mean two answers that can
+    /// disagree about the same moment — the argument this file's header makes
+    /// about deltas, one level up.
+    ///
+    /// It is a COPY and not the journal itself: the journal belongs to the
+    /// runner's thread and this is read by every screen. The ceiling is
+    /// [`crate::journal::ACTIVITY`], so the copy is bounded however long the
+    /// machine has been running.
+    pub journal: Vec<crate::task::RunRecord>,
+    /// Something the brain wants said, without anybody having asked.
+    ///
+    /// It is the brain's line under the minibuffer — the one the countdown
+    /// already uses. A watch's whole output is a sentence, and a sentence that
+    /// only appeared on a screen somebody had to open would be a watch nobody
+    /// hears.
+    ///
+    /// ONE at a time, like the announcement beside it: the line is one line,
+    /// and a queue of notices on it would be a second notification system next
+    /// to the one this repository already has (invariant 14).
+    pub notice: Option<crate::task::Notice>,
 }
 
 impl Mind {
@@ -387,6 +425,7 @@ mod tests {
 
     fn a_row(id: &str) -> TaskState {
         TaskState {
+            kind: crate::task::Kind::Routine,
             id: id.to_owned(),
             standing: Standing::Idle,
             enabled: true,
@@ -395,6 +434,7 @@ mod tests {
             next: 0,
             hold: None,
             why_not: String::new(),
+            history: Vec::new(),
             last: None,
             steps: Vec::new(),
         }

@@ -130,6 +130,7 @@ pub mod phrases;
 pub mod guest;
 #[cfg(feature = "host")]
 pub mod rails;
+pub mod region;
 pub mod screen;
 pub mod scroll;
 pub mod sheet;
@@ -140,6 +141,7 @@ pub use grid::Grid;
 pub use phrases::Phrases;
 #[cfg(feature = "host")]
 pub use rails::Frame;
+pub use region::{Region, Slice, split};
 pub use screen::{Ink, Run, Screen};
 pub use scroll::Scroll;
 pub use sheet::{SHEET_LABEL, Sheet, sheet_split};
@@ -178,6 +180,15 @@ pub mod types {
     #[cfg(not(feature = "guest"))]
     pub use ronoctua_protocol::{Context, DisplayList, Heights, Scale};
 }
+
+/// THE FRAME AS THE HOST RECEIVES IT.
+///
+/// [`screen::Screen::as_protocol`] answers in these types, and a buffer's own
+/// TESTS are the only callers — production hands the WIT's shapes over instead
+/// (`Screen::finish_wit`). It is re-exported here because a buffer must not
+/// name the protocol crate itself: this crate is its one door, and a buffer
+/// that reached past it would be a second place the wall is described.
+pub use ronoctua_protocol as frame;
 
 // ---------------------------------------------------------------------------
 // The two numbers a buffer may not be told, and the reason for each.
@@ -260,9 +271,98 @@ pub enum Role {
     Accent,
     /// The rule, and only the rule.
     Rule,
-    /// The band under a list's focused row. A change of colour, never a box
-    /// (invariant 15).
+    /// The same rule, on a ground that was RAISED.
+    ///
+    /// # Why a rule needs to know what it is drawn on
+    ///
+    /// Because a rule is a signal and a ground is where the theme lives, and
+    /// the two climb the same ladder. `rule.default` is the step that reads
+    /// against the chrome; on a raised ground it does not. Measured across the
+    /// nine themes on 2026-09-20: `rule.default` on `surface.header` is ΔE
+    /// 0,025 and on `surface.container` 0,047 — the first is a line nobody can
+    /// see, and the owner photographed exactly that. `rule.raised` measures
+    /// 0,098 and 0,123 on the same two.
+    ///
+    /// # Why no buffer ever names it
+    ///
+    /// Because choosing it is not a decision anyone should be making twice.
+    /// [`Pen::fill`] remembers the role the block's ground was filled with and
+    /// [`Pen::rule`] resolves this one from it, so a rule inside a container
+    /// is the raised one by construction. The check
+    /// `a-rule-follows-its-ground` is what keeps that true.
+    RuleRaised,
+    /// The band under a list's focused row. A change of colour, and no radius.
     Band,
+    /// The ground under a CONTAINER — a block of rows that belong together.
+    ///
+    /// # Why it is not [`Role::Band`]
+    ///
+    /// Because a band means "this one", and a container means "these". Drawn in
+    /// the band's colour, five rows of history would read as five selected
+    /// rows, which is the one thing the band is for. The owner asked for the
+    /// result to sit on a background of its own, and a change of ground is how
+    /// this system says it: a card is allowed, the preference is for the
+    /// quieter answer, and shadow and elevation are what stay out.
+    ///
+    /// It was `surface.shelf` and it drew NOTHING, which is worth writing
+    /// down: a shelf is `neutral.window` and a buffer's own ground is
+    /// `surface.buffer`, which is `neutral.window` too. The quad was emitted,
+    /// painted, and identical to the page. Measured off a photograph of the
+    /// brain — three history rows that each asked for a ground, and three rows
+    /// whose right edge read exactly the page colour. `surface.container` is
+    /// the next rung that exists, and it is a rung a BUFFER can see.
+    Shelf,
+    /// The ground under a buffer's header line — the band that carries its
+    /// glyph, its name and every shortcut it answers to.
+    ///
+    /// Louder than [`Role::Shelf`] on purpose: a container is meant to be
+    /// quiet and a header is meant to be chrome. One rung apart, which is all
+    /// the difference a page needs when the separation is done with ground
+    /// rather than with a border.
+    Header,
+    /// Something is wrong, or about to be, and the screen says so in colour.
+    ///
+    /// The one role that is allowed to alarm. A buffer may not name a token
+    /// (invariant 11), so without this there is no way for one to draw the
+    /// difference between "here is a fact" and "nothing will run until you do
+    /// something" — and the brain's whole reason for having a screen is the
+    /// second kind of sentence.
+    Danger,
+    /// A thing that happens ONCE and is then gone, against the things that
+    /// repeat.
+    ///
+    /// The brain's list has two kinds of row and they are not told apart by
+    /// their words: both are a name, a moment and a standing. A glyph says
+    /// which, and this says it again in colour, because a glyph two cells wide
+    /// is a small thing to hang a distinction on.
+    Once,
+    /// The ground under the row the POINTER is on.
+    ///
+    /// Not [`Role::Band`], which is where the KEYBOARD is. The two are
+    /// different questions and every window in the shell already answers both
+    /// — a buffer could answer neither, because no role reached
+    /// `surface.hover` and the wall carried no pointer event at all.
+    Hover,
+    /// The notation of a shortcut — `RET`, `m r`, `Tab`.
+    ///
+    /// # Why the hint family had to be reachable
+    ///
+    /// Because the minibuffer's shortcut line is drawn in `text.subtle.*`, a
+    /// hue family deliberately OFF the warm content ramp so the line reads as
+    /// "not content", and [`Palette::color`] was a closed table of ten tokens
+    /// with none of that family in it. A buffer teaching its keys had no
+    /// choice but to reach for `state.accent` and `text.dim` — the content
+    /// ramp — and the owner read the result on screen: the brain's header did
+    /// not look like the file manager's minibuffer, because it was not wearing
+    /// the same colours.
+    Key,
+    /// What a shortcut DOES, beside its notation.
+    Prose,
+    /// Punctuation between two shortcuts, and the only thing below the prose.
+    ///
+    /// A third tone, so a separator is not read as a word — the same argument
+    /// `Register::Separator` makes on the host's side of the wall.
+    Faint,
 }
 
 /// The one thing that differs between the host and the component.
@@ -337,16 +437,40 @@ impl Palette for Tokens {
         ronoctua_protocol::Color::name(match role {
             Role::Title => "text-primary",
             Role::Body => "text-secondary",
-            // TWO ROLES ON ONE TOKEN TODAY, and they stay two roles: a label
-            // that names a value and content that accompanies one are two
-            // jobs, and the day the theme separates them the change is in this
-            // table and nowhere else. Collapsing them now would mean finding
-            // every call site again then.
-            Role::Quiet => "text-dim",
+            // TWO ROLES, TWO TOKENS, AND THE DAY IS TODAY.
+            //
+            // They were both `text-dim`, and the comment here said the day the
+            // theme separated them the change would be in this table. The
+            // owner found the day: the brain's log draws a run's NAME in
+            // `Quiet` and the machine's error beside it in `Dim`, and he read
+            // them on screen as one colour — *"a mensagem de erro na mesma cor
+            // do título, e não mais discreta como eu havia pedido"*.
+            //
+            // `Quiet` is content that accompanies — a count, a unit, a name
+            // beside a date — so it takes the middle of the content ramp, the
+            // step that is present and does not pull. `Dim` is a label naming
+            // a value, and the value is the point: it stays at the bottom.
+            // Between them the row now has a hierarchy instead of a tone.
+            Role::Quiet => "text-secondary",
             Role::Dim => "text-dim",
             Role::Accent => "state-accent",
             Role::Rule => "rule-default",
+            Role::RuleRaised => "rule-raised",
             Role::Band => "surface-selection",
+            // `surface-container` AND NOT `surface-shelf`, and the enum's own
+            // note carries the measurement: the shelf is the buffer's page
+            // colour exactly, so it painted nothing at all.
+            Role::Shelf => "surface-container",
+            Role::Header => "surface-header",
+            Role::Danger => "state-error",
+            Role::Once => "text-once",
+            Role::Hover => "surface-hover",
+            // THE HINT FAMILY, the same three the minibuffer's own line uses:
+            // `Register::Key`, `Register::Prose` and `Register::Separator` in
+            // `chrome.rs` resolve to exactly these.
+            Role::Key => "text-subtle-strong",
+            Role::Prose => "text-subtle-default",
+            Role::Faint => "text-subtle-faint",
         })
     }
 

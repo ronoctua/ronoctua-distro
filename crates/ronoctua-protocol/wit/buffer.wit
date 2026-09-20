@@ -89,8 +89,22 @@ interface types {
         max-width: u16,
     }
 
-    record line-command {
+    // A BAND ACROSS A ROW, OR ACROSS PART OF ONE.
+    //
+    // It was `line-command` — a row and a colour, nothing else — because the
+    // rule written down was that a ground "paints the whole row, and that is
+    // all". That closed something the owner never asked to close: two columns
+    // side by side, each with its own selection, is an ordinary arrangement
+    // and it needs a band that is a RECTANGLE rather than a stripe. A
+    // separator under a heading inside one of those columns needs the same.
+    //
+    // `columns: 0` means "to the edge", which is what `0` already means for a
+    // text run's budget — so every band that was full-bleed stays full-bleed
+    // by writing the zero it always implied.
+    record band-command {
         line: u16,
+        column: u16,
+        columns: u16,
         color: color,
     }
 
@@ -157,12 +171,133 @@ interface types {
         color: color,
     }
 
+    // A SCROLLBAR, for a list a buffer is showing a window onto.
+    //
+    // # Why this had to exist, and why it is not "a scrollable region"
+    //
+    // `docs/PENDING.md` used to say a buffer could not have a container that
+    // scrolls, because none of the five primitives was a scrollable region and
+    // inventing one would be a sixth vocabulary every buffer had to learn. The
+    // owner said that rule was wrong, and reading it again, so is the
+    // reasoning: a buffer already draws whatever window of a list it likes —
+    // it owns the offset, it emits the rows it wants, and the host clips
+    // nothing. Nothing was missing from the DRAWING.
+    //
+    // Two things were missing, and neither is a region. This one is the BAR:
+    // the buffer cannot draw a thumb, because a thumb is a fraction of a track
+    // in pixels and a buffer counts in cells. A bar drawn out of block
+    // characters would be a second scrollbar that looks nothing like the five
+    // the shell already draws. The other is `input::wheel`, below — a bar
+    // nobody can grab is a picture of a control.
+    //
+    // # What the host does with it
+    //
+    // Exactly what it does for its own lists: `ronoctua_design::Scroll`, which
+    // has been compiled on both sides of this wall since it was written, with
+    // the pixel residue the host owns because only the host knows the surface's
+    // real height. So a buffer's bar IS the system's bar, and not a likeness.
+    //
+    // Nothing is drawn when the list fits — `Scroll::cut` answers that, and
+    // the whole shell agrees a bar over a list that fits is a control that
+    // does nothing.
+    record bar-command {
+        // The first row of the track.
+        line: u16,
+        // How many rows it covers.
+        lines: u16,
+        // Which column it sits in. The caller subtracts it from its own
+        // content: a bar drawn over text is the defect `AGENTS.md` names —
+        // "barra nenhuma desenha por cima do conteúdo".
+        column: u16,
+        // How many rows the list has, how many are shown, and which is first.
+        // The three `Scroll` takes, in its own words, in the same unit: rows.
+        total: u32,
+        shown: u32,
+        offset: u32,
+        color: color,
+    }
+
+    // A SENTENCE, WRAPPED, in a rectangle of cells.
+    //
+    // # Why a buffer cannot do this itself
+    //
+    // Because it holds a KEY and not a sentence. `text-command` draws one row
+    // and the host elides it at the budget, which is right for a label and
+    // useless for a paragraph: a description cut at the width of a column is
+    // a description nobody can read. And wrapping needs the TRANSLATED string
+    // — a buffer never sees one, and could not measure it if it did.
+    //
+    // So the rectangle crosses and the host fills it: it looks the key up,
+    // wraps to `columns` with the same `layout::wrap` the file manager's file
+    // names use, draws up to `lines` rows and elides the last one if there is
+    // more. Nothing new is decided on this side.
+    //
+    // It is what lets a buffer have a footer that explains the thing under the
+    // cursor, which is the shape every view in the shell already has and no
+    // buffer could have.
+    record paragraph-command {
+        line: u16,
+        column: u16,
+        // The rectangle, in cells.
+        lines: u16,
+        columns: u16,
+        // What to write. A key is translated first; data is wrapped as it is.
+        content: text,
+        color: color,
+        scale: scale,
+        // THE FIRST WRAPPED ROW TO DRAW, which is how a sentence SCROLLS.
+        //
+        // # Why the offset crosses and the total does not
+        //
+        // Because only the host knows the total: it holds the translated
+        // string and it is the one that wraps. A buffer that tried to keep a
+        // scroll of its own would be counting rows of a sentence it has never
+        // seen — so it keeps the OFFSET, which is a thing it can hold, and the
+        // host clamps it, draws the window, and draws the thumb beside it when
+        // there is more. The wheel and the drag over that rectangle come back
+        // as `input::scrolled`, already clamped, so the number this side holds
+        // is always one the host produced.
+        //
+        // `0` is the top, which is what every paragraph that does not scroll
+        // says and always said.
+        first-row: u16,
+    }
+
+    // FROM THIS LINE DOWN, THE FRAME IS ANCHORED TO THE WINDOW'S FOOT.
+    //
+    // # The residue, and why it is not the buffer's to fix
+    //
+    // A surface holds `floor(height / line)` whole rows plus a leftover of less
+    // than one — nought to twenty-five pixels, changing with the window. It
+    // falls under the LAST row, where a buffer that ends in a footer puts the
+    // one thing that must sit at the bottom, and the owner read it as *"um
+    // espaço após o `Last run` … que varia de tamanho conforme a altura
+    // disponível"*. Measured on that screen: nine pixels.
+    //
+    // The ground already took the residue (`Scroll::track`'s rule, applied to
+    // the last band); the INK never did. This is how the ink takes it: the host
+    // places these lines counting UP from the bottom, so the leftover falls
+    // between the block above and the block at the foot — inside the page's own
+    // ground, where nothing is drawn. It is `Span::foot`, which exists for this
+    // exact symptom on the file manager's transport.
+    //
+    // A buffer that never divides its window sends none of these, and nothing
+    // about it changes.
+    record anchor-command {
+        // The first line that is anchored. Everything from here down moves
+        // with the window's bottom edge.
+        foot-from: u16,
+    }
+
     variant command {
         text(text-command),
-        rule(line-command),
-        selection(line-command),
+        anchor(anchor-command),
+        paragraph(paragraph-command),
+        rule(band-command),
+        selection(band-command),
         grid(grid-command),
         svg(svg-command),
+        bar(bar-command),
     }
 
     // What the buffer ASKS to happen. `tecla` used to return `bool` — the
@@ -919,6 +1054,26 @@ interface types {
         skipped,
         done,
         failed,
+        // NOTHING RAN, because the machine was in no state for it.
+        //
+        // It is not a failure and it is not a run: the moment came, the gate
+        // said no, and the next moment will be along. It is recorded ONCE per
+        // episode and not once per tick — the runner looks every thirty
+        // seconds, and a log that wrote a line each time would be a wall of
+        // "RAM is busy" with everything that actually happened underneath it.
+        held,
+    }
+
+    // Whether a task repeats, or happens once and is then gone.
+    //
+    // Every task the brain has today is a routine. One-shots are coming, and
+    // the list has to be able to say which is which BEFORE they arrive:
+    // otherwise the day one lands, every row on the page changes meaning at
+    // once. A glyph says it, and a colour says it again — a glyph two cells
+    // wide is a small thing to hang a distinction on.
+    enum task-kind {
+        routine,
+        once,
     }
 
     // Which stretch of the person's day a task prefers. The hours each one
@@ -946,6 +1101,14 @@ interface types {
     // name is longer at the one place it is written and unambiguous everywhere
     // it is read, which is the same argument `buffer-state` makes.
     record run-record {
+        // WHICH TASK THIS WAS, and it crosses because the home page shows one
+        // list of everything the brain has done. Inside a task's own page it
+        // is redundant and costs a string; on the home page there is no other
+        // way to say whose run a row is.
+        task: string,
+        // And its name, translated, for the same reason `task-state` carries
+        // one: the log reserves a column for it and could not measure it.
+        task-text: string,
         began: u64,
         ended: u64,
         // WHEN IT RAN, already formatted by the host, in ISO. The component has
@@ -973,14 +1136,43 @@ interface types {
         // What it really runs. DATA — a command line is not translated.
         command: string,
         needs-root: bool,
+        // Whether it will run.
         on: bool,
-        // Whether that differs from what the distro ships.
-        changed: bool,
+        // WHETHER THE DISTRO SHIPS IT ON, which is the DECLARED fact and the
+        // only one of the two that is not derived.
+        //
+        // This used to be `changed: bool` — "does `on` differ from the
+        // default" — computed on the daemon's side and sent. The default
+        // itself never crossed, and that cost two things. On screen, a page
+        // could say "you changed this" and could not say what it had been
+        // changed FROM. And in the host, the key that flips a step had no way
+        // to work out what flipping meant, because the person's file holds
+        // exceptions to a default nobody had told it.
+        //
+        // Sending the DEFAULT instead makes "changed" a subtraction anybody
+        // can do (`on != on-by-default`) and leaves exactly one authority for
+        // it: `assets/updates.nix`, where it is declared.
+        on-by-default: bool,
     }
 
     record task-state {
         // English, kebab-case. `brain-task-<id>` names it on screen.
         id: string,
+        // THE SAME NAME, ALREADY TRANSLATED, and it is for MEASURING.
+        //
+        // The component draws the KEY — so a language changed at run time
+        // still reaches the screen — and it reserves a column for the name.
+        // Reserved BLIND that column was twenty-six cells for a word five
+        // cells wide, which is the gap the owner photographed across the top
+        // of the page and down the log's second column.
+        //
+        // Same rule as `next-text` and `when-text` beside it: the number is
+        // for the arithmetic this side cannot do, the text for the thing it
+        // cannot compute. A host that sends nothing gets the old reservation,
+        // because the component falls back to it.
+        name-text: string,
+        // Whether it repeats or happens once.
+        kind: task-kind,
         standing: standing,
         enabled: bool,
         interval-days: u16,
@@ -997,6 +1189,15 @@ interface types {
         // `began: 0` would be a moment in 1970.
         ran: bool,
         last: run-record,
+        // The last few runs, NEWEST FIRST — `last` is `history[0]` when there
+        // is one.
+        //
+        // Both, and not one derived from the other: `last` is what a row on the
+        // list shows and `ran` is what says it means anything, and an empty
+        // list would have made every reader of `last` check the length first.
+        // The ceiling is the brain's, not this record's: what crosses is what
+        // it decided to keep.
+        history: list<run-record>,
         steps: list<task-step>,
     }
 
@@ -1014,6 +1215,23 @@ interface types {
     }
 
     // How busy is too busy — the general gate, as the person set it.
+    // SOMETHING THE BRAIN WANTS SAID, without anybody having asked.
+    //
+    // It is the line under the minibuffer — the one the countdown already
+    // uses. A WATCH's whole output is a sentence, and a sentence that only
+    // appeared on a screen somebody had to open would be a watch nobody hears.
+    //
+    // Keys and not sentences: neither the footer nor a component invents
+    // words. `act` is a COMMAND id, and empty is a notice that only tells —
+    // which is not a lesser kind. The one about a second copy of Emacs has no
+    // button on purpose: what is open is somebody's work, and nothing here
+    // knows whether it is saved.
+    record notice {
+        task: string,
+        says: string,
+        act: string,
+    }
+
     record gate {
         ram-ceiling-pct: u16,
         cpu-stall-per-mille: u16,
@@ -1047,6 +1265,36 @@ interface types {
         // `ronoctua-brain` — and a screen that stepped by one would take
         // twenty-three presses to get from a month to a week.
         cadence: list<u16>,
+        // EVERYTHING THE BRAIN HAS DONE, newest first, across every task.
+        //
+        // A task's own `history` answers "how has this one been going"; this
+        // answers "what has this machine been doing", which is the question
+        // somebody opens the page with. They are two lists and not one view of
+        // one list, because the per-task one has a floor — a task that runs
+        // monthly keeps its last ten however much else happens — and this one
+        // has a ceiling. Neither can be cut out of the other.
+        activity: list<run-record>,
+        // HOW MANY THAT LIST KEEPS, which is not how many it holds today.
+        //
+        // It crosses for the reason `cadence` does: it is a POLICY, decided in
+        // `ronoctua-brain` with its argument beside it, and the screen names it
+        // — the activity block's title says what it is a window ONTO, and "the
+        // last hundred" is a different promise from "these fourteen". Written
+        // into the two translations instead, it would be a number in four
+        // places that can disagree with the one that does the cutting.
+        remembers: u32,
+        // AND HOW MANY OF ITS OWN A TASK KEEPS, which its `history` is the
+        // whole of.
+        //
+        // The same argument, one list down: the `History` heading on a task's
+        // page is a window onto this number, and the owner asked it to say so
+        // — *"algo como (last 10)"*. It is `journal::RECENT`, the brain's own
+        // floor on pruning, and a screen that wrote `10` into two translations
+        // would be a fourth place for the number to disagree with the one that
+        // does the keeping.
+        recent: u32,
+        // What the brain wants said. `task` empty means there is nothing.
+        notice: notice,
     }
 
     // One step, switched on or off by the id the last `mind` gave.
@@ -1214,6 +1462,35 @@ interface types {
     // So the host hands the text over, exactly as it hands over a clipboard in
     // `paste`. The buffer still cannot WRITE a phrase of UI in any language —
     // it can only echo one it was given.
+    // A turn of the wheel, at a cell.
+    record wheel-event {
+        // Where the pointer was, in the buffer's own cells.
+        at: position,
+        // How many lines, and which way. NEGATIVE is towards the top of the
+        // list — the direction a list's offset moves, not the direction the
+        // fingers went, because every caller of this subtracts it from an
+        // offset and a sign that flipped on the way in would flip there.
+        lines: s16,
+    }
+
+    // A BAR THAT WAS DRAGGED, answered as the first row to draw.
+    //
+    // The host knows where it painted every `bar` — it built the thumb out of
+    // the three numbers the command carried — so it is the only side that can
+    // turn a pointer at a height into a row. What it cannot know is WHICH
+    // list: a page may have several, and only the buffer knows where its
+    // blocks are. So the position crosses for the same reason it does on a
+    // wheel, and the answer is a row rather than a delta: a drag is absolute,
+    // and a sum of deltas drifts away from the hand.
+    record scroll-event {
+        // Where the pointer is, in the buffer's own cells. The COLUMN and the
+        // LINE both: the line says which block, and the column tells a page
+        // with two lists side by side which of the two was grabbed.
+        at: position,
+        // The row that should now be the first one drawn in that block.
+        first: u32,
+    }
+
     record phrase {
         key: string,
         text: string,
@@ -1292,6 +1569,28 @@ interface types {
         // has its own header and footer. The host sending "item number N"
         // would be the host reimplementing the buffer's layout.
         click(position),
+        // THE WHEEL, over a cell of the buffer's grid.
+        //
+        // The other half of `command::bar`: a scrollbar nobody can turn is a
+        // picture of a control. It arrives in LINES and never in pixels, the
+        // same wall `click` respects — a pixel is a Wayland and screen-scale
+        // thing, and the buffer knows neither (invariant 11).
+        //
+        // The arithmetic that turns a wheel into lines is the host's, and
+        // there is one of it: `surface::axis_lines` and `wheel_lines`, which
+        // carry the leftover fraction between events. Five windows once wrote
+        // `(pixels / line) as i64 * 3` each, which throws the fraction away
+        // and then multiplies what is left by three — a slow gesture moved
+        // nothing and then jumped.
+        //
+        // The POSITION is here for the same reason `click` carries one: a
+        // screen with two lists has to know which one the pointer was over,
+        // and only the buffer knows where its lists are.
+        wheel(wheel-event),
+        // A BAR DRAGGED WITH THE MOUSE. The other half of a scrollbar: one
+        // that is drawn and cannot be grabbed is a picture of a control, which
+        // is the sentence this repository already keeps about the wheel.
+        scrolled(scroll-event),
         // The machine's memory, ALREADY READ. Only for whoever declared
         // `capability::system`.
         //
@@ -1325,6 +1624,26 @@ interface types {
         // Like `queue`, nobody pressed it: the host is subscribed to the
         // brain's own socket on a thread, and what arrives is the whole mind.
         mind(mind),
+        // WHERE THE POINTER IS RESTING, in the buffer's own cells.
+        //
+        // It used to be refused, and the reason written down was that
+        // "highlighting the item under the mouse would ask for a frame per
+        // pixel of movement". That is false as stated: the pointer moves in
+        // PIXELS and this side counts CELLS, so the host delivers only when the
+        // CELL changes — a few dozen events crossing a whole screen, not one
+        // per pixel. Every other window in the shell has tracked the pointer
+        // this way since it was written; the buffer window was the exception,
+        // and the exception was an author's assumption rather than a
+        // measurement.
+        //
+        // It carries a `position` and not two fields for the same reason
+        // `click` does: `wasmtime` lowers a record POSITIONALLY, and a flat
+        // pair here would lower cleanly into the wrong shape.
+        hover(position),
+        // The pointer LEFT. Distinct from a hover nobody can place, because
+        // absence and "somewhere I cannot name" are different answers: one
+        // clears the highlight and the other keeps it.
+        unhover,
     }
 }
 
@@ -1336,7 +1655,7 @@ interface view {
     // in the interface's module only what it declares it uses, and a record
     // reachable only from inside a `variant` ends up out of scope.
     use types.{
-        capability, command, grid-command, line-command, text-command,
+        band-command, capability, command, grid-command, text-command,
         heights, context, color, descriptor, effect, input, binding, position, segment,
         text,
         // `phrase` is reachable only from inside `input`, which is exactly the

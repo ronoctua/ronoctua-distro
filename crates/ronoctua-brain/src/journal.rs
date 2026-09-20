@@ -44,14 +44,36 @@ use crate::task::RunRecord;
 /// apart is the lifetime, and the lifetime is the directory.
 pub const JOURNAL_FILE: &str = "brain.json";
 
-/// How many runs are kept.
+/// How many runs are kept, across every task.
 ///
-/// Sixty-four, the same ceiling the transfer queue keeps its finished jobs to,
-/// and for the same reason: it is a few screens of history — enough to answer
-/// "did that one work?" weeks later — and small enough that the whole thing
-/// crossing the socket on every change stays free. At one run a week it is more
-/// than a year.
-pub const HISTORY: usize = 64;
+/// It was sixty-four, matched to the transfer queue's ceiling on finished
+/// jobs. Two things moved it. The home page now shows the last [`ACTIVITY`]
+/// things the brain did, so the list has to be at least that long to fill it;
+/// and a five-minute watch was added, which at sixty-four would have wrapped
+/// the whole list inside six hours and taken every other task's history with
+/// it. Two hundred and fifty-six is a few days of the watch and still years of
+/// everything else — and what protects the rare tasks is not this number, it
+/// is the floor in [`Journal::put`].
+///
+/// The whole list crosses the socket on every change. At this size that is a
+/// few tens of kilobytes, and the argument for sending the whole mind is in
+/// `crate::wire`.
+pub const HISTORY: usize = 256;
+
+/// How many of a task's OWN runs are kept whatever else happens, and shown.
+///
+/// Ten, because the owner asked for ten. It is a floor on [`put`]'s pruning as
+/// well as the number the screen draws: a task's row promises its last ten, and
+/// a ceiling that could take them is a promise the screen cannot keep.
+pub const RECENT: usize = 10;
+
+/// How many records the home page's activity log shows.
+///
+/// A hundred, because the owner asked for a hundred. It is smaller than
+/// [`HISTORY`] on purpose — what is kept and what is shown are two questions,
+/// and the log scrolls, so showing fewer than are kept is a choice about the
+/// list and not about the disk.
+pub const ACTIVITY: usize = 100;
 
 /// Every run the brain remembers, oldest first.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,7 +98,33 @@ impl Journal {
     /// postponed. What is not here is a hold — see this module's header.
     #[must_use]
     pub fn last(&self, task: &str) -> Option<Moment> {
-        self.latest(task).map(|r| r.began)
+        // A WAIT IS NOT A RUN, and this is the one place where confusing them
+        // would be expensive. `due` is `last + interval_days`, so a `Held`
+        // counted here would push a weekly task a whole week every time the
+        // machine happened to be busy at its moment — a machine that is busy
+        // every night would postpone itself for ever, and the screen would
+        // show a date moving away each time anybody looked.
+        //
+        // It is `runs` and not `latest` for exactly that reason: `latest` is
+        // what the SCREEN draws — the last thing that happened to this task,
+        // whatever it was — and this is what the SCHEDULE counts from. Two
+        // questions, and they were one function until a hold became a record.
+        self.runs
+            .iter()
+            .rev()
+            .find(|r| r.task == task && r.kind != crate::task::OutcomeKind::Held)
+            .map(|r| r.began)
+    }
+
+    /// Every record, oldest first.
+    ///
+    /// The home page's activity log is the tail of this, and the cut is the
+    /// caller's for the reason [`Self::recent`] gives: what this knows is how
+    /// to answer a question, and how many to answer with is a decision about
+    /// a screen.
+    #[must_use]
+    pub fn all(&self) -> &[RunRecord] {
+        &self.runs
     }
 
     /// The last record of this task — what the screen draws.
@@ -85,12 +133,61 @@ impl Journal {
         self.runs.iter().rev().find(|r| r.task == task)
     }
 
-    /// Writes one down, and drops the oldest past the ceiling.
+    /// The last few records of this task, NEWEST FIRST.
+    ///
+    /// # Why a task's own history and not the journal's
+    ///
+    /// Because the journal is one list for every task, capped at
+    /// [`HISTORY`] — so on a machine where one task runs ten times a week and
+    /// another once a month, the second one's last run falls off the end while
+    /// its row still has to show it. Asking per task is what makes "the last
+    /// five of THIS" a question with an answer.
+    ///
+    /// The owner asked for five, and the number is the caller's: what this
+    /// knows is how to answer the question.
+    #[must_use]
+    pub fn recent(&self, task: &str, most: usize) -> Vec<RunRecord> {
+        self.runs
+            .iter()
+            .rev()
+            .filter(|r| r.task == task)
+            .take(most)
+            .cloned()
+            .collect()
+    }
+
+    /// Writes one down, and drops the oldest past the ceiling — unless
+    /// dropping it would take a task's last few with it.
+    ///
+    /// # Why the ceiling has a floor under it
+    ///
+    /// Because a flat ceiling on one shared list is a ceiling that empties the
+    /// rare tasks first. The update runs weekly, the sweep every ten days, the
+    /// trash every four, and a watch every five minutes — and the watch would
+    /// fill the whole list inside a day, taking the update's last run with it.
+    /// The row that shows it would then say "never", about a task that ran on
+    /// Tuesday.
+    ///
+    /// So the oldest record is dropped only while its own task still has more
+    /// than [`RECENT`] left. Every task keeps its last few for as long as it
+    /// exists, and everything above that is first-in-first-out. The list can
+    /// therefore be longer than [`HISTORY`] — by at most `RECENT` per task,
+    /// which is a handful of records and the price of the row being honest.
     pub fn put(&mut self, record: RunRecord) {
         self.runs.push(record);
-        if self.runs.len() > HISTORY {
-            let over = self.runs.len() - HISTORY;
-            self.runs.drain(..over);
+        while self.runs.len() > HISTORY {
+            // THE OLDEST THAT CAN GO. Walking from the front, the first record
+            // whose task would still have more than `RECENT` left behind it.
+            let Some(at) = self
+                .runs
+                .iter()
+                .position(|r| self.runs.iter().filter(|o| o.task == r.task).count() > RECENT)
+            else {
+                // Every task is down to its floor. The list stays longer than
+                // the ceiling, which is the trade this floor exists to make.
+                break;
+            };
+            self.runs.remove(at);
         }
     }
 

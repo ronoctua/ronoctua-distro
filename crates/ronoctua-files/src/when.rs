@@ -269,6 +269,30 @@ pub fn civil(secs: i64, zone: &Zone) -> Civil {
 
 /// Days since 1970-01-01 into a calendar date.
 ///
+/// Howard Hinnant's `days_from_civil` — the inverse of [`civil_from_days`].
+///
+/// Days since 1970-01-01, from a civil date. It is here because the trash reads
+/// its own `DeletionDate` back: the spec writes local time with no zone marker,
+/// so turning one into an instant needs exactly the arithmetic that made it.
+///
+/// `None` for a month or day outside the calendar, which is what a corrupt
+/// `.trashinfo` looks like — and a date this cannot read is a file it must not
+/// delete.
+#[must_use]
+pub fn epoch_of(year: i64, month: u32, day: u32) -> Option<i64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let m = i64::from(month);
+    let d = i64::from(day);
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
 /// Howard Hinnant's `civil_from_days`, exact for the whole proleptic Gregorian
 /// range. It is arithmetic and not a table, which is why it needs no data and
 /// cannot go stale.
@@ -298,6 +322,14 @@ mod tests {
     #[test]
     fn the_calendar_is_exact_at_the_places_it_usually_is_not() {
         // The epoch itself.
+        // AND THE INVERSE AGREES, which is the only thing that makes a date
+        // written by `Trash::put` readable by `Trash::expire`.
+        for days in [0_i64, 11_016, -25_508, 20_000, 1] {
+            let (y, m, d) = civil_from_days(days);
+            assert_eq!(epoch_of(y, m, d), Some(days), "{y}-{m}-{d}");
+        }
+        assert_eq!(epoch_of(2026, 13, 1), None, "a thirteenth month was read");
+        assert_eq!(epoch_of(2026, 1, 0), None, "a zeroth day was read");
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         // 2000 is a leap year and 1900 is not — the rule most hand-rolled
         // calendars get wrong, and the reason this is arithmetic and not

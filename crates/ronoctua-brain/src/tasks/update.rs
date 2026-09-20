@@ -367,7 +367,7 @@ mod tests {
             assert!(!mine.id.is_empty());
         }
         // AND BOTH ANSWERS ARE PRESENT. A table where everything shipped on
-        // would make `steps_off` unreachable from the screen, and one where
+        // would make `steps_flipped` unreachable from the screen, and one where
         // everything shipped off would make the sequence a no-op — either way
         // the toggle below would be testing nothing.
         assert!(
@@ -378,5 +378,64 @@ mod tests {
             steps().iter().any(|s| !s.on_by_default),
             "no step is switched off"
         );
+    }
+
+    /// THE SHEET THE SCRIPT WRITES IS THE SHEET THIS CRATE READS.
+    ///
+    /// The defect this pins: the brain watched a JSON file that **nothing on
+    /// the machine wrote**. The update's script kept a TSV in another
+    /// directory, `Report::watch` never saw an mtime move, and every run the
+    /// brain started came back `runaway` once its patience was gone — two
+    /// hours, on a rebuild that had worked. There was no symptom to see
+    /// quickly, because every test points `reporting_in` at a scratch
+    /// directory and none of them named the real path.
+    ///
+    /// The literal below is copied from what `nix/scripts/gen-updates.py`
+    /// actually emitted, run against a planted report. It is a fixture and not
+    /// a call, because the script is shell and this is a unit test; what keeps
+    /// the two in step is `the-brain-reads-what-the-units-write`, which reads
+    /// the generator and this crate.
+    #[test]
+    fn the_scripts_sheet_is_read_the_way_the_screen_needs_it() {
+        let written = r#"{"began":1789868464,"ended":1789868999,"trouble":"","steps":[{"id":"first-step","ok":true,"seconds":12,"trouble":""},{"id":"second-step","ok":true,"seconds":0,"trouble":""}]}"#;
+        let sheet: crate::task::Sheet = serde_json::from_str(written).expect("the sheet parses");
+        assert_eq!(sheet.began, 1_789_868_464);
+        assert_eq!(sheet.ended, 1_789_868_999, "a run that ended says so");
+        assert_eq!(sheet.steps.len(), 2);
+        assert!(matches!(
+            ended(sheet.steps, &sheet.trouble),
+            Outcome::Done(_)
+        ));
+
+        // AND A STEP THAT WAS MERELY SKIPPED IS NOT A FAILURE. The script
+        // writes `skipped-network` for a machine with no connection and the
+        // sheet carries `ok: true` for it — marking it false would report the
+        // whole update as broken because `tldr` could not reach the network.
+        let skipped = r#"{"began":1,"ended":2,"trouble":"","steps":[{"id":"a-step-that-was-skipped","ok":true,"seconds":0,"trouble":""}]}"#;
+        let sheet: crate::task::Sheet = serde_json::from_str(skipped).expect("parses");
+        assert!(matches!(
+            ended(sheet.steps, &sheet.trouble),
+            Outcome::Done(_)
+        ));
+
+        // AND ONE THAT FAILED NAMES THE STEP IT STOPPED AT.
+        let failed = r#"{"began":1,"ended":2,"trouble":"","steps":[{"id":"first-step","ok":true,"seconds":1,"trouble":""},{"id":"the-step-that-failed","ok":false,"seconds":3,"trouble":""}]}"#;
+        let sheet: crate::task::Sheet = serde_json::from_str(failed).expect("parses");
+        match ended(sheet.steps, &sheet.trouble) {
+            Outcome::Failed { at, .. } => assert_eq!(at, "the-step-that-failed"),
+            other => panic!("a step that failed is a run that failed: {other:?}"),
+        }
+    }
+
+    /// A SHEET STILL BEING WRITTEN SAYS SO, and the watcher keeps waiting.
+    ///
+    /// `ended: 0` is the whole of that contract. Without it — a script that
+    /// stamped the end at the top, say — the first look would find a finished
+    /// run and the brain would report a rebuild as over before it began.
+    #[test]
+    fn a_run_still_going_has_no_end() {
+        let going = r#"{"began":10,"ended":0,"trouble":"","steps":[]}"#;
+        let sheet: crate::task::Sheet = serde_json::from_str(going).expect("parses");
+        assert_eq!(sheet.ended, 0, "zero is how the sheet says `still going`");
     }
 }

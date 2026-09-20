@@ -324,15 +324,34 @@ pub struct Row<'a, P: Palette> {
     line: u16,
     layout: &'a Layout,
     tall: u16,
+    /// The role the block this row is in was filled with, if it was filled.
+    ///
+    /// A row inside a container is a row drawn ON the container, and the
+    /// quietest step of the text ladder is invisible there — measured Lc
+    /// 0,0000 in all nine themes. `Pen::row_of` hands the ground down so the
+    /// lift reaches a table's cells too; a row taken straight off the screen
+    /// has no block and so no ground, which is `None` and lifts nothing.
+    ground: Option<crate::Role>,
 }
 
 impl<'a, P: Palette> Row<'a, P> {
     pub(crate) fn new(screen: &'a mut Screen<P>, line: u16, layout: &'a Layout) -> Self {
+        Self::on(screen, line, layout, None)
+    }
+
+    /// The same row, told which ground it is drawn on.
+    pub(crate) fn on(
+        screen: &'a mut Screen<P>,
+        line: u16,
+        layout: &'a Layout,
+        ground: Option<crate::Role>,
+    ) -> Self {
         Self {
             screen,
             line,
             layout,
             tall: 1,
+            ground,
         }
     }
 
@@ -350,7 +369,14 @@ impl<'a, P: Palette> Row<'a, P> {
         let Some(field) = self.layout.field(id) else {
             return false;
         };
-        let placed = run.at(field.at).within(field.width);
+        let role = crate::screen::on_ground(run.role, self.ground);
+        // AND IT IS DRAWN AT THE SIZE IT WAS MEASURED IN. A column budgets
+        // CELLS and `Scale::Small` advances 0,81 of one, so the next column
+        // starts where the budget ends and not where the ink stopped — a gap
+        // proportional to the phrase, which is what the owner read across the
+        // brain's header. See `Screen::measured`.
+        let run = self.screen.measured(run);
+        let placed = run.at(field.at).within(field.width).in_role(role);
         let cells = self.screen.put(self.line, placed);
         self.tall = self.tall.max(cells);
         true
@@ -530,6 +556,47 @@ mod tests {
     }
 
     /// A run cannot contradict the layout: the field's cell and budget win.
+    /// FAILS IF: a run put in a column is drawn at a size that does not advance
+    /// one cell, and the frame says nothing about it.
+    ///
+    /// The whole of the defect the owner photographed across the brain's
+    /// header: a column budgets CELLS, `Scale::Small` advances 0,81 of one, and
+    /// whatever follows starts where the BUDGET ends. The slack is
+    /// proportional to the phrase, so a long column opens a wide gap and a
+    /// short one a narrow gap — *"espaços desproporcionais entre os atalhos"*,
+    /// and a separator with more air on one side than the other.
+    #[test]
+    fn a_column_draws_at_the_size_it_measures() {
+        let heights = Heights::from_sizes(12.0, 14.0, 20.0, 28.0, 40.0, 1.45);
+        let layout = Table::across(40)
+            .with(Column::fixed("a", 10, 1))
+            .with(Column::fill("b", 4))
+            .resolve();
+        let ctx = Context {
+            columns: 40,
+            lines: 8,
+            heights,
+        };
+        let mut screen = Screen::<Tokens>::new(&ctx);
+        let mut row = screen.row_of(0, &layout);
+        assert!(row.put("a", Run::datum("x").small()));
+        assert_eq!(row.done(), 1);
+        assert_eq!(screen.mismeasured(), 1, "the frame did not notice");
+        assert!(
+            screen.check().is_err(),
+            "a frame with a mis-measured column passed its own check"
+        );
+        // AND THE INK IS STILL THERE, in the right place: what was wrong is the
+        // SIZE, and at the grid's size the run is exactly where the layout put
+        // it. Turning it away would cost the row a column to fix a gap.
+        let list = screen.as_protocol();
+        let ronoctua_protocol::Command::Text { scale, column, .. } = &list.commands[0] else {
+            panic!("a run");
+        };
+        assert_eq!(*column, 0);
+        assert_ne!(*scale, ronoctua_protocol::Scale::Small);
+    }
+
     #[test]
     fn a_field_takes_its_column_and_not_the_runs_own() {
         let heights = Heights::from_sizes(12.0, 14.0, 20.0, 28.0, 40.0, 1.45);

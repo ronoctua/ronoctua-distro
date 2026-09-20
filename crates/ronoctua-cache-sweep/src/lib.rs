@@ -13,6 +13,22 @@
 //! never the problem**, and that is why the reach is the whole root and not a
 //! directory of ours.
 //!
+//! # WHAT IT LOOKS AT: the entries in the root, each one whole
+//!
+//! Not every file, weighed on its own. The owner stopped that, and the reason
+//! is worth having here too: a cache is rarely a heap of independent files. It
+//! is an index and the things the index names, a manifest and its blobs, a
+//! database and its write-ahead log. Take the ones nobody read lately and leave
+//! the rest, and you have not freed a cache — you have left a program holding
+//! half of something, which is a class of failure nobody can debug from a
+//! directory listing.
+//!
+//! Nearly every program keeps its cache in a directory of its own under the
+//! root, which is what makes the coarse rule the SAFE one: the unit of deletion
+//! becomes the unit the program created. **A directory is as old as its
+//! youngest file**, so a cache anything still touches is never taken, however
+//! much of it is ancient — and the walk still has to descend to find that out.
+//!
 //! # What it will not do, and why each one is here
 //!
 //! This binary deletes files for a living, so the refusals are the design:
@@ -40,7 +56,7 @@
 
 use std::io;
 use std::os::unix::fs::MetadataExt as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 /// Whether the walk is a rehearsal or the real thing.
@@ -65,18 +81,20 @@ pub enum Act {
 /// same time would make a lie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Swept {
-    /// Regular files taken, or that would have been.
+    /// Files in the ROOT taken, or that would have been.
+    ///
+    /// A cache kept as a single file rather than a directory — `.tdb`, a
+    /// sqlite database, an index. Most of what goes is a directory.
     pub files: u64,
     /// What they weighed.
     pub bytes: u64,
-    /// Regular files looked at and left, because they are still in use.
+    /// Entries in the root looked at and left, because something still uses
+    /// them — or because they could not be dated at all.
     pub kept: u64,
-    /// Directories removed because THIS walk emptied them.
+    /// Directories in the root taken WHOLE, or that would have been.
     ///
-    /// Never one that was already empty when the walk arrived: that one belongs
-    /// to a program that made it and has not written into it yet, and taking it
-    /// would be this sweep doing something nobody asked for. Zero in a
-    /// rehearsal, which counts files and touches nothing.
+    /// The ordinary case: nearly every program keeps its cache in one of these,
+    /// and a directory goes entire or not at all. See the module header.
     pub dirs: u64,
     /// Entries the walk could not read or could not remove.
     ///
@@ -113,16 +131,18 @@ pub fn unused_for(meta: &std::fs::Metadata, now: SystemTime) -> Option<Duration>
     now.duration_since(used).ok()
 }
 
-/// Walk `root` and take every regular file unused for `keep` or longer.
+/// Take every entry in `root` that nothing has used for `keep` or longer.
+///
+/// An entry is a file or a DIRECTORY, and a directory goes whole or not at all
+/// — see the module header for why that is the safe rule and not the coarse
+/// one. Its age is its youngest file's, which is what "nothing in here has been
+/// touched" means.
 ///
 /// `now` is a PARAMETER and not a clock: a sweep whose age arithmetic reads the
 /// system clock cannot be tested against a file planted two days in the future,
 /// and that file is the case this most needs to get right.
 ///
-/// The root itself is never removed, and neither are its immediate children:
-/// `fontconfig`, `starship` and a dozen others expect their directory to be
-/// there, and recreating it is the login's business, not a sweep's. Everything
-/// deeper that ends up empty goes.
+/// The root itself is never removed.
 pub fn sweep(root: &Path, now: SystemTime, keep: Duration, act: Act) -> Swept {
     let mut out = Swept::default();
     let Ok(top) = std::fs::symlink_metadata(root) else {
@@ -136,109 +156,159 @@ pub fn sweep(root: &Path, now: SystemTime, keep: Duration, act: Act) -> Swept {
         return out;
     }
     let disk = top.dev();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        out.refused += 1;
+        return out;
+    };
 
-    // AN EXPLICIT STACK AND NOT RECURSION. A cache root is somebody else's
-    // directory tree and its depth is not ours to bound; a deep one would be a
-    // stack overflow, which in this process is a sweep that half ran.
-    //
-    // The `bool` is "have its children been walked yet": a directory has to be
-    // visited twice — once to queue what is in it, and once afterwards to find
-    // out whether anything is left. The depth rides along because the root's
-    // own children are kept whatever happens.
-    // AND WHICH DIRECTORIES THIS WALK TOOK SOMETHING OUT OF. A directory that
-    // was ALREADY empty when the walk arrived is left where it is: it belongs
-    // to a program that made it and has not written into it yet, and removing
-    // it would be this sweep doing something nobody asked for.
-    let mut emptied: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    let mut stack: Vec<(PathBuf, usize, bool)> = vec![(root.to_path_buf(), 0, false)];
-    while let Some((at, depth, walked)) = stack.pop() {
-        if walked {
-            // COMING BACK UP. Everything below has been dealt with, so a
-            // directory that is empty AND that this walk took something out of
-            // is one this walk emptied.
-            if depth > 1 && emptied.contains(&at) && is_empty(&at) {
-                match std::fs::remove_dir(&at) {
-                    Ok(()) => {
-                        out.dirs += 1;
-                        if let Some(up) = at.parent() {
-                            emptied.insert(up.to_path_buf());
-                        }
-                    }
-                    // A directory something wrote into between the two visits
-                    // is not empty any more, and that is not a failure.
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                    Err(_) => out.refused += 1,
-                }
-            }
-            continue;
-        }
-        let Ok(entries) = std::fs::read_dir(&at) else {
+    for entry in entries {
+        let Ok(entry) = entry else {
             out.refused += 1;
             continue;
         };
-        stack.push((at.clone(), depth, true));
-        for entry in entries {
-            let Ok(entry) = entry else {
-                out.refused += 1;
-                continue;
-            };
-            let path = entry.path();
-            // SYMLINK METADATA, ALWAYS. `metadata` here would follow a link out
-            // of the cache root and make every rule below a rule about
-            // somebody else's files.
-            let Ok(meta) = std::fs::symlink_metadata(&path) else {
-                out.refused += 1;
-                continue;
-            };
-            if meta.is_dir() {
-                // AND NEVER OFF THIS DISK. A mount under the cache root is
-                // another filesystem with another owner's rules on it.
-                if meta.dev() == disk {
-                    stack.push((path, depth + 1, false));
+        let path = entry.path();
+        // SYMLINK METADATA, ALWAYS. `metadata` here would follow a link out of
+        // the cache root and make every rule below a rule about somebody else's
+        // files.
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            out.refused += 1;
+            continue;
+        };
+        // A LINK, A SOCKET, A FIFO, A DEVICE: left alone. The first is what this
+        // must not follow and the rest belong to something running right now.
+        if !meta.is_dir() && !meta.is_file() {
+            continue;
+        }
+        // AND NEVER OFF THIS DISK. A mount under the cache root is another
+        // filesystem with another owner's rules on it.
+        if meta.dev() != disk {
+            continue;
+        }
+
+        let (age, weight) = if meta.is_dir() {
+            match measure(&path, now, disk) {
+                Some(measured) => measured,
+                None => {
+                    // SOMETHING IN THERE COULD NOT BE READ OR COULD NOT BE
+                    // DATED, so this directory has no age — and a directory
+                    // with no age is one this does not delete. Refusing to
+                    // answer is the only safe answer about a tree one cannot
+                    // see all of.
+                    out.refused += 1;
+                    out.kept += 1;
+                    continue;
                 }
-                continue;
             }
-            // A LINK, A SOCKET, A FIFO, A DEVICE: left alone. The first is what
-            // this must not follow and the rest belong to something that is
-            // running right now.
-            if !meta.is_file() {
-                continue;
-            }
+        } else {
             match unused_for(&meta, now) {
-                Some(age) if age >= keep => {
-                    if act == Act::Execute {
-                        match std::fs::remove_file(&path) {
-                            Ok(()) => {
-                                emptied.insert(at.clone());
-                            }
-                            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-                            Err(_) => {
-                                out.refused += 1;
-                                continue;
-                            }
-                        }
-                    }
-                    out.files += 1;
-                    out.bytes += meta.len();
+                Some(age) => (age, meta.len()),
+                None => {
+                    out.kept += 1;
+                    continue;
                 }
-                // STILL IN USE, or stamped in the future — which keeps it.
-                _ => out.kept += 1,
+            }
+        };
+
+        if age < keep {
+            out.kept += 1;
+            continue;
+        }
+        if act == Act::Execute {
+            let gone = if meta.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            match gone {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(_) => {
+                    out.refused += 1;
+                    continue;
+                }
             }
         }
+        if meta.is_dir() {
+            out.dirs += 1;
+        } else {
+            out.files += 1;
+        }
+        out.bytes += weight;
     }
     out
 }
 
-/// Whether a directory has nothing left in it.
+/// How long since ANYTHING under `at` was used, and what it all weighs.
 ///
-/// An unreadable directory answers NO, which is what keeps a sweep from
-/// removing something it could not look inside.
-fn is_empty(at: &Path) -> bool {
-    std::fs::read_dir(at).is_ok_and(|mut d| d.next().is_none())
+/// The age of a directory is its YOUNGEST file's, which is what "nothing in
+/// here has been touched" means — one file somebody opened yesterday keeps the
+/// whole thing, however ancient the rest of it is. That is the property that
+/// makes taking a directory whole safe: a cache in use is never taken.
+///
+/// `None` when any part of it could not be read or could not be dated. A
+/// directory this cannot see all of is one it must not delete, and refusing to
+/// answer is the only honest way to say so.
+fn measure(at: &Path, now: SystemTime, disk: u64) -> Option<(Duration, u64)> {
+    let mut youngest = Duration::MAX;
+    let mut weight = 0u64;
+    let mut empty = true;
+    // AN EXPLICIT STACK AND NOT RECURSION. A cache directory's depth is not
+    // ours to bound, and a deep one would be a stack overflow — which in this
+    // process is a sweep that half ran.
+    let mut stack = vec![at.to_path_buf()];
+    while let Some(here) = stack.pop() {
+        for entry in std::fs::read_dir(&here).ok()? {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            let meta = std::fs::symlink_metadata(&path).ok()?;
+            if meta.is_dir() {
+                // A MOUNT INSIDE MAKES THE WHOLE THING UNANSWERABLE, because
+                // what is under it is not this filesystem's to weigh — and a
+                // `remove_dir_all` over it would be deleting across the
+                // boundary this refuses to cross.
+                if meta.dev() != disk {
+                    return None;
+                }
+                stack.push(path);
+                empty = false;
+                continue;
+            }
+            empty = false;
+            // A LINK OR A SOCKET INSIDE IS NOT WEIGHED AND NOT DATED. It is
+            // still taken with the directory, which is right: it belongs to
+            // whatever made the directory.
+            if !meta.is_file() {
+                continue;
+            }
+            youngest = youngest.min(unused_for(&meta, now)?);
+            weight = weight.saturating_add(meta.len());
+        }
+    }
+    // AN EMPTY DIRECTORY HAS NO YOUNGEST FILE, so it is dated by ITSELF — and
+    // by its MODIFICATION time alone, which is the one place in this crate that
+    // does not take the later of the two.
+    //
+    // Because a directory's access time is not evidence about the person: it
+    // moves when ANYBODY lists it, and the thing that lists it most reliably is
+    // this walk. `read_dir` a few lines above stamps `atime` with now, so a
+    // rule taking the later of the two would find every empty directory freshly
+    // used the moment it looked — for ever, and the abandoned one would never
+    // go. Found by a test that planted one three months old and watched it
+    // survive.
+    //
+    // A directory's mtime moves when its CONTENTS change, which is exactly the
+    // question being asked of an empty one.
+    if empty {
+        let mine = std::fs::symlink_metadata(at).ok()?;
+        return Some((now.duration_since(mine.modified().ok()?).ok()?, 0));
+    }
+    Some((youngest, weight))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     /// A tree of our own, under `/tmp`, that goes away with the test.
@@ -304,6 +374,72 @@ mod tests {
     const SECONDS_IN_A_DAY: u64 = 24 * 60 * 60;
 
     #[test]
+    fn a_directory_is_as_old_as_its_youngest_file_and_goes_whole() {
+        // THE RULE THE OWNER ASKED FOR, and the reason: a cache is rarely a
+        // heap of independent files. Take the ones nobody read lately and leave
+        // the rest, and a program is left holding half of an index — a class of
+        // failure nobody can debug from a directory listing.
+        //
+        // So the unit is the entry in the ROOT, and one file somebody opened
+        // yesterday keeps the whole thing.
+        let tree = Tree::new("pasta-inteira");
+        tree.plant("alive/ancient.bin", days(400));
+        tree.plant("alive/deep/older.bin", days(400));
+        tree.plant("alive/deep/read-yesterday.bin", days(1));
+        tree.plant("dead/one.bin", days(90));
+        tree.plant("dead/deep/two.bin", days(90));
+
+        let took = sweep(&tree.0, SystemTime::now(), days(40), Act::Execute);
+
+        assert!(
+            tree.at("alive/ancient.bin").exists(),
+            "a four-hundred-day-old file was taken out from under a cache in use"
+        );
+        assert!(tree.at("alive/deep/read-yesterday.bin").exists());
+        assert!(
+            !tree.at("dead").exists(),
+            "a directory nothing has touched in three months stayed"
+        );
+        assert_eq!(
+            took.dirs, 1,
+            "it took something other than the one directory"
+        );
+        assert_eq!(took.files, 0, "it went inside and took files one by one");
+        assert_eq!(took.kept, 1, "it did not count the live one as kept");
+        assert!(took.bytes > 0, "it weighed nothing");
+    }
+
+    #[test]
+    fn a_directory_it_cannot_see_all_of_is_one_it_does_not_delete() {
+        // REFUSING TO ANSWER IS THE ONLY SAFE ANSWER about a tree one cannot
+        // read: an unreadable corner could hold the file that is in use, and
+        // `remove_dir_all` would take it with everything else.
+        let tree = Tree::new("ilegivel");
+        tree.plant("blind/old.bin", days(400));
+        let shut = tree.at("blind/inner");
+        std::fs::create_dir_all(&shut).unwrap();
+        std::fs::write(shut.join("x.bin"), b"x").unwrap();
+        // NO PERMISSION TO LOOK INSIDE, which is what a cache of another
+        // program's can genuinely be.
+        let mut mode = std::fs::metadata(&shut).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o000);
+        std::fs::set_permissions(&shut, mode).unwrap();
+
+        let took = sweep(&tree.0, SystemTime::now(), days(40), Act::Execute);
+
+        assert!(
+            tree.at("blind").exists(),
+            "a directory with an unreadable corner was deleted anyway"
+        );
+        assert_eq!(took.refused, 1, "it did not say it could not answer");
+        assert_eq!(took.dirs, 0);
+
+        let mut mode = std::fs::metadata(&shut).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+        let _ = std::fs::set_permissions(&shut, mode);
+    }
+
+    #[test]
     fn a_sandbox_with_nothing_in_it_proves_nothing_so_this_plants() {
         // THE DEFECT THIS CATCHES IS IN THE TEST ITSELF, and this repository
         // has met it: `dev-exits-clean` ran in a sandbox whose `/tmp` was
@@ -313,13 +449,13 @@ mod tests {
         // So every case below plants, and every one of them asserts what was
         // NOT taken as well as what was.
         let tree = Tree::new("plantada");
-        tree.plant("deep/old.bin", days(40));
-        tree.plant("deep/new.bin", days(1));
-        let took = sweep(&tree.0, SystemTime::now(), days(20), Act::Execute);
+        tree.plant("old.bin", days(60));
+        tree.plant("new.bin", days(1));
+        let took = sweep(&tree.0, SystemTime::now(), days(40), Act::Execute);
         assert_eq!(took.files, 1, "it did not take the old one");
         assert_eq!(took.kept, 1, "it did not leave the new one");
-        assert!(!tree.at("deep/old.bin").exists());
-        assert!(tree.at("deep/new.bin").exists(), "today's work went");
+        assert!(!tree.at("old.bin").exists());
+        assert!(tree.at("new.bin").exists(), "today's work went");
     }
 
     #[test]
@@ -412,57 +548,51 @@ mod tests {
         // this is the only thing in the tree that deletes a person's files: the
         // number has to be checkable before anybody believes it.
         let tree = Tree::new("ensaio");
-        tree.plant("a/old-1.bin", days(30));
-        tree.plant("a/old-2.bin", days(30));
-        tree.plant("a/new.bin", days(2));
+        tree.plant("dead/one.bin", days(90));
+        tree.plant("dead/two.bin", days(90));
+        tree.plant("alive/new.bin", days(2));
 
-        let said = sweep(&tree.0, SystemTime::now(), days(20), Act::Rehearse);
-        assert_eq!(said.files, 2);
+        let said = sweep(&tree.0, SystemTime::now(), days(40), Act::Rehearse);
+        assert_eq!(said.dirs, 1);
         assert!(said.bytes > 0);
-        assert!(
-            tree.at("a/old-1.bin").exists(),
-            "a rehearsal deleted a file"
-        );
+        assert!(tree.at("dead").exists(), "a rehearsal deleted a directory");
 
-        let did = sweep(&tree.0, SystemTime::now(), days(20), Act::Execute);
+        let did = sweep(&tree.0, SystemTime::now(), days(40), Act::Execute);
         assert_eq!(
-            (did.files, did.bytes),
-            (said.files, said.bytes),
+            (did.dirs, did.bytes),
+            (said.dirs, said.bytes),
             "the rehearsal's number and the real one disagree"
         );
     }
 
     #[test]
-    fn the_roots_own_children_stay_and_what_the_walk_empties_goes() {
-        // `fontconfig`, `starship` and a dozen others expect their directory to
-        // be there and recreating it is the login's business. Deeper than that,
-        // a directory this walk emptied is cruft — but one that was ALREADY
-        // empty belongs to a program that made it and has not written into it
-        // yet.
-        let tree = Tree::new("pastas");
-        tree.plant("keeper/deep/gone.bin", days(30));
-        std::fs::create_dir_all(tree.at("keeper/untouched")).unwrap();
-        std::fs::create_dir_all(tree.at("empty-child")).unwrap();
+    fn an_empty_directory_is_dated_by_itself() {
+        // THE ONE CASE where a directory's own stamp is the honest answer: it
+        // has no youngest file to be as old as. A program that made its cache
+        // directory this morning and has not written into it yet must keep it;
+        // one abandoned three months ago is rubbish like any other.
+        let tree = Tree::new("vazia");
+        let fresh = tree.at("just-made");
+        std::fs::create_dir_all(&fresh).unwrap();
+        let old = tree.at("abandoned");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::File::open(&old)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(SystemTime::now() - days(90))
+                    .set_modified(SystemTime::now() - days(90)),
+            )
+            .unwrap();
 
-        let took = sweep(&tree.0, SystemTime::now(), days(20), Act::Execute);
+        let took = sweep(&tree.0, SystemTime::now(), days(40), Act::Execute);
 
+        assert!(fresh.exists(), "a directory made this morning was taken");
         assert!(
-            !tree.at("keeper/deep").exists(),
-            "the directory the walk emptied stayed"
+            !old.exists(),
+            "an abandoned empty directory stayed for ever"
         );
-        assert!(
-            tree.at("keeper").exists(),
-            "a child of the root was removed"
-        );
-        assert!(
-            tree.at("empty-child").exists(),
-            "an empty child of the root was removed"
-        );
-        assert!(
-            tree.at("keeper/untouched").exists(),
-            "a directory that was already empty was removed"
-        );
-        assert_eq!(took.dirs, 1, "it counted a directory it did not empty");
+        assert_eq!(took.dirs, 1);
     }
 
     #[test]

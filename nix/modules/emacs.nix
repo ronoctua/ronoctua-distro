@@ -107,6 +107,22 @@ in
   config = lib.mkIf cfg.editor.emacs {
     environment.systemPackages = [ doomSync ] ++ doomDeps;
 
+    # AND THE UPDATE BRINGS DOOM WITH IT.
+    #
+    # `assets/updates.nix` declares the step and ships it OFF, which it has to:
+    # it names a bare binary, and a bare binary must not ship on (invariant 6).
+    # The module that knows the binary exists is this one, so this is where it
+    # is switched on — the same shape `ronoctua.update.steps` has for every
+    # other per-machine answer, written into `/etc/ronoctua/updates.conf`.
+    #
+    # WHY IT HAS TO HAPPEN AT ALL: the three files below are rewritten from the
+    # repository on every rebuild, and until `doom sync` runs the framework is
+    # still resolving the previous ones. The owner asked for the two to move
+    # together.
+    #
+    # `mkDefault`, so somebody who does not want it says so in one line.
+    ronoctua.update.steps.doom-sync = lib.mkDefault true;
+
     # WHERE THE FILE MANAGER SENDS TEXT — and it is set HERE, inside this
     # `mkIf`, rather than baked into the binary.
     #

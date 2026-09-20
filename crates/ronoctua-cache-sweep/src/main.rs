@@ -10,9 +10,9 @@
 //! 2. A unit gets `CPUSchedulingPolicy=idle` and `IOSchedulingClass=idle` for
 //!    nothing — the argument `nix/modules/memory.nix` already makes about
 //!    collecting the store: it competes with everything for the disk, so it
-//!    yields to whatever the person is actually doing. The first run on the
-//!    owner's machine frees about 148 GiB; without this it is a machine nobody
-//!    can type on.
+//!    yields to whatever the person is actually doing. Deleting whole cache
+//!    directories at once is a lot of `unlink`; without this it is a machine
+//!    nobody can type on while it happens.
 //! 3. It stays reachable by hand and in a VM.
 //!
 //! # What it is told, and what it decides
@@ -104,16 +104,16 @@ fn main() -> std::process::ExitCode {
     // when; what it TOOK is here, where `journalctl --user -u
     // ronoctua-cache-sweep` finds it.
     println!(
-        "{} {} files ({}), kept {}, {} empty directories, {} refused, in {:.1}s — {}",
+        "{} {} directories and {} files ({}), kept {}, {} unanswerable, in {:.1}s — {}",
         if act == Act::Execute {
             "took"
         } else {
             "would take"
         },
+        took.dirs,
         took.files,
         in_units(took.bytes),
         took.kept,
-        took.dirs,
         took.refused,
         ended
             .duration_since(began)

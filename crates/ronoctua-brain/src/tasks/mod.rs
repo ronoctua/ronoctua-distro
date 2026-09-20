@@ -13,7 +13,9 @@
 //! at construction, so a mistake is a daemon that does not start rather than a
 //! bracketed key on somebody's screen.
 
+pub mod emacs;
 pub mod sweep;
+pub mod trash;
 pub mod update;
 
 use std::sync::Arc;
@@ -35,6 +37,10 @@ pub fn tasks(zone: Arc<dyn Offset>) -> Vec<Box<dyn Task>> {
     vec![
         // ONE LINE PER FEATURE. This is the door.
         Box::new(update::SystemUpdate::with(Arc::clone(&zone))),
-        Box::new(sweep::CacheSweep::with(zone)),
+        Box::new(sweep::CacheSweep::with(Arc::clone(&zone))),
+        Box::new(trash::EmptyTrash::with(zone)),
+        // THE ONE THAT ONLY LOOKS. It takes no zone: its cadence is in
+        // minutes, so there is no calendar for it to be in.
+        Box::new(emacs::EmacsDaemon::new()),
     ]
 }

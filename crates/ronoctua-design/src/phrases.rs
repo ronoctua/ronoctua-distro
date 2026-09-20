@@ -35,6 +35,16 @@ impl Phrases {
         Self(said)
     }
 
+    /// Nothing said yet.
+    ///
+    /// `const`, which [`Default`] cannot be, because a buffer's state is built
+    /// in a `const fn` — the whole of it lives in one `thread_local` and is
+    /// constructed before anything has happened.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self(Vec::new())
+    }
+
     /// The text for a key, or the FALLBACK the buffer compiled in.
     ///
     /// Never an `Option`, and that is the point: a buffer that had to decide

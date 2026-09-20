@@ -108,6 +108,14 @@
   # this scene needs nothing from the ones before it.
   { id = "geo"; }
   { id = "brain"; }
+  # THE BRAIN'S OWN WINDOW. It needs the scene above, which is what starts the
+  # daemon — without one the buffer opens and draws the screen it draws before
+  # a mind arrives, which is the picture this repository already has too many
+  # of.
+  {
+    id = "brain-buffer";
+    needs = [ "brain" ];
+  }
   { id = "update"; }
   { id = "theme"; }
   { id = "hints"; }

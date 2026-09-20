@@ -3061,6 +3061,41 @@ byte**, antes e depois de mexer no traço. O glifo `Huge` da esquerda fica: um �
 desenha (o que a cópia do *caractere* entrega), o outro é o que o SVG entrega, e vê-los lado a lado é
 informação.
 
+#### As duas primitivas que faltavam, e a regra minha que estava errada
+
+Escrevi no `docs/PENDING.md` que um buffer não podia ter um container que rola, porque nenhuma das
+cinco primitivas era uma região rolável e inventar uma seria um sexto vocabulário. O dono disse que
+a regra está errada. Está, e o raciocínio também: **um buffer já desenha a janela de lista que
+quiser** — ele é dono do deslocamento, emite as linhas que quer, e o hospedeiro não recorta nada.
+Não faltava nada no desenho.
+
+Faltavam duas coisas, e nenhuma delas é uma região.
+
+**`command::bar` — o polegar.** É uma fração de um trilho em PIXELS, e este lado conta CÉLULAS. Uma
+barra feita de blocos seria uma sexta barra parecida com as cinco de verdade e igual a nenhuma delas.
+Então a barra atravessa como NÚMEROS — total, mostrados, deslocamento — e o hospedeiro a desenha com
+o `ronoctua_design::Scroll`, que compila dos dois lados da parede desde o dia em que foi escrito e é
+a mesma aritmética das nove vistas. O resíduo de pixel continua sendo do hospedeiro, que é o único
+que conhece a superfície. Nada é desenhado quando a lista cabe (`Scroll::cut`).
+
+**`input::wheel` — a mão.** Em LINHAS e nunca em pixels, a mesma parede que o `click` respeita, pela
+aritmética única do `surface::axis_lines` — a que guarda a fração entre eventos, que é o que faz um
+gesto lento mover alguma coisa. Uma barra que ninguém pega é o retrato de um controle.
+
+**E `command::paragraph`, pela mesma razão do outro lado.** Um buffer segura uma CHAVE. O `text`
+desenha UMA linha e o hospedeiro a elide no orçamento — certo para um rótulo, inútil para uma
+descrição, que cortada na largura de uma coluna é uma descrição que ninguém lê. E quebrar linha
+precisa da string TRADUZIDA, que este lado nunca vê e não saberia medir. Então o RETÂNGULO atravessa
+e o hospedeiro o preenche, com o mesmo `layout::wrap` que um nome de arquivo comprido já usa, e elide
+a última linha quando sobra texto. É o que deixa um buffer ter um rodapé que explica o que está sob o
+cursor — a forma que toda vista do rodapé tem e nenhum buffer podia ter.
+
+E o portão do `nothing_is_covered` aprendeu a distinguir **CHÃO de TINTA**: uma seleção existe para
+ficar embaixo, e um rodapé com fundo próprio e um parágrafo em cima dele se denunciava como defeito.
+Uma RÉGUA não é chão — um título alto que alcança a régua abaixo dele é exatamente o defeito que
+aquele portão foi escrito para pegar —, e uma BARRA também não: o que mantém uma barra honesta fora
+disso é o teste de COLUNA, não uma isenção.
+
 #### A display list ganhou a primeira primitiva de pixel — e a trava que faltava
 
 `command::svg` é a quinta primitiva, ao lado de texto, régua, grade e seleção, e a primeira que
@@ -7236,7 +7271,7 @@ amarra o estado **pós-destrave** ao volume que foi realmente aberto.
 
 ---
 
-### O cérebro — `LEADER b b`, e a linha que avisa antes
+### O cérebro — `LEADER b`, e a linha que avisa antes
 
 A máquina faz coisas sozinha, e até esta tela nada dizia o quê, quando, nem no que deu. `nix flake
 update` era um ALIAS de shell; o rebuild morava no `rescue.nix`, a coleta de lixo no `memory.nix`, o
@@ -7263,11 +7298,95 @@ Este é o ponto do crate. O dono pediu um lugar onde *"qualquer coisa nesse espa
 funcionalidade em vez de um daemon novo, e um lugar só é um lugar se os passos para usá-lo estiverem
 escritos. Acrescentar uma tarefa toca **cinco**: um tipo em `src/tasks/`, uma linha no `vec![]` que
 os lista, as duas chaves de texto nos dois idiomas, uma linha na página inicial do buffer (se ela
-quiser uma) e um padrão em `prefs` (se ela tiver preferências). O que ela NÃO escreve, porque o
+quiser uma) e um padrão em `prefs` (se ela tiver preferências). A LISTA desenha qualquer tarefa sem
+saber nada dela: `brain-task-<id>` a nomeia, `<id>-does` diz o que faz, e `Task::kind` decide o
+glifo e a cor. O que ela NÃO escreve, porque o
 runner já é dono: a fila — no máximo uma tarefa por vez —, o portão de métrica, o aviso e a contagem
 dele, o diário, o socket e toda tela que olha.
 
-O trait tem seis métodos e **só o `run` toca a máquina**. Os outros — como se chama, quando vence,
+#### E o interruptor não alcançava a execução
+
+Atrás daquele defeito havia um maior, e o dono decidiu consertá-lo: `m t` gravava no `brain.json` e
+**nada na máquina lia esse arquivo**. Quem decide quais passos rodam é `/etc/ronoctua/updates.conf`,
+gerado da opção `ronoctua.update.steps`, que precisa de um rebuild. A página oferecia uma tecla, a
+tecla gravava um arquivo, e a sequência seguia rodando exatamente o que rodava — sem nada, em lugar
+nenhum, dizendo isso.
+
+O `turned_on` do script gerado passou a ler **três camadas**, da menos específica para a mais: o
+padrão da distro, a tabela da máquina, e por cima delas os GIROS da pessoa, que o brain escreve de
+`brain.json` para `$XDG_STATE_HOME/ronoctua/update-steps.conf` toda vez que as preferências mudam.
+Uma fonte de verdade (`brain.json`) e uma vista derivada dela, na forma de uma linha por passo, que é
+a forma que o script já sabe ler — a alternativa era ensinar um `writeShellApplication` a parsear
+JSON, que é ou uma dependência nova ou um `grep` que um dia responderá com confiança e errado sobre
+a máquina de alguém. É a mesma relação que o fragmento do niri tem com o `theme.json`.
+
+**A camada da pessoa é só da metade dela**, e isso é uma fronteira e não um esquecimento: a metade
+root roda como root, cuja casa é `/root`, e não há jeito honesto de ela descobrir de quem foi a
+sessão que a iniciou. As formas de dar-lhe um acabam todas num diretório de root que um membro de
+`users` pode escrever — numa máquina compartilhada, qualquer conta decidindo o que um update de root
+roda. Os seis passos root ficam com a opção do Nix, e a página os desenha RECUSANDO com a frase que
+diz de onde vem o valor — a mesma resposta que a vista do Syncthing dá para as catorze opções que o
+flake fixa (invariante 6).
+
+E o que prova isso é um check que **roda a função gerada** em vez de ler o gerador. A primeira forma
+dele lia o código-fonte pelo nome do arquivo, e uma sabotagem passou direto: apontar a guarda para
+`/nonexistent` deixando o redirecionamento embaixo manteve o nome no texto e quebrou a
+funcionalidade. Um check que procura uma palavra mede como a fonte está escrita, que não é a
+propriedade.
+
+#### `você mudou` sobre seis passos que ninguém tocou
+
+O dono abriu a página do update e viu seis linhas dizendo `you changed`, numa máquina onde não tinha
+mudado nada. Perguntou o que aquilo queria dizer. Era um defeito, e a forma dele vale guardar.
+
+`TaskPrefs::steps_off` era *"um conjunto de exceções e não uma lista do que roda"*, e o comentário
+que dizia isso estava certo sobre o que o campo é e errado sobre o que ele supõe: um conjunto de
+"desligados" só consegue expressar uma coisa — *a pessoa DESLIGOU um passo que vem ligado* —, e
+portanto assume que **todo passo vem ligado**. O `assets/updates.nix` entrega **seis dos doze
+desligados**.
+
+A aritmética era `on = !contains(id)` e `changed = contains(id) == on_by_default`. Com o conjunto
+vazio, para cada um daqueles seis: `on` dava LIGADO — o contrário do que a distro entrega, com o
+tique aceso — e `changed` dava verdadeiro. E apertar a tecla piorava ao contrário: o passo entrava no
+conjunto, `on` virava falso e `changed` virava falso, então a linha passava a dizer "não mexido"
+**depois** de a pessoa ter escrito no arquivo dela.
+
+O conserto tem duas metades. A exceção virou um **giro sobre o padrão declarado** —
+`on = on_by_default ^ flipped`, `changed = flipped` —, com o nome do campo mudado para
+`steps_flipped` e um `serde(alias)` no antigo: sob a leitura velha uma entrada só podia ser um passo
+ligado que alguém desligou, e sob esta ela quer dizer exatamente a mesma coisa, então nada em disco
+precisa migrar. E o que **atravessa** deixou de ser `changed` e passou a ser `on_by_default`: o padrão
+é o fato DECLARADO e o único dos dois que não é derivado, "mudou" é uma subtração que qualquer um com
+os dois faz, e a tela ganhou de graça a capacidade de dizer de que um passo foi mudado.
+
+#### Uma tarefa pode ser uma VIGIA, e isso mudou duas coisas
+
+A tarefa que olha o daemon do Emacs não se parece com as outras três em nada. As três fazem e
+relatam; esta só OLHA, e o resultado inteiro dela é uma frase. Duas consequências, e as duas valem
+para a próxima vigia que aparecer.
+
+**A cadência dela é em minutos.** `interval_days` é a unidade certa para um rebuild e inútil aqui: o
+daemon pode cair às dez da manhã, e uma checagem que voltasse amanhã deixaria alguém sem a sessão do
+editor por um dia enquanto a tela dizia que estava tudo em ordem. `TaskPrefs::every_minutes` é
+`Option` e vale para quem a declara — `schedule::next_moment` curto-circuita o calendário inteiro na
+primeira linha quando ela está lá, porque não há janela para achar, dia para caminhar nem fuso para
+consultar, e `local_day` arredondaria cinco minutos para "hoje" e devolveria sempre o mesmo instante.
+Não é um knob: a escada de cadência que a tela percorre é em dias, e uma tarefa que pensa em minutos
+não tem degrau nenhum ali para onde ir.
+
+**E ela levanta um AVISO** (`task::Notice`, por `Report::say`), que a faixa do rodapé desenha. Uma
+frase que só aparecesse numa tela que alguém tem de abrir seria uma vigia que ninguém ouve. Veio pelo
+`Report` e não por um quarto `Outcome` nem por um método a mais no trait: `run` recebe `&self` e
+devolve o que FEZ, um aviso não é isso, um quarto `Outcome` faria todo leitor de um outcome aprender
+sobre avisos, e um método a mais não teria onde a tarefa lembrar o que acabou de achar. O `Report` já
+é o canal de volta de uma execução.
+
+O aviso carrega CHAVES e um id de COMANDO — nem o rodapé nem um componente inventa palavra — e **pode
+não ter botão**. O do "este Emacs não é o cliente" não tem um de propósito: o que está aberto é o
+trabalho de alguém, com buffers que nada aqui sabe se foram salvos.
+
+O trait tem oito métodos e **só o `run` toca a máquina**. Os outros — como se chama, de que tipo é,
+quando vence,
 do que precisa, por quanto tempo avisa, quais são os passos — não recebem relógio, não abrem arquivo
 e não sobem processo. É isso que permite provar um ANO de agendamento em milissegundos, com um
 `Clock` de teste, sem esperar um segundo sequer.

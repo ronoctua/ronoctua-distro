@@ -54,6 +54,28 @@ ON_FAILURE = {"stop", "carry-on"}
 # cannot be inapplicable, and inventing a directory to test would be worse.
 NEEDS = {"always", "binary", "directory", "writable-file", "network"}
 
+# WHERE THE BRAIN LOOKS, and it is spelled in exactly three places on this
+# machine: here, `ronoctua_brain::runner::REPORTS_LEAF`, and the `--report`
+# argument in `nix/modules/cache.nix`. The check
+# `the-brain-reads-what-the-units-write` reads all three and refuses a
+# disagreement — they disagreed once, and every run the brain started came back
+# `runaway` on work that had succeeded.
+REPORTS_LEAF = "ronoctua-brain"
+
+# The brain's id for this sequence — `crates/ronoctua-brain/src/tasks/update.rs`
+# names the same string, and the sheet's filename is built from it.
+UPDATE_TASK = "system-update"
+
+# WHERE THE PERSON'S OWN SWITCHES LIVE, written by `ronoctua-brain` out of
+# `brain.json`. `ronoctua_brain::prefs::STEPS_FILE` names the leaf; the check
+# `the-step-switch-reaches-the-run` reads both and refuses a disagreement.
+#
+# `${XDG_STATE_HOME:-$HOME/.local/state}` is expanded by the SHELL and not
+# here: the root half has a different home from the person's, and this table is
+# the person's. The root half never reads it — see `emit_runner`, which only
+# emits this layer for the person's half.
+PERSON_STEPS = "${XDG_STATE_HOME:-$HOME/.local/state}/ronoctua/update-steps.conf"
+
 FIELDS = {
     "id",
     "does",
@@ -852,8 +874,75 @@ def emit_runner(
         "# The report the view reads: one line per step, tab separated,",
         "# `<id> <verdict> <seconds>`. Ids and verdicts are English and closed;",
         "# the sentence on screen comes from a text key, never from here.",
-        "record() { printf '%s\\t%s\\t%s\\n' \"$1\" \"$2\" \"$3\" >> \"$report\"; }",
+        "record() { printf '%s\\t%s\\t%s\\n' \"$1\" \"$2\" \"$3\" >> \"$report\""
+        + ("; }" if root_half else "; sheet; }"),
         "",
+    ]
+
+    # THE SECOND READER OF THE SAME LINES, and the reason it exists: the brain
+    # watches a JSON file and NOTHING ON THE MACHINE WROTE ONE. It watched
+    # `/run/ronoctua-brain/system-update.json`, the script wrote a TSV
+    # somewhere else, `Report::watch` never saw the mtime move, and every
+    # update the brain started came back `runaway` after two hours — on a
+    # rebuild that had worked. It is derived from the TSV rather than written
+    # beside it so the two can never disagree about what happened.
+    if not root_half:
+        out += [
+            "# WHAT THE BRAIN WATCHES, rebuilt whole after every step.",
+            "#",
+            "# `ronoctua_brain::task::Sheet`: `began` is set once, `ended` stays",
+            "# ZERO while the run is going (a moment in 1970 is not a run that",
+            "# ended), and `steps` is this file's own TSV turned into records.",
+            "# The brain re-reads it only when the mtime moves, and a read that",
+            "# lands mid-write parses as nothing and is simply tried again.",
+            "#",
+            "# `ok` is false for `failed` and `stopped` and true for everything",
+            "# else: a step that is off or skipped did not fail, and marking it",
+            "# so would report the whole update as broken because a machine has",
+            "# no `rustup`. The words are closed and the ids are kebab-case, so",
+            "# nothing here needs escaping.",
+            "#",
+            "# NO PER-STEP PROSE, because the TSV carries none: what a step said",
+            "# goes to the journal. The brain names the step it stopped at,",
+            "# which `ended()` argues is more than \"something went wrong\".",
+            f'brain="$XDG_RUNTIME_DIR/{REPORTS_LEAF}"',
+            'mkdir -p "$brain" 2>/dev/null || true',
+            'if [ "$execute" = true ]; then',
+            f'  sheet_file="$brain/{UPDATE_TASK}.json"',
+            "else",
+            f'  sheet_file="$brain/{UPDATE_TASK}-rehearsal.json"',
+            "fi",
+            # `$EPOCHSECONDS` and not `date`: the runner's PATH is the wiring\'s
+            # store paths and nothing else, and a bare `date` would fail far
+            # from its cause. Bash 5 has carried this since 2019.
+            "began=$EPOCHSECONDS",
+            "sheet_ended=0",
+            "sheet() {",
+            "  local id verdict seconds ok first=true",
+            '  { printf \'{"began":%s,"ended":%s,"trouble":"","steps":[\' \\',
+            '      "$began" "$sheet_ended"',
+            '    while read -r id verdict seconds; do',
+            '      case "$verdict" in failed|stopped) ok=false ;; *) ok=true ;; esac',
+            '      if [ "$first" = true ]; then first=false; else printf \',\'; fi',
+            '      printf \'{"id":"%s","ok":%s,"seconds":%s,"trouble":""}\' \\',
+            '        "$id" "$ok" "${seconds:-0}"',
+            '    done < "$report"',
+            "    printf ']}'",
+            '  } > "$sheet_file".new 2>/dev/null || return 0',
+            "  # ATOMIC, so the brain never reads half a file it could have read",
+            "  # whole. `Report::sheet` tolerates a torn read, but a rename costs",
+            "  # nothing and removes the retry.",
+            '  mv -f "$sheet_file".new "$sheet_file" 2>/dev/null || true',
+            "}",
+            "# STAMPING THE END is a separate verb from writing the sheet,",
+            "# because every step writes the sheet and only the way out ends",
+            "# the run.",
+            "finish() { sheet_ended=$EPOCHSECONDS; sheet; }",
+            "sheet",
+            "",
+        ]
+
+    out += [
         "skip() {",
         '  if [ -n "$3" ]; then',
         '    say "-- $1: skipped ($2: $3)"',
@@ -870,21 +959,75 @@ def emit_runner(
         "= connected ]",
         "}",
         "",
-        "# WHICH STEPS ARE ON. The machine's table wins and the distro's default",
-        "# answers when there is none — invariant 5: the numbers live in Nix, and",
-        "# this only reads them.",
+        "# WHICH STEPS ARE ON, from up to three sources, most specific first.",
+        "#",
+        "#   1. the person's own switch, from the brain's page (`m t`);",
+        "#   2. this machine's table, from `ronoctua.update.steps`;",
+        "#   3. the distro's default, baked in below.",
+        "#",
+        "# LAYER 1 IS THE PERSON'S HALF ONLY, and that is a boundary and not an",
+        "# oversight. This table lives in the person's state directory; the root",
+        "# half runs as root, whose home is `/root`, and there is no honest way",
+        "# for it to find out whose session started it. The ways to give it one",
+        "# all end in a root-owned directory that a member of `users` may write",
+        "# — which would let any account on a shared machine decide what a root",
+        "# update runs. The six root steps take `ronoctua.update.steps`, and the",
+        "# brain's page DRAWS them refusing and says so, which is the same answer",
+        "# the Syncthing view already gives for the fourteen options the flake",
+        "# fixes (invariant 6).",
+        "#",
+        "# The person's layer is a set of FLIPS and not a set of states: it says",
+        "# which steps differ from the answer the other two give, so a step",
+        "# added by a later version takes its declared default instead of being",
+        "# missing from everybody's file. That is the same shape the brain keeps",
+        "# it in, and it is what makes `m t` mean the same thing on a machine",
+        "# whose `/etc` table was changed afterwards.",
+        "#",
+        "# Invariant 5 is intact: nothing here decides anything. The numbers and",
+        "# the defaults live in Nix, the flips live in the person's own file, and",
+        "# this reads both.",
+        "#",
+        "# WITHOUT LAYER 1 THE SWITCH ON THE SCREEN DID NOTHING. It wrote to",
+        "# `brain.json` and nothing on the machine read it — the page offered a",
+        "# key, the key wrote a file, and the sequence went on running what it",
+        "# ran before, with nothing to tell anybody.",
         "turned_on() {",
-        "  local want=$1 id state",
+        # The two extra locals belong to the person's flip, which the root
+        # half does not read — and shellcheck refuses a local nothing uses.
+        "  local want=$1 id state on=1" + ("" if root_half else " task step"),
         f"  if [ -r {shlex.quote(wiring['config'])} ]; then",
         "    while read -r id state; do",
         '      case "$id" in "#"*|"") continue ;; esac',
         '      if [ "$id" = "$want" ]; then',
-        '        [ "$state" = on ]',
-        "        return",
+        '        [ "$state" = on ] && on=0 || on=1',
+        "        break",
         "      fi",
         f"    done < {shlex.quote(wiring['config'])}",
+        "  else",
+        "    default_on \"$want\" && on=0 || on=1",
         "  fi",
-        '  case "$want" in',
+        *(
+            []
+            if root_half
+            else [
+                "  # AND THE PERSON'S FLIP, last, because it is the most specific.",
+                f'  if [ -r "{PERSON_STEPS}" ]; then',
+                "    while read -r task step; do",
+                '      case "$task" in "#"*|"") continue ;; esac',
+                f'      if [ "$task" = {shlex.quote(UPDATE_TASK)} ] && [ "$step" = "$want" ]; then',
+                '        [ "$on" = 0 ] && on=1 || on=0',
+                "        break",
+                "      fi",
+                f'    done < "{PERSON_STEPS}"',
+                "  fi",
+            ]
+        ),
+        '  return "$on"',
+        "}",
+        "",
+        "# The distro's answer, used when this machine has no table of its own.",
+        "default_on() {",
+        '  case "$1" in',
         "    " + ("|".join(shlex.quote(i) for i in defaults_on) if defaults_on else "'')")
         + ") return 0 ;;",
         "  esac",
@@ -912,6 +1055,7 @@ def emit_runner(
             f"if ! {shlex.quote(wiring['systemctl'])} start \"$privileged\"; then",
             '  say "!! the privileged half stopped; see: journalctl -u $privileged"',
             "  record system-half failed 0",
+            "  finish",
             "  exit 1",
             "fi",
             "",
@@ -926,6 +1070,7 @@ def emit_runner(
                 f"if ! {name}; then",
                 f"  say \"== sequence stopped at {s['id']}\"",
                 "  record sequence stopped 0",
+                *([] if root_half else ["  finish"]),
                 "  exit 1",
                 "fi",
             ]
@@ -934,6 +1079,13 @@ def emit_runner(
     out += [
         "",
         'say "== end"',
+        # THE LAST THING, AND ON EVERY WAY OUT. `ended` staying zero is how the
+        # sheet says "still going", so a run that ends without stamping it is a
+        # run the brain watches until its patience is gone and then calls
+        # `runaway`. That is the exact defect this whole file half exists to
+        # close, and leaving one `exit` without it would reopen it for that
+        # path only — which is the kind of hole nobody finds twice.
+        *([] if root_half else ["finish"]),
         "exit 0",
         "",
     ]
@@ -1041,7 +1193,7 @@ def main() -> int:
     person = sum(1 for s in steps if not s["root"])
     print(
         f"update: {len(steps) - person} root steps, {person} of the person's, "
-        "dois roteiros"
+        "two scripts"
     )
     return 0
 

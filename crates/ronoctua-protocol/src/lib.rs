@@ -1066,6 +1066,22 @@ pub enum OutcomeKind {
     Done,
     /// It ran and it did not.
     Failed,
+    /// Nothing ran: the machine was in no state for it.
+    ///
+    /// Not a failure and not a run. It is written ONCE per episode — the
+    /// runner looks every thirty seconds, and a line per look would be a wall
+    /// of "RAM is busy" with everything that actually happened buried in it.
+    Held,
+}
+
+/// Whether a task repeats, or happens once and is then gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskKind {
+    /// It comes round again.
+    #[default]
+    Routine,
+    /// It happens once and then it is gone.
+    Once,
 }
 
 /// Which stretch of the person's day a task prefers.
@@ -1129,6 +1145,14 @@ pub struct StepOutcome {
 /// the same argument [`BufferState`] makes.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RunRecord {
+    /// Which task this was.
+    ///
+    /// It crosses because the home page shows one list of everything the
+    /// brain has done, and there is no other way there to say whose run a row
+    /// is. Inside a task's own page it is redundant and costs a string.
+    pub task: String,
+    /// Its name, translated, for the reason `TaskState::name_text` carries one.
+    pub task_text: String,
     /// When it started, in epoch seconds.
     pub began: u64,
     /// When it ended.
@@ -1165,10 +1189,17 @@ pub struct TaskStep {
     pub command: String,
     /// Whether it needs to be root.
     pub needs_root: bool,
-    /// Whether it is on.
+    /// Whether it will run.
     pub on: bool,
-    /// Whether that differs from what the distro ships.
-    pub changed: bool,
+    /// Whether the distro ships it on — the DECLARED fact.
+    ///
+    /// It was `changed: bool` (does `on` differ from the default), worked out
+    /// on the daemon's side. The default never crossed, so the screen could
+    /// say "you changed this" and could not say what it had been changed
+    /// FROM, and the host had no way to know what flipping a step meant.
+    /// Sending the default makes "changed" an `!=` anybody can do and leaves
+    /// one authority for it.
+    pub on_by_default: bool,
 }
 
 /// One task, as the screen draws it.
@@ -1176,6 +1207,14 @@ pub struct TaskStep {
 pub struct TaskState {
     /// English, kebab-case. `brain-task-<id>` names it on screen.
     pub id: String,
+    /// The same name, ALREADY TRANSLATED, and it is for measuring.
+    ///
+    /// The component draws the key and reserves a column for what it becomes;
+    /// blind, that column was twenty-six cells for a word five cells wide.
+    /// The rule `next_text` follows, applied to a width instead of a date.
+    pub name_text: String,
+    /// Whether it repeats or happens once.
+    pub kind: TaskKind,
     /// Where it is right now.
     pub standing: Standing,
     /// Whether it runs on its own at all.
@@ -1200,6 +1239,15 @@ pub struct TaskState {
     pub ran: bool,
     /// The last run. Meaningless unless [`TaskState::ran`].
     pub last: RunRecord,
+    /// The last few runs, NEWEST FIRST.
+    ///
+    /// `last` is `history[0]` when there is one. Both cross, and not one
+    /// derived from the other: a row on the list draws `last` and an empty list
+    /// would make every reader check a length before it could.
+    ///
+    /// How many is the brain's decision and not this record's — what crosses is
+    /// what it kept.
+    pub history: Vec<RunRecord>,
     /// What it runs.
     pub steps: Vec<TaskStep>,
 }
@@ -1267,6 +1315,44 @@ pub struct Mind {
     /// `ronoctua-brain` — and a screen that stepped by one would take
     /// twenty-three presses to get from a month to a week.
     pub cadence: Vec<u16>,
+    /// Everything the brain has done, newest first, across every task.
+    ///
+    /// A task's own `history` answers *how has this one been going*; this
+    /// answers *what has this machine been doing*, which is the question the
+    /// page is opened with. Two lists and not one view of one: the per-task
+    /// one has a FLOOR (a monthly task keeps its last ten however much else
+    /// happens) and this one has a CEILING. Neither can be cut out of the
+    /// other.
+    pub activity: Vec<RunRecord>,
+    /// How many runs that list keeps — not how many it holds today.
+    ///
+    /// A policy of the daemon's, crossing for the same reason `cadence` does.
+    /// The activity block's title is a window onto this number, and a screen
+    /// that guessed it would drift from the one doing the cutting.
+    pub remembers: u32,
+    /// How many of its OWN runs a task keeps, which its `history` is all of.
+    ///
+    /// The same argument as `remembers`, one list down: a task's `History`
+    /// heading is a window onto this number and the owner asked it to say so.
+    /// It is `journal::RECENT`, the brain's floor on pruning.
+    pub recent: u32,
+    /// Something the brain wants said, without anybody having asked.
+    ///
+    /// The band's line. `task` empty means there is nothing — the same shape
+    /// [`Mind::announcement`] beside it uses, and for the same reason: a
+    /// record crosses the WIT and an `Option` does not.
+    pub notice: Notice,
+}
+
+/// Something the brain wants said, without anybody having asked.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Notice {
+    /// Whose it is. Empty when there is no notice at all.
+    pub task: String,
+    /// What to say, as a text key.
+    pub says: String,
+    /// The command a button runs. Empty for a notice that only tells.
+    pub act: String,
 }
 
 /// One step, switched on or off by the id the last [`Mind`] gave.
@@ -1600,11 +1686,58 @@ pub enum Command {
         /// has the translated string.
         max_width: u16,
     },
-    /// A ONE-line horizontal rule — the only separator that exists
-    /// besides whitespace (section 5.1).
+    /// A sentence, WRAPPED, in a rectangle of cells.
+    ///
+    /// # Why a buffer cannot do this itself
+    ///
+    /// Because it holds a key and not a sentence. [`Command::Text`] draws one
+    /// row and the host elides it at the budget — right for a label, useless
+    /// for a description, which cut at a column's width is a description
+    /// nobody can read. Wrapping needs the TRANSLATED string, and a buffer
+    /// never sees one.
+    ///
+    /// The host looks the key up, wraps with the same `layout::wrap` the file
+    /// manager's names use, draws up to `lines` rows and elides the last if
+    /// there is more. Nothing new is decided on the guest's side.
+    Paragraph {
+        /// The first row.
+        line: u16,
+        /// The first column.
+        column: u16,
+        /// How many rows it may fill.
+        lines: u16,
+        /// How wide, in cells.
+        columns: u16,
+        /// What to write.
+        content: Text,
+        /// The colour token.
+        color: Color,
+        /// The size, by name.
+        scale: Scale,
+        /// The first WRAPPED row to draw, which is how a sentence scrolls.
+        ///
+        /// Only the host knows how many rows the sentence came to — it holds
+        /// the translated string and it is the one that wraps — so the buffer
+        /// keeps the OFFSET and the host clamps it, draws the window, and
+        /// draws a thumb beside it when there is more. `0` is the top.
+        first_row: u16,
+    },
+    /// A ONE-line horizontal rule, across the row or across part of it.
+    ///
+    /// It is a SEPARATOR, and separators are allowed — the preference for a
+    /// layout that does without one is a preference, not a ban. What it could
+    /// not do before was stop short: a rule under a heading inside one of two
+    /// side-by-side columns has to end where the column does, and a full-bleed
+    /// stripe would run through its neighbour.
+    ///
+    /// `columns: 0` is to the edge.
     Rule {
         /// On which row.
         line: u16,
+        /// The first column it covers.
+        column: u16,
+        /// How many columns. `0` is to the edge.
+        columns: u16,
         /// The colour token.
         color: Color,
     },
@@ -1624,13 +1757,24 @@ pub enum Command {
         /// The colour, by token name.
         color: Color,
     },
-    /// The background of a list's focused row.
+    /// The ground under a row, or under part of one.
     ///
-    /// **A change of colour, not a box and not an outline** (invariant 15). That is why
-    /// there is no width and no radius: it paints the whole row, and that is all.
+    /// **A change of colour, and no radius.** It used to have no column and no
+    /// width either, and the reason written beside it was that a ground
+    /// "paints the whole row, and that is all". That was never the owner's
+    /// rule: two columns side by side, each with its own selection, is an
+    /// ordinary layout, and it is unreachable from a stripe that always spans
+    /// the line.
+    ///
+    /// `columns: 0` is "to the edge" — the same thing `0` means for a text
+    /// run's budget — so every band that was full-bleed still is.
     Selection {
         /// On which row.
         line: u16,
+        /// The first column it covers.
+        column: u16,
+        /// How many columns. `0` is to the edge.
+        columns: u16,
         /// The colour token.
         color: Color,
     },
@@ -1660,6 +1804,63 @@ pub enum Command {
         /// background — an invisible drawing, indistinguishable from "not implemented".
         color: Color,
     },
+    /// A scrollbar, for a list the buffer is showing a window onto.
+    ///
+    /// # Why a buffer cannot draw its own
+    ///
+    /// Because a thumb is a fraction of a track in PIXELS, and a buffer counts
+    /// in cells (invariant 11). Built out of block characters it would be a
+    /// second scrollbar that looks nothing like the five the shell draws.
+    /// What the host does with this is exactly what it does for its own lists
+    /// — [`ronoctua_design::Scroll`], compiled on both sides of the wall since
+    /// it was written, plus the pixel residue only the host can know.
+    ///
+    /// **Nothing is drawn when the list fits.** `Scroll::cut` answers that,
+    /// and the whole shell agrees that a bar over a list that fits is a
+    /// control which does nothing.
+    Bar {
+        /// The first row of the track.
+        line: u16,
+        /// How many rows it covers.
+        lines: u16,
+        /// Which column it sits in.
+        ///
+        /// The CALLER subtracts it from its own content. A bar drawn over text
+        /// is the defect the working rules name: *"barra nenhuma desenha por
+        /// cima do conteúdo"*.
+        column: u16,
+        /// How many rows the list has.
+        total: u32,
+        /// How many of them are shown.
+        shown: u32,
+        /// Which row is the first one drawn.
+        offset: u32,
+        /// The colour token.
+        color: Color,
+    },
+    /// From this line down, the frame is anchored to the window's FOOT.
+    ///
+    /// # What it is for
+    ///
+    /// A surface holds `floor(height / line)` whole rows plus a leftover of
+    /// less than one, and that leftover falls under the last row — which is
+    /// where a buffer that ends in a footer puts the one thing that has to sit
+    /// at the bottom. The owner read it as *"um espaço após o `Last run` …
+    /// que varia de tamanho conforme a altura disponível para o buffer"*;
+    /// measured on that screen, nine pixels of it.
+    ///
+    /// The ground already took the residue — `Scroll::track`'s rule, applied
+    /// to the last band. The INK never did. With this the host places these
+    /// lines counting UP from the bottom, so the leftover falls between the
+    /// block above and the block at the foot, inside the page's own ground,
+    /// where nothing is drawn.
+    ///
+    /// It draws NOTHING itself, which is why it claims no rows and no columns:
+    /// it is a fact about the frame and not a thing in it.
+    Anchor {
+        /// The first line that is anchored.
+        foot_from: u16,
+    },
 }
 
 impl Command {
@@ -1671,7 +1872,11 @@ impl Command {
             | Self::Rule { line, .. }
             | Self::Grid { line, .. }
             | Self::Selection { line, .. }
-            | Self::Svg { line, .. } => *line,
+            | Self::Svg { line, .. }
+            | Self::Bar { line, .. }
+            | Self::Paragraph { line, .. } => *line,
+            // The line it anchors FROM, which is the only line it knows.
+            Self::Anchor { foot_from } => *foot_from,
         }
     }
 
@@ -1688,7 +1893,7 @@ impl Command {
     pub const fn requires(&self) -> Option<Capability> {
         match self {
             Self::Svg { .. } => Some(Capability::Vector),
-            // THE OTHER FOUR COST NOTHING, and they are named rather than
+            // THE OTHER FIVE COST NOTHING, and they are named rather than
             // swept up by a `_` for the reason the other two gates in this
             // file learned the hard way: `Request::requires` had a catch-all
             // under a doc comment promising exhaustiveness, and it granted the
@@ -1699,9 +1904,19 @@ impl Command {
             // and the easiest to add — the pixel one this repository has
             // deliberately not built yet would land right here — so this is
             // where a new case has to stop and be decided.
-            Self::Text { .. } | Self::Rule { .. } | Self::Grid { .. } | Self::Selection { .. } => {
-                None
-            }
+            //
+            // `Bar` is among the free ones on purpose: it produces no pixels
+            // of its own, it carries no content, and what it draws is
+            // arithmetic over numbers the buffer already had. A gate on it
+            // would be a gate on "this list is longer than its window", which
+            // is not a privilege.
+            Self::Text { .. }
+            | Self::Rule { .. }
+            | Self::Grid { .. }
+            | Self::Selection { .. }
+            | Self::Bar { .. }
+            | Self::Anchor { .. }
+            | Self::Paragraph { .. } => None,
         }
     }
 }
@@ -1763,13 +1978,65 @@ impl DisplayList {
     ///
     /// Zero when empty — not 1. The host uses this to size things, and a
     /// empty buffer must reserve no rows at all.
+    ///
+    /// # It counts the whole EXTENT, not the first row
+    ///
+    /// This was `line() + 1`, and a command that claims rows DOWNWARD — a
+    /// paragraph of six, a bar down a block of twenty — reported the row it
+    /// began on. So a frame whose footer ran four rows past the bottom edge
+    /// answered with a height inside the window, and the buffer's own
+    /// `nothing_is_drawn_outside_the_window` test was green the whole time the
+    /// owner was looking at a footer drawn over a history list.
+    ///
+    /// [`Self::rows_of`] already knew the answer; nothing here is new
+    /// arithmetic, only the arithmetic that was already written being asked.
     #[must_use]
-    pub fn height(&self) -> u16 {
+    pub fn height(&self, heights: Heights) -> u16 {
         self.commands
             .iter()
-            .map(|c| c.line().saturating_add(1))
+            .map(|c| Self::reach_of(c, heights))
             .max()
             .unwrap_or(0)
+    }
+
+    /// Nothing reaches past the last line of the window.
+    ///
+    /// # Why the host could not be the one to notice
+    ///
+    /// Because it did not clip and it did not complain: a line past the bottom
+    /// was measured, laid out, submitted to the rasteriser and dropped there,
+    /// with nothing in any log. It was the one defect in this tree with no
+    /// symptom at all — the ink simply was not on the screen, and every guard
+    /// that might have said so was looking at something else.
+    ///
+    /// # Errors
+    ///
+    /// Which command, how far it reaches, and how tall the window is.
+    pub fn nothing_is_drawn_below(&self, heights: Heights, lines: u16) -> Result<(), String> {
+        for c in &self.commands {
+            let (from, _) = Self::rows_of(c, heights);
+            let reaches = Self::reach_of(c, heights);
+            if reaches > lines {
+                return Err(format!(
+                    "a {} beginning on row {from} reaches row {} of a window {lines} rows tall                      — the host draws it and the rasteriser throws it away, silently",
+                    Self::sketch(c),
+                    reaches.saturating_sub(1),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// One row past the last a command reaches.
+    ///
+    /// The public half of [`Self::rows_of`], because the host asks the same
+    /// question when it decides whether a command lands inside the window at
+    /// all — and two answers to "how far down does this go" is how a frame
+    /// came to be measured one way and drawn another.
+    #[must_use]
+    pub fn reach_of(c: &Command, heights: Heights) -> u16 {
+        let (from, tall) = Self::rows_of(c, heights);
+        from.saturating_add(tall)
     }
 
     /// The rows a command claims: `(first row, how many)`.
@@ -1785,6 +2052,22 @@ impl DisplayList {
                 (*line, u16::try_from(lines.len()).unwrap_or(u16::MAX).max(1))
             }
             Command::Svg { line, lines, .. } => (*line, (*lines).max(1)),
+            // A BAR CLAIMS ITS WHOLE TRACK, which is what makes the overlap
+            // guard useful for it: the one mistake it invites is a bar drawn
+            // down a column somebody else is writing in, and that is exactly
+            // what `nothing_overlaps` is looking for.
+            Command::Bar { line, lines, .. } => (*line, (*lines).max(1)),
+            // A PARAGRAPH CLAIMS ITS WHOLE RECTANGLE, however few rows the
+            // sentence turns out to need: the caller reserved them, and what
+            // the overlap guard is looking for is something else drawn where
+            // this one MAY reach.
+            Command::Paragraph { line, lines, .. } => (*line, (*lines).max(1)),
+            // AN ANCHOR CLAIMS NOTHING. It is a fact about where the frame
+            // sits, not a thing in it, and a height of zero is what lets every
+            // guard in this file walk past it without an exemption anybody has
+            // to remember: `nothing_is_covered` skips a span one row tall or
+            // less, and `nothing_overlaps` looks only at text.
+            Command::Anchor { foot_from } => (*foot_from, 0),
         }
     }
 
@@ -1809,7 +2092,9 @@ impl DisplayList {
     /// charges it in the other direction.
     ///
     /// `Rule` and `Selection` paint the whole width by definition and have no
-    /// column of their own.
+    /// column of their own. A `Bar` claims exactly ONE — a scrollbar in this
+    /// system is one cell wide, which is what `AGENTS.md` means by "a bar that
+    /// scrolls vertically takes a CELL".
     fn columns_of(c: &Command, heights: Heights, columns: u16) -> (u16, u16) {
         match c {
             Command::Text {
@@ -1834,7 +2119,32 @@ impl DisplayList {
                 };
                 (*column, wide)
             }
-            Command::Rule { .. } | Command::Selection { .. } => (0, columns),
+            // A BAND CLAIMS WHAT IT WAS GIVEN, and the whole line when it was
+            // given nothing — which is what `0` means everywhere else here.
+            Command::Rule {
+                column,
+                columns: wide,
+                ..
+            }
+            | Command::Selection {
+                column,
+                columns: wide,
+                ..
+            } => (
+                *column,
+                if *wide == 0 {
+                    columns.saturating_sub(*column)
+                } else {
+                    *wide
+                },
+            ),
+            Command::Bar { column, .. } => (*column, 1),
+            Command::Anchor { .. } => (0, 0),
+            Command::Paragraph {
+                column,
+                columns: wide,
+                ..
+            } => (*column, *wide),
             Command::Grid { column, lines, .. } => {
                 (*column, lines.iter().map(|l| cells(l)).max().unwrap_or(0))
             }
@@ -1869,6 +2179,59 @@ impl DisplayList {
             Command::Selection { .. } => "selection".into(),
             Command::Grid { lines, .. } => format!("a grid of {} lines", lines.len()),
             Command::Svg { .. } => "svg".into(),
+            Command::Paragraph { content, .. } => match content {
+                Text::Key(k) => format!("a paragraph of `{k}`"),
+                Text::Data(t) => format!(
+                    "a paragraph of `{}`",
+                    t.chars().take(24).collect::<String>()
+                ),
+                Text::Icon(i) => format!("a paragraph of the icon `{i}`"),
+            },
+            // THE NUMBERS, because a bar that collides is a bar in the wrong
+            // column, and "a bar" alone would not say which of the two on the
+            // screen it was.
+            Command::Bar {
+                column,
+                total,
+                shown,
+                ..
+            } => format!("a bar in column {column} over {shown} of {total}"),
+            Command::Anchor { foot_from } => {
+                format!("the frame anchored to the foot from row {foot_from}")
+            }
+        }
+    }
+
+    /// Whether a command is a GROUND — a full-width colour drawn underneath.
+    ///
+    /// # Why only the selection, and not the rule or the bar
+    ///
+    /// Because a ground is the one thing whose whole job is to be inside
+    /// somebody else's box: a list row sits on its cursor band, a footer's
+    /// text sits on its own ground, and a paragraph three rows tall sits on
+    /// three of them. Reporting that as a collision is reporting that the
+    /// drawing works.
+    ///
+    /// A RULE IS NOT A GROUND. It is an edge at the bottom of a row, and a
+    /// tall title whose box reaches it is exactly the defect this guard was
+    /// written for — the heading that drew a rule on its own baseline, which
+    /// `the_old_defect_is_still_refused` reproduces by hand.
+    ///
+    /// A BAR IS NOT ONE EITHER. It is a control in a column, and a run whose
+    /// box reaches down through that column is a run drawn over it — which is
+    /// the same thing said the other way round by the working rules: no bar
+    /// draws over content, and no content draws over a bar. What keeps an
+    /// honest bar out of this is the COLUMN test, not an exemption.
+    const fn is_ground(c: &Command) -> bool {
+        match c {
+            Command::Selection { .. } => true,
+            Command::Text { .. }
+            | Command::Paragraph { .. }
+            | Command::Grid { .. }
+            | Command::Svg { .. }
+            | Command::Rule { .. }
+            | Command::Anchor { .. }
+            | Command::Bar { .. } => false,
         }
     }
 
@@ -1919,6 +2282,14 @@ impl DisplayList {
             let inside = from.saturating_add(1)..from.saturating_add(tall);
             for (j, &(at, _)) in rows.iter().enumerate() {
                 if i == j || !inside.contains(&at) || !Self::meet(cols[i], cols[j]) {
+                    continue;
+                }
+                // A GROUND IS NEVER COVERED — being underneath is its whole
+                // job. Without this, a footer with a ground and a paragraph on
+                // it reported itself as a defect: the paragraph claims the
+                // rows it was given, and the ground is one selection per row
+                // inside them. Every one of those is the drawing working.
+                if Self::is_ground(&self.commands[j]) {
                     continue;
                 }
                 return Err(format!(
@@ -1991,12 +2362,18 @@ impl DisplayList {
         let mut v: Vec<&str> = self
             .commands
             .iter()
-            .map(|c| match c {
+            .filter_map(|c| match c {
                 Command::Text { color, .. }
                 | Command::Rule { color, .. }
                 | Command::Grid { color, .. }
                 | Command::Selection { color, .. }
-                | Command::Svg { color, .. } => color.as_str(),
+                | Command::Svg { color, .. }
+                | Command::Bar { color, .. }
+                | Command::Paragraph { color, .. } => Some(color.as_str()),
+                // AN ANCHOR HAS NO INK, so it has no colour to check. Named
+                // rather than swept into a `_`: a primitive that DOES paint
+                // may not be added without this list being read.
+                Command::Anchor { .. } => None,
             })
             .collect();
         v.sort_unstable();
@@ -2174,6 +2551,52 @@ pub enum Input {
         /// The row, from the buffer's (0,0) cell.
         line: u16,
     },
+    /// The wheel, over a cell of the buffer's grid.
+    ///
+    /// The other half of [`Command::Bar`]: a scrollbar nobody can turn is a
+    /// picture of a control, and until this existed a buffer received no
+    /// pointer event at all except the click.
+    ///
+    /// **In lines, never in pixels**, the same wall [`Input::Click`] respects.
+    /// The arithmetic that turns a wheel into lines is the host's and there is
+    /// one of it — it carries the leftover fraction between events, which is
+    /// what five windows each got wrong by writing `(pixels / line) as i64 * 3`
+    /// and throwing the fraction away.
+    Wheel {
+        /// The column the pointer was over.
+        column: u16,
+        /// The row the pointer was over.
+        line: u16,
+        /// How many lines, and which way.
+        ///
+        /// NEGATIVE is towards the top of the list: every caller subtracts
+        /// this from an offset, and a sign that flipped on the way in would
+        /// flip there.
+        lines: i16,
+    },
+    /// A BAR THAT WAS DRAGGED, answered as the first row to draw.
+    ///
+    /// The other half of a scrollbar. One that is drawn and cannot be grabbed
+    /// is a picture of a control — the sentence this repository already keeps
+    /// about the wheel — and the owner reported exactly that: *"o clicar e
+    /// arrastar a scrollbar com o mouse não está funcionando"*.
+    ///
+    /// The host is the only side that can turn a pointer at a height into a
+    /// row: it built the thumb out of the three numbers the `Bar` carried, and
+    /// the inverse is `Scroll::offset_at`. What it cannot know is WHICH list —
+    /// a page may have several — so the position crosses for the same reason
+    /// it does on a wheel.
+    ///
+    /// ABSOLUTE, and never a delta: a drag is where the hand IS, and a sum of
+    /// deltas drifts away from it over a long gesture.
+    Scrolled {
+        /// The column the pointer is over.
+        column: u16,
+        /// The row the pointer is over.
+        line: u16,
+        /// The row that should now be the first one drawn in that block.
+        first: u32,
+    },
     /// The machine's memory, already read. Only for whoever declared
     /// [`Capability::System`].
     ///
@@ -2212,7 +2635,35 @@ pub enum Input {
     /// brain's own socket on a thread, and what arrives is the WHOLE mind — a
     /// delta needs both sides to agree on what they last saw, and what is being
     /// agreed about here is when the machine will rebuild itself.
-    Mind(Mind),
+    ///
+    /// BOXED, and every other variant of this enum is not. `Mind` is three
+    /// hundred bytes — a list of tasks, a list of everything the brain has
+    /// done, a notice — and an enum is as big as its largest variant, so
+    /// unboxed it would make every `Input` in the system that size, including
+    /// the arrow keys. One allocation on a path that already crossed a socket
+    /// is the cheaper half of that trade by a wide margin.
+    Mind(Box<Mind>),
+    /// Where the pointer is resting, in the buffer's own cells.
+    ///
+    /// FLATTENED here and a `position` record on the wire, exactly as
+    /// [`Input::Click`] is — the runtime re-nests it, and the comment beside
+    /// the wheel's lowering says what happens to anything that forgets.
+    ///
+    /// The host sends one only when the CELL changes, which is what makes this
+    /// cheap: the pointer moves in pixels, a buffer counts cells, and a whole
+    /// traversal of a wide screen is a few dozen of these.
+    Hover {
+        /// The column, from the buffer's (0,0) cell.
+        column: u16,
+        /// The row, from the buffer's (0,0) cell.
+        line: u16,
+    },
+    /// The pointer left the window.
+    ///
+    /// Its own case rather than a `Hover` with no position: "gone" and
+    /// "somewhere I cannot place" are different answers, and only the first one
+    /// should put a highlight out.
+    Unhover,
 }
 
 #[cfg(test)]
@@ -2298,6 +2749,8 @@ mod tests {
         let mut l = DisplayList::fresh_one();
         l.push(Command::Rule {
             line: 0,
+            column: 0,
+            columns: 0,
             color: Color("rule-default".into()),
         });
         assert_eq!(l.commands[0].requires(), None);
@@ -2368,7 +2821,42 @@ mod tests {
     #[test]
     fn the_height_of_an_empty_list_is_zero() {
         // Zero, not 1: an empty buffer reserves no rows.
-        assert_eq!(DisplayList::fresh_one().height(), 0);
+        assert_eq!(DisplayList::fresh_one().height(heights()), 0);
+    }
+
+    /// A COMMAND THAT CLAIMS ROWS DOWNWARD IS COUNTED WHOLE.
+    ///
+    /// THE DEFECT THIS CATCHES: the height was `line() + 1`, so a paragraph of
+    /// six rows beginning on row 20 answered 21. A buffer whose footer ran off
+    /// the bottom therefore reported a height inside the window, and the test
+    /// that was meant to prove nothing is drawn outside it stayed green while
+    /// the owner was photographing a footer drawn over a history list.
+    #[test]
+    fn a_block_that_reaches_down_is_counted_to_its_last_row() {
+        let mut d = DisplayList::fresh_one();
+        d.push(Command::Paragraph {
+            line: 20,
+            column: 0,
+            columns: 40,
+            content: Text::key("about"),
+            color: Color::name("text-dim"),
+            scale: Scale::Normal,
+            lines: 6,
+            first_row: 0,
+        });
+        assert_eq!(
+            d.height(heights()),
+            26,
+            "the paragraph reported its first row"
+        );
+        assert!(d.nothing_is_drawn_below(heights(), 26).is_ok());
+        let trouble = d
+            .nothing_is_drawn_below(heights(), 24)
+            .expect_err("six rows from row twenty do not fit in twenty-four");
+        assert!(
+            trouble.contains("25"),
+            "the sentence does not say how far it reaches: {trouble}"
+        );
     }
 
     #[test]
@@ -2384,9 +2872,11 @@ mod tests {
         });
         d.push(Command::Rule {
             line: 1,
+            column: 0,
+            columns: 0,
             color: Color::name("rule-default"),
         });
-        assert_eq!(d.height(), 5);
+        assert_eq!(d.height(heights()), 5);
     }
 
     #[test]
@@ -2398,6 +2888,8 @@ mod tests {
         for name in ["text.primary", "rule.default", "text.primary"] {
             d.push(Command::Rule {
                 line: 0,
+                column: 0,
+                columns: 0,
                 color: Color(name.into()),
             });
         }
@@ -2421,6 +2913,8 @@ mod tests {
         });
         d.push(Command::Rule {
             line: 1,
+            column: 0,
+            columns: 0,
             color: Color::name("rule-default"),
         });
         d

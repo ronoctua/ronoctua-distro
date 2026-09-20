@@ -409,6 +409,56 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
                 ("line".into(), Val::U16(*line)),
             ])),
         ),
+        // THE POINTER AT REST, in the same `position` record the click uses —
+        // it is the same question asked without a button, and giving it a
+        // shape of its own would be two answers to "where is the mouse".
+        Input::Hover { column, line } => (
+            "hover",
+            Some(Val::Record(vec![
+                ("column".into(), Val::U16(*column)),
+                ("line".into(), Val::U16(*line)),
+            ])),
+        ),
+        Input::Unhover => ("unhover", None),
+        // THE WHEEL, and it carries a `position` RECORD the way `click` does —
+        // a nested record and not two more fields, because that is the shape
+        // the WIT declares and `wasmtime` lowers a record POSITIONALLY. Two
+        // `u16` and an `s16` flattened here would lower cleanly into a
+        // `{ position, s16 }` and put the line number where the position is.
+        Input::Wheel {
+            column,
+            line,
+            lines,
+        } => (
+            "wheel",
+            Some(Val::Record(vec![
+                (
+                    "at".into(),
+                    Val::Record(vec![
+                        ("column".into(), Val::U16(*column)),
+                        ("line".into(), Val::U16(*line)),
+                    ]),
+                ),
+                ("lines".into(), Val::S16(*lines)),
+            ])),
+        ),
+        Input::Scrolled {
+            column,
+            line,
+            first,
+        } => (
+            "scrolled",
+            Some(Val::Record(vec![
+                (
+                    "at".into(),
+                    Val::Record(vec![
+                        ("column".into(), Val::U16(*column)),
+                        ("line".into(), Val::U16(*line)),
+                    ]),
+                ),
+                ("first".into(), Val::U32(*first)),
+            ])),
+        ),
         Input::Survey(s) => ("survey", Some(val_of_survey(s))),
         Input::Queue(q) => ("queue", Some(val_of_queue(q))),
         Input::Rack(r) => ("rack", Some(val_of_rack(r))),
@@ -586,6 +636,77 @@ const fn outcome_kind_name(o: ronoctua_protocol::OutcomeKind) -> &'static str {
         O::Skipped => "skipped",
         O::Done => "done",
         O::Failed => "failed",
+        O::Held => "held",
+    }
+}
+
+/// One run of the journal, as the WIT's `run-record`.
+///
+/// A FUNCTION and not a closure, because two places marshal one: a task's own
+/// history and the whole machine's activity log. They are the same record, and
+/// two copies of nine fields is two chances for `wasmtime` to lower a pair the
+/// wrong way round — it zips a record POSITIONALLY and only then compares
+/// names, so two strings traded still lower cleanly.
+fn run_val(r: &ronoctua_protocol::RunRecord) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+    Val::Record(vec![
+        ("task".into(), Val::String(r.task.clone())),
+        ("task-text".into(), Val::String(r.task_text.clone())),
+        ("began".into(), Val::U64(r.began)),
+        ("ended".into(), Val::U64(r.ended)),
+        ("when-text".into(), Val::String(r.when_text.clone())),
+        (
+            "outcome".into(),
+            Val::Enum(outcome_kind_name(r.outcome).to_owned()),
+        ),
+        ("at".into(), Val::String(r.at.clone())),
+        ("why".into(), Val::String(r.why.clone())),
+        ("trouble".into(), Val::String(r.trouble.clone())),
+        (
+            "steps".into(),
+            Val::List(
+                r.steps
+                    .iter()
+                    .map(|o| {
+                        Val::Record(vec![
+                            ("id".into(), Val::String(o.id.clone())),
+                            ("ok".into(), Val::Bool(o.ok)),
+                            ("seconds".into(), Val::U32(o.seconds)),
+                            ("trouble".into(), Val::String(o.trouble.clone())),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+    ])
+}
+
+/// The scale a command named, lifted back.
+///
+/// A FUNCTION because two commands carry one — a run and a paragraph — and the
+/// second was written by copying the first, which is how a new scale ends up
+/// legible in one of them and gigantic in the other.
+///
+/// An unknown enum falls back to NORMAL: a buffer compiled against a newer WIT
+/// shows up readable rather than three times the size of everything round it.
+fn scale_of(v: Option<&wasmtime::component::Val>) -> ronoctua_protocol::Scale {
+    use ronoctua_protocol::Scale;
+    use wasmtime::component::Val;
+    match v {
+        Some(Val::Enum(n)) if n == "large" => Scale::Large,
+        Some(Val::Enum(n)) if n == "small" => Scale::Small,
+        Some(Val::Enum(n)) if n == "base" => Scale::Base,
+        Some(Val::Enum(n)) if n == "huge" => Scale::Huge,
+        _ => Scale::Normal,
+    }
+}
+
+/// The name a `task-kind` has in the WIT.
+const fn task_kind_name(k: ronoctua_protocol::TaskKind) -> &'static str {
+    use ronoctua_protocol::TaskKind as K;
+    match k {
+        K::Routine => "routine",
+        K::Once => "once",
     }
 }
 
@@ -843,19 +964,6 @@ fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
         .tasks
         .iter()
         .map(|t| {
-            let outcomes = t
-                .last
-                .steps
-                .iter()
-                .map(|o| {
-                    Val::Record(vec![
-                        ("id".into(), Val::String(o.id.clone())),
-                        ("ok".into(), Val::Bool(o.ok)),
-                        ("seconds".into(), Val::U32(o.seconds)),
-                        ("trouble".into(), Val::String(o.trouble.clone())),
-                    ])
-                })
-                .collect();
             let steps = t
                 .steps
                 .iter()
@@ -865,12 +973,20 @@ fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
                         ("command".into(), Val::String(s.command.clone())),
                         ("needs-root".into(), Val::Bool(s.needs_root)),
                         ("on".into(), Val::Bool(s.on)),
-                        ("changed".into(), Val::Bool(s.changed)),
+                        ("on-by-default".into(), Val::Bool(s.on_by_default)),
                     ])
                 })
                 .collect();
+
+            let history: Vec<Val> = t.history.iter().map(&run_val).collect();
             Val::Record(vec![
                 ("id".into(), Val::String(t.id.clone())),
+                // THE NAME AS A WORD, beside the id. The component draws the
+                // KEY and measures THIS — see `TaskState::name_text` — and the
+                // order is the WIT's, because `wasmtime` zips a record
+                // positionally and only then compares names.
+                ("name-text".into(), Val::String(t.name_text.clone())),
+                ("kind".into(), Val::Enum(task_kind_name(t.kind).to_owned())),
                 (
                     "standing".into(),
                     Val::Enum(standing_name(t.standing).to_owned()),
@@ -887,21 +1003,16 @@ fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
                 ("why-not".into(), Val::String(t.why_not.clone())),
                 ("ran".into(), Val::Bool(t.ran)),
                 (
+                    // `run_val` AND NOT A COPY. It was a copy — eight fields
+                    // written out here and the same eight in the closure that
+                    // built the history — and the copy fell a field behind the
+                    // day the record grew one, which `wasmtime` reports as
+                    // "expected 9 fields, got 8" about a record it will not
+                    // name. One function, one shape.
                     "last".into(),
-                    Val::Record(vec![
-                        ("began".into(), Val::U64(t.last.began)),
-                        ("ended".into(), Val::U64(t.last.ended)),
-                        ("when-text".into(), Val::String(t.last.when_text.clone())),
-                        (
-                            "outcome".into(),
-                            Val::Enum(outcome_kind_name(t.last.outcome).to_owned()),
-                        ),
-                        ("at".into(), Val::String(t.last.at.clone())),
-                        ("why".into(), Val::String(t.last.why.clone())),
-                        ("trouble".into(), Val::String(t.last.trouble.clone())),
-                        ("steps".into(), Val::List(outcomes)),
-                    ]),
+                    run_val(&t.last),
                 ),
+                ("history".into(), Val::List(history)),
                 ("steps".into(), Val::List(steps)),
             ])
         })
@@ -952,6 +1063,25 @@ fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
         (
             "cadence".into(),
             Val::List(m.cadence.iter().copied().map(Val::U16).collect()),
+        ),
+        // EVERYTHING THE BRAIN HAS DONE, in the same record the per-task
+        // history uses — one shape, so the screen that draws one draws the
+        // other.
+        (
+            "activity".into(),
+            Val::List(m.activity.iter().map(run_val).collect()),
+        ),
+        // HOW MANY THAT LIST KEEPS. It crosses for the reason `cadence` does:
+        // it is the daemon's policy and the screen's title names it.
+        ("remembers".into(), Val::U32(m.remembers)),
+        ("recent".into(), Val::U32(m.recent)),
+        (
+            "notice".into(),
+            Val::Record(vec![
+                ("task".into(), Val::String(m.notice.task.clone())),
+                ("says".into(), Val::String(m.notice.says.clone())),
+                ("act".into(), Val::String(m.notice.act.clone())),
+            ]),
         ),
     ])
 }
@@ -1346,6 +1476,10 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
             Some(Val::U16(n)) => *n,
             _ => 0,
         };
+        let u32_de = |v: Option<&Val>| match v {
+            Some(Val::U32(n)) => *n,
+            _ => 0,
+        };
         // The colour arrives as an ENUM, and no longer as a record with a string.
         //
         // The `Val::Enum` carries the CASE's name in `kebab-case`
@@ -1400,24 +1534,20 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
                     column: u16_de(field("column")),
                     text: content,
                     color: color_of(field("color")),
-                    scale: match field("scale") {
-                        Some(Val::Enum(n)) if n == "large" => prot::Scale::Large,
-                        Some(Val::Enum(n)) if n == "small" => prot::Scale::Small,
-                        Some(Val::Enum(n)) if n == "base" => prot::Scale::Base,
-                        Some(Val::Enum(n)) if n == "huge" => prot::Scale::Huge,
-                        // An unknown enum falls back to NORMAL: a new buffer with
-                        // a new scale shows up legible, and not gigantic.
-                        _ => prot::Scale::Normal,
-                    },
+                    scale: scale_of(field("scale")),
                     max_width: u16_de(field("max-width")),
                 });
             }
             "rule" => list.push(prot::Command::Rule {
                 line: u16_de(field("line")),
+                column: u16_de(field("column")),
+                columns: u16_de(field("columns")),
                 color: color_of(field("color")),
             }),
             "selection" => list.push(prot::Command::Selection {
                 line: u16_de(field("line")),
+                column: u16_de(field("column")),
+                columns: u16_de(field("columns")),
                 color: color_of(field("color")),
             }),
             "svg" => {
@@ -1440,6 +1570,43 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
                     color: color_of(field("color")),
                 });
             }
+            "paragraph" => {
+                let content = match field("content") {
+                    Some(Val::Variant(case, inside)) => match (case.as_str(), inside.as_deref()) {
+                        ("key", Some(Val::String(s))) => prot::Text::key(s.clone()),
+                        ("icon", Some(Val::Enum(n))) => prot::Text::icon(n.clone()),
+                        (_, Some(Val::String(s))) => prot::Text::datum(s.clone()),
+                        _ => continue,
+                    },
+                    _ => continue,
+                };
+                list.push(prot::Command::Paragraph {
+                    line: u16_de(field("line")),
+                    column: u16_de(field("column")),
+                    lines: u16_de(field("lines")),
+                    columns: u16_de(field("columns")),
+                    content,
+                    color: color_of(field("color")),
+                    scale: scale_of(field("scale")),
+                    first_row: u16_de(field("first-row")),
+                });
+            }
+            "bar" => list.push(prot::Command::Bar {
+                line: u16_de(field("line")),
+                lines: u16_de(field("lines")),
+                column: u16_de(field("column")),
+                total: u32_de(field("total")),
+                shown: u32_de(field("shown")),
+                offset: u32_de(field("offset")),
+                color: color_of(field("color")),
+            }),
+            // A FACT ABOUT THE FRAME, and the only command that draws
+            // nothing: from this line down the host places the ink counting UP
+            // from the window's bottom, so the surface's residue falls where
+            // nothing is drawn. See `prot::Command::Anchor`.
+            "anchor" => list.push(prot::Command::Anchor {
+                foot_from: u16_de(field("foot-from")),
+            }),
             otherwise => {
                 tracing::warn!(
                     command = otherwise,
@@ -1927,6 +2094,10 @@ mod tests {
         // lowers CLEANLY and comes out on screen as a task that is off when it
         // is on, or a failure attributed to the wrong step.
         let m = ronoctua_protocol::Mind {
+            remembers: 100,
+            recent: 10,
+            activity: Vec::new(),
+            notice: ronoctua_protocol::Notice::default(),
             now: 1_770_000_000,
             pulse: ronoctua_protocol::Pulse {
                 at: 1_769_999_940,
@@ -1936,7 +2107,14 @@ mod tests {
                 }],
             },
             tasks: vec![ronoctua_protocol::TaskState {
+                // ROUTINE AND `Once` BOTH GET DRAWN by the driver; here the
+                // shape is what is being pinned, so one is enough.
+                kind: ronoctua_protocol::TaskKind::Routine,
                 id: "update".to_owned(),
+                // THE NAME AS THE HOST RESOLVED IT. The component measures
+                // this one and draws the key beside it, so a fixture with an
+                // empty string would pin a record the screen never sees.
+                name_text: "Update the system".to_owned(),
                 standing: ronoctua_protocol::Standing::Queued,
                 enabled: true,
                 interval_days: 7,
@@ -1946,7 +2124,25 @@ mod tests {
                 hold: ronoctua_protocol::HoldKind::Battery,
                 why_not: String::new(),
                 ran: true,
+                // A HISTORY WITH SOMETHING IN IT, because this test reads
+                // `history[0]`'s shape: the record it shares with `last` is
+                // marshalled by one function, and pinning it here is what
+                // proves the two have not become two.
+                history: vec![ronoctua_protocol::RunRecord {
+                    task: "system-update".to_owned(),
+                    task_text: "Update the system".to_owned(),
+                    began: 1_769_800_000,
+                    ended: 1_769_800_100,
+                    when_text: "2026-01-30 09:00".to_owned(),
+                    outcome: ronoctua_protocol::OutcomeKind::Held,
+                    at: String::new(),
+                    why: "ram".to_owned(),
+                    trouble: String::new(),
+                    steps: Vec::new(),
+                }],
                 last: ronoctua_protocol::RunRecord {
+                    task: "system-update".to_owned(),
+                    task_text: "Update the system".to_owned(),
                     began: 1_769_900_000,
                     ended: 1_769_900_600,
                     when_text: "2026-02-01 03:00".to_owned(),
@@ -1966,7 +2162,7 @@ mod tests {
                     command: "nix build .#system".to_owned(),
                     needs_root: false,
                     on: true,
-                    changed: false,
+                    on_by_default: false,
                 }],
             }],
             queue: vec!["update".to_owned()],
@@ -1998,10 +2194,18 @@ mod tests {
                 "rehearsing",
                 "announcement",
                 "gate",
-                "cadence"
+                "cadence",
+                "activity",
+                "remembers",
+                "recent",
+                "notice"
             ]
         );
         assert_eq!(shape(field(&v, "pulse").expect("pulse")), ["at", "signs"]);
+        assert_eq!(
+            shape(field(&v, "notice").expect("notice")),
+            ["task", "says", "act"]
+        );
         assert_eq!(
             shape(field(&v, "announcement").expect("announcement")),
             ["task", "total-seconds", "deadline", "why"]
@@ -2029,6 +2233,10 @@ mod tests {
             shape(&tasks[0]),
             [
                 "id",
+                // THE NAME AS A WORD, for the component to MEASURE. It draws
+                // the key beside it; this is the width it could not know.
+                "name-text",
+                "kind",
                 "standing",
                 "enabled",
                 "interval-days",
@@ -2039,23 +2247,11 @@ mod tests {
                 "why-not",
                 "ran",
                 "last",
+                "history",
                 "steps"
             ]
         );
         let last = field(&tasks[0], "last").expect("last");
-        assert_eq!(
-            shape(last),
-            [
-                "began",
-                "ended",
-                "when-text",
-                "outcome",
-                "at",
-                "why",
-                "trouble",
-                "steps"
-            ]
-        );
         let wasmtime::component::Val::List(outcomes) = field(last, "steps").expect("outcomes")
         else {
             panic!("the registry's steps are not a list")
@@ -2067,8 +2263,29 @@ mod tests {
         };
         assert_eq!(
             shape(&steps[0]),
-            ["id", "command", "needs-root", "on", "changed"]
+            ["id", "command", "needs-root", "on", "on-by-default"]
         );
+        // AND THE RECORD THE HISTORY AND THE ACTIVITY LOG SHARE. It is one
+        // shape in two places on purpose — `run_val` is a function and not a
+        // closure for exactly that — so pinning it once pins both.
+        let wanted_run = [
+            "task",
+            "task-text",
+            "began",
+            "ended",
+            "when-text",
+            "outcome",
+            "at",
+            "why",
+            "trouble",
+            "steps",
+        ];
+        assert_eq!(shape(field(&tasks[0], "last").expect("last")), wanted_run);
+        let wasmtime::component::Val::List(history) = field(&tasks[0], "history").expect("history")
+        else {
+            panic!("history is not a list")
+        };
+        assert_eq!(shape(&history[0]), wanted_run);
 
         // AND THE BOOLEANS ARE READ BACK BY NAME, which is the half the shape
         // check cannot do: it would still pass with any two of them swapped,
@@ -2086,6 +2303,13 @@ mod tests {
             field(&steps[0], "on"),
             Some(&wasmtime::component::Val::Bool(true))
         );
+        // THE TWO THAT ARE EASIEST TO TRADE, read back by name and with
+        // DIFFERENT values so a swap cannot pass. A step that is on and ships
+        // off is exactly the row that used to draw wrong.
+        assert_eq!(
+            field(&steps[0], "on-by-default"),
+            Some(&wasmtime::component::Val::Bool(false))
+        );
         assert_eq!(
             field(&outcomes[0], "ok"),
             Some(&wasmtime::component::Val::Bool(false))
@@ -2095,6 +2319,10 @@ mod tests {
         assert_eq!(
             field(&tasks[0], "part-of-day"),
             Some(&wasmtime::component::Val::Enum("night".to_owned()))
+        );
+        assert_eq!(
+            field(&tasks[0], "kind"),
+            Some(&wasmtime::component::Val::Enum("routine".to_owned()))
         );
         assert_eq!(
             field(&tasks[0], "hold"),

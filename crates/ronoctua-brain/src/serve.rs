@@ -179,8 +179,8 @@ fn answer(desk: &Arc<Desk>, ask: &Ask, out: &mut impl Write) -> Result<()> {
             }
             desk.shared.change(|m| {
                 let mine = m.prefs.mine(task);
-                if !mine.steps_off.remove(step) {
-                    mine.steps_off.insert(step.clone());
+                if !mine.steps_flipped.remove(step) {
+                    mine.steps_flipped.insert(step.clone());
                 }
             });
             keep(desk);
@@ -189,7 +189,8 @@ fn answer(desk: &Arc<Desk>, ask: &Ask, out: &mut impl Write) -> Result<()> {
             if let Some(why) = unknown(desk, task) {
                 return write_line(out, &Say::Refused { why });
             }
-            desk.shared.change(|m| m.prefs.mine(task).steps_off.clear());
+            desk.shared
+                .change(|m| m.prefs.mine(task).steps_flipped.clear());
             keep(desk);
         }
         Ask::Tune { prefs } => {
@@ -395,7 +396,7 @@ mod tests {
         assert!(
             mind.prefs
                 .of(crate::tasks::update::ID)
-                .steps_off
+                .steps_flipped
                 .contains(step),
             "it did not switch off"
         );
@@ -404,13 +405,13 @@ mod tests {
         assert_eq!(
             crate::prefs::read_from(&root)
                 .of("system-update")
-                .steps_off
+                .steps_flipped
                 .len(),
             1
         );
         let mind = mind_of(&socket, &off);
         assert!(
-            mind.prefs.of("system-update").steps_off.is_empty(),
+            mind.prefs.of("system-update").steps_flipped.is_empty(),
             "the same key did not switch it back on"
         );
 

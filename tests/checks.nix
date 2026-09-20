@@ -105,6 +105,37 @@ let
   # The keyboard layout, from the same file the configs read.
   keyboard = import ../nix/keyboard-xkb.nix;
 
+  # THE UPDATE'S TWO SCRIPTS, for the check that RUNS one of their functions
+  # instead of reading the generator for words.
+  #
+  # The wiring is placeholders on purpose, and that is not a shortcut: what is
+  # exercised is `turned_on`, which reads the machine's `/etc` table and the
+  # person's own file and nothing else. A store path for `nmcli` or a real unit
+  # name would be a dependency this check has no use for, and the day one of
+  # them moved it would rebuild for nothing.
+  #
+  # `programs` IS real, because the generator refuses a step whose package it
+  # was not given — the two-way check that keeps `assets/updates.nix` and the
+  # module in step.
+  updateRunners = updatesTable.mkScripts {
+    programs = {
+      nix = pkgs.nix;
+      systemd = pkgs.systemd;
+      fontconfig = pkgs.fontconfig;
+      tealdeer = pkgs.tealdeer;
+    };
+    wiring = {
+      shell = pkgs.runtimeShell;
+      systemctl = "${pkgs.systemd}/bin/systemctl";
+      nmcli = "/nonexistent/nmcli";
+      flock = "${pkgs.util-linux}/bin/flock";
+      state-dir = "/nonexistent/state";
+      config = "/nonexistent/updates.conf";
+      system-unit = "ronoctua-update-system.service";
+      system-unit-rehearsal = "ronoctua-update-system-rehearsal.service";
+    };
+  };
+
   # The software rasterizer, from the SAME place the VM tests use — otherwise
   # the two could point at different ICDs and only one of them would be the one
   # the CI actually exercises.
@@ -132,6 +163,250 @@ let
     lib.findFirst (r: lib.hasPrefix "C " r) "" keyboardTmpfiles
   )) 6;
   user = self.nixosConfigurations.vm.config.ronoctua.user;
+
+  # THE FOUR THINGS A CHECK THAT READS SOURCE MUST DO, in one place.
+  #
+  # # Why this exists
+  #
+  # Because a check that greps Rust passes for the wrong reason with alarming
+  # ease, and three of them did. The audit that found it named four shapes:
+  #
+  # * **the wrong anchor** — a bare `find` landed on an occurrence in a
+  #   DIFFERENT function, so the captured window began in the wrong place, ran
+  #   past the arm the check was about, and found what it was looking for in
+  #   the neighbour. Sabotaging the real code changed nothing.
+  # * **the non-greedy brace** — a body captured up to a guessed closing brace
+  #   stops at the DESTRUCTURING's brace as soon as a record has several
+  #   fields, so the body is empty and every `not in body` silently passes.
+  # * **the comment that satisfies the assertion** — searching un-stripped text
+  #   lets a doc comment stand in for the code it describes.
+  # * **the vacuous loop** — a `finditer` that matches nothing iterates zero
+  #   times, and zero iterations is a green check.
+  #
+  # The repository already had the cure, written out six times by hand. This is
+  # it once: narrow by BRACES from `fn NAME`, strip what is not code, and refuse
+  # to proceed on a capture that is suspiciously small.
+  #
+  # `checks-do-not-pass-by-coincidence` is what makes a new check use it.
+  #
+  # A FILE and not a string spliced into each script: a Nix `''` string carries
+  # no indentation of its own, so interpolating it into an indented Python
+  # heredoc would put the first line at four spaces and the rest at zero. The
+  # store path is read at run time instead — every check that needs it opens
+  # with `exec(open("${pyPrelude}").read())`.
+  pyPrelude = pkgs.writeText "ronoctua-check-prelude.py" ''
+    import re as _re
+    import sys as _sys
+
+    def code_of(text):
+        # The text with comments and every literal emptied.
+        #
+        # LIFTED FROM `every-window-knows-its-scale`, which had the best of the
+        # six hand-written copies, and it is better for three reasons the
+        # simpler ones get wrong: a raw string `r#"…"#` has no escapes and ends
+        # only at the matching hash count; a lifetime `'a` is not a character
+        # literal, and skipping to the next quote from one eats the code
+        # between two lifetimes; and a character literal is emitted as `_`
+        # rather than as an empty pair of single quotes, because this file is a
+        # Nix indented string and such a pair closes the fence — inside a
+        # comment as readily as in code.
+        out, i, n = [], 0, len(text)
+        while i < n:
+            c = text[i]
+            if c == "r":
+                j = i + 1
+                while j < n and text[j] == "#":
+                    j += 1
+                if j < n and text[j] == '"' and (j > i + 1 or not text[i - 1 : i].isalnum()):
+                    close = '"' + "#" * (j - i - 1)
+                    end = text.find(close, j + 1)
+                    i = n if end == -1 else end + len(close)
+                    out.append('""')
+                    continue
+            if c == '"':
+                i += 1
+                while i < n:
+                    if text[i] == "\\":
+                        i += 2
+                        continue
+                    if text[i] == '"':
+                        i += 1
+                        break
+                    i += 1
+                out.append('""')
+                continue
+            if c == "'":
+                m = _re.match(r"'(?:\\.|[^\\'])'", text[i:])
+                if m:
+                    i += m.end()
+                    out.append("_")
+                    continue
+            if c == "/" and text[i : i + 2] == "//":
+                while i < n and text[i] != "\n":
+                    i += 1
+                continue
+            if c == "/" and text[i : i + 2] == "/*":
+                end = text.find("*/", i + 2)
+                i = n if end < 0 else end + 2
+                continue
+            out.append(c)
+            i += 1
+        return "".join(out)
+
+    def hashless(text):
+        # The same, for a language whose comments begin with `#` — Nix, KDL,
+        # shell, Python. `code_of` is Rust-shaped and would leave every one of
+        # those comments standing, which is how a check comes to be satisfied
+        # by the sentence above the code instead of the code.
+        return "\n".join(l.split("#", 1)[0] for l in text.splitlines())
+
+    def uncommented(text):
+        # The comments off and the STRINGS KEPT.
+        #
+        # `code_of` empties both, and for most questions that is right: a
+        # sentence in a comment answering for the code is the defect this
+        # family exists to refuse, and so is a message literal answering for
+        # the branch that would print it. But some assertions ARE about a
+        # string — `include!(concat!(env!("OUT_DIR"), "/names.rs"))` is the
+        # line that wires a generated table into a crate, and the path in it is
+        # the half that says WHICH table. Emptied, the assertion would go on
+        # passing over an include of the wrong file.
+        #
+        # So this is the narrower tool, and it is narrower on purpose: it is
+        # for a needle that is itself a string literal. A check reaching for it
+        # to search for PROSE has picked the wrong one — prose in a string is
+        # exactly what `code_of` is there to take away.
+        out, i, n = [], 0, len(text)
+        while i < n:
+            if text[i] == '"':
+                out.append('"')
+                i += 1
+                while i < n:
+                    if text[i] == "\\":
+                        out.append(text[i : i + 2])
+                        i += 2
+                        continue
+                    out.append(text[i])
+                    if text[i] == '"':
+                        i += 1
+                        break
+                    i += 1
+                continue
+            if text[i : i + 2] == "//":
+                while i < n and text[i] != "\n":
+                    i += 1
+                continue
+            if text[i : i + 2] == "/*":
+                end = text.find("*/", i + 2)
+                i = n if end < 0 else end + 2
+                continue
+            out.append(text[i])
+            i += 1
+        return "".join(out)
+
+    def body_of(text, name, kind="fn"):
+        # The body of one item, from its name to the brace that closes it.
+        #
+        # By BRACES and never by a terminator someone guessed: the guess is
+        # what stops at the destructuring's own brace, or runs into the next
+        # function and reads whatever is there. `name` is matched as a WORD, so
+        # a longer name beginning with it is not mistaken for it, and the
+        # signature is not spelled out — a parameter being added is not a
+        # defect, and reporting one as "the function went away" is a wrong
+        # diagnosis this check family has already given once.
+        m = _re.search(r"\b" + kind + r"\s+" + _re.escape(name) + r"\b", text)
+        if not m:
+            return None
+        start = text.find("{", m.end())
+        if start < 0:
+            return None
+        depth = 0
+        for k in range(start, len(text)):
+            if text[k] == "{":
+                depth += 1
+            elif text[k] == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start + 1 : k]
+        return None
+
+    def scope(text, header):
+        # The braced block whose HEADER matches this pattern.
+        #
+        # Because a name is only unique inside something. `fn at` occurs twice
+        # in `screen.rs` — `Run::at`, the builder, and `Pen::at`, the bounds
+        # check — and `body_of` on the bare file finds the first. That is the
+        # wrong-anchor defect, and it caught this check's own author a second
+        # time. Narrow to the `impl` first, then ask for the name.
+        m = _re.search(header, text)
+        if not m:
+            return None
+        start = text.find("{", m.end())
+        if start < 0:
+            return None
+        depth = 0
+        for k in range(start, len(text)):
+            if text[k] == "{":
+                depth += 1
+            elif text[k] == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start + 1 : k]
+        return None
+
+    def shut_at(text, opened):
+        # A call's arguments: from just after its `(` to the matching `)`.
+        #
+        # By PARENTHESES and never by a closing string. A call ends `) {` or
+        # `)?` or `),` as readily as `);`, and a scan that guesses one of those
+        # either stops in the middle of the arguments or runs into the next
+        # call and reads whatever is there. A fixed number of characters is the
+        # same mistake with a different face: the window moves whenever
+        # anything inside it does.
+        deep, at = 0, opened
+        while at < len(text):
+            if text[at] == "(":
+                deep += 1
+            elif text[at] == ")":
+                if deep == 0:
+                    return text[opened:at]
+                deep -= 1
+            at += 1
+        return text[opened:]
+
+    def without_tests(text):
+        # The file with its `#[cfg(test)]` module cut off.
+        #
+        # Because a test USES what it is testing: the keyboard buffer's own
+        # tests send `Input::Click`, so a check asking whether the buffer
+        # answers one found the arm in the test after it had been deleted from
+        # the product. It is the vacuous pass with a new face — the needle was
+        # there, and not in the code that runs on somebody's screen.
+        at = text.find("#[cfg(test)]")
+        return text if at < 0 else text[:at]
+
+    def whose(text, at):
+        # Which function a hit at `at` is inside — the `walls` idiom.
+        walls = [(m.start(), m.group(1)) for m in _re.finditer(r"\n\s*(?:pub )?fn (\w+)", text)]
+        return next((name for start, name in reversed(walls) if start < at), "nothing")
+
+    def floor(many, least, what):
+        # Refuse a sweep that found suspiciously little. The antidote to the
+        # vacuous pass: a capture that came back empty, or a loop that never
+        # turned, is NOISE and not an answer.
+        if many < least:
+            print("ERROR: only " + str(many) + " " + what
+                  + "; this check has stopped reaching them.", file=_sys.stderr)
+            raise SystemExit(1)
+        return many
+
+    def must(body, what):
+        # `body_of`'s answer, or a refusal that says which item went missing.
+        if body is None or len(body.strip()) < 2:
+            print("ERROR: " + what + " went away, or came back empty.", file=_sys.stderr)
+            raise SystemExit(1)
+        return body
+  '';
 
   # A check that runs a script and passes if it exits 0.
   mkCheck =
@@ -454,10 +729,18 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
-        config = pathlib.Path(
+        # FILE-WIDE: a compositor's config and a Nix table, neither of which
+        # has a function in it.
+        #
+        # `uncommented` for the KDL, whose comment is `//`, and `hashless` for
+        # the Nix: a `screenshot-path` commented out is not a path, and it used
+        # to read as one.
+        config = uncommented(pathlib.Path(
           "${self.nixosConfigurations.vm.config.environment.etc."niri/config.kdl".source}"
-        ).read_text()
+        ).read_text())
+        floor(len(config), 1000, "characters of niri's config")
 
         line = re.search(r'^\s*screenshot-path\s+"([^"]+)"', config, re.M)
         if not line:
@@ -472,7 +755,8 @@ let
         # The name the distro declares, from the ONE file that holds it. Read as
         # text and not evaluated: this check has no Nix to call, and the entry is a
         # plain string.
-        table = pathlib.Path("${../nix/user-dirs.nix}").read_text()
+        table = hashless(pathlib.Path("${../nix/user-dirs.nix}").read_text())
+        floor(len(table), 200, "characters of nix/user-dirs.nix")
         entry = re.search(r'^\s*screenshot\s*=\s*"([^"]+)"\s*;', table, re.M)
         if not entry:
             print("ERROR: nix/user-dirs.nix has no `screenshot` entry.", file=sys.stderr)
@@ -524,9 +808,16 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
+        # FILE-WIDE: a polkit rule anywhere in a module is the offence, and a
+        # module is a Nix attribute set with no functions to narrow to.
+        #
+        # `hashless`: a rule written out in a `#` comment — which is how one is
+        # usually left behind — would otherwise be read as a rule.
         modules = pathlib.Path("${../nix/modules}")
-        disks = (modules / "disks.nix").read_text()
+        disks = hashless((modules / "disks.nix").read_text())
+        floor(len(disks), 200, "characters of nix/modules/disks.nix")
         wrong = []
 
         # 1. THE MODULE ACTUALLY TURNS UDISKS ON.
@@ -540,16 +831,19 @@ let
             wrong.append("nix/modules/disks.nix writes a polkit rule")
 
         # 3. NOR DOES ANY OTHER MODULE NAME A UDISKS ACTION.
+        swept = 0
         for f in sorted(modules.glob("*.nix")):
-            body = f.read_text()
+            body = hashless(f.read_text())
+            swept += 1
             if "org.freedesktop.udisks2." in body.lower():
                 wrong.append(f"{f.name} names a udisks2 action in a polkit rule")
 
         # 4. AND THE FOUR RULES THAT SHOULD EXIST STILL DO.
         #    An "assert the absence" check that never asserts a presence goes
         #    green on an empty tree.
+        floor(swept, 10, "modules swept for a udisks2 rule")
         for name in ["files.nix", "rescue.nix", "memory.nix", "keyboard.nix"]:
-            body = (modules / name).read_text()
+            body = hashless((modules / name).read_text())
             if "polkit.addRule" not in body:
                 wrong.append(f"{name} lost the polkit rule it MUST have")
 
@@ -588,9 +882,15 @@ let
   disks-tools-are-pinned = mkCheck "disks-tools-are-pinned" [ pkgs.python3 pkgs.binutils ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    module = pathlib.Path("${../nix/modules/disks.nix}").read_text()
-    proxies = pathlib.Path("${../crates/ronoctua-disks/src/udisks.rs}").read_text()
+    # FILE-WIDE: the override is a Nix attribute set and the five verbs are
+    # module-level `fn`s — neither question is about the inside of a function.
+    # `Recipe::filesystem` is narrowed by name below.
+    module = hashless(pathlib.Path("${../nix/modules/disks.nix}").read_text())
+    proxies = code_of(pathlib.Path("${../crates/ronoctua-disks/src/udisks.rs}").read_text())
+    floor(len(module), 200, "characters of nix/modules/disks.nix")
+    floor(len(proxies), 1000, "characters of udisks.rs")
     wrong = []
 
     # 1. THE ONE OVERRIDE IS STILL THERE. A nixpkgs bump that re-adds the
@@ -601,11 +901,11 @@ let
     # 2. AND IT IS STILL THE ONLY ONE. A tool quietly dropped is a
     #    `mount.<type>` quietly missing, which is a stick that will not mount
     #    and nothing saying why.
-    block = re.search(r"pkgs\.udisks\.override\s*\{(.*?)\n  \};", module, re.S)
+    block = scope(module, r"pkgs\.udisks\.override")
     if not block:
         wrong.append("could not find the `pkgs.udisks.override` block in disks.nix")
     else:
-        named = set(re.findall(r"^\s*(\w+)\s*=", block.group(1), re.M))
+        named = set(re.findall(r"^\s*(\w+)\s*=", block, re.M))
         extra = named - {"xfsprogs"}
         if extra:
             wrong.append(f"disks.nix overrides more than xfsprogs: {sorted(extra)}")
@@ -638,12 +938,16 @@ let
     #    row saying XFS is not here because the program that writes it is not
     #    installed; a `Recipe` that named `xfs` would make that row a lie AND
     #    produce a refusal from udisks with nothing on screen predicting it.
-    protocol = pathlib.Path("${../crates/ronoctua-protocol/src/lib.rs}").read_text()
-    body = re.search(r"pub const fn filesystem\(self\)[^\n]*\n(.*?)\n    \}", protocol, re.S)
+    # `uncommented`, because the filesystems ARE the string literals this
+    # reads back — `code_of` would empty every one of them and the set would
+    # come back empty whatever the code said.
+    protocol = uncommented(pathlib.Path("${../crates/ronoctua-protocol/src/lib.rs}").read_text())
+    floor(len(protocol), 2000, "characters of the protocol's lib.rs")
+    body = body_of(protocol, "filesystem")
     if not body:
             wrong.append("could not find `Recipe::filesystem` in the protocol")
     else:
-        offered = set(re.findall(r'=> "([a-z0-9]+)"', body.group(1)))
+        offered = set(re.findall(r'=> "([a-z0-9]+)"', body))
         if offered != {"vfat", "exfat", "ntfs", "ext4", "btrfs"}:
             wrong.append(f"the filesystems on offer changed: {sorted(offered)}")
 
@@ -653,7 +957,10 @@ let
         for w in wrong:
             print("       " + w, file=sys.stderr)
         raise SystemExit(1)
-        print("OK: only xfsprogs goes, the five verbs exist, and XFS is not offered")
+    # OUTSIDE THE FAILURE. This line sat one indent in, after the `raise`, so
+    # it was unreachable on both paths and the Python half of this check said
+    # nothing at all when it was green.
+    print("OK: only xfsprogs goes, the five verbs exist, and XFS is not offered")
     END
 
     # AND THE BUILT PACKAGE AGREES WITH THE OVERRIDE.
@@ -724,6 +1031,7 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
         # WHERE THE ENVIRONMENT MAY BE READ AT ALL. Both are named for what they
         # are — a lookup, not a read — and the application calls them, once.
@@ -736,10 +1044,15 @@ let
         # The lookups themselves, and the constructor that exists to gather them.
         ALLOWED = ("config_dir", "state_dir", "of_env")
 
+        # FILE-WIDE: the offence is a function ANYWHERE in the workspace that
+        # both writes and finds, so the census is of every file — and inside
+        # one, the indent walk below narrows to a function at a time.
         crates = pathlib.Path("${../crates}")
         bad = []
+        swept = 0
         for f in sorted(crates.rglob("*.rs")):
-            body = f.read_text()
+            body = code_of(f.read_text())
+            swept += 1
             # `[ \t]*` AND NOT `\s*`: `\s` matches a NEWLINE, so a function
             # preceded by a blank line — which is most of them — captured
             # `"\n    "` as its indent, and the closing brace was then
@@ -765,6 +1078,7 @@ let
                         f"directory ({', '.join(found)})"
                     )
 
+        floor(swept, 100, "sources of the workspace swept for a writer")
         if bad:
             print("ERROR: persistence that finds its own root.", file=sys.stderr)
             print("", file=sys.stderr)
@@ -779,15 +1093,16 @@ let
 
         # AND THE FINDERS ARE STILL THERE. Without this the check goes
         # green on a tree where persistence was deleted altogether.
-        finders = sum(
-            1
-            for f in crates.rglob("*.rs")
-            for w in ("fn config_dir(", "fn state_dir(")
-            if w in f.read_text()
+        finders = floor(
+            sum(
+                1
+                for f in crates.rglob("*.rs")
+                for w in ("fn config_dir(", "fn state_dir(")
+                if w in code_of(f.read_text())
+            ),
+            2,
+            "functions that locate a directory",
         )
-        if finders < 2:
-            print("ERROR: could not find the functions that locate the directories.", file=sys.stderr)
-            raise SystemExit(1)
         print(f"OK: nothing that persists finds its own root ({finders} locators)")
         END
       '';
@@ -1264,15 +1579,22 @@ let
   niri-actions-translated = mkCheck "niri-actions-translated" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import re, sys, pathlib
+    exec(open("${pyPrelude}").read())
 
-    table_src = pathlib.Path("${niriActions}/niri-actions.rs").read_text()
+    # FILE-WIDE: a generated table of rows against a catalogue of sentences.
+    # Neither has a function in it.
+    #
+    # `uncommented`, because the key IS the string literal being read out, and
+    # `hashless` on the `.ftl`, whose comment is `#`.
+    table_src = uncommented(pathlib.Path("${niriActions}/niri-actions.rs").read_text())
     key_names = re.findall(r'key: "(cmd-niri-[a-z0-9-]+)"', table_src)
-    assert len(key_names) > 100, f"only {len(key_names)} actions in the generated table"
+    floor(len(key_names), 100, "actions in the generated table")
 
     absent = []
     for language in ${builtins.toJSON languages}:
-        ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
+        ftl = hashless(pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text())
         present = set(re.findall(r"^([a-z0-9-]+) *=", ftl, re.M))
+        floor(len(present), 500, "keys declared by " + language)
         absent += [f"{language}: {c}" for c in key_names if c not in present]
 
     if absent:
@@ -1937,21 +2259,31 @@ let
   footer-mouse-reaches-nothing-new = mkCheck "footer-mouse-reaches-nothing-new" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    shell = pathlib.Path("${self}/crates/ronoctua-shell/src")
-    surface = (shell / "surface.rs").read_text()
-    buffer_host = (shell / "buffer.rs").read_text()
+    # FILE-WIDE: what a mark DOES is a command id written where that mark is
+    # handled, and `enum Hit` is module-level in three files. `segment_clicked`
+    # is narrowed by name below, and the three enums by `scope`.
+    #
+    # `uncommented` and never `code_of`: every needle here is a command id or a
+    # mark id in a string literal. Emptying the strings would leave a check
+    # that finds nothing and says so about nothing.
+    root = pathlib.Path("${self}")
+    shell = root / "crates" / "ronoctua-shell" / "src"
+    def read(path):
+        text = uncommented(path.read_text())
+        floor(len(text), 500, "characters of " + path.name)
+        return text
+    surface = read(shell / "surface.rs")
+    buffer_host = read(shell / "buffer.rs")
     gaps = []
 
     # 1) WHAT A CLICK ON THE MODELINE CAN DO.
-    body = re.search(
-        r"fn segment_clicked\(&mut self[^\n]*\n(.*?)\n    \}\n",
-        surface,
-        re.S,
-    )
-    if not body:
-        sys.exit("ERROR: `segment_clicked` went away or changed shape")
-    clicked = body.group(1)
+    # BY NAME AND BRACES. The signature was written out here, and the capture
+    # ran to the next `\n    }` — which a nested block closes early, taking
+    # everything after it out of reach.
+    clicked = must(body_of(surface, "segment_clicked"), "`segment_clicked`")
+    floor(len(clicked), 500, "characters of `segment_clicked`")
     orders = set(re.findall(r'"(state-next|state-prev)"', clicked))
     if orders != {"state-next", "state-prev"}:
         gaps.append("the click sends " + repr(sorted(orders)) + ", and not the keyboard's two")
@@ -2021,7 +2353,7 @@ let
     # obvious way to reach the window and the tempting place to stop. The key
     # is what makes it reachable at three in the morning when nothing is
     # running — which is exactly when somebody wants to read what happened.
-    keymap = (shell / "leader.rs").read_text()
+    keymap = read(shell / "leader.rs")
     if '"update-watch"' not in clicked:
         gaps.append("clicking the update's mark does not open the window")
     if '"update-watch"' not in keymap:
@@ -2048,7 +2380,7 @@ let
     # asserted by name — the pool is looked up rather than compared, the
     # command it runs is the one `RET` on the row runs, and that command is
     # in the keymap. Four devices, one door, and the keyboard reaches it too.
-    view = (shell / "bluetooth.rs").read_text()
+    view = read(shell / "bluetooth.rs")
     if 'pub const POOL: [&str; 4] = ["bt-1", "bt-2", "bt-3", "bt-4"];' not in view:
         gaps.append("the bluetooth pool is not the four ids this check knows")
     if "POOL.iter().position" not in clicked:
@@ -2072,21 +2404,21 @@ let
     # manager's levels already teach a dozen keys and will teach more, so a
     # letter owned by a notification collides with one of them sooner or later
     # — invisibly, because the person presses it and something else happens.
-    band = (shell / "band.rs").read_text()
+    band = read(shell / "band.rs")
     # EVERY variant of the enum, and not only the two we hoped to find: a check
     # that looks for what it expects passes on a THIRD target nobody gave a key
     # to, which is the whole defect. Planted, and the first version passed.
-    enum = re.search(r"pub enum Hit \{(.*?)\n\}", band, re.S)
+    enum = scope(band, r"pub enum Hit\b")
     if not enum:
         sys.exit("ERROR: `band::Hit` went away or changed shape")
-    hits = set(re.findall(r"^    ([A-Z]\w*)", enum.group(1), re.M))
+    hits = set(re.findall(r"^    ([A-Z]\w*)", enum, re.M))
     if hits != {"Read", "Action"}:
         gaps.append("the band has targets " + repr(sorted(hits)) + ", outside what was agreed")
     # The keyboard's half of each. `keymap` is read above, with the modeline's
     # own half — one read, because two would be two things to keep in step.
     if '"notif-dismiss"' not in keymap:
         gaps.append("the band's circle has no equivalent key")
-    manager = (shell / "notifications.rs").read_text()
+    manager = read(shell / "notifications.rs")
     # AGAINST THE CODE AND NOT THE CRITERION: the row has to EXIST in the open
     # record's plan, and `RET` has to run the one under the cursor. Looking for
     # the words "action" anywhere would pass on a comment.
@@ -2104,16 +2436,55 @@ let
     # the two answers are on the line. If either of them were mouse-only, a
     # person at the keyboard could watch the countdown run out with no way to
     # stop it.
-    brain = (shell / "brain.rs").read_text()
-    brain_enum = re.search(r"pub enum Hit \{(.*?)\n\}", brain, re.S)
+    brain = read(shell / "brain.rs")
+    brain_enum = scope(brain, r"pub enum Hit\b")
     if not brain_enum:
         sys.exit("ERROR: `brain::Hit` went away or changed shape")
-    brain_hits = set(re.findall(r"^    ([A-Z]\w*)", brain_enum.group(1), re.M))
-    if brain_hits != {"Abort", "Proceed"}:
+    brain_hits = set(re.findall(r"^    ([A-Z]\w*)", brain_enum, re.M))
+    if brain_hits != {"Abort", "Notice", "Proceed"}:
         gaps.append("the brain's line has targets " + repr(sorted(brain_hits)) + ", outside what was agreed")
-    for command in ('"brain-abort"', '"brain-proceed"'):
-        if command not in keymap:
-            gaps.append("the brain's line has no key for " + command)
+    #
+    # MEASURED AGAINST THE BRAIN'S BUFFER and no longer against the leader's
+    # table. `LEADER b a` and `LEADER b p` are gone: the owner asked for
+    # `LEADER b` to open the brain with nothing in between, and a sequence
+    # cannot be a command and the prefix of another — the keymap refuses that
+    # at build time. What the two answers do already lived inside the buffer,
+    # as `m a` and `m p`, and the band prints THOSE.
+    #
+    # So the promise is the same one, one door along: every control the band
+    # draws is answerable from the keyboard. The band also keeps its click,
+    # and both remain registry commands, so `LEADER :` reaches them by name.
+    #
+    # AND THE THIRD IS THE WATCH'S OFFER. A watch has no result but a
+    # sentence, and a sentence that only appeared on a screen somebody has to
+    # open would be a watch nobody hears — so the line carries the offer too,
+    # with a button. It is ONE target and not one per notice: what it runs is
+    # named by the notice itself, as a command id the registry resolves.
+    # The promise it is held to is the other two's exactly — the button is
+    # answerable from the keyboard, at `m n`.
+    brain_buffer = read(root / "buffers" / "brain" / "src" / "lib.rs")
+    for command in ('"brain-abort"', '"brain-proceed"', '"brain-notice"'):
+        if command not in brain_buffer:
+            gaps.append("the brain's line has no key in the brain's buffer for " + command)
+    # AND THE BAND PRINTS WHAT THE BUFFER ANSWERS TO. The two constants are
+    # the band's own, and they have to be the buffer's keys and not the
+    # leader's — a line that taught `SUPER b a` after that sequence went away
+    # would be teaching a key that does nothing.
+    leader_src = keymap
+    for const, wanted in (
+        ("BRAIN_ABORT_KEYS", "brain-abort"),
+        ("BRAIN_PROCEED_KEYS", "brain-proceed"),
+        ("BRAIN_NOTICE_KEYS", "brain-notice"),
+    ):
+        said = re.search(r"pub const " + const + r': &str = "([^"]+)";', leader_src)
+        if not said:
+            gaps.append("`" + const + "` went away; the band draws its key from it")
+            continue
+        if ('("' + said.group(1) + '", "' + wanted + '")') not in brain_buffer:
+            gaps.append(
+                "the band prints `" + said.group(1) + "` for " + wanted
+                + ", which is not what the brain's buffer binds"
+            )
     # AND A CONTROL CANNOT BE BUILT WITHOUT SAYING WHAT IT DOES.
     #
     # This is structural rather than a count, and the first version of it was a
@@ -2131,10 +2502,10 @@ let
     #
     # Every variant of the enum, and not the two we hoped to find: a check that
     # looks for what it expects passes on a THIRD target nobody gave a key to.
-    rows_enum = re.search(r"pub enum Hit \{(.*?)\n\}", manager, re.S)
+    rows_enum = scope(manager, r"pub enum Hit\b")
     if not rows_enum:
         sys.exit("ERROR: `notifications::Hit` went away or changed shape")
-    targets = set(re.findall(r"^    ([A-Z]\w*)", rows_enum.group(1), re.M))
+    targets = set(re.findall(r"^    ([A-Z]\w*)", rows_enum, re.M))
     #
     # `ToggleRead` was `MarkRead`, and the rename is the point rather than a
     # detail: the envelope is ONE control that goes both ways, drawn open on an
@@ -2163,7 +2534,7 @@ let
         "notifications.rs",
         "notifications_window.rs",
     ):
-        text = (shell / name).read_text()
+        text = read(shell / name)
         for word in forbidden:
             if word in text:
                 gaps.append(name + ": " + word + " — invariant 14")
@@ -2228,20 +2599,25 @@ let
   inspect-keys-exist = mkCheck "inspect-keys-exist" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: the keys are a module-level `pub mod key`, and that module IS
+    # the narrowing — found by `scope`, which walks its braces rather than
+    # stopping at the first `\n}` a nested block gives it.
+    #
+    # `uncommented`, because a key is the string literal being read out.
     root_dir = pathlib.Path("${self}")
-    source = (root_dir / "crates/ronoctua-inspect/src/lib.rs").read_text()
+    source = uncommented((root_dir / "crates/ronoctua-inspect/src/lib.rs").read_text())
+    floor(len(source), 1000, "characters of ronoctua-inspect's lib.rs")
 
     # The `key` module's constants, and only those: a literal anywhere else in
     # the crate is a string, not a promise about a bundle.
-    block = re.search(r"pub mod key \{(.*?)\n\}", source, re.S)
+    block = scope(source, r"pub mod key\b")
     if not block:
         print("ERROR: the `key` module is gone from ronoctua-inspect.", file=sys.stderr)
         raise SystemExit(1)
-    owed = sorted(set(re.findall(r'pub const [A-Z_0-9]+: &str = "([a-z][a-z0-9-]*)";', block.group(1))))
-    if not owed:
-        print("ERROR: no constant in the `key` module — what does the regex match?", file=sys.stderr)
-        raise SystemExit(1)
+    owed = sorted(set(re.findall(r'pub const [A-Z_0-9]+: &str = "([a-z][a-z0-9-]*)";', block)))
+    floor(len(owed), 5, "keys ronoctua-inspect asks for")
 
     failed = 0
     for language in ${builtins.toJSON languages}:
@@ -2294,15 +2670,18 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
         root_dir = pathlib.Path("${self}")
-        table = pathlib.Path("${updatesTable.table}/updates.rs").read_text()
+        # FILE-WIDE: an id written by hand ANYWHERE in the tree is the offence,
+        # which is the whole of what "one list" means. The three declared
+        # places are the exception, named above.
+        table = uncommented(pathlib.Path("${updatesTable.table}/updates.rs").read_text())
+        floor(len(table), 500, "characters of the generated table")
 
         # The ids the ONE declaration produced.
         ids = sorted(set(re.findall(r'^\s+id: "([a-z0-9-]+)",$', table, re.M)))
-        if len(ids) < 5:
-            print(f"ERROR: only {len(ids)} ids in the generated table — did the pattern change?", file=sys.stderr)
-            raise SystemExit(1)
+        floor(len(ids), 5, "ids in the generated table")
 
         # Where a step's name is allowed to be written by hand: the declaration
         # itself, and the generator that reads it.
@@ -2313,6 +2692,7 @@ let
         }
 
         gaps = []
+        swept = 0
         for source in sorted(root_dir.rglob("*")):
             if source.is_dir() or source.suffix not in {".rs", ".nix", ".py"}:
                 continue
@@ -2323,14 +2703,17 @@ let
                 text = source.read_text()
             except (UnicodeDecodeError, OSError):
                 continue
-            for n, line in enumerate(text.splitlines(), 1):
-                stripped = line.strip()
-                if stripped.startswith(("//", "#", "///", "//!")):
-                    continue
+            # BOTH COMMENT SHAPES, and not only at the start of a line. An id
+            # named after code on the same line — `let step = "doom-sync"; //
+            # the editor's` — was counted as a second list, and one named in
+            # prose after code was not counted at all.
+            swept += 1
+            for n, line in enumerate(hashless(uncommented(text)).splitlines(), 1):
                 for i in ids:
                     if f'"{i}"' in line:
                         gaps.append(f"{rel}:{n}: {i}")
 
+        floor(swept, 100, "files of the tree swept for a step's id")
         if gaps:
             print("ERROR: a step of the update is named outside the declaration.", file=sys.stderr)
             print("", file=sys.stderr)
@@ -2366,9 +2749,17 @@ let
   update-names-agree = mkCheck "update-names-agree" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     root_dir = pathlib.Path("${self}")
-    module = (root_dir / "nix/modules/update.nix").read_text()
+    # FILE-WIDE: the constants are module-level in two files, and what they
+    # are compared against is a Nix attribute set. Neither side has a function
+    # to narrow to.
+    #
+    # `hashless` for the Nix and `uncommented` for the Rust: the NAME is the
+    # string literal being read out of the constant, so the strings stay.
+    module = hashless((root_dir / "nix/modules/update.nix").read_text())
+    floor(len(module), 500, "characters of nix/modules/update.nix")
 
     # What Rust says, and where it says it.
     WRITTEN = {
@@ -2379,7 +2770,8 @@ let
     gaps = []
     seen = 0
     for where, names in WRITTEN.items():
-        source = (root_dir / where).read_text()
+        source = uncommented((root_dir / where).read_text())
+        floor(len(source), 500, "characters of " + where)
         for name in names:
             m = re.search(rf'const {name}: &str = "([^"]+)";', source)
             if not m:
@@ -2421,9 +2813,7 @@ let
                     f"{where}: `{name}` = {said!r}, and nix/modules/update.nix does not DECLARE it"
                 )
 
-    if not seen:
-        print("ERROR: no constant found — did the pattern change?", file=sys.stderr)
-        raise SystemExit(1)
+    floor(seen, 4, "constants the Rust repeats")
     if gaps:
         print("ERROR: a name from the Rust does not exist in the module that declares it.", file=sys.stderr)
         print("", file=sys.stderr)
@@ -2452,6 +2842,7 @@ let
   updates-have-text = mkCheck "updates-have-text" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     owed = [
         line.strip()
@@ -2462,7 +2853,9 @@ let
 
     failed = 0
     for language in ${builtins.toJSON languages}:
-        text = (root_dir / f"{language}.ftl").read_text()
+        # FILE-WIDE: a generated list of keys against the catalogues, and
+        # `hashless` is what makes a key commented out of one count as missing.
+        text = hashless((root_dir / f"{language}.ftl").read_text())
         have = set(re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M))
         for key in owed:
             if key not in have:
@@ -2474,7 +2867,12 @@ let
         print("Every key lives in BOTH languages — one alone takes the i18n build down,", file=sys.stderr)
         print("and this check says WHICH before it gets there.", file=sys.stderr)
         raise SystemExit(1)
-        print(f"OK: the sequence's {len(owed)} keys exist in both languages")
+    # THE LINE THAT SAYS IT PASSED, outside the failure. It sat one indent in,
+    # after the `raise` — unreachable on both paths — so this check printed
+    # nothing at all when it was green, which is what a check that has stopped
+    # running looks like.
+    floor(len(owed), 5, "keys the sequence requires")
+    print(f"OK: the sequence's {len(owed)} keys exist in both languages")
     END
   '';
 
@@ -2603,10 +3001,15 @@ let
   design-constants-match-tokens = mkCheck "design-constants-match-tokens" [ pkgs.python3 ] ''
     python3 - <<'END'
     import math, pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: both numbers are module-level — a `pub const` in a crate and a
+    # leaf of an attribute set — and there is no function to narrow to.
     root_dir = pathlib.Path("${self}")
-    design = (root_dir / "crates/ronoctua-design/src/lib.rs").read_text()
-    typography = (root_dir / "assets/tokens/typography.nix").read_text()
+    design = code_of((root_dir / "crates/ronoctua-design/src/lib.rs").read_text())
+    typography = hashless((root_dir / "assets/tokens/typography.nix").read_text())
+    floor(len(design), 2000, "characters of ronoctua-design's lib.rs")
+    floor(len(typography), 200, "characters of typography.nix")
 
     def constant(name):
         m = re.search(rf"pub const {name}: u16 = (\d+);", design)
@@ -2882,11 +3285,19 @@ let
   one-offset-per-list = mkCheck "one-offset-per-list" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a second home for the number is a FIELD or a call written
+    # anywhere in one of the three files — none of them a question about the
+    # inside of a function. The strip is what stops the comment that explains
+    # this rule, and names all four dead spellings, from answering for them.
     home = pathlib.Path("${self}/crates/ronoctua-shell/src")
-    files = (home / "files.rs").read_text()
-    window = (home / "files_window.rs").read_text()
-    surface = (home / "surface.rs").read_text()
+    files = code_of((home / "files.rs").read_text())
+    window = code_of((home / "files_window.rs").read_text())
+    surface = code_of((home / "surface.rs").read_text())
+    floor(len(files), 10000, "characters of files.rs")
+    floor(len(window), 10000, "characters of files_window.rs")
+    floor(len(surface), 100000, "characters of surface.rs")
     wrong = []
 
     # THE SETTER IS GONE. It is what let a door hold the number.
@@ -2933,33 +3344,23 @@ let
   every-list-can-be-dragged = mkCheck "every-list-can-be-dragged" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    files = pathlib.Path("${self}/crates/ronoctua-shell/src/files.rs").read_text()
+    files = code_of(pathlib.Path("${self}/crates/ronoctua-shell/src/files.rs").read_text())
     wrong = []
     # THE TWO THAT MAY SAY `false`, each for a reason of its own — see below.
     MAY_REFUSE = ("Preview", "Fold")
 
-    def body_of(name):
-        m = re.search(r"\n    pub fn " + name + r"\b", files)
-        if not m:
-            return None
-        i = m.start()
-        depth, j, seen = 0, files.index("{", i), False
-        for k in range(j, len(files)):
-            if files[k] == "{":
-                depth += 1
-                seen = True
-            elif files[k] == "}":
-                depth -= 1
-                if seen and depth == 0:
-                    return files[i:k]
-        return files[i:]
-
+    # `body_of` was written out here, by hand, and six other checks had their
+    # own copy of the same walk. It lives in `pyPrelude` now — one answer to
+    # "where does this function end", so a check cannot disagree with its
+    # neighbour about it.
     for name in ("wheel", "drag_to"):
-        body = body_of(name)
+        body = body_of(files, name)
         if body is None:
             wrong.append("`" + name + "` is gone from files.rs")
             continue
+        floor(len(body), 40, "characters of `" + name + "`")
         for m in re.finditer(r"Pane::(\w+)\s*=>[^\n]*\bfalse\b", body):
             if m.group(1) not in MAY_REFUSE:
                 wrong.append(
@@ -3000,6 +3401,408 @@ let
     PY
   '';
 
+  # A CHECK THAT READS SOURCE DOES NOT PASS BY COINCIDENCE.
+  #
+  # # What this is for
+  #
+  # Three checks in this file passed for the wrong reason, and the owner found
+  # it by asking why a sabotage produced no error. The audit that followed named
+  # four shapes, and every one of them is a GREEN check over a broken promise:
+  #
+  # * **the wrong anchor** — a bare `find` landed on an occurrence in another
+  #   function, so the window began in the wrong place and found what it was
+  #   looking for in the neighbouring match arm;
+  # * **the non-greedy brace** — a body captured up to a guessed `}` stopped at
+  #   the destructuring's own brace, and every `not in body` silently passed;
+  # * **the comment** — un-stripped text let a doc comment stand in for the
+  #   code it describes;
+  # * **the vacuous loop** — a `finditer` that matches nothing turns zero times,
+  #   and zero turns is a pass.
+  #
+  # `pyPrelude` is the cure, and this is what makes a check use it: narrow by
+  # BRACES from a name, strip what is not code, and refuse a capture that came
+  # back suspiciously small.
+  #
+  # # The census, and why it is written out
+  #
+  # One hundred and eighteen checks read source. The five that were rewritten
+  # when this was found are held to the rule; the rest are named below, and the
+  # list is the DEBT — it is meant to shrink, and a check that leaves it may
+  # never go back. Naming them is what stops "the rest" from being a word that
+  # covers an unknown number of them.
+  checks-do-not-pass-by-coincidence = mkCheck "checks-do-not-pass-by-coincidence" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    text = pathlib.Path("${self}/tests/checks.nix").read_text()
+
+    # Every check, by name, with its script.
+    #
+    # ANCHORED ON `mkCheck "<name>"` AND NOT ON THE ATTRIBUTE. It used to be
+    # `\n  <name> = mkCheck "`, which a check written as
+    # `<name> =\n  let … in\n  mkCheck "<name>"` does not match — and there are
+    # a dozen of those. They were invisible to this census, AND their scripts
+    # fell inside the previous check's slice, so a `.read_text()` of theirs was
+    # blamed on a neighbour that reads nothing. The name in the quotes is the
+    # check's own, and `mkCheck` itself refuses a name that disagrees with the
+    # attribute (`check-<name>` is the derivation).
+    starts = [(m.start(), m.group(1))
+              for m in re.finditer(r"mkCheck \"([a-zA-Z][\w-]*)\"", text)]
+    if len(starts) < 200:
+        print(f"ERROR: only {len(starts)} checks found; the sweep stopped reaching them.",
+              file=sys.stderr)
+        raise SystemExit(1)
+
+    def script_of(at, until):
+        # The check's own script, with the NEXT one's prose taken off the end.
+        # A slice that runs to the next `mkCheck` carries the comment block
+        # written above it, and a sentence there would answer for this check.
+        lines = text[at:until].split("\n")
+        while lines and (not lines[-1].strip() or lines[-1].lstrip().startswith("#")):
+            lines.pop()
+        return "\n".join(lines)
+
+    # THE DEBT, AND IT IS PAID. A name here was a check that read source and
+    # had not been put through the prelude yet; the list held 113 of them when
+    # it was written and holds none now. It stays, empty, for two reasons: a
+    # check written tomorrow that reads source is refused outright rather than
+    # quietly added to a list, and the list being EMPTY is itself the statement
+    # that the sweep finished — a set with names in it would be a promise, and
+    # this is a fact.
+    #
+    # `set()` and not `{}`, which is an empty DICT and makes the difference
+    # below a `TypeError`.
+    NOT_YET = set()
+
+    # AND THE ONE THAT READS THIS FILE.
+    #
+    # It is exempt because the prelude is RUST-shaped: `code_of` strips `//`
+    # comments and `body_of` walks from `fn NAME` to a matching brace, and
+    # neither means anything in a Nix file. It carries the other half of the
+    # bargain instead — two floors, on the number of checks and on the number
+    # that read source — so a sweep of this file that stopped reaching them is
+    # refused rather than reported as nothing to do.
+    #
+    # Named, and not discovered: an exemption a rule infers is one nobody
+    # reviews.
+    READS_NIX = {"checks-do-not-pass-by-coincidence"}
+
+    reads, unswept, wrong = [], [], []
+    for i, (at, name) in enumerate(starts):
+        body = script_of(at, starts[i + 1][0] if i + 1 < len(starts) else len(text))
+        if ".read_text()" not in body:
+            continue
+        reads.append(name)
+        if name in READS_NIX:
+            continue
+        # ESCAPED: `''${pyPrelude}` is the literal text this looks for in the
+        # source. Written bare, Nix would interpolate it into the store path
+        # and the search would be for a string no check contains — so every
+        # check would read as unswept, including the five that are not.
+        prelude = 'exec(open("''${pyPrelude}")' in body
+        if name in NOT_YET:
+            if prelude:
+                wrong.append(name + " is on the prelude and still on the debt list — take it off")
+            continue
+        if not prelude:
+            unswept.append(name + " reads source and does not open with the prelude")
+            continue
+        # AND IT USES ALL THREE HALVES OF IT.
+        #
+        # `uncommented` counts, and it is the narrow one: it takes the comments
+        # off and keeps the strings, for a check whose needle IS a string
+        # literal — an `include!` of a generated file names it by path. The
+        # thing being refused here is a COMMENT answering for the code, and
+        # both strip those.
+        #
+        # AND A CHECK MAY DECLARE THAT PROSE IS ITS SUBJECT. Three of them ask
+        # about the words and not about the code: whether a cross-reference
+        # names a section that exists, whether an attribution is carried, or
+        # whether the sentence beside a constant still says the number the
+        # constant works out to. Stripping the comments there would not make
+        # such a check stricter — it would leave it asking nothing at all. So
+        # the rule is the same one as below: SAY which kind of question this
+        # is, in the check, where a reviewer meets it.
+        # `hashless` is the third, and it is the one for a language whose
+        # comment begins with `#` — Nix, KDL, shell, Python. A check that reads
+        # only those has stripped everything it read when it has called it.
+        # AND A CHECK MAY SAY THAT IT PARSES RATHER THAN SEARCHES. A manifest
+        # read with `json.loads` is not searched at all, and JSON has no
+        # comment for one to hide in: there is nothing for a stripper to take
+        # off, and calling one would be a gesture. Declared, like the rest.
+        prose = "# PROSE:" in body
+        parsed = "# PARSED:" in body
+        stripped = any(w + "(" in body for w in ("code_of", "uncommented", "hashless"))
+        if not prose and not parsed and not stripped:
+            wrong.append(name + " searches text it has not stripped: a comment can answer for it")
+        # NARROWED, OR SAYING THAT IT IS NOT.
+        #
+        # Not every question is about a function. "No file under this directory
+        # mentions X" is a whole-file question and narrowing it would be a
+        # false precision. What the rule asks is that a check SAY which kind it
+        # is asking, because the defect is a check that MEANT to ask about one
+        # function and asked the file by accident.
+        whole_file = "# FILE-WIDE:" in body
+        if "body_of(" not in body and "scope(" not in body and not whole_file:
+            wrong.append(name + " searches a whole file without saying so: write"
+                         + " `# FILE-WIDE:` and the reason, or narrow with `body_of`")
+        if "floor(" not in body and "must(" not in body:
+            wrong.append(name + " has no floor: an empty capture would pass silently")
+
+    if len(reads) < 100:
+        print(f"ERROR: only {len(reads)} checks read source; this check has stopped seeing them.",
+              file=sys.stderr)
+        raise SystemExit(1)
+    gone = sorted(NOT_YET - set(reads))
+    if gone:
+        wrong.append("the debt list names checks that no longer read source: " + ", ".join(gone))
+
+    if unswept or wrong:
+        print("ERROR: a check that reads source can pass for the wrong reason.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong + unswept:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       Narrow by braces from a name, strip what is not code, and refuse", file=sys.stderr)
+        print("       a capture that came back small. `pyPrelude` is all three.", file=sys.stderr)
+        raise SystemExit(1)
+    done = len(reads) - len(NOT_YET) - len(READS_NIX)
+    print(f"OK: {len(reads)} checks read source, {done} on the prelude, {len(NOT_YET)} still owed")
+    END
+  '';
+
+  # A RULE FOLLOWS THE GROUND IT IS DRAWN ON.
+  #
+  # A rule is a SIGNAL and a ground is where the theme lives, and the two climb
+  # the same ladder. `rule.default` is the step that reads against the chrome;
+  # on a raised ground it does not. Measured across the nine themes on
+  # 2026-09-20: `rule.default` on `surface.header` is ΔE 0,025 and on
+  # `surface.container` 0,047 — the first is a line one cannot see, and the
+  # owner photographed exactly that. `rule.raised` measures 0,098 and 0,123.
+  #
+  # THE ANSWER IS NOT A SECOND TOKEN FOR A BUFFER TO CHOOSE. It is `Pen`
+  # remembering the role its block was FILLED with and resolving the rule, the
+  # bar and the quietest text step from it — so choosing wrong stops being
+  # possible instead of being caught. This check is what keeps the resolution
+  # in one place and the two raised grounds named in it.
+  a-rule-follows-its-ground = mkCheck "a-rule-follows-its-ground" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: `on_ground` is a free function and the two `Part`s are
+    # module-level types; what is asked of the conversions is that no site
+    # anywhere in them writes a register by hand. `Pen::rule`, `Pen::bar_from`
+    # and `on_ground` itself are narrowed by name.
+    design = pathlib.Path("${../crates/ronoctua-design/src}")
+    screen = code_of((design / "screen.rs").read_text())
+    guest = code_of((design / "guest.rs").read_text())
+    table = code_of((design / "table.rs").read_text())
+    floor(len(screen), 20000, "characters of screen.rs")
+    floor(len(guest), 2000, "characters of guest.rs")
+    floor(len(table), 2000, "characters of table.rs")
+    wrong = []
+
+    # NARROWED TO THE PEN'S OWN `impl`, first. `Screen` has a `rule`, a `put`
+    # and a `paragraph` of its own, and they come FIRST in the file — asking
+    # `body_of` for a name over the whole of `screen.rs` answers with the
+    # screen's every time, which is a check reading the wrong function and
+    # reporting the right-looking failure.
+    pen = must(scope(screen, r"impl<P: Palette> Pen<"), "`impl Pen`")
+    floor(len(pen), 2000, "characters of `impl Pen`")
+    parts = must(scope(screen, r"\nenum Part<"), "`enum Part`")
+    floor(len(parts), 500, "characters of `enum Part`")
+
+    # 1. THE PEN REMEMBERS, AND `fill` IS WHAT WRITES IT DOWN.
+    if not re.search(r"\n    ground:\s*Option<Role>,", screen):
+        wrong.append("`Pen` no longer carries the ground its block was filled with")
+    filled = must(body_of(pen, "fill"), "`Pen::fill`")
+    floor(len(filled), 40, "characters of `Pen::fill`")
+    if "self.ground = Some(role);" not in filled:
+        wrong.append("`Pen::fill` no longer records the role; every resolution below reads `None`")
+
+    # 2. THE TABLE IS ONE TABLE, and it names both raised grounds and both moves.
+    answer = must(body_of(screen, "on_ground"), "`on_ground`")
+    floor(len(answer), 60, "characters of `on_ground`")
+    if "Role::Shelf | Role::Header" not in answer:
+        wrong.append(
+            "`on_ground` does not name both raised grounds; a container and a "
+            "header are one rung apart and both eat the default rule"
+        )
+    for was, becomes, why in (
+        ("Role::Rule", "Role::RuleRaised", "a rule on a raised ground is ΔE 0,025 — invisible"),
+        ("Role::Faint", "Role::Prose", "the faintest step measures Lc 0,0000 on both raised grounds"),
+    ):
+        if not re.search(re.escape(was) + r"\s*=>\s*" + re.escape(becomes), answer):
+            wrong.append(f"`on_ground` no longer lifts {was} to {becomes}: {why}")
+
+    # 3. AND EVERY DOOR OF THE PEN GOES THROUGH IT.
+    #
+    # Named one by one, and not by "the file mentions `on_ground`": the point
+    # is that the rule, the bar, a run, a paragraph and a table's cell all ask,
+    # and a door that stopped asking would leave the others answering.
+    # `paragraph_from` and not `paragraph`: the short one delegates to it, and
+    # asking the delegate would be asking a line that forwards.
+    for name in ("rule", "bar_from", "put", "paragraph_from"):
+        body = must(body_of(pen, name), "`Pen::" + name + "`")
+        if "on_ground(" not in body:
+            wrong.append(f"`Pen::{name}` draws without asking the ground it is on")
+    if "on_ground(" not in must(body_of(table, "put"), "`Row::put`"):
+        wrong.append(
+            "`Row::put` does not ask the ground: a table inside a container is "
+            "where the brain draws its history, and its cells would keep the "
+            "register the caller wrote"
+        )
+
+    # 4. THE REGISTER TRAVELS WITH THE PART, in both conversions.
+    #
+    # It used to be `Role::Rule` written at the two places a `Ruled` and a
+    # `Barred` become a command — the host's and the guest's — which is what
+    # made the ground unreachable from a rule in the first place.
+    for name, body in (("screen.rs", screen), ("guest.rs", guest)):
+        for hard in ("color: Tokens::color(Role::Rule)", "color: P::color(Role::Rule)"):
+            if hard in body:
+                wrong.append(
+                    f"{name} writes `{hard}` by hand again; the role has to travel "
+                    "on the part, or the ground cannot reach it"
+                )
+    for part in ("Ruled", "Barred"):
+        # NO `{` IN THE HEADER PATTERN. `scope` looks for the brace AFTER the
+        # match, so a pattern that eats the opening one sends it to the next
+        # variant's — and the capture is then a block this never meant to read.
+        block = must(scope(parts, r"\b" + part + r"\b"), "`Part::" + part + "`")
+        if not re.search(r"\n\s+role: Role,", block):
+            wrong.append(f"`Part::{part}` no longer carries a role")
+
+    # 5. AND THE RAISED REGISTER IS NOT PUBLIC. `rule_as` and `bar_as` exist so
+    #    that `Pen` can choose; a `pub` on either is a second chooser.
+    for name in ("rule_as", "bar_as"):
+        if re.search(r"pub\s+fn\s+" + name + r"\b", screen):
+            wrong.append(f"`Screen::{name}` is public: something other than the Pen can choose")
+
+    if wrong:
+        print("ERROR: a rule that does not follow the ground it is drawn on.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       `Pen::fill` writes the ground down and `on_ground` is the", file=sys.stderr)
+        print("       one table that answers what each role becomes on it. See", file=sys.stderr)
+        print("       `Role::RuleRaised` for the measurements.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: one table answers what a role becomes on a ground, and five doors ask it")
+    END
+  '';
+
+  # EVERY GROUND IS MEASURED, or it is named as one nothing is drawn on.
+  #
+  # `surface.container` and `surface.header` existed for a whole delivery and
+  # appeared in no gate at all: fifteen tones are drawn on them across the nine
+  # themes and nothing in `gen-theme.py` had ever looked at one. What that cost
+  # was a rule nobody could see and a text step measuring Lc 0,0000 — both of
+  # them found the day the grounds were finally added to the list.
+  #
+  # So a `surface.*` token is either a GROUND — and then some tone is measured
+  # on it — or it is a fill that carries no text, and it says so here with the
+  # reason. The list is the audit; the check is what makes the list complete.
+  every-ground-is-measured = mkCheck "every-ground-is-measured" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a recipe is a leaf of an attribute set and a gate is a row of
+    # a tuple; neither is a question about the inside of a function. The
+    # `surface = {` block and the `CONTRAST_GATES` tuple are the narrowing.
+    #
+    # `hashless` for both, whose comment is `#`: a ground commented out of the
+    # recipes is not a ground, and a gate commented out of the generator does
+    # not measure anything — which is exactly the shape a gate is lost in.
+    generator = hashless(pathlib.Path("${../nix/scripts/gen-theme.py}").read_text())
+    floor(len(generator), 10000, "characters of gen-theme.py")
+
+    # WHICH SURFACES EXIST, read from the GENERATED token list and not from a
+    # list written here: a second list is the one that goes stale. And not
+    # from `colors.nix` either, whose shape is a recipe rather than a name —
+    # `surface.mesh` is declared `{ of = …; chroma = …; }`, so walking the
+    # attribute set finds `surface.mesh.of` and misses the token itself.
+    #
+    # PARSED: `tokens.wit` carries the dotted path of every token in a comment
+    # above its variant, one per line, written by `gen-tokens.py`. It is read
+    # by the line and not searched, which is why there is nothing here for a
+    # stripper to take off.
+    wit = pathlib.Path("${wit}/deps/tokens/tokens.wit").read_text()
+    surfaces = set(re.findall(r"^\s*// (color\.surface\.[a-z.-]+)$", wit, re.M))
+    surfaces = {name.removeprefix("color.") for name in surfaces}
+    floor(len(surfaces), 10, "surfaces in the generated token list")
+
+    # AND WHICH OF THEM A CONTRAST GATE MEASURES A TONE ON.
+    #
+    # NARROWED TO THE THREE ASSIGNMENTS THAT ARE THE ANSWER, and not grepped
+    # over the file: `surface.backdrop` is named half a dozen times in
+    # `DISTANCE_GATES` — it is told apart from the chrome and from the content's
+    # black — and a sweep of the whole generator read that as "measured". It is
+    # not: nothing is ever DRAWN on the compositor's desk, which is the exact
+    # claim this check exists to make somebody write down.
+    gated = set()
+    for name in ("SIX_GROUNDS", "RAISED_GROUNDS", "CONTRAST_GATES"):
+        m = re.search(r"\n" + name + r"\s*=\s*\(", generator)
+        if m is None:
+            print(f"ERROR: `{name}` went away from gen-theme.py", file=sys.stderr)
+            raise SystemExit(1)
+        gated |= set(re.findall(r'"(surface\.[a-z.-]+)"', shut_at(generator, m.end())))
+    floor(len(gated), 8, "surfaces a contrast gate measures a tone on")
+
+    # THE ONES NOTHING IS DRAWN ON, each with the reason it carries no text.
+    #
+    # Named, and not inferred: an exemption a rule works out for itself is one
+    # nobody reviews. Every line here is a promise that this surface is a fill
+    # and never a page — and the day something draws a word on one, the promise
+    # is the thing to change.
+    NO_TEXT = {
+        "surface.backdrop": "the compositor's desk, where no window is: the shell draws nothing on it at all",
+        "surface.atlas.land": "a continent's fill inside the globe's own picture",
+        "surface.atlas.ocean": "the water behind it",
+        "surface.atlas.lake": "a lake cut out of a continent",
+        "surface.atlas.here": "the dot that marks the coordinate, and it is a dot",
+        "surface.mesh": "the ground a 3D part is lit against, in the worker's own pixmap",
+        "surface.wave": "the ink of an audio waveform, which is a drawing of a sound",
+    }
+    wrong = []
+    for name in sorted(surfaces):
+        if name in gated:
+            if name in NO_TEXT:
+                wrong.append(
+                    name + " is on the no-text list AND measured by a gate; one of "
+                    "the two is wrong, and the gate is the one that tells the truth"
+                )
+            continue
+        if name not in NO_TEXT:
+            wrong.append(
+                name + " is a surface that no gate measures anything on, and it is "
+                "not on the list of fills that carry no text. Either put a tone on "
+                "it in `CONTRAST_GATES` or say here why nothing is ever drawn on it."
+            )
+    for name in sorted(NO_TEXT):
+        if name not in surfaces:
+            wrong.append(name + " is excused and colors.nix no longer declares it")
+
+    if wrong:
+        print("ERROR: a ground nothing measures.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A surface that carries text and no gate is a surface where", file=sys.stderr)
+        print("       a theme can put a tone the eye cannot find — and nothing in", file=sys.stderr)
+        print("       the build would say so. That is what `surface.header` was.", file=sys.stderr)
+        raise SystemExit(1)
+    print(
+        f"OK: {len(surfaces)} surfaces, {len(surfaces) - len(NO_TEXT)} of them measured "
+        f"and {len(NO_TEXT)} declared to carry no text"
+    )
+    END
+  '';
+
   # ONE REPAINT MODEL, in every window.
   #
   # Presentation blocks on the vertical blank. A handler that paints is a
@@ -3016,16 +3819,66 @@ let
     python3 - <<'PY'
     import pathlib, re, sys
 
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a door is a FILE here, and what is asked of one — that it has
+    # an `ask_paint`, a `settle`, one place that takes the debt, and no
+    # `self.paint()` outside `settle` — is about every line of it. `settle` is
+    # narrowed by name, which is how the one allowed paint is found.
     home = pathlib.Path("${self}/crates/ronoctua-shell/src")
-    windows = sorted(home.glob("*_window.rs"))
-    if len(windows) < 3:
-        print(f"ERROR: only {len(windows)} windows found; the glob stopped matching.",
+
+    # EVERY DOOR THAT DRAWS, and not only the ones whose name ends in
+    # `_window.rs`.
+    #
+    # That glob is how this defect came back. The model was written, the
+    # reasoning was written, this check was written — and `buffer.rs` sat
+    # outside the fence, painting inside its pointer handler, one blocked
+    # present per cell the mouse crossed. The owner reported the same trailing
+    # highlight a third time, in a door the check could not see.
+    #
+    # So the fence is now a CENSUS: every file that owns a surface is named
+    # here, and a door that is not on the list is refused by the count below.
+    # Naming them costs one line each and is the only shape that cannot
+    # silently omit the next one.
+    DOORS = tuple(sorted(f.name for f in home.glob("*_window.rs"))) + (
+        # The wasip2 buffer host. It is a window like the others; it simply
+        # does not carry the word in its name.
+        "buffer.rs",
+        # The line that outlives a dead footer. Same model, own surface.
+        "lifeline.rs",
+    )
+    windows = [home / name for name in DOORS]
+    missing = [f.name for f in windows if not f.exists()]
+    if missing:
+        print("ERROR: the census names doors that are not there: " + ", ".join(missing),
               file=sys.stderr)
         raise SystemExit(1)
+    floor(len(windows), 14, "doors in the census")
+
+    # AND NO DOOR IS OUTSIDE IT. A file that owns a `wl_surface` and is not on
+    # the list above is exactly what `buffer.rs` was: a place this check could
+    # not reach. `surface.rs` is the one exception, and it is declared, not
+    # discovered — see the block after the loop.
+    DECLARED_APART = {"surface.rs"}
+    for f in sorted(home.glob("*.rs")):
+        if f.name in DOORS or f.name in DECLARED_APART:
+            continue
+        text = code_of(f.read_text())
+        if re.search(r"impl\s+PointerHandler\s+for", text) and "self.paint()" in text:
+            wrong_door = f.name
+            print(f"ERROR: `{wrong_door}` handles the pointer and paints, and the census",
+                  file=sys.stderr)
+            print("       does not name it. That is the shape the hover lag comes back in.",
+                  file=sys.stderr)
+            raise SystemExit(1)
 
     wrong = []
     for f in windows:
-        text = f.read_text()
+        # `code_of`, because every door EXPLAINS this model in a comment above
+        # the two methods — naming `ask_paint`, `settle` and `self.paint()` in
+        # prose — and the check was reading its own evidence.
+        text = code_of(f.read_text())
+        floor(len(text), 2000, "characters of " + f.name)
         if not re.search(r"\bfn\s+ask_paint\b", text):
             wrong.append(f"{f.name} has no `ask_paint`")
         if not re.search(r"\bfn\s+settle\b", text):
@@ -3042,18 +3895,13 @@ let
         # and the span is found by matching braces rather than by guessing how
         # many lines back it might be — the first draft guessed, and reported
         # `settle`'s own call three times.
-        span = None
-        m = re.search(r"\bfn\s+settle\s*\(&mut self\)\s*\{", text)
-        if m:
-            depth, start = 0, m.end() - 1
-            for k in range(start, len(text)):
-                if text[k] == "{":
-                    depth += 1
-                elif text[k] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        span = (start, k)
-                        break
+        # THE ONE PLACE A PAINT IS ALLOWED, found by name and by braces. The
+        # signature was written out here; `body_of` takes the name, so a
+        # `settle` that grew a parameter is still the same `settle`.
+        allowed = body_of(text, "settle") or ""
+        floor(len(allowed) + 1, 1, "characters of `settle` in " + f.name)
+        at = text.find(allowed) if allowed else -1
+        span = (at, at + len(allowed)) if at >= 0 else None
         for hit in re.finditer(r"self\.paint\(\);", text):
             if span and span[0] <= hit.start() <= span[1]:
                 continue
@@ -3095,7 +3943,13 @@ let
     python3 - <<'PY'
     import pathlib, re, sys
 
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: an edge worked out as a count of lines is an offence wherever
+    # it is written, and the `let` it is bound in IS the narrowing — the
+    # pattern below reads one binding at a time.
     home = pathlib.Path("${self}/crates/ronoctua-shell/src")
+    swept = 0
     # `chrome.rs` DEFINES the conversion, and `files.rs` states the one rule
     # about which band may take the residue — with the reasoning beside it.
     allowed = {"chrome.rs"}
@@ -3126,7 +3980,8 @@ let
         # whole number of lines — `line_px + lines * line_px + line_px * 0.4`
         # is the fixture that proves the residue exists, and forbidding it
         # there would forbid the proof.
-        text = f.read_text().split("#[cfg(test)]")[0]
+        text = code_of(f.read_text()).split("#[cfg(test)]")[0]
+        swept += 1
         for m in naming.finditer(text):
             name, value = m.group(1), " ".join(m.group(2).split())
             if not (a_count.search(value) and a_multiple.search(value)):
@@ -3135,8 +3990,12 @@ let
             wrong.append(f"{f.name}:{line}  `{name}` = {value[:60]}")
 
     # AND THE RAIL STAYS ON THE HOST'S SIDE.
+    floor(swept, 30, "sources of the shell swept for an edge")
     design = pathlib.Path("${self}/crates/ronoctua-design/src")
-    lib = (design / "lib.rs").read_text()
+    # `uncommented` here and `code_of` above: the needle below is a `cfg`
+    # attribute whose feature name is a STRING, and `code_of` would empty it.
+    lib = uncommented((design / "lib.rs").read_text())
+    floor(len(lib), 1000, "characters of ronoctua-design's lib.rs")
     if not re.search(r'#\[cfg\(feature = "host"\)\]\s*\npub mod rails;', lib):
         wrong.append("ronoctua-design/src/lib.rs: `rails` is no longer behind `host`")
     # THE RAIL BY ITS OWN NAME, and not any `Frame`. `buffers/transfers` has a
@@ -3144,7 +4003,7 @@ let
     # forbade a buffer's own alias, which is none of this check's business.
     rail = re.compile(r"\brails::|(?:ronoctua_)?design::Frame\b")
     for f in sorted(pathlib.Path("${self}/buffers").rglob("src/*.rs")):
-        if rail.search(f.read_text()):
+        if rail.search(code_of(f.read_text())):
             wrong.append(f"buffers/{f.parent.parent.name}: a buffer names the pixel rail")
 
     if wrong:
@@ -3160,6 +4019,777 @@ let
         raise SystemExit(1)
     print("OK: no edge in the shell is a count of lines")
     PY
+  '';
+
+  # A BUFFER DRAWS INSIDE THE BLOCK THAT IS DRAWING.
+  #
+  # The brain's footer was painted on top of its history list, and a strip of
+  # the page's own ground showed between that footer and the bottom edge. The
+  # owner photographed both. Neither was a slip in the arithmetic — there was
+  # no arithmetic to slip: a buffer addressed the window by bare `u16`,
+  # `Screen::go_to` had no bound, the lowering was a one-to-one map, and the
+  # host clipped nothing.
+  #
+  # `Region` and `Pen` are the answer, and this is what keeps them true: the
+  # pen REFUSES a row outside its block rather than clamping it (clamping
+  # leaves the defect alive and the ink somewhere plausible), `Screen::check`
+  # fails a frame that has one, and the blocks must tile the window with no
+  # gap and no overlap.
+  a-buffer-draws-inside-its-regions = mkCheck "a-buffer-draws-inside-its-regions" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    root = pathlib.Path("${self}")
+    design = root / "crates" / "ronoctua-design" / "src"
+    region = code_of((design / "region.rs").read_text())
+    screen = code_of((design / "screen.rs").read_text())
+    gaps = []
+
+    # 1) THE PEN REFUSES, AND COUNTS. A clamp would put the ink one row inside
+    #    the block and leave whatever produced the row alone.
+    # NARROWED TO THE `Pen` FIRST. `fn at` is also `Run::at`, the builder, and
+    # it comes first in the file — asking the file for `at` finds that one.
+    pen = must(scope(screen, r"impl<[^>]*>\s+Pen<"), "`impl Pen`")
+    at = must(body_of(pen, "at"), "`Pen::at`")
+    if "refused" not in at or "saturating_add(1)" not in at:
+        gaps.append("`Pen::at` no longer counts what it turned away")
+    if "return None" not in at:
+        gaps.append("`Pen::at` no longer refuses a row outside the block")
+    # AND IT MEASURES THE WHOLE EXTENT. A paragraph of four rows beginning on
+    # the block's last one is three rows outside it, and asking only about the
+    # first row is what made that look fine.
+    if "rows.max(1)" not in at:
+        gaps.append("`Pen::at` measures the first row instead of the whole extent")
+
+    # 2) `Screen::check` FAILS A FRAME WITH ONE, and proves the tiling.
+    audit = must(body_of(screen, "regions_are_whole"), "`Screen::regions_are_whole`")
+    # ON THE CODE AND NOT ON THE MESSAGE. The third of these was
+    # `"belongs to no block"` — a phrase out of the `format!` that reports it —
+    # and `code_of` empties every literal, so the assertion could only ever
+    # fail. It is the repository's own trap, written down in `AGENTS.md`:
+    # assert on what runs, never on what it would say.
+    for wanted, why in (
+        ("self.refused > 0", "a refused draw no longer fails the frame"),
+        ("meets(b)", "two blocks sharing a line is no longer refused"),
+        ("r.holds(line)", "a line nobody owns is no longer refused"),
+    ):
+        if wanted not in audit:
+            gaps.append(why)
+    checked = must(body_of(screen, "check"), "`Screen::check`")
+    for call, why in (
+        ("regions_are_whole()", "`Screen::check` no longer runs the block audit"),
+        ("nothing_is_drawn_below", "`Screen::check` no longer asks about the bottom"),
+    ):
+        if call not in checked:
+            gaps.append(why)
+
+    # 3) THE SPLIT TILES, and it is the CODE that says so.
+    #
+    # These assertions used to be satisfied by DOC COMMENTS: `region.rs` says
+    # "no two of them share a line" in prose three lines above the test that
+    # proves it, and the un-stripped search could not tell them apart. With
+    # `code_of` the prose is gone and only the assertions remain.
+    #
+    # Asserted on the CODE and never on the MESSAGE: `code_of` empties string
+    # bodies precisely so a sentence cannot stand in for the thing it
+    # describes, and that cuts both ways — a check that looked for the
+    # assertion's own words would be looking at what was just taken out.
+    tiles = must(body_of(region, "a_split_tiles_the_window_exactly"), "the tiling test")
+    for wanted, why in (
+        ("meets(b)", "two blocks are no longer proved disjoint"),
+        ("holds(line)).count()", "every line is no longer proved to have one owner"),
+    ):
+        if wanted not in tiles:
+            gaps.append("the tiling test: " + why)
+
+    # 4) AND THE BRAIN DRAWS THROUGH PENS.
+    #
+    # THIS IS WHAT THIS CHECK NEVER DID. The first version looked for a
+    # parameter spelled exactly `from: u16` in six signatures that have not had
+    # one since they were rewritten — the regex matched, the condition was
+    # false, and `gaps.append` was unreachable. It enforced NOTHING, and its
+    # own comment claimed the six "take a pen, never the screen" while all six
+    # take a `&mut Screen<Wit>` and build the pen inside.
+    #
+    # What is true, and what is worth holding, is that each one draws through a
+    # pen: it asks for its block and never puts ink on the screen directly.
+    brain = code_of((root / "buffers" / "brain" / "src" / "lib.rs").read_text())
+    body = brain.split("#[cfg(test)]")[0]
+    drawers = ("header", "warning", "home", "task_page", "draw_log", "foot")
+    floor(len(drawers), 6, "drawing functions named here")
+    for fn in drawers:
+        one = must(body_of(body, fn), "the brain's `" + fn + "`")
+        if "screen.region(" not in one:
+            gaps.append("`" + fn + "` does not ask for a block before drawing")
+        # AND IT PUTS NO INK ON THE SCREEN ITSELF. `screen.region(...)` is the
+        # only `screen.` a drawer may say; anything else is a draw that no
+        # block owns and that `Screen::check` cannot attribute.
+        for stray in re.finditer(r"screen\.(\w+)\(", one):
+            if stray.group(1) != "region":
+                gaps.append("`" + fn + "` draws straight on the screen: `screen."
+                            + stray.group(1) + "(`")
+
+    if "screen.go_to(" in body:
+        gaps.append("the brain reaches for `go_to`, which has no block and no bound")
+
+    if gaps:
+        print("ERROR: a buffer can draw outside the block that is drawing.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for g in gaps:
+            print("       " + g, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A footer painted over a history list and a strip of page under", file=sys.stderr)
+        print("       the footer were both this, and neither was visible to any guard:", file=sys.stderr)
+        print("       the blocks were two loose numbers threaded through six functions.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: six drawers, every one through a block, and the tiling proved in code")
+    END
+  '';
+
+  # A STATE CHANGE REPAINTS.
+  #
+  # `RET` on a task moved the modeline's title to `task` and left the home page
+  # on screen until an arrow key — which repaints unconditionally — brought the
+  # right page up, already scrolled a row. The owner reported it and said it
+  # must never happen again.
+  #
+  # The guest had forgotten its `Redraw`, and that is fixed; this is the half
+  # that keeps the NEXT buffer out of the same hole. A state is a SCREEN: the
+  # modeline names it, so announcing one without drawing it puts the name of a
+  # page on the chrome while the page underneath is the last one.
+  a-state-change-repaints = mkCheck "a-state-change-repaints" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    root = pathlib.Path("${self}")
+    host = code_of((root / "crates" / "ronoctua-shell" / "src" / "buffer.rs").read_text())
+    gaps = []
+
+    # THE HOST'S HALF. A state is a SCREEN: the modeline names it, so
+    # announcing one without drawing it puts the name of a page on the chrome
+    # while the page underneath is still the last one.
+    deliver = must(body_of(host, "deliver"), "`Host::deliver`")
+    arm = must(scope(deliver, r"Effect::StateChanged\(id\)[^=]*=>"), "the `StateChanged` arm")
+    floor(len(arm), 80, "characters of the `StateChanged` arm")
+    if "ask_paint()" not in arm:
+        gaps.append("the host announces a new state and does not draw it")
+    if "self.now()" not in arm:
+        gaps.append("the guard on `n != self.now()` went away, so a repeat costs a frame")
+
+    # AND THE BRAIN'S. Every arm of `confirm` that moves the page asks for one.
+    #
+    # The first version looked for `self.page = Page::Task;` and walked the
+    # text after it up to a `}` at sixteen spaces — so it saw only ONE of the
+    # two directions, and its loop turned zero times the moment anybody
+    # re-indented the function. Zero iterations is a green check.
+    #
+    # Now every assignment is found, in both directions, and the count is
+    # floored: a `confirm` that stopped changing the page at all would be the
+    # same silence.
+    brain = code_of((root / "buffers" / "brain" / "src" / "lib.rs").read_text())
+    confirm = must(body_of(brain, "confirm"), "the brain's `confirm`")
+    moves = [m.start() for m in re.finditer(r"self\.page\s*=\s*Page::", confirm)]
+    floor(len(moves), 2, "arms of `confirm` that move the page")
+    for at in moves:
+        # THE REST OF THE ARM, to its own closing brace — counted, not guessed.
+        depth, after = 0, confirm[at:]
+        end = len(after)
+        for k, ch in enumerate(after):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                if depth == 0:
+                    end = k
+                    break
+                depth -= 1
+        if "Effect::Redraw" not in after[:end]:
+            line = confirm.count("\n", 0, at) + 1
+            gaps.append("an arm of `confirm` (its line " + str(line)
+                        + ") moves the page and asks for no frame")
+
+    if gaps:
+        print("ERROR: a buffer can change what the modeline says without changing the screen.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for g in gaps:
+            print("       " + g, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       The owner pressed RET, watched the title change, and went on", file=sys.stderr)
+        print("       looking at the page underneath until the next keystroke.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: a state change is a screen, and both sides ask for it to be drawn")
+    END
+  '';
+
+  # A BUFFER CAN BE HOVERED, AND BY THE CELL.
+  #
+  # The rule written in this tree was that there is no hover, because
+  # "highlighting the item under the mouse would ask for a frame per pixel of
+  # movement". The owner said an interface without hover is crippled, and the
+  # measurement says the objection was never true: the pointer arrives in
+  # PIXELS and a buffer counts CELLS, so an event crosses only when the cell
+  # changes.
+  #
+  # This is what keeps that economy honest — deliver per cell, and put the
+  # highlight out when the pointer leaves.
+  a-buffer-can-be-hovered = mkCheck "a-buffer-can-be-hovered" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    root = pathlib.Path("${self}")
+    shell = root / "crates" / "ronoctua-shell" / "src"
+    host = code_of((shell / "buffer.rs").read_text())
+    gaps = []
+
+    frame = must(body_of(host, "pointer_frame"), "`pointer_frame`")
+
+    # 1) THE POINTER AT REST IS ANSWERED, and by the CELL.
+    #
+    # The first version asked `body.count("Self::cell_at(") < 2`, which the
+    # wheel and the click satisfy between them: delete the hover's own call and
+    # the count is still two, and the check stays green while the thing it
+    # names is gone. So the question is asked of the ARM that answers motion,
+    # not of the whole handler.
+    #
+    # ANCHORED PAST THE `=>`, because a match PATTERN has braces of its own:
+    # `PointerEventKind::Leave { .. }` is a brace pair, and a scope that
+    # balanced from the first `{` came back with `" .. "` — four characters
+    # that every assertion then failed against for the wrong reason. The floor
+    # underneath is what turns a capture like that into noise instead of an
+    # answer.
+    motion = must(scope(frame, r"PointerEventKind::Enter[^=]*=>"), "the `Enter | Motion` arm")
+    floor(len(motion), 200, "characters of the motion arm")
+    for wanted, why in (
+        # BY THE CALL AND NOT THE RECEIVER: `cell_at` became a method the day
+        # the line had to come from the frame's own arithmetic (a buffer whose
+        # window ends in a footer places that block from the bottom edge), and
+        # a needle spelling out `Self::` reported that the hover had gone away.
+        (".cell_at(", "hover does not go through the same `cell_at` the click does"),
+        ("self.cell_under_pointer", "the host no longer remembers which cell the pointer is on"),
+        ("Input::Hover", "motion no longer reaches the buffer"),
+    ):
+        if wanted not in motion:
+            gaps.append(why)
+    # AND ONLY WHEN THE CELL CHANGED. Without the comparison this is an event
+    # per pointer report, which is the objection the old "there is no hover"
+    # rule made and the only thing that would have made it true.
+    if not re.search(r"if\s+now\s*!=\s*self\.cell_under_pointer", motion):
+        gaps.append("the host delivers a hover without asking whether the CELL changed")
+    # AND THE MARGIN IS NOT CELL ZERO. `cell_at` answers `None` there, and
+    # lighting the first row whenever a hand crossed the border is what sending
+    # zero would do.
+    if "Input::Unhover" not in motion:
+        gaps.append("a pointer on the margin no longer puts the highlight out")
+
+    # 2) LEAVING PUTS IT OUT.
+    leave = must(scope(frame, r"PointerEventKind::Leave[^=]*=>"), "the `Leave` arm")
+    floor(len(leave), 60, "characters of the leave arm")
+    if "Input::Unhover" not in leave:
+        gaps.append("the pointer can leave the window with the highlight still lit")
+
+    # 3) THE WALL CARRIES IT, in the same `position` record the click uses.
+    wit = (root / "crates" / "ronoctua-protocol" / "wit" / "buffer.wit").read_text()
+    said = must(scope(wit, r"variant input"), "`variant input`")
+    for case in ("hover(position)", "unhover"):
+        if case not in said:
+            gaps.append("`variant input` no longer carries `" + case + "`")
+    lower = code_of((root / "crates" / "ronoctua-runtime" / "src" / "lib.rs").read_text())
+    lowering = must(body_of(lower, "val_of_input"), "`val_of_input`")
+    # The strings survive `code_of` as empty pairs, so the arms are found by
+    # the VARIANT they lower, which is code.
+    for arm in ("Input::Hover", "Input::Unhover"):
+        if arm not in lowering:
+            gaps.append("the runtime does not lower `" + arm + "`")
+
+    # 4) AND A BUFFER CAN DRAW IT. `surface.hover` had no role, so a buffer
+    #    could not name the ground every other window in the shell draws.
+    lib = code_of((root / "crates" / "ronoctua-design" / "src" / "lib.rs").read_text())
+    guest = code_of((root / "crates" / "ronoctua-design" / "src" / "guest.rs").read_text())
+    if "Role::Hover" not in lib or "SurfaceHover" not in guest:
+        gaps.append("no role reaches `surface.hover`, so a buffer cannot draw the row under the pointer")
+
+    if gaps:
+        print("ERROR: the pointer cannot be followed, or is followed too dearly.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for g in gaps:
+            print("       " + g, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A frame per pixel is what the old rule feared; a frame per CELL", file=sys.stderr)
+        print("       is what this costs, and it is what every other window already does.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: the pointer crosses by the cell, leaves put it out, and a buffer can draw it")
+    END
+  '';
+
+  # A CONTROL IS GRABBED WHERE IT IS DRAWN, and a scrollbar is the proof.
+  #
+  # THE DEFECT THIS CLOSES, measured on the owner's screen: a bar in the last
+  # column is PAINTED past the last cell — deliberately, so it touches the
+  # border — while the press was resolved into a CELL, which in that strip
+  # names a column the component never drew in. `bar.column == pointer.column`
+  # could not match at any width: column 81 drawn, column 83 reported. Every
+  # drag in every buffer fell through to the row behind the bar, and the owner
+  # reported it as an issue that comes back with every new screen. It comes
+  # back because a control placed by two arithmetics has no place where the two
+  # are obliged to agree.
+  #
+  # So there is ONE: `paint::bar_box` answers where the bar went, `quads_of`
+  # paints the thumb inside that answer, and `bar_grabbed` reads the same
+  # answer to decide a press. This refuses the second arithmetic coming back —
+  # by name, in each of the four places it used to live.
+  a-bar-is-grabbed-where-it-is-drawn =
+    mkCheck "a-bar-is-grabbed-where-it-is-drawn" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
+
+        root = pathlib.Path("${self}")
+        shell = root / "crates" / "ronoctua-shell" / "src"
+        paint = code_of((shell / "paint.rs").read_text())
+        host = code_of((shell / "buffer.rs").read_text())
+        gaps = []
+
+        # 1) ONE PLACEMENT, and this is it.
+        box = must(body_of(paint, "bar_box"), "`paint::bar_box`")
+        floor(len(box), 400, "characters of `bar_box`")
+        for wanted, why in (
+            ("width_px", "`bar_box` no longer knows the surface, so it cannot put a bar against its edge"),
+            ("scroll.track(", "`bar_box` builds a track of its own instead of asking `Scroll`"),
+            ("cut()", "`bar_box` answers for a list that FITS, whose bar is never drawn"),
+        ):
+            if wanted not in box:
+                gaps.append(why)
+
+        # 2) THE PAINTER DRAWS INSIDE THE ANSWER and works nothing out itself.
+        #
+        # ANCHORED PAST THE `=>`, because a match pattern has braces of its own:
+        # a scope balanced from the first `{` comes back with the destructuring.
+        quads = must(body_of(paint, "quads_of"), "`quads_of`")
+        arm = must(scope(quads, r"Command::Bar[^=]*=>"), "the `Command::Bar` arm of `quads_of`")
+        floor(len(arm), 200, "characters of the bar's arm")
+        if "bar_box(" not in arm:
+            gaps.append("the painter no longer asks `bar_box` where the bar goes")
+        for forbidden, why in (
+            ("CONTENT_INSET", "the painter works out the margin again instead of reading the placement"),
+            ("width_px /", "the painter counts the surface's columns again"),
+            (".bar(", "the painter builds the rectangle itself rather than the thumb inside the track"),
+        ):
+            if forbidden in arm:
+                gaps.append(why)
+
+        # 3) AND THE GRAB READS THE SAME ANSWER, in PIXELS.
+        grabbed = must(body_of(paint, "bar_grabbed"), "`paint::bar_grabbed`")
+        for wanted, why in (
+            ("bar_box(", "the grab looks for a bar somewhere other than where it was placed"),
+            (".holds(", "the grab tests something other than the rectangle the bar occupies"),
+        ):
+            if wanted not in grabbed:
+                gaps.append(why)
+
+        # 4) THE HOST COMPARES NO COLUMNS. This is the defect itself, by name.
+        under = must(body_of(host, "bar_under"), "`Host::bar_under`")
+        if "bar_grabbed(" not in under:
+            gaps.append("`bar_under` has an arithmetic of its own again")
+        if re.search(r"column\s*[!=]=|[!=]=\s*column", under):
+            gaps.append(
+                "`bar_under` decides by comparing COLUMNS again — the comparison that "
+                "could never match for a bar in the last column"
+            )
+
+        # 5) AND THE PRESS ASKS WITH A POINT, not with a cell. `shut_at` reads the
+        #    call's own arguments, by its parentheses.
+        frame = must(body_of(host, "pointer_frame"), "`pointer_frame`")
+        call = "self.bar_under("
+        if call not in frame:
+            gaps.append("the press no longer asks whether it landed on a bar")
+        else:
+            args = shut_at(frame, frame.index(call) + len(call))
+            if "e.position" not in args:
+                gaps.append(
+                    "the press asks for a bar with a CELL rather than with a point; "
+                    "the cell in the right margin is not the cell the bar was drawn in"
+                )
+
+        # 6) AND EVERY ANSWER CARRIES THE BAR'S OWN CELL, because what the
+        #    component does with it is route it to one of its lists — and the
+        #    pointer may be past the last column when it does.
+        sent = re.findall(r"Input::Scrolled\s*\{([^}]*)\}", frame)
+        floor(len(sent), 3, "places the host answers a scroll (the press, the motion, the wheel)")
+        for one in sent:
+            # EVERY ONE CARRIES A FIELD OF THE PLACEMENT, never a local the
+            # pointer's cell was bound to. `bar.column`, `said.line` — the dot
+            # is the whole assertion: a bare `column` here is the cell
+            # `cell_at` answered, and in the margin that is not the cell the
+            # control was drawn in.
+            if not re.search(r"column:\s*\w+\.\w+", one) or not re.search(
+                r"line:\s*\w+\.\w+", one
+            ):
+                gaps.append(
+                    "a scroll is answered with the POINTER's cell instead of the control's"
+                )
+
+        # 7) AND THE INVERSE IS THE THUMB'S OWN, asked of the track it was drawn
+        #    in. A second sum here brings the thumb back somewhere other than
+        #    under the finger, and a drag IS the finger.
+        to = must(body_of(host, "row_dragged_to"), "`Host::row_dragged_to`")
+        if "row_at(" not in to:
+            gaps.append("`row_dragged_to` no longer asks the placement where the pointer is")
+        for forbidden, why in (
+            ("track(", "`row_dragged_to` builds a second track"),
+            ("offset_at(", "`row_dragged_to` reaches past the placement to the raw inverse"),
+            ("CONTENT_INSETY", "`row_dragged_to` adds the inset again"),
+        ):
+            if forbidden in to:
+                gaps.append(why)
+
+        if gaps:
+            print("ERROR: a scrollbar is placed by one arithmetic and grabbed by another.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for g in gaps:
+                print("       " + g, file=sys.stderr)
+            print("", file=sys.stderr)
+            print("       One function says where the control went; the door that paints it", file=sys.stderr)
+            print("       and the door that catches it both READ that answer. Written apart,", file=sys.stderr)
+            print("       they drift, and the symptom is a control that does not respond.", file=sys.stderr)
+            raise SystemExit(1)
+        print("OK: one placement, and the paint and the press are two readings of it")
+        END
+      '';
+
+  # EVERY IMPLEMENTATION ANSWERS THE POINTER.
+  #
+  # The owner's words, and he asked for them to be a rule of the project:
+  # *"O SUPORTE AO MOUSE DEVE SER SUPORTADO EM TODAS AS IMPLEMENTAÇÕES; ESSA
+  # DEVE SER UMA REGRA ABSOLUTA DO PROJETO."* What prompted it was the brain's
+  # task page, where the pointer did nothing at all — not select, not change a
+  # value — because `clicked` was guarded by `page == Page::Home`; and the
+  # keyboard buffer, which had no `Input::Click` arm of any kind.
+  #
+  # It is DERIVED and not a census: a buffer that draws a BAND has rows, and
+  # rows are clicked; a buffer that draws a BAR has a window, and a window is
+  # wheeled and dragged. A buffer that draws neither is not a list and owes
+  # nothing — which is why `example`, the template, passes without a line of
+  # its own and stops passing the moment it grows a row.
+  a-buffer-answers-the-pointer = mkCheck "a-buffer-answers-the-pointer" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+    exec(open("${pyPrelude}").read())
+
+    root = pathlib.Path("${self}")
+    gaps = []
+    seen = 0
+    drawing = 0
+    for lib in sorted((root / "buffers").glob("*/src/lib.rs")):
+        who = lib.parent.parent.name
+        # FILE-WIDE: what a buffer draws and what it answers are both spread
+        # across its whole file — the drawing is in `render`'s helpers and the
+        # answers are arms of one `match`. `code_of` because every needle here
+        # is CODE: a variant, a method call.
+        src = code_of(without_tests(lib.read_text()))
+        floor(len(src), 1000, "characters of " + who + "'s lib.rs")
+        seen += 1
+        rows = ".band(" in src or "ground_in(" in src
+        window = ".bar(" in src or "bar_from(" in src
+        if not rows and not window:
+            continue
+        drawing += 1
+        owed = []
+        if rows:
+            # A ROW IS CLICKED, and the pointer resting on it lights it: the
+            # cursor is where the KEYBOARD is and the hover is where a click
+            # would land, and every window in the shell answers them apart.
+            owed += ["Input::Click", "Input::Hover", "Input::Unhover"]
+        if window:
+            # A WINDOW IS WHEELED AND DRAGGED. A bar nobody can turn is the
+            # picture of a control, and a list with neither is a list whose end
+            # the mouse cannot reach at all.
+            owed += ["Input::Wheel", "Input::Scrolled"]
+        for arm in owed:
+            if arm not in src:
+                gaps.append(who + " draws a " + ("row" if arm.endswith(("Click", "Hover", "Unhover")) else "window")
+                            + " and does not answer `" + arm + "`")
+
+    floor(seen, 6, "buffers read")
+    floor(drawing, 4, "buffers that draw a row or a window")
+
+    if gaps:
+        print("ERROR: a screen only the keyboard can reach is half a screen.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for g in gaps:
+            print("       " + g, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       What the keyboard reaches, the pointer reaches: select, open,", file=sys.stderr)
+        print("       change a value, scroll, and DRAG the bar. It is a rule of the", file=sys.stderr)
+        print("       project and not a preference — see AGENTS.md.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: " + str(drawing) + " of " + str(seen) + " buffers draw a row or a window, and every one answers the pointer")
+    END
+  '';
+
+  # A COLUMN IS DRAWN AT THE SIZE IT WAS MEASURED IN.
+  #
+  # A buffer lays out in CELLS and `Scale::Small` advances 0,81 of one, so a
+  # run of eleven clusters budgeted eleven cells draws nine and leaves two of
+  # slack — and whatever the layout puts after it starts where the BUDGET ends,
+  # not where the ink stopped. The slack is proportional to the phrase, so two
+  # columns of different lengths open different gaps.
+  #
+  # The owner read exactly that across the brain's header: *"espaços
+  # desproporcionais entre os atalhos"*, and a separator with more air on one
+  # side than the other. Measured on that screen: `Switch step` was budgeted
+  # 118,6 px and drew 96, which put 3,2 cells before the dot and 1,6 after it.
+  #
+  # `Row::put` is where a run meets a column, so that is where it is refused —
+  # counted on the frame and reported by `Screen::check`, which every buffer's
+  # own tests ask. This refuses the refusal being taken out.
+  a-row-is-never-drawn-small = mkCheck "a-row-is-never-drawn-small" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    root = pathlib.Path("${self}") / "crates" / "ronoctua-design" / "src"
+    table = code_of((root / "table.rs").read_text())
+    screen = code_of((root / "screen.rs").read_text())
+    gaps = []
+
+    # 1) THE COLUMN ASKS. `Row::put` is the one place a run is given a column's
+    #    first cell and its budget, which is what makes this the one place the
+    #    question can be asked at all.
+    put = must(scope(table, r"impl<'a, P: Palette> Row<'a, P>"), "`impl Row`")
+    body = must(body_of(put, "put"), "`Row::put`")
+    floor(len(body), 100, "characters of `Row::put`")
+    if "measured(" not in body:
+        gaps.append("`Row::put` no longer asks whether the run draws at the grid's size")
+
+    # 2) AND THE FRAME ANSWERS. The count and the refusal both live on the
+    #    screen, so a buffer's own tests see it without a second assertion.
+    measured = must(body_of(screen, "measured"), "`Screen::measured`")
+    if "Scale::Small" not in measured:
+        gaps.append("`Screen::measured` no longer names the size that does not advance a cell")
+    if "mismeasured" not in measured:
+        gaps.append("`Screen::measured` counts nothing, so the frame cannot report it")
+    check = must(body_of(screen, "check"), "`Screen::check`")
+    if "mismeasured" not in check:
+        gaps.append("`Screen::check` passes a frame with a mis-measured column")
+
+    # 3) AND NO BUFFER PUTS ONE IN A COLUMN. The refusal clamps rather than
+    #    turning the ink away — the place was right and only the size was
+    #    wrong — so this is what keeps the clamp from becoming the habit.
+    for lib in sorted((pathlib.Path("${self}") / "buffers").glob("*/src/lib.rs")):
+        src = code_of(without_tests(lib.read_text()))
+        floor(len(src), 1000, "characters of " + lib.parent.parent.name + "'s lib.rs")
+        for hit in re.finditer(r"\.put\(", src):
+            args = shut_at(src, hit.end())
+            # A COLUMN'S `put` IS THE ONE THAT NAMES A COLUMN: `Row::put` takes
+            # the field's id first and `Screen::put` takes a line. `code_of`
+            # empties a literal to a bare pair of quotes, which is exactly what
+            # tells the two apart — and it has to be told, because a run placed
+            # by hand with its own `at` pushes nothing and may be small.
+            if not args.lstrip().startswith('""'):
+                continue
+            if ".small()" in args:
+                gaps.append(lib.parent.parent.name + " puts a small run in a column")
+
+    if gaps:
+        print("ERROR: a column is budgeted in cells and drawn in something else.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for g in gaps:
+            print("       " + g, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       What follows a run starts where its BUDGET ends, not where its ink", file=sys.stderr)
+        print("       did — so the gap grows with the phrase, and two columns of", file=sys.stderr)
+        print("       different lengths open different gaps.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: a run in a column draws at the size the column measured")
+    END
+  '';
+
+  # THE HOST DRAWS NOTHING IT CANNOT SHOW, AND THE LAST GROUND REACHES THE EDGE.
+  #
+  # Two defects with one shape. A command past the bottom of the window was
+  # measured, shaped, submitted and thrown away by the rasteriser, with nothing
+  # in any log — the only fault in this tree with no symptom at all. And a
+  # ground of exactly one line height on the last row stopped short of the
+  # surface by the sub-line residue, which the owner photographed as a strip of
+  # the page between the footer and the border.
+  #
+  # The second rule is not new: `Scroll::track` writes it out for the thumb and
+  # `Section::bar_box` applies it. Scrollbars had it and grounds never did.
+  the-host-shows-what-it-draws = mkCheck "the-host-shows-what-it-draws" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    root = pathlib.Path("${self}")
+    paint = code_of((root / "crates" / "ronoctua-shell" / "src" / "paint.rs").read_text())
+    gaps = []
+
+    # 1) IT REFUSES WHAT IT CANNOT SHOW, AND SAYS SO.
+    #
+    # Asked of `spans_of` and not of the file. The first version searched all
+    # of `paint.rs` while every message it printed named `spans_of` — and one
+    # of its three anchors, `reach_of`, is in fact inside `fn inside`. Green
+    # for the right reason that day and by luck the next.
+    spans = must(body_of(paint, "spans_of"), "`spans_of`")
+    if "nothing_is_drawn_below" not in spans:
+        gaps.append("`spans_of` no longer asks whether anything fell off the bottom")
+    if not re.search(r"\.filter\(\|\w+\| inside\(", spans):
+        gaps.append("`spans_of` lays out runs it cannot show")
+    # AND THE EXTENT, never the first row: a paragraph of six beginning on the
+    # last row is five rows of ink nobody sees.
+    inside = must(body_of(paint, "inside"), "`inside`")
+    if "reach_of" not in inside:
+        gaps.append("the host measures a command by its first row again")
+
+    # 2) THE LAST GROUND TAKES THE RESIDUE, and a band is as wide as it asked.
+    #
+    # Narrowed to `quads_of` first. `Command::Selection` occurs six times in
+    # this file — one of them in `spans_from`, which answers `Vec::new()` —
+    # and a bare `find` landed there, so the window began in the wrong
+    # function and found what it wanted in the arm NEXT DOOR. Sabotaging the
+    # real arm changed nothing.
+    quads = must(body_of(paint, "quads_of"), "`quads_of`")
+    arm = must(scope(quads, r"Command::Selection \{[^=]*=>"), "the `Selection` arm of `quads_of`")
+    floor(len(arm), 200, "characters of the `Selection` arm")
+    if "rows.bottom(" not in arm:
+        gaps.append("a ground is a fixed line height again, so the last one stops short of the edge")
+    # AND THE RESIDUE RULE IS WHERE IT IS WRITTEN. It used to be four lines
+    # inside this arm and is now `Rows::bottom`, because the ink, the rules and
+    # the bars ask the same question — see `paint::Rows`.
+    bottom = must(body_of(paint, "bottom"), "`Rows::bottom`")
+    if "self.height" not in bottom:
+        gaps.append("`Rows::bottom` no longer knows the surface, so no ground can reach its edge")
+    if "band_px(" not in arm:
+        gaps.append("a band takes the whole row again, whatever width it was given")
+    # AND THE SAME FOR THE RULE, which shares the arithmetic.
+    rule = must(scope(quads, r"Command::Rule \{[^=]*=>"), "the `Rule` arm of `quads_of`")
+    if "band_px(" not in rule:
+        gaps.append("a rule runs edge to edge again, whatever width it was given")
+    # AND THE TWO SHAPES ARE STILL TWO. A band asked for nothing bleeds past
+    # the margin; one asked for a width sits inside the content rail.
+    where = must(body_of(paint, "band_px"), "`band_px`")
+    if "column == 0 && columns == 0" not in where:
+        gaps.append("`band_px` no longer distinguishes a full bleed from a bounded band")
+
+    # 3) AND THE PROTOCOL COUNTS THE SAME WAY.
+    proto = code_of((root / "crates" / "ronoctua-protocol" / "src" / "lib.rs").read_text())
+    tall = must(body_of(proto, "height"), "`DisplayList::height`")
+    if "reach_of" not in tall:
+        gaps.append("`DisplayList::height` reports the first row of the lowest command again")
+
+    if gaps:
+        print("ERROR: the host can draw what it cannot show, or stop short of the edge.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for g in gaps:
+            print("       " + g, file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: nothing is laid out below the window, and a band is as wide as it asked to be")
+    END
+  '';
+
+  # THE SHORTCUT LINE OF A BUFFER IS THE SYSTEM'S SHORTCUT LINE.
+  #
+  # The owner read the brain's header beside the file manager's minibuffer and
+  # said what it is: the same control, not looking like the same control. Two
+  # causes, and both are structural.
+  #
+  # The COLOUR: the minibuffer draws its hints in `text.subtle.*`, a hue family
+  # deliberately off the warm content ramp, and `Palette::color` was a closed
+  # table of ten tokens with none of that family in it — so a buffer teaching
+  # its keys had no choice but the content ramp.
+  #
+  # The SPACING: a phrase is a KEY, and a buffer cannot measure a sentence it
+  # does not hold, so every phrase was given a fixed thirteen-cell column. The
+  # host hands the words over (`Input::Phrases`); the header measures them.
+  the-shortcut-line-is-the-systems = mkCheck "the-shortcut-line-is-the-systems" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    root = pathlib.Path("${self}")
+    gaps = []
+
+    # 1) THE THREE TONES EXIST AND ARE THE HINT LINE'S OWN.
+    lib = code_of((root / "crates" / "ronoctua-design" / "src" / "lib.rs").read_text())
+    table = must(body_of(lib, "color"), "`Tokens::color`")
+    pairs = (("Key", "text-subtle-strong"), ("Prose", "text-subtle-default"), ("Faint", "text-subtle-faint"))
+    floor(len(pairs), 3, "tones the hint line is made of")
+    for role, token in pairs:
+        # The token survives `code_of` as an empty string, so the ARM is found
+        # by its role and the token is looked for in the un-stripped table.
+        if not re.search(r"Role::" + role + r"\b", table):
+            gaps.append("`Role::" + role + "` went away")
+    raw = (root / "crates" / "ronoctua-design" / "src" / "lib.rs").read_text()
+    for role, token in pairs:
+        if not re.search(r"Role::" + role + r"\s*=>\s*\"" + token + r"\"", raw):
+            gaps.append("`Role::" + role + "` no longer resolves to `" + token + "`")
+    # And the host's own hint line still draws them, which is what makes them
+    # the SAME colour rather than a second family that resembles it.
+    chrome = code_of((root / "crates" / "ronoctua-shell" / "src" / "chrome.rs").read_text())
+    for token in ("TEXT_SUBTLE_STRONG", "TEXT_SUBTLE_DEFAULT", "TEXT_SUBTLE_FAINT"):
+        if token not in chrome:
+            gaps.append("the minibuffer's hint line no longer draws `" + token + "`")
+
+    # 2) THE BRAIN WEARS THEM, and no longer reaches for the content ramp.
+    brain = code_of((root / "buffers" / "brain" / "src" / "lib.rs").read_text())
+    builder = must(body_of(brain, "header"), "the brain's `header`")
+    # NARROWED TO THE RUNGS, because the question is about them: the page's own
+    # glyph beside the title is `accent` and always was, and a check that read
+    # the whole builder would call that "back on the content ramp".
+    head = must(scope(builder, r"for rung in"), "the loop that paints the ladder")
+    floor(len(head), 400, "characters of the ladder's drawing")
+    for wanted, why in (
+        ("Role::Key", "the notation is not in the hint line's own tone"),
+        ("Role::Prose", "the phrase is not in the hint line's own tone"),
+        ("Icon::Separator", "there is no dot between one pair and the next"),
+    ):
+        if wanted not in head:
+            gaps.append(why)
+    if ".accent()" in head or ".dim()" in head:
+        gaps.append("the header is back on the content ramp")
+    # AND IT IS DRAWN AT THE SYSTEM'S SIZE. A buffer lays out in CELLS and
+    # `Scale::Small` advances 0,81 of one, so a ladder drawn small opens a gap
+    # that grows with each phrase — which is what the owner read as
+    # *"espaços desproporcionais entre os atalhos"*, with a separator carrying
+    # twice as much air on one side as the other.
+    if ".small()" in head:
+        gaps.append("the ladder is drawn smaller than the cells it is laid out in")
+
+    # 3) AND THE PHRASES ARE MEASURED. The fixed column is the fallback for a
+    #    host that said nothing, never the layout.
+    #
+    # Found by NAME and not by signature: the first version spelled every
+    # parameter out, so adding one reported "a pair's width no longer comes
+    # from the words the host sent" — a wrong diagnosis, which is the failure
+    # mode this family has already produced once.
+    if "every_taught_phrase()" not in brain:
+        gaps.append("the buffer no longer asks the host for the words it teaches")
+    fit = must(body_of(brain, "ladder"), "the brain's `ladder`")
+    if "pair_cells" not in fit:
+        gaps.append("the header measures its pairs by a fixed column again")
+    pair = must(body_of(brain, "pair_cells"), "the brain's `pair_cells`")
+    if "self.phrases.or(" not in pair:
+        gaps.append("a pair's width no longer comes from the words the host sent")
+
+    # 4) THE DOT IS A TOKEN, never a codepoint: a component may not name one.
+    icons = (root / "assets" / "tokens" / "icons.nix").read_text()
+    if not re.search(r"^\s*separator = ", icons, re.M):
+        gaps.append("`icon.separator` went away, so the dot has no token to come from")
+
+    if gaps:
+        print("ERROR: a buffer's shortcut line is not the system's.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for g in gaps:
+            print("       " + g, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       The owner read the two lines side by side. They have to be the", file=sys.stderr)
+        print("       same colours, the same spacing and the same separator.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: a buffer teaches its keys in the minibuffer's colours, measured and spaced like it")
+    END
   '';
 
   # ONE SCROLLBAR, and one arithmetic behind it.
@@ -3183,9 +4813,17 @@ let
     python3 - <<'PY'
     import pathlib, re, sys
 
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a second arithmetic for the thumb, written anywhere in any
+    # door, is the offence — there is no function to narrow to, because the
+    # point is that it may appear in one that does not exist yet. `has_bar` is
+    # narrowed by name at the end.
     home = pathlib.Path("${self}/crates/ronoctua-shell/src")
-    files = (home / "files.rs").read_text()
+    files = code_of((home / "files.rs").read_text())
+    floor(len(files), 10000, "characters of files.rs")
     wrong = []
+    swept = 0
 
     # THE RECTANGLE HAS ONE DEFINITION.
     if len(re.findall(r"\bfn\s+bar_box\b", files)) != 1:
@@ -3195,7 +4833,7 @@ let
     # a `u16`. The rectangle test below is what catches a real second one.
     for gone in ("facts_bar", "panel_bar"):
         for f in sorted(home.glob("*.rs")):
-            if re.search(r"\bfn\s+" + gone + r"\b", f.read_text()):
+            if re.search(r"\bfn\s+" + gone + r"\b", code_of(f.read_text())):
                 wrong.append(f"{f.name} grew a second bar, `{gone}`")
 
     # AND NOBODY ELSE BUILDS ONE. A thumb is a rectangle whose height is a
@@ -3204,7 +4842,8 @@ let
     for f in sorted(home.glob("*.rs")):
         if f.name == "files.rs":
             continue
-        text = f.read_text()
+        text = code_of(f.read_text())
+        swept += 1
         for m in thumb.finditer(text):
             line = text.count("\n", 0, m.start()) + 1
             wrong.append(f"{f.name}:{line} computes a thumb of its own")
@@ -3217,8 +4856,9 @@ let
     # `files_window.rs` does not have it: it asks `Geometry::bars`, which asks
     # `bar_box`, which asks `Scroll`. Demanding the name there would have
     # forced a second call whose only purpose was to satisfy this check.
+    floor(swept, 20, "doors swept for a thumb of their own")
     for f in sorted(home.glob("*.rs")):
-        text = f.read_text()
+        text = code_of(f.read_text())
         if "RULE_STRONG" not in text:
             continue
         if not re.search(r"ronoctua_design::Scroll|\bbar_box\b|\bbars\(|\bregion_bar\b", text):
@@ -3234,7 +4874,7 @@ let
     # The first draft looked for `right - cell` instead, and a plant that
     # assembled the rectangle out of `thumb` by hand walked straight past it.
     for f in sorted(home.glob("*.rs")):
-        text = f.read_text()
+        text = code_of(f.read_text())
         for m in re.finditer(r"\.thumb\(", text):
             line = text.count("\n", 0, m.start()) + 1
             wrong.append(f"{f.name}:{line} builds a bar out of `thumb` instead of asking `bar`")
@@ -3244,8 +4884,9 @@ let
     # COMMENTS STRIPPED FIRST. `has_bar`'s own comment names the call it
     # makes, so a plant that replaced the CODE with `false` and left the call
     # quoted beside it left this check green.
-    surface = re.sub(r"//[^\n]*", "", (home / "surface.rs").read_text())
-    if not re.search(r"fn has_bar\b[^}]*files\.is_some\(\)", surface, re.S):
+    surface = code_of((home / "surface.rs").read_text())
+    floor(len(surface), 100000, "characters of surface.rs")
+    if "files.is_some()" not in must(body_of(surface, "has_bar"), "`has_bar`"):
         wrong.append("surface.rs: `has_bar` no longer stands down for the manager")
 
     if wrong:
@@ -3274,17 +4915,26 @@ let
     python3 - <<'END'
     import pathlib, re, sys
 
-    made = pathlib.Path("${syntaxTable.table}/syntax.rs").read_text()
-    gen = pathlib.Path("${self}/nix/scripts/gen-syntax.py").read_text()
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a generated table and its generator, both read at module
+    # level. `scope` narrows to each enum by its braces.
+    #
+    # `uncommented` for the Rust and `hashless` for the Python: the keys and
+    # the vocabularies compared here are string literals on both sides.
+    made = uncommented(pathlib.Path("${syntaxTable.table}/syntax.rs").read_text())
+    gen = hashless(pathlib.Path("${self}/nix/scripts/gen-syntax.py").read_text())
+    floor(len(made), 2000, "characters of the generated syntax table")
+    floor(len(gen), 2000, "characters of gen-syntax.py")
 
     failed = 0
 
     def enum_of(name):
-        block = re.search(r"pub enum " + name + r" \{(.*?)\n\}", made, re.S)
+        block = scope(made, r"pub enum " + name + r"\b")
         if not block:
             print(f"ERROR: the generated table has no `{name}` enum", file=sys.stderr)
             raise SystemExit(1)
-        return {v for v in re.findall(r"^    ([A-Z][A-Za-z0-9]*),$", block.group(1), re.M)}
+        return {v for v in re.findall(r"^    ([A-Z][A-Za-z0-9]*),$", block, re.M)}
 
     def tuple_of(name):
         m = re.search(name + r" = \(([^)]*)\)", gen)
@@ -3378,10 +5028,19 @@ let
     python3 - <<'END'
     import pathlib, re, sys
 
-    src = pathlib.Path("${self}/assets/syntax.nix").read_text()
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: the declaration is one attribute set, and a claim anywhere in
+    # it is the offence.
+    #
     # The comments explain the rule and name the types; the DECLARATIONS are
-    # what may not carry them.
-    live = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+    # what may not carry them. `hashless` is the prelude's `#` stripper, and it
+    # takes a comment off the END of a line too — which the `startswith` test
+    # let stand, so a claim and a sentence about a claim on one line were both
+    # read as claims.
+    src = pathlib.Path("${self}/assets/syntax.nix").read_text()
+    live = hashless(src)
+    floor(len(live), 1000, "characters of assets/syntax.nix")
 
     failed = 0
     for forbidden in ("text/plain", "application/octet-stream", "inode/"):
@@ -3396,14 +5055,11 @@ let
 
     # AND IT STILL CLAIMS SOMETHING. Without this the check passes on a file
     # that was emptied, which is the shape `gen-mimedb.py`'s floors refuse.
-    claims = len(re.findall(r"^\s*mime = \[", live, re.M))
-    if claims < 30:
-        print(
-            f"ERROR: only {claims} language(s) declare a `mime` list, below the floor of 30.\n"
-            "       A check that forbids and never confirms passes on an empty file.",
-            file=sys.stderr,
-        )
-        failed = 1
+    claims = floor(
+        len(re.findall(r"^\s*mime = \[", live, re.M)),
+        30,
+        "languages declaring a `mime` list",
+    )
 
     if failed:
         raise SystemExit(1)
@@ -3422,12 +5078,17 @@ let
     python3 - <<'END'
     import pathlib, re, sys
 
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a second map anywhere in a door is the offence, and the `Role`
+    # enum is module-level in the crate. `syntax_color` is narrowed by name.
     home = pathlib.Path("${self}/crates/ronoctua-shell/src")
     mine = "chrome.rs"
     failed = 0
 
-    src = (home / mine).read_text()
-    block = re.search(r"pub\(crate\) const fn syntax_color\(.*?\n\}", src, re.S)
+    src = code_of((home / mine).read_text())
+    floor(len(src), 20000, "characters of chrome.rs")
+    block = body_of(src, "syntax_color")
     if not block:
         print(
             "ERROR: `chrome::syntax_color` is gone. A check that only forbids passes\n"
@@ -3435,7 +5096,8 @@ let
             file=sys.stderr,
         )
         raise SystemExit(1)
-    body = block.group(0)
+    body = block
+    floor(len(body), 100, "characters of `syntax_color`")
 
     # EVERY ARM NAMES A TOKEN, and none of them a value.
     arms = re.findall(r"Role::(\w+)", body)
@@ -3454,8 +5116,7 @@ let
     for f in sorted(home.glob("*.rs")):
         if f.name == mine:
             continue
-        text = f.read_text()
-        text = re.sub(r"//[^\n]*", "", text)
+        text = code_of(f.read_text())
         if re.search(r"Role::\w+\s*=>", text):
             print(
                 f"ERROR: {f.name} turns a syntax role into something itself.\n"
@@ -3466,12 +5127,14 @@ let
             failed = 1
 
     # AND EVERY ROLE THE CRATE DECLARES HAS AN ARM.
-    crate = pathlib.Path("${self}/crates/ronoctua-syntax/src/lib.rs").read_text()
-    declared = re.search(r"pub enum Role \{(.*?)\n\}", crate, re.S)
+    crate = code_of(pathlib.Path("${self}/crates/ronoctua-syntax/src/lib.rs").read_text())
+    floor(len(crate), 2000, "characters of ronoctua-syntax's lib.rs")
+    declared = scope(crate, r"pub enum Role\b")
     if not declared:
         print("ERROR: `ronoctua-syntax` has no `Role` enum", file=sys.stderr)
         raise SystemExit(1)
-    owed = set(re.findall(r"^    ([A-Z]\w*),$", declared.group(1), re.M))
+    owed = set(re.findall(r"^    ([A-Z]\w*),$", declared, re.M))
+    floor(len(owed), 5, "roles the highlighter answers with")
     missing = owed - set(arms)
     if missing:
         print(f"ERROR: no colour for {sorted(missing)}", file=sys.stderr)
@@ -3497,14 +5160,20 @@ let
     python3 - <<'END'
     import pathlib, re, sys
 
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a second `Role` enum anywhere in the workspace is the
+    # offence, and the four names the crate owes are module-level.
     root = pathlib.Path("${self}")
     mine = root / "crates/ronoctua-syntax/src"
     failed = 0
+    swept = 0
 
     if not (mine / "lib.rs").exists():
         print("ERROR: `crates/ronoctua-syntax` is gone", file=sys.stderr)
         raise SystemExit(1)
-    owner = (mine / "lib.rs").read_text()
+    owner = code_of((mine / "lib.rs").read_text())
+    floor(len(owner), 2000, "characters of ronoctua-syntax's lib.rs")
     for owed in ("pub enum Role", "pub fn line_into(", "pub fn states(", "pub fn of_mime("):
         if owed not in owner:
             print(f"ERROR: the crate no longer offers `{owed}`", file=sys.stderr)
@@ -3523,9 +5192,10 @@ let
     for f in sorted(root.glob("crates/*/src/**/*.rs")):
         if mine in f.parents or f.parent == mine:
             continue
-        text = f.read_text()
-        m = re.search(r"pub enum Role \{(.*?)\n\}", text, re.S)
-        if m and "Comment" in m.group(1) and "String" in m.group(1):
+        text = code_of(f.read_text())
+        swept += 1
+        m = scope(text, r"pub enum Role\b")
+        if m and "Comment" in m and "String" in m:
             print(
                 f"ERROR: {f.relative_to(root)} declares a second syntax `Role`.\n"
                 "       There is one highlighter, and it is `ronoctua-syntax`.",
@@ -3533,6 +5203,7 @@ let
             )
             failed = 1
 
+    floor(swept, 100, "sources of the workspace swept for a second `Role`")
     if failed:
         raise SystemExit(1)
     print("OK: one highlighter, and it is still a crate of its own")
@@ -3542,15 +5213,20 @@ let
   separators-come-from-chrome = mkCheck "separators-come-from-chrome" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a rectangle assembled by hand anywhere in a door is the
+    # offence, and the nine lines after each `Quad {` are the narrowing.
     home = pathlib.Path("${self}/crates/ronoctua-shell/src")
     # The one file allowed to build one: it is the definition.
     mine = "chrome.rs"
     bad = []
+    swept = 0
     for f in sorted(home.glob("*.rs")):
         if f.name == mine:
             continue
-        lines = f.read_text().split("\n")
+        lines = code_of(f.read_text()).split("\n")
+        swept += 1
         for i, l in enumerate(lines):
             if "Quad {" not in l:
                 continue
@@ -3567,7 +5243,9 @@ let
 
     # AND THE DEFINITION STILL DEFINES. A check that only forbids would pass
     # on the day somebody deleted the two functions and went back to hand.
-    src = (home / mine).read_text()
+    floor(swept, 20, "doors swept for a hand-made rule")
+    src = code_of((home / mine).read_text())
+    floor(len(src), 20000, "characters of chrome.rs")
     for fn in ("pub fn rule(", "pub fn divider("):
         if fn not in src:
             print(f"ERROR: chrome.rs lost `{fn}` — there is no longer one place.", file=sys.stderr)
@@ -3598,9 +5276,14 @@ let
   sections-do-not-share-a-line = mkCheck "sections-do-not-share-a-line" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: `struct Section` and the three functions are module-level, and
+    # the offence — a flattening function coming back — is one appearing
+    # anywhere in the file.
     home = pathlib.Path("${self}/crates/ronoctua-shell/src")
-    files = (home / "files.rs").read_text()
+    files = code_of((home / "files.rs").read_text())
+    floor(len(files), 10000, "characters of files.rs")
 
     # THE BUILDER IS THE ONLY ONE. `Section` has to exist and carry its own
     # content, or this check is guarding nothing.
@@ -3636,7 +5319,8 @@ let
 
     # AND THE DOORS DRAW SECTIONS.
     for door in ("surface.rs", "files_window.rs"):
-        src = (home / door).read_text()
+        src = code_of((home / door).read_text())
+        floor(len(src), 10000, "characters of " + door)
         if ".sections(" not in src:
             print(f"ERROR: {door} does not draw by section.", file=sys.stderr)
             sys.exit(1)
@@ -3656,10 +5340,17 @@ let
   buffer-states-have-text = mkCheck "buffer-states-have-text" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     root_dir = pathlib.Path("${self}")
     ID = re.compile(r'^\s+id: "([a-z][a-z0-9-]*)"\.into\(\),')
     LETTER = re.compile(r"^\s+letter: '(.)',")
+    seen_files = 0
+
+    # FILE-WIDE: a descriptor is module-level, and the `states: vec![` block is
+    # the narrowing. `uncommented` and never `code_of` here — BOTH needles are
+    # literals, and `code_of` would turn every `letter: 'n'` into `letter: _`,
+    # which is the whole of the second half of this check.
 
     # Read the `states:` block of each descriptor. The same shape
     # `english-names` and `buffer-modes-have-text` read, and for the same
@@ -3671,7 +5362,8 @@ let
         inside = False
         found = []
         pending = None
-        for line in rs.read_text().splitlines():
+        seen_files += 1
+        for line in uncommented(rs.read_text()).splitlines():
             if "states: vec![" in line:
                 inside = True
                 continue
@@ -3691,8 +5383,8 @@ let
         if found:
             per_buffer[rs.parts[-3]] = found
 
-    if not per_buffer:
-        sys.exit("ERROR: no state found — did the block's shape change?")
+    floor(seen_files, 8, "buffer sources swept for a `states:` block")
+    floor(len(per_buffer), 5, "buffers declaring a state")
 
     gaps = []
     for buffer, states in sorted(per_buffer.items()):
@@ -3760,7 +5452,11 @@ let
   torrent-layout-matches-cxx = mkCheck "torrent-layout-matches-cxx" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import re, sys, pathlib
+    exec(open("${pyPrelude}").read())
 
+    # PARSED: the C++ side is a table the compiler WROTE — one name and one
+    # number per line — and it is split on whitespace, not searched. There is
+    # no comment in it for anything to hide in.
     measured = {}
     for row in pathlib.Path("${torrentShim}/share/ronoctua/layout.txt").read_text().split("\n"):
         if not row.strip():
@@ -3768,7 +5464,14 @@ let
         name, value = row.split()
         measured[name] = int(value)
 
-    rust = pathlib.Path("${../crates/ronoctua-torrent/src/ffi.rs}").read_text()
+    # FILE-WIDE: the numbers are in `assert_eq!`s of a test module, which is
+    # where a layout is pinned; there is no one function to narrow to.
+    #
+    # `code_of`: a number written in a comment beside the assertion is prose
+    # about the layout, and the only thing that may answer here is the
+    # assertion the compiler checks.
+    rust = code_of(pathlib.Path("${../crates/ronoctua-torrent/src/ffi.rs}").read_text())
+    floor(len(rust), 1000, "characters of ffi.rs")
     declared = {}
     m = re.search(r"assert_eq!\(size_of::<Status>\(\), (\d+)", rust)
     if m:
@@ -3779,8 +5482,7 @@ let
     for field, value in re.findall(r"offset_of!\(Status, (\w+)\), (\d+)", rust):
         declared[field] = int(value)
 
-    if not declared:
-        sys.exit("ERROR: could not find a single number in ffi.rs — the layout test went away")
+    floor(len(declared), 3, "numbers the Rust declares about the layout")
 
     failed = 0
     for name, value in sorted(measured.items()):
@@ -3829,8 +5531,14 @@ let
   extension-has-no-fingerprint = mkCheck "extension-has-no-fingerprint" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import json, pathlib, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a manifest is one object with no functions in it.
+    # PARSED: this manifest is not searched, it is `json.loads`-ed, and JSON has
+    # no comment for a false positive to hide in — the five keys below are
+    # looked up in a dictionary. A stripper here would be a gesture.
     m = json.loads(pathlib.Path("${extension}/share/ronoctua-extension/manifest.json").read_text())
+    floor(len(m), 4, "top-level keys of the manifest")
     forbidden = [
         ("web_accessible_resources", "any page can `fetch` from chrome-extension://"),
         ("content_scripts", "what it leaves in the DOM is a marker"),
@@ -3953,22 +5661,32 @@ let
       ''
         python3 - <<'PY'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
+        # FILE-WIDE: what the extension OFFERS is a set of literals scattered
+        # through two scripts, and what the keyboard binds is a module-level
+        # table. Neither is a question about one function.
+        #
+        # `uncommented` and never `code_of`: every needle here is a string —
+        # `want: 'audio'` in the JavaScript, `"transfers-add"` in the Rust — and
+        # emptying the literals would leave both sets empty and the check mute.
         source = pathlib.Path("${../extension}")
         wanted = set()
         kinds = set()
         for name in ("popup.js", "worker.js"):
-            text = (source / name).read_text()
+            text = uncommented((source / name).read_text())
+            floor(len(text), 500, "characters of " + name)
             wanted |= set(re.findall(r"want:\s*'([a-z]+)'", text))
             kinds |= set(re.findall(r"kind:\s*'([a-z-]+)'", text))
 
-        leader = pathlib.Path("${../crates/ronoctua-shell/src/leader.rs}").read_text()
+        leader = uncommented(pathlib.Path("${../crates/ronoctua-shell/src/leader.rs}").read_text())
+        floor(len(leader), 10000, "characters of leader.rs")
         bound = set(re.findall(r'\(\s*"[a-z ]+"\s*,\s*"(transfers-[a-z-]+)"', leader))
+        floor(len(bound), 4, "transfer commands the keyboard binds")
 
         failed = 0
         # ---- WHAT THE MENU TAKES OFF A PAGE ----
-        if not wanted:
-            sys.exit("ERROR: could not find a single `want:` in the extension — the check stopped looking")
+        floor(len(wanted), 2, "media kinds the extension offers")
         for want in sorted(wanted):
             for command in (f"transfers-{want}", f"transfers-{want}-as-me"):
                 if command not in bound:
@@ -4038,13 +5756,24 @@ let
   extension-has-no-literal = mkCheck "extension-has-no-literal" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a colour or a word written by hand ANYWHERE in a file is the
+    # offence, and these are scripts with no functions worth narrowing to.
+    #
+    # `uncommented` and never `code_of`: what is being hunted IS a literal — a
+    # hex colour, a sentence assigned to `textContent` — so emptying the
+    # strings would leave a check that can never find one. What the strip is
+    # for here is the other half: a hex written in a `//` comment as an
+    # example is prose, and used to fail the build.
     source = pathlib.Path("${../extension}")
     failed = 0
+    swept = 0
     for entry in sorted(source.iterdir()):
         if entry.name == "generated.js":
             continue
-        text = entry.read_text()
+        text = uncommented(entry.read_text())
+        swept += 1
         # A colour by hand, in any notation a browser would accept.
         for m in re.finditer(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(\s*\d+", text):
             row = text[: m.start()].count("\n") + 1
@@ -4065,6 +5794,7 @@ let
                     file=sys.stderr,
                 )
                 failed = 1
+    floor(swept, 4, "files of the extension swept for a literal")
     if failed:
         sys.exit(1)
     print("OK: the extension carries neither a word nor a colour of its own")
@@ -4283,6 +6013,13 @@ let
     python3 - <<'END'
     import pathlib, re, struct, sys, zlib
 
+    # FILE-WIDE: what is read here is a picture and the tool's own printed
+    # line, neither of which has a function in it.
+    # PARSED: the PNG is DECODED — chunk by chunk, CRC by CRC, then inflated —
+    # and the tool's line is matched for the size it printed. Nothing is
+    # searched for a name, so there is no prose for a comment to hide in.
+    exec(open("${pyPrelude}").read())
+
     def read(language):
         raw = pathlib.Path(f"{language}.png").read_bytes()
         assert raw[:8] == b"\x89PNG\r\n\x1a\n", f"{language}: wrong PNG signature"
@@ -4348,6 +6085,8 @@ let
             "screen, not a drawn buffer"
         )
         seen[language] = pixels
+
+    floor(len(seen), 2, "languages photographed")
 
     # AND THE TRANSLATIONS DIFFER IN THE PIXEL — every pair of them.
     #
@@ -4727,10 +6466,21 @@ let
   document-formats-are-total = mkCheck "document-formats-are-total" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: the table of types and the `enum Kind` are module-level, and
+    # the variables a unit sets are lines of a Nix module. The three functions
+    # this check is really about — `kind_of`, `read_it`, `Tool::variable` — are
+    # narrowed by name below.
+    #
+    # `uncommented` for the Rust: every media type here is a STRING literal,
+    # and `code_of` would empty the table, the arms and the answers all at
+    # once, leaving three empty sets that agree with each other.
     src = pathlib.Path("${../crates/ronoctua-inspect/src}")
-    module = (src / "document.rs").read_text()
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
+    module = uncommented((src / "document.rs").read_text())
+    shell = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text())
+    floor(len(module), 2000, "characters of document.rs")
+    floor(len(shell), 10000, "characters of files.rs")
     bad = []
 
     # --- ONE. The list and the function claim the same set -----------------
@@ -4742,12 +6492,13 @@ let
         # A TYPE AND NOT A WORD: the list carries comments, and a quoted
         # phrase in one of them is not a claim. Every MIME type has a slash.
         claimed = [t for t in re.findall(r'"([^"]+)"', declared.group(1)) if "/" in t]
-    arm = re.search(r"pub fn kind_of\(mime: &str\) -> Option<Kind> \{(.*?)\n\}", module, re.S)
+    arm = body_of(module, "kind_of")
     if arm is None:
         bad.append("document.rs no longer dispatches on the type")
         matched = []
     else:
-        matched = re.findall(r'is\("([^"]+)"\)', arm.group(1))
+        floor(len(arm), 200, "characters of `kind_of`")
+        matched = re.findall(r'is\("([^"]+)"\)', arm)
     if set(matched) - set(claimed):
         bad.append("matched on but not declared: " + ", ".join(sorted(set(matched) - set(claimed))))
     if set(claimed) - set(matched):
@@ -4778,28 +6529,28 @@ let
     # OUT OF THE ENUM'S OWN BLOCK, and not off the whole file: a sweep of the
     # module's indented identifiers finds `Ok(`, `Err(` and `Some(` and reports
     # three variants that do not exist.
-    block = re.search(r"pub enum Kind \{(.*?)\n\}", module, re.S)
+    block = scope(module, r"pub enum Kind\b")
     if block is None:
         bad.append("document.rs no longer declares `enum Kind`")
         kinds = set()
     else:
         kinds = {
             m.group(1)
-            for m in re.finditer(r"^    ([A-Z]\w*)(?:\(|,)", block.group(1), re.M)
+            for m in re.finditer(r"^    ([A-Z]\w*)(?:\(|,)", block, re.M)
         }
-    if len(kinds) < 5:
-        bad.append(f"only {len(kinds)} kinds found; the sweep is not reading the enum")
+    floor(len(kinds), 5, "kinds of document")
     for k in sorted(kinds):
-        if not arm or f"Kind::{k}" not in arm.group(1):
+        if not arm or f"Kind::{k}" not in arm:
             bad.append(f"Kind::{k} is declared and `kind_of` never answers it")
-    read = re.search(r"fn read_it\(path: &Path, kind: Kind,.*?\) -> .*?\n\}", module, re.S)
+    read = body_of(module, "read_it")
     if read is None:
         bad.append("document.rs no longer has read_it")
     else:
+        floor(len(read), 200, "characters of `read_it`")
         for k in sorted(kinds):
-            if f"Kind::{k}" not in read.group(0):
+            if f"Kind::{k}" not in read:
                 bad.append(f"Kind::{k} reaches read_it and read_it does not name it")
-        if re.search(r"^\s+_ =>", read.group(0), re.M):
+        if re.search(r"^\s+_ =>", read, re.M):
             bad.append(
                 "read_it has a catch-all arm; a Kind added tomorrow would fall "
                 "into somebody else's reader with nothing saying so"
@@ -4827,15 +6578,12 @@ let
     # closure carrying a program nothing runs.
     ROOT = pathlib.Path("${self}")
     variables = sorted(
-        set(re.findall(r'Self::\w+ => "(RONOCTUA_\w+)"', (src / "tools.rs").read_text()))
+        set(re.findall(r'Self::\w+ => "(RONOCTUA_\w+)"', uncommented((src / "tools.rs").read_text())))
     )
-    if len(variables) < 6:
-        bad.append(
-            f"tools.rs names {len(variables)} programs; the sweep is not reading "
-            "`Tool::variable`"
-        )
+    floor(len(variables), 6, "programs named by `Tool::variable`")
     for where in ("nix/modules/media.nix", "nix/rust.nix", "nix/dev.nix"):
-        said = (ROOT / where).read_text()
+        said = hashless((ROOT / where).read_text())
+        floor(len(said), 500, "characters of " + where)
         for v in variables:
             if v not in said:
                 bad.append(f"{where} does not set {v} — the reader would refuse with `missing`")
@@ -4844,7 +6592,7 @@ let
     # footer is a systemd USER UNIT, which inherits the manager's environment
     # and not the shell's. A tool named in one and not the other works in the
     # nested loop and refuses on the machine the distro is for.
-    media = (ROOT / "nix/modules/media.nix").read_text()
+    media = hashless((ROOT / "nix/modules/media.nix").read_text())
     unit = set(
         re.findall(
             r"systemd\.user\.services\.ronoctua-footer\.environment\.(RONOCTUA_\w+)", media
@@ -4869,14 +6617,12 @@ let
     # A sweep that counted that would excuse nothing and fail forever — which
     # is the mistake two checks in this file have already made.
     def code(where):
-        out = []
-        for f in sorted(pathlib.Path(where).rglob("*.rs")):
-            for line in f.read_text().splitlines():
-                bare = line.strip()
-                if bare.startswith("//"):
-                    continue
-                out.append(line)
-        return "\n".join(out)
+        # The prelude's stripper, over a whole tree. It used to drop only a
+        # line that BEGAN with `//`, so a variable named in a comment after
+        # code on the same line still counted as being read.
+        return "\n".join(
+            uncommented(f.read_text()) for f in sorted(pathlib.Path(where).rglob("*.rs"))
+        )
 
     inspect = code(src)
     shell_said = code(ROOT / "crates/ronoctua-shell/src")
@@ -4902,11 +6648,20 @@ let
   playlist-formats-are-total = mkCheck "playlist-formats-are-total" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: `TYPES`, `REFUSED` and the row of the table are module-level.
+    # `kind_of` is narrowed by name below.
+    #
+    # `uncommented` for the Rust and `hashless` for the Nix: every needle here
+    # is a media type in a string literal, and `code_of` would empty all three
+    # sets at once — three empty sets that agree perfectly.
     src = pathlib.Path("${../crates/ronoctua-inspect/src}")
     i18n = pathlib.Path("${../assets/i18n}")
-    module = (src / "playlist.rs").read_text()
-    pixels = (src / "pixels.rs").read_text()
+    module = uncommented((src / "playlist.rs").read_text())
+    pixels = uncommented((src / "pixels.rs").read_text())
+    floor(len(module), 500, "characters of playlist.rs")
+    floor(len(pixels), 1000, "characters of pixels.rs")
     bad = []
 
     # --- what the module says it serves -----------------------------------
@@ -4918,8 +6673,8 @@ let
         claimed = set(re.findall(r'"([^"]+)"', declared.group(1)))
 
     # --- what it can actually PARSE ---------------------------------------
-    arm = re.search(r"fn kind_of\(mime: &str\) -> Option<Kind> \{(.*?)\n\}", module, re.S)
-    read = set(re.findall(r'"([^"]+)"', arm.group(1))) if arm else set()
+    arm = body_of(module, "kind_of")
+    read = set(re.findall(r'"([^"]+)"', arm)) if arm else set()
     if arm is None:
         bad.append("playlist.rs no longer dispatches on the type")
 
@@ -4962,7 +6717,8 @@ let
             )
 
     # --- and no playlist type may be probed --------------------------------
-    facts = (src / "facts.rs").read_text()
+    facts = uncommented((src / "facts.rs").read_text())
+    floor(len(facts), 500, "characters of facts.rs")
     if "playlist::is_a_playlist(mime)" not in facts:
         bad.append("facts::needs no longer keeps ffprobe away from a playlist")
 
@@ -4985,7 +6741,8 @@ let
     # the bytes (`mime::of_path`). With one glyph for both, that decision stops
     # being visible — and nobody looking at a listing can tell the two names
     # apart anyway.
-    glyphs = pathlib.Path("${../assets/icons/mime-glyphs.nix}").read_text()
+    glyphs = hashless(pathlib.Path("${../assets/icons/mime-glyphs.nix}").read_text())
+    floor(len(glyphs), 1000, "characters of mime-glyphs.nix")
     rows = dict(
         re.findall(r'mime = "([^"]+)";\s*\n\s*token = "([^"]+)";', glyphs)
     )
@@ -5004,6 +6761,7 @@ let
             "which name wins is decided by the bytes, so the drawing must not depend on it"
         )
 
+    floor(len(claimed), 4, "playlist spellings claimed")
     if bad:
         print("\n".join(bad))
         sys.exit(1)
@@ -5035,8 +6793,17 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
-        files = pathlib.Path("${../crates/ronoctua-shell/src/files.rs}").read_text()
+        # FILE-WIDE: `OF_THE_VIEW` is a module-level table, and the `re.search`
+        # for it below is the narrowing.
+        #
+        # `uncommented` and not `code_of`, because a CHORD is a string literal
+        # and emptying it would leave a list of bindings with no keys in it —
+        # every assertion below would then be about nothing.
+        raw = pathlib.Path("${../crates/ronoctua-shell/src/files.rs}").read_text()
+        files = uncommented(raw)
+        floor(len(files), 10000, "characters of files.rs")
         bad = []
 
         # THE TABLE ITSELF, and not the whole file: a comment may name `M-` while
@@ -5045,7 +6812,7 @@ let
         if block is None:
             bad.append("files.rs no longer declares OF_THE_VIEW as a table")
         else:
-            body = re.sub(r"//.*", "", block.group(1))
+            body = block.group(1)
             # A THIRD ELEMENT IS ALLOWED, and the day one arrived this check
             # went BLIND: the manager's table grew a `Where` — which rows a key
             # is alive on — and a pattern that demanded the closing bracket
@@ -5054,8 +6821,7 @@ let
             # silence; the lesson is that a table's SHAPE is not the contract,
             # its first two columns are.
             bound = re.findall(r'\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*[,)]', body)
-            if not bound:
-                bad.append("OF_THE_VIEW binds nothing, which cannot be right")
+            floor(len(bound), 10, "keys bound by the view")
             for chord, action in bound:
                 if chord.startswith("M-") or "-M-" in chord:
                     bad.append(
@@ -5067,7 +6833,10 @@ let
 
         # AND THE COMMENT STAYS TRUE. This check is named in the file; if the
         # sentence goes, the reader loses the reason and this loses its subject.
-        if "files-keys-are-not-the-compositors" not in files:
+        # AGAINST THE RAW TEXT, on purpose. This one assertion is about PROSE:
+        # the rule is written in a comment above the table, and that is where a
+        # reader meets it. Asked of the stripped text it could never be true.
+        if "files-keys-are-not-the-compositors" not in raw:
             bad.append("files.rs stopped naming this check, so nothing explains the rule")
 
         if bad:
@@ -5096,21 +6865,34 @@ let
   inspect-labels-are-keys = mkCheck "inspect-labels-are-keys" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: the census is "how many sites in this crate build a
+    # `Label::Named`", and one anywhere is the offence. There is no function to
+    # narrow to — the point is that there is exactly ONE function, and the
+    # sweep is what finds out.
     src = pathlib.Path("${../crates/ronoctua-inspect/src}")
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     bad = []
 
     def code_only(text):
-        """The file with its test module and its comments cut away."""
-        cut = re.split(r"\n#\[cfg\(test\)\]", text)[0]
-        return re.sub(r"//.*", "", cut)
+        """The file with its test module cut away, and then stripped.
 
-    built = []
+        The strip was `re.sub(r"//.*", "")`, which is wrong in the one way
+        that matters here: a `//` inside a string literal ends the line, so a
+        URL or a path would hide whatever followed it. `code_of` knows the
+        difference, and it empties the literals too — which is right, because
+        what this check refuses is a label BUILT from one.
+        """
+        return code_of(re.split(r"\n#\[cfg\(test\)\]", text)[0])
+
+    built, swept = [], 0
     for path in sorted(src.rglob("*.rs")):
+        swept += 1
         for n, line in enumerate(code_only(path.read_text()).splitlines(), 1):
             if "Label::Named(" in line:
                 built.append((path.name, n, line.strip()))
+    floor(swept, 10, "sources of ronoctua-inspect swept for a label")
 
     if len(built) != 1:
         bad.append(
@@ -5126,7 +6908,8 @@ let
 
     # AND THE ONE PLACE THAT RESOLVES ONE must still tell the two apart, or a
     # key reaches the screen as itself.
-    files = (shell / "files.rs").read_text()
+    files = code_of((shell / "files.rs").read_text())
+    floor(len(files), 10000, "characters of files.rs")
     if "Label::Named(name) => name.clone()" not in files:
         bad.append("files.rs no longer shows a named label verbatim")
     if "Label::Key(k) => texts.t(k)" not in files:
@@ -5155,22 +6938,29 @@ let
   mesh-formats-are-total = mkCheck "mesh-formats-are-total" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: `enum Shape`, its `ALL` and the table of claims are all
+    # module-level. `scope` narrows to the enum, by its braces.
+    #
+    # `uncommented`, because the media types this compares ARE string
+    # literals — `code_of` would empty every claim in the table at once.
     src = pathlib.Path("${../crates/ronoctua-inspect/src}")
     i18n = pathlib.Path("${../assets/i18n}")
-    mod = (src / "mesh" / "mod.rs").read_text()
-    pixels = (src / "pixels.rs").read_text()
+    mod = uncommented((src / "mesh" / "mod.rs").read_text())
+    pixels = uncommented((src / "pixels.rs").read_text())
+    floor(len(mod), 500, "characters of mesh/mod.rs")
+    floor(len(pixels), 1000, "characters of pixels.rs")
     bad = []
 
     # --- the variants, from the enum itself -------------------------------
-    block = re.search(r"pub enum Shape \{(.*?)\n\}", mod, re.S)
+    block = scope(mod, r"pub enum Shape\b")
     if block is None:
         bad.append("no `pub enum Shape` — what does this check read?")
         variants = []
     else:
-        variants = re.findall(r"^    ([A-Z][A-Za-z0-9]*),$", block.group(1), re.M)
-    if len(variants) < 10:
-        bad.append(f"only {len(variants)} shapes — the enum is not being read")
+        variants = re.findall(r"^    ([A-Z][A-Za-z0-9]*),$", block, re.M)
+    floor(len(variants), 10, "shapes declared by `enum Shape`")
 
     # --- each one has a key, and is in ALL --------------------------------
     keyed = dict(re.findall(r"Self::([A-Za-z0-9]+) => crate::key::([A-Z_0-9]+),", mod))
@@ -5684,9 +7474,19 @@ let
   one-pipewire-boundary = mkCheck "one-pipewire-boundary" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a boundary is broken by a NAME appearing anywhere outside it,
+    # so the file is the question. The cut at `mod tests` is the narrowing.
+    #
+    # `uncommented` and never `code_of`: every name here is a string literal —
+    # a program, a header, a path — and emptying the strings would leave a
+    # sweep that can never find one. What the strip is for is the other half:
+    # a name written in a comment is prose ABOUT the boundary, and three of
+    # these files explain themselves that way.
     crates = pathlib.Path("${../crates}")
     boundary = crates / "ronoctua-audio" / "src" / "pipewire.rs"
+    swept = 0
     wrong = []
 
     NAMES = ("pw-dump", "wpctl", "pw-cat", "RONOCTUA_PW_DUMP", "RONOCTUA_WPCTL",
@@ -5709,15 +7509,22 @@ let
         # AND COMMENTS ARE PROSE. Several files explain at length why the
         # programs live where they do, and a rule that could not tell a
         # sentence from a call would be a rule nobody could write near.
-        code = "\n".join(re.sub(r"//.*", "", line) for line in text.splitlines())
+        # AND `uncommented` IS WHAT TELLS A SENTENCE FROM A CALL. It was a
+        # `re.sub` over `//.*`, which cuts at a `//` inside a STRING as
+        # readily as at a comment — a URL or a path would have hidden
+        # everything after it on that line.
+        code = uncommented(text)
+        swept += 1
         for name in NAMES:
             if name in code:
                 wrong.append(f"{f.relative_to(crates)} names `{name}` outside the boundary")
 
+    floor(swept, 100, "sources of the workspace swept for a PipeWire program")
     if not boundary.exists():
         wrong.append("crates/ronoctua-audio/src/pipewire.rs is gone; what is this checking?")
     else:
-        body = boundary.read_text()
+        body = uncommented(boundary.read_text())
+        floor(len(body), 1000, "characters of pipewire.rs")
         for name in ("pw-dump", "wpctl", "pw-cat"):
             if name not in body:
                 wrong.append(f"the boundary no longer names `{name}` — has it moved?")
@@ -5744,11 +7551,17 @@ let
     python3 - <<'END'
     import pathlib, re, sys
 
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a second cube root anywhere in the workspace is the offence,
+    # and the two functions that ARE the conversion are module-level.
     crates = pathlib.Path("${../crates}")
     lib = crates / "ronoctua-audio" / "src" / "lib.rs"
     wrong = []
+    swept = 0
 
-    body = lib.read_text()
+    body = code_of(lib.read_text())
+    floor(len(body), 500, "characters of ronoctua-audio's lib.rs")
     if "pub fn perceived" not in body or "pub fn stored" not in body:
         wrong.append("`perceived` and `stored` are what the conversion IS; one of them is gone")
     if "cbrt" not in body:
@@ -5759,9 +7572,11 @@ let
     for f in sorted(crates.rglob("*.rs")):
         if f == lib or "ronoctua-tokens" in str(f):
             continue
-        code = "\n".join(re.sub(r"//.*", "", line) for line in f.read_text().splitlines())
+        code = code_of(f.read_text())
+        swept += 1
         if "cbrt" in code:
             wrong.append(f"{f.relative_to(crates)} takes a cube root of its own")
+    floor(swept, 100, "sources of the workspace swept for a cube root")
 
     if "fn the_round_trip_holds" not in body:
         wrong.append("the round-trip test is gone; a one-sided one would still pass")
@@ -5847,13 +7662,21 @@ let
   the-microphone-has-one-door = mkCheck "the-microphone-has-one-door" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: the `Drop` guard, the two functions and the two orders are
+    # each a thing that is either in its file or not; none is a question about
+    # the inside of a function.
+    #
+    # `uncommented` and not `code_of`: two of the needles are string literals —
+    # the `--pdeathsig` flag and the variable that names `setpriv`.
     crates = pathlib.Path("${../crates}")
     meter = crates / "ronoctua-audio" / "src" / "meter.rs"
     view = crates / "ronoctua-shell" / "src" / "audio.rs"
     wrong = []
 
-    body = meter.read_text()
+    body = uncommented(meter.read_text())
+    floor(len(body), 500, "characters of meter.rs")
     # A VALUE WITH A GUARD, not a flag. Dropping it is what closes the device,
     # and that is what ties "nobody is looking" to "nothing is listening".
     if "impl Drop for Reaped" not in body:
@@ -5871,10 +7694,8 @@ let
     # deleting the argument left the check green over prose about an argument
     # that was no longer passed. It is the "a check that reads its own
     # evidence" trap, caught by sabotage.
-    spawn = "\n".join(
-        re.sub(r"//.*", "", line)
-        for line in (crates / "ronoctua-audio" / "src" / "pipewire.rs").read_text().splitlines()
-    )
+    spawn = uncommented((crates / "ronoctua-audio" / "src" / "pipewire.rs").read_text())
+    floor(len(spawn), 1000, "characters of pipewire.rs")
     if "--pdeathsig" not in spawn or "RONOCTUA_SETPRIV" not in spawn:
         wrong.append(
             "the recorder no longer runs under a death signal; a killed footer "
@@ -5883,7 +7704,8 @@ let
 
     # AND THE VIEW DECIDES BY THE CURSOR. `listening` is answered from the row
     # the cursor is on and from nothing else.
-    seen = view.read_text()
+    seen = uncommented(view.read_text())
+    floor(len(seen), 1000, "characters of audio.rs")
     if "Spot::Source(id) => Some(id)" not in seen:
         wrong.append("the view no longer derives the open microphone from the cursor's row")
     if "pub const fn listening" not in seen:
@@ -5891,7 +7713,8 @@ let
 
     # THE DOORS SEND THE ORDER, and both of them send the closing one.
     for door in ("surface.rs", "audio_window.rs"):
-        text = (crates / "ronoctua-shell" / "src" / door).read_text()
+        text = uncommented((crates / "ronoctua-shell" / "src" / door).read_text())
+        floor(len(text), 1000, "characters of " + door)
         if "Order::Listen(None)" not in text:
             wrong.append(f"{door} never closes the microphone")
         if "follow_the_microphone" not in text:
@@ -6021,7 +7844,12 @@ let
   keys-are-never-text = mkCheck "keys-are-never-text" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # PROSE: this check's subject IS the prose. It reads the VALUE of every
+    # sentence in the catalogue and refuses one that spells a key sequence out
+    # in words, so the words are the thing being examined.
+    # FILE-WIDE: a catalogue has no functions, and every line of it is read.
     wrong = []
     seen = 0
     for language in "${lib.concatStringsSep " " languages}".split():
@@ -6040,8 +7868,7 @@ let
             # key. What goes stale is `LEADER s p k`.
             if re.search(r"\b(LEADER|SPC|SUPER)\b(\s+[A-Za-z]\b)+", value):
                 wrong.append(f"{language}: `{key}` spells a leader key: {value[:60]}")
-    if seen < 1000:
-        sys.exit(f"ERROR: only {seen} values read; the sweep is not reaching the catalogue")
+    floor(seen, 1000, "values read out of the catalogue")
 
     if wrong:
         print("ERROR: a key sequence written as text.", file=sys.stderr)
@@ -6078,19 +7905,31 @@ let
   run-command-handles-every-key = mkCheck "run-command-handles-every-key" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    surface = (shell / "surface.rs").read_text()
-    keymap = (shell / "leader.rs").read_text()
-    actions = (shell / "actions.rs").read_text()
+    # FILE-WIDE: the keymap and the generated actions are module-level tables.
+    # `run_with` is narrowed by name below.
+    #
+    # `uncommented` and never `code_of`: a command id is a string literal on
+    # every one of the three sides, and emptying them would leave three empty
+    # sets that agree with each other perfectly.
+    surface = uncommented((shell / "surface.rs").read_text())
+    keymap = uncommented((shell / "leader.rs").read_text())
+    actions = uncommented((shell / "actions.rs").read_text())
+    floor(len(surface), 100000, "characters of surface.rs")
+    floor(len(keymap), 10000, "characters of leader.rs")
+    floor(len(actions), 1000, "characters of actions.rs")
 
     # 1) WHAT THE `match` HANDLES. Arms are `"id" => …` and `"a" | "b" => …`,
     #    at the arm's own indentation inside `run_with`.
-    body = re.search(r"fn run_with\(&mut self[^\n]*\n(.*?)\n    \}\n", surface, re.S)
-    if not body:
-        sys.exit("ERROR: `run_with` went away or changed shape")
+    # BY NAME AND BRACES. The signature was written out here, and the capture
+    # ran to the next `\n    }` — which a nested block closes early, hiding
+    # every arm below it and letting a key that leads nowhere pass.
+    body = must(body_of(surface, "run_with"), "`run_with`")
+    floor(len(body), 1000, "characters of `run_with`")
     handled = set()
-    for line in body.group(1).splitlines():
+    for line in body.splitlines():
         stripped = line.strip()
         head = stripped.split("=>", 1)[0] if "=>" in stripped else ""
         if not head:
@@ -6100,8 +7939,7 @@ let
         if re.fullmatch(r'(\s*"[a-z0-9-]+"\s*\|?)+', head):
             handled |= set(re.findall(r'"([a-z0-9-]+)"', head))
 
-    if len(handled) < 100:
-        sys.exit(f"ERROR: only {len(handled)} arms found; the sweep is not reaching the match")
+    floor(len(handled), 100, "arms of `run_with`")
 
     # 2) THE GENERATED FAMILIES, which have no arm and do not need one.
     #
@@ -6125,8 +7963,7 @@ let
     #
     # Each row of `BINDINGS` is `("s n l", "network-lan", …)`.
     bound = set(re.findall(r'^\s*\("[^"]*", "([a-z0-9-]+)"', keymap, re.M))
-    if len(bound) < 60:
-        sys.exit(f"ERROR: only {len(bound)} bindings found; the sweep is not reaching the table")
+    floor(len(bound), 60, "bindings in the keymap")
 
     gaps = sorted(bound - handled - generated)
     # `niri-<name>` is dispatched by prefix, not by an arm.
@@ -6180,61 +8017,41 @@ let
         python3 - <<'END'
         import pathlib, re, sys
 
-        src = pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text()
+        exec(open("${pyPrelude}").read())
+
+        # FILE-WIDE: what is asked is that every view the keyboard can drive is
+        # NAMED in each of four branches — a question about the whole of each
+        # branch, and the branches themselves are narrowed by name below.
+        #
+        # STRIPPED ONCE, AT THE TOP. The rules below used to read a mixture:
+        # two of them stripped and one searched the raw text, and a rule a
+        # SENTENCE can satisfy is worse than no rule — writing
+        # `// ViewState::Display draws through its own window` above a branch
+        # that has been turned off was enough to make the view count as named
+        # in both places, while the keyboard drove it and nothing drew it.
+        # `uncommented` and never `code_of`: rule 4 counts the doors by the ID
+        # each one passes to `region_is_free`, and those ids are STRING
+        # literals — emptied, every door disappears and the floor fails on a
+        # correct file. What is being refused here is a COMMENT answering for
+        # the code, and taking the comments off is the whole of that.
+        src = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text())
+        floor(len(src), 100000, "characters of surface.rs")
         wrong = []
 
-        def code_of(text):
-            """The same source with `//` comments taken out.
 
-            RULE 3 BELOW SEARCHES RAW TEXT WITHOUT IT, and a rule a SENTENCE can
-            satisfy is worse than no rule: writing
-            `// ViewState::Display draws through its own window` above a branch
-            that has been turned off is enough to make the view count as named
-            in both places, while the keyboard drives it and nothing draws it.
-            Its two sibling checks — `every-window-knows-its-scale` and
-            `every-list-window-has-a-bar` — both strip first and both say in
-            prose why; this one did not.
+        def span_of(name):
+            """One method's body, as lines.
+
+            It counted braces PER LINE and matched a whole SIGNATURE, so a
+            brace inside a string ended a body early and adding a parameter
+            reported that the method had gone away. `body_of` walks the
+            characters and takes the bare name; the lines are what the
+            indentation rule below reads.
             """
-            out = []
-            for line in text.splitlines():
-                cut, quoted, escaped = None, False, False
-                for i, ch in enumerate(line):
-                    if escaped:
-                        escaped = False
-                        continue
-                    if ch == "\\":
-                        escaped = True
-                    elif ch == '"':
-                        quoted = not quoted
-                    elif ch == "/" and not quoted and line[i : i + 2] == "//":
-                        cut = i
-                        break
-                out.append(line if cut is None else line[:cut])
-            return "\n".join(out)
-
-        def body_of(signature):
-            """The lines of one method, from its signature to the closing brace at
-            its own indentation — the shape every method in this file has."""
-            lines = src.splitlines()
-            start = next(
-                (i for i, l in enumerate(lines) if l.strip().startswith(signature)),
-                None,
-            )
-            if start is None:
-                sys.exit(f"ERROR: `{signature}` went away or changed shape")
-            depth = 0
-            began = False
-            for i in range(start, len(lines)):
-                depth += lines[i].count("{") - lines[i].count("}")
-                if not began and "{" in lines[i]:
-                    began = True
-                    continue
-                if began and depth <= 0:
-                    return lines[start : i + 1]
-            sys.exit(f"ERROR: `{signature}` never closes")
+            return must(body_of(src, name), "`" + name + "`").splitlines()
 
         # 1) THE ORDER, from the one place it is written.
-        order = re.findall(r"ViewState::([A-Z]\w*)", "\n".join(body_of("const fn view(&self)")))
+        order = re.findall(r"ViewState::([A-Z]\w*)", "\n".join(span_of("view")))
         order = [v for v in dict.fromkeys(order)]
         # NOT A FLOOR — THE ENUM ITSELF. A number written here is a number
         # that goes stale: it said twelve for two rounds after the screens'
@@ -6245,7 +8062,7 @@ let
         # invisible to every rule in this check.
         declared = re.findall(
             r"^\s{4}([A-Z]\w*),",
-            "\n".join(body_of("enum ViewState")),
+            must(scope(src, r"enum ViewState\b"), "`enum ViewState`"),
             re.M,
         )
         missing = [v for v in declared if v not in order]
@@ -6304,18 +8121,18 @@ let
         # So the DISPATCHER is named here and the wrapper is checked to still
         # reach it. A third name would otherwise be the same drift again, and
         # the next reader would be told eighteen lies instead of one truth.
-        wrapper = "\n".join(body_of("fn typed(&mut self, event: KeyEvent)"))
+        wrapper = "\n".join(span_of("typed"))
         if "self.took_a_key(event)" not in wrapper:
             wrong.append(
                 "`typed` no longer hands the key to `took_a_key`, so the branch "
                 "this check reads is not the one the keyboard drives"
             )
 
-        for signature, room in (
-            ("fn took_a_key(&mut self, event: KeyEvent)", "the key branch"),
-            ("fn expansion(&self)", "the region"),
+        for name, room in (
+            ("took_a_key", "the key branch"),
+            ("expansion", "the region"),
         ):
-            lines = body_of(signature)
+            lines = span_of(name)
             for n, line in enumerate(lines):
                 # Top level of the method body is eight spaces; anything deeper is
                 # inside a branch that has already asked.
@@ -6344,8 +8161,8 @@ let
         #
         # A view with no branch in one of them is a view that is drawn and not
         # driven, or driven and not drawn — the same defect from the other side.
-        keys = code_of("\n".join(body_of("fn took_a_key(&mut self, event: KeyEvent)")))
-        region = code_of("\n".join(body_of("fn expansion(&self)")))
+        keys = "\n".join(span_of("took_a_key"))
+        region = "\n".join(span_of("expansion"))
         for view in order:
             if view == "NoneOf":
                 continue
@@ -6365,17 +8182,14 @@ let
                 "ViewState::Leader from the branch rule is no longer valid"
             )
 
-        guard = "\n".join(body_of("fn region_is_free(&mut self, what: &str)"))
+        guard = "\n".join(span_of("region_is_free"))
         if "self.view()" not in guard:
             wrong.append("`region_is_free` no longer asks `view()`")
         if "self.files" in guard:
             wrong.append("`region_is_free` is back to asking about the file manager alone")
         doors = set(re.findall(r'region_is_free\("([a-z-]+)"\)', src))
         # ELEVEN with the screens' own door — a floor, like the one above.
-        if len(doors) < 11:
-            wrong.append(
-                f"only {len(doors)} doors ask whether the region is free: {sorted(doors)}"
-            )
+        floor(len(doors), 11, "doors that ask whether the region is free")
 
         if wrong:
             print("ERROR: the footer would draw one view and drive another.", file=sys.stderr)
@@ -6438,33 +8252,24 @@ let
   every-modal-view-has-a-hint = mkCheck "every-modal-view-has-a-hint" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    src = pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text()
+    src = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text())
+    floor(len(src), 100000, "characters of surface.rs")
 
-    def body_of(signature):
-        """One item, from its signature to the closing brace at its own depth."""
-        lines = src.splitlines()
-        start = next(
-            (i for i, l in enumerate(lines) if l.strip().startswith(signature)),
-            None,
-        )
-        if start is None:
-            sys.exit(f"ERROR: `{signature}` went away or changed shape")
-        depth, began = 0, False
-        for i in range(start, len(lines)):
-            depth += lines[i].count("{") - lines[i].count("}")
-            if not began and "{" in lines[i]:
-                began = True
-                continue
-            if began and depth <= 0:
-                return "\n".join(lines[start : i + 1])
-        sys.exit(f"ERROR: `{signature}` never closes")
+    # This counted braces PER LINE, which a brace inside a string or a
+    # character literal defeats. `scope` walks the characters, and it takes a
+    # PATTERN for the header — so the two blocks below are found by what opens
+    # them and not by a line that has to start with the right words.
+    def block(header, what):
+        return must(scope(src, header), what)
 
     # THE ENUM ITSELF, and not a list written here: a view added to it and
     # forgotten everywhere else is exactly the shape this is for.
-    declared = re.findall(r"^\s{4}([A-Z]\w*),", body_of("enum ViewState"), re.M)
-    if len(declared) < 10:
-        sys.exit(f"ERROR: only {len(declared)} views were found; this is not reading the enum")
+    declared = re.findall(
+        r"^\s{4}([A-Z]\w*),", block(r"enum ViewState\b", "`enum ViewState`"), re.M
+    )
+    floor(len(declared), 10, "views declared by `ViewState`")
 
     # THE THREE THAT OWE NOTHING, each for a reason that is about the view and
     # not about the work:
@@ -6481,7 +8286,7 @@ let
     #             the `M-x`'s case with a different list underneath.
     owes_nothing = {"NoneOf", "Leader", "Commands", "Manual", "Applications"}
 
-    hint = body_of("let hint = move ||")
+    hint = block(r"let hint = move \|\|", "the hint closure")
     missing = [
         v
         for v in declared
@@ -6509,6 +8314,10 @@ let
     python3 - <<'END'
     import pathlib, sys
 
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a door draws its bar from wherever it paints, and the question
+    # is whether the call appears in the file at all.
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     # THE MANAGER'S WINDOW IS THE EXCEPTION, and it is the one that already
     # had a bar: it has FOUR bands rather than one list, so it asks `Scroll`
@@ -6521,12 +8330,9 @@ let
     # have one — so a check that read the comments would pass on a window
     # whose CALL had been deleted and whose prose survived. That is a check
     # satisfiable by a sentence, which is worse than no check.
-    def code_of(text):
-        out = []
-        for line in text.splitlines():
-            bare = line.split("//")[0]
-            out.append(bare)
-        return "\n".join(out)
+    # This was a local `code_of` that cut at the first `//` on a line, which is
+    # wrong inside a string literal. The prelude's knows the difference, and it
+    # is the one this name now means.
 
     for f in sorted(shell.rglob("*_window.rs")):
         body = code_of(f.read_text())
@@ -6556,8 +8362,7 @@ let
     # count: an eighth is checked like the rest, and a window that loses its
     # `PointerEventKind::Axis` takes the sweep below the number and says so. A
     # guard set to exactly what the sweep found is a guard that proves nothing.
-    if windows < 7:
-        wrong.append(f"only {windows} scrolling windows found; the sweep is not reaching them")
+    floor(windows, 7, "scrolling windows found")
 
     if wrong:
         print("ERROR: a list nobody can see the length of.", file=sys.stderr)
@@ -6663,8 +8468,17 @@ let
   the-footer-does-not-ask-itself = mkCheck "the-footer-does-not-ask-itself" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    src = pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text()
+    # FILE-WIDE: this builds the CALL GRAPH of one file — every method of it,
+    # and what each one calls — so the file is the unit by construction. The
+    # cut at `mod tests` and the brace walk below are the narrowing.
+    #
+    # `code_of` matters more here than almost anywhere: the walk counts braces,
+    # and a `{` inside a string literal or a comment would end a method's body
+    # in the wrong place, giving the graph an edge nobody wrote.
+    src = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text())
+    floor(len(src), 100000, "characters of surface.rs")
     # THE TRAILING TEST MODULE IS NOT THE DOOR. A call in an assertion is a
     # thing the test does, not a thing the footer does.
     stop = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", src, re.M)
@@ -6688,10 +8502,7 @@ let
             i += 1
         bodies[m.group(1)] = bodies.get(m.group(1), "") + code[start : i + 1]
 
-    if len(bodies) < 200:
-        print(f"ERROR: only {len(bodies)} methods found in surface.rs; the sweep", file=sys.stderr)
-        print("       is not reading the file's shape any more.", file=sys.stderr)
-        raise SystemExit(1)
+    floor(len(bodies), 200, "methods found in surface.rs")
 
     edges = {n: sorted(set(re.findall(r"self\.(\w+)\(", b)) & set(bodies)) for n, b in bodies.items()}
     bad = []
@@ -6821,11 +8632,22 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
         root_dir = pathlib.Path("${self}")
         bad = []
 
-        niri = (root_dir / "nix/modules/niri.nix").read_text()
+        # FILE-WIDE: every question here is about a UNIT — a `systemd.user`
+        # block in a Nix module, a subcommand in `main.rs`, a word in a shell
+        # script. None of them lives in a function, and the three `re.search`es
+        # for the unit blocks are the narrowing.
+        #
+        # `hashless` for the Nix and the shell, because `#` is their comment;
+        # `uncommented` for the Rust, because the needle there is the string
+        # literal `Some("lifeline")` and `code_of` would empty it.
+
+        niri = hashless((root_dir / "nix/modules/niri.nix").read_text())
+        floor(len(niri), 4000, "characters of nix/modules/niri.nix")
 
         # --- ONE. The footer names the unit to raise --------------------------
         footer = re.search(
@@ -6875,7 +8697,8 @@ let
                 bad.append("the lifeline unit is `wantedBy` something; it must be raised only by the failure")
 
         # --- AND THE SUBCOMMAND IT NAMES IS REACHABLE -------------------------
-        main = (root_dir / "crates/ronoctua-shell/src/main.rs").read_text()
+        main = uncommented((root_dir / "crates/ronoctua-shell/src/main.rs").read_text())
+        floor(len(main), 2000, "characters of main.rs")
         if 'Some("lifeline")' not in main:
             bad.append("`ronoctua-shell` has no `lifeline` subcommand for the unit to run")
 
@@ -6884,10 +8707,11 @@ let
         # COMMENTS ARE NOT CODE, and a sabotage proved it: the script argues this
         # rule out at length in prose, so a sweep that counted those lines passed
         # green over a watcher that had stopped raising anything.
-        loop_starter = "\n".join(
-            "" if l.lstrip().startswith("#") else l
-            for l in (root_dir / "nix/footer-single.nix").read_text().split("\n")
-        )
+        # `hashless` is the prelude's answer to what this line used to do by
+        # hand, and it is the better one: it takes a `#` off the END of a line
+        # too, which the `lstrip().startswith` test let stand.
+        loop_starter = hashless((root_dir / "nix/footer-single.nix").read_text())
+        floor(len(loop_starter), 2000, "characters of nix/footer-single.nix")
         if "lifeline" not in loop_starter:
             bad.append(
                 "nix/footer-single.nix never raises the line: in the nested loop — which is "
@@ -6929,8 +8753,17 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
-        src = pathlib.Path("${../crates/ronoctua-shell/src}/lifeline.rs").read_text()
+        # FILE-WIDE: what is asked is "what does the rescue line OFFER", and the
+        # offer is a module-level table — `const OFFERED`, found below, is the
+        # narrowing. The two registers and the `Escape` arm are drawn from
+        # methods whose names are not the thing being asserted.
+        #
+        # `uncommented`: every needle here is a string literal — the key a row
+        # is pressed by, and the `"ESC"` that `Escape` resolves to.
+        src = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/lifeline.rs").read_text())
+        floor(len(src), 4000, "characters of lifeline.rs")
         i18n = pathlib.Path("${../assets/i18n}")
         bad = []
 
@@ -7043,34 +8876,42 @@ let
   a-hint-never-splits-a-key = mkCheck "a-hint-never-splits-a-key" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    chrome = (shell / "chrome.rs").read_text()
-    fold = (shell / "fold.rs").read_text()
+    chrome = code_of((shell / "chrome.rs").read_text())
+    fold = code_of((shell / "fold.rs").read_text())
+    floor(len(chrome), 20000, "characters of chrome.rs")
+    floor(len(fold), 4000, "characters of fold.rs")
     bad = []
 
     # THE VARIANTS THAT EXIST.
-    block = re.search(r"pub enum Register \{(.*?)\n\}", chrome, re.S)
+    block = scope(chrome, r"pub enum Register\b")
     if block is None:
         bad.append("chrome.rs no longer declares `enum Register`")
         variants = set()
     else:
-        variants = {m.group(1) for m in re.finditer(r"^    ([A-Z]\w*),", block.group(1), re.M)}
+        variants = {m.group(1) for m in re.finditer(r"^    ([A-Z]\w*),", block, re.M)}
     if len(variants) < 4:
         bad.append(f"only {len(variants)} registers found; the sweep is not reading the enum")
 
     # THE ONES DRAWN AS TWO RUNS — the `match p.register` inside `laid`.
-    walk = re.search(r"fn laid\(pieces: &\[Piece\], column: u16, room: u16\).*?\n\}", chrome, re.S)
+    # BY NAME AND BRACES, never by the signature. The whole signature was
+    # written out here, so adding a parameter to `laid` reported that the
+    # function had gone away — a wrong diagnosis about a change that is not a
+    # defect. `body_of` walks from the name to the brace that closes it.
+    walk = body_of(chrome, "laid")
     if walk is None:
         bad.append("chrome.rs no longer has `laid` — what places the runs now?")
         drawn = set()
     else:
-        split = re.search(r"let runs: Vec<&str> = match p\.register \{(.*?)\n        \};", walk.group(0), re.S)
+        floor(len(walk), 200, "characters of `laid`")
+        split = scope(walk, r"let runs: Vec<&str> = match p\.register\b")
         if split is None:
             bad.append("`laid` no longer splits a key at its modifier")
             drawn = set()
         else:
-            arms = split.group(1)
+            arms = split
             # THE KEY ARM IS THE ONE THAT CUTS; the other names the rest.
             cut = arms.split("=>")[0]
             drawn = set(re.findall(r"Register::(\w+)", cut))
@@ -7082,12 +8923,12 @@ let
                 )
 
     # AND THE ONES THAT MAKE A GROUP A SHORTCUT.
-    keyed = re.search(r"let keyed = group\.iter\(\)\.any\(\|p\| \{(.*?)\n        \}\);", fold, re.S)
+    keyed = scope(fold, r"let keyed = group\.iter\(\)\.any\(\|p\|")
     if keyed is None:
         bad.append("fold.rs no longer decides which groups are shortcuts")
         grouped = set()
     else:
-        grouped = set(re.findall(r"Register::(\w+)", keyed.group(1)))
+        grouped = set(re.findall(r"Register::(\w+)", keyed))
 
     if drawn and grouped and drawn != grouped:
         bad.append(
@@ -7143,7 +8984,12 @@ let
   the-band-asks-the-section = mkCheck "the-band-asks-the-section" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: "is every `band_belongs` in this door asked about something
+    # `band_row` produced" is a question about every site in the file, and the
+    # twelve lines above each site are the narrowing — the offence is a site
+    # anywhere, so there is no one function to walk.
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     bad = []
     doors = 0
@@ -7152,10 +8998,12 @@ let
         # prose, and a sweep that counted those would report the paragraph
         # explaining the fix as the defect — which is what the first version of
         # this check did.
-        lines = [
-            "" if l.lstrip().startswith("//") else l
-            for l in (shell / name).read_text().split("\n")
-        ]
+        # `code_of` in place of the hand-written strip, which only caught a
+        # comment that began a line: a `band_belongs` named in prose AFTER code
+        # on the same line still counted as a site.
+        text = code_of((shell / name).read_text())
+        floor(len(text), 10000, "characters of " + name)
+        lines = text.split("\n")
         sites = [n for n, l in enumerate(lines) if "band_belongs" in l]
         if not sites:
             bad.append(f"{name} draws a hover band without asking `band_belongs`")
@@ -7212,28 +9060,20 @@ let
   a-refusal-is-not-cut = mkCheck "a-refusal-is-not-cut" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    body = (pathlib.Path("${../crates/ronoctua-shell/src}") / "files.rs").read_text()
+    body = code_of((pathlib.Path("${../crates/ronoctua-shell/src}") / "files.rs").read_text())
+    floor(len(body), 10000, "characters of files.rs")
     bad = []
 
-    def block(head):
-        at = body.find(head)
-        if at < 0:
-            return None
-        depth, i = 0, body.index("{", at)
-        start = i
-        while i < len(body):
-            if body[i] == "{":
-                depth += 1
-            elif body[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    return body[start : i + 1]
-            i += 1
-        return None
+    # `block` was this check's own copy of the brace walk, and it was one of
+    # six. It is `body_of` now — and by NAME rather than by the opening of a
+    # signature, so a parameter added to any of the three below is no longer
+    # reported as the function having gone away.
+    block = lambda name: body_of(body, name)
 
     # ONE. The drawing wraps the sentence.
-    drawing = block("fn preview_content(")
+    drawing = block("preview_content")
     if drawing is None:
         bad.append("files.rs has no `preview_content` — where is the panel drawn?")
     else:
@@ -7267,7 +9107,7 @@ let
                 )
 
     # TWO. The height is measured at the panel's own width.
-    measured = block("fn refusal_lines(")
+    measured = block("refusal_lines")
     if measured is None:
         bad.append("files.rs no longer measures how tall a refusal is")
     else:
@@ -7280,7 +9120,7 @@ let
             )
 
     # THREE. And the panel's total counts it, or there is no scrollbar.
-    total = block("pub fn preview_total(")
+    total = block("preview_total")
     if total is None:
         bad.append("files.rs no longer has `preview_total`")
     elif "self.refusal_lines()" not in total:
@@ -7306,7 +9146,14 @@ let
   every-hint-key-explains-itself = mkCheck "every-hint-key-explains-itself" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: `OF_THE_*` tables are module-level, and the census is of every
+    # one of them in every door. The two `means` functions and `strong_of` are
+    # narrowed by name below.
+    #
+    # `uncommented` and never `code_of`: an id IS a string literal, and there
+    # would be no ids at all to check if the strings were emptied.
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     i18n = pathlib.Path("${../assets/i18n}")
 
@@ -7324,7 +9171,7 @@ let
 
     ids, tables = {}, []
     for f in sorted(shell.glob("*.rs")):
-        for m in TABLE.finditer(f.read_text()):
+        for m in TABLE.finditer(uncommented(f.read_text())):
             found = ROW.findall(m.group(2))
             tables.append((f.name, m.group(1), len(found)))
             for i in found:
@@ -7333,28 +9180,26 @@ let
     # A FLOOR, never the count: a table that stops being recognised takes the
     # sweep below it and says so, where a number equal to what was found would
     # prove nothing.
-    if len(tables) < 14:
-        print(f"ERROR: only {len(tables)} hint tables found; the sweep is not", file=sys.stderr)
-        print("       recognising `OF_THE_*` any more.", file=sys.stderr)
-        raise SystemExit(1)
+    floor(len(tables), 14, "hint tables recognised as `OF_THE_*`")
 
     # AND WHAT THE TWO `means` FUNCTIONS CAN ANSWER — see the header.
-    MEANS = [("files.rs", r"pub fn strong_meaning\("), ("notifications.rs", r"fn means\(")]
+    # BY NAME, and by braces. The two were written out as the head of a regex
+    # that then ran to the next `\n    }`, which a nested block closes early.
+    MEANS = [("files.rs", "strong_meaning"), ("notifications.rs", "means")]
     answered = 0
     for name, head in MEANS:
-        body = (shell / name).read_text()
-        m = re.search(head + r".*?\n    \}\n", body, re.S)
+        body = uncommented((shell / name).read_text())
+        m = body_of(body, head)
         if not m:
             print(f"ERROR: {name}: the `means` function this check reads is gone;", file=sys.stderr)
             print("       the ids it can answer are no longer being covered.", file=sys.stderr)
             raise SystemExit(1)
-        for i in re.findall(r'"([a-z0-9-]+)"', m.group(0)):
+        floor(len(m), 100, "characters of " + name + "'s `" + head + "`")
+        for i in re.findall(r'"([a-z0-9-]+)"', m):
             answered += 1
             ids.setdefault(i, f"{name}:means")
 
-    if answered < 10:
-        print(f"ERROR: only {answered} ids read out of the `means` functions.", file=sys.stderr)
-        raise SystemExit(1)
+    floor(answered, 10, "ids read out of the `means` functions")
 
     # THE IDS A `means` ALWAYS REPLACES, derived and never listed.
     #
@@ -7365,13 +9210,13 @@ let
     always = set(
         re.findall(
             r'"([a-z0-9-]+)"\s*=>\s*Some\(',
-            re.search(r"pub fn strong_of\(.*?\n\}\n", (shell / "files.rs").read_text(), re.S).group(0),
+            must(
+                body_of(uncommented((shell / "files.rs").read_text()), "strong_of"),
+                "`files::strong_of`",
+            ),
         )
     )
-    if not always:
-        print("ERROR: `files::strong_of` no longer names the ids a `means`", file=sys.stderr)
-        print("       always replaces; the exception below cannot be derived.", file=sys.stderr)
-        raise SystemExit(1)
+    floor(len(always), 1, "ids a `means` always replaces")
 
     wrong, skipped, covered = [], [], 0
     for language in ${builtins.toJSON languages}:
@@ -7497,22 +9342,22 @@ let
   the-cursor-is-a-colour = mkCheck "the-cursor-is-a-colour" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
 
     # THE VIEWS ARE FOUND BY THEIR `struct View`, never by a list typed here.
     # `labels-of-a-view-are-distinct` scanned a hand-written six while eight
     # existed, and the two it never opened were the two with the defect.
+    # FILE-WIDE: a view is a FILE here — the census is "every source with a
+    # `struct View`" — and the colour it names may be named anywhere in it.
+    # The cut at `mod tests` is the narrowing.
     VIEWS = sorted(
         f.name
         for f in shell.glob("*.rs")
-        if re.search(r"^(?:pub )?struct View\b", f.read_text(), re.M)
+        if re.search(r"^(?:pub )?struct View\b", code_of(f.read_text()), re.M)
     )
-    if len(VIEWS) < 12:
-        raise SystemExit(
-            f"ERROR: only {len(VIEWS)} views found ({VIEWS}); the sweep is not "
-            "finding them by their `struct View` any more"
-        )
+    floor(len(VIEWS), 12, "views found by their `struct View`")
 
     HERE = re.compile(r"\bTEXT_HERE_[A-Z]+\b")
 
@@ -7545,7 +9390,7 @@ let
 
     wrong, swept, skipped = [], [], []
     for name in VIEWS:
-        body = (shell / name).read_text()
+        body = code_of((shell / name).read_text())
         # THE TRAILING TEST MODULE IS NOT THE SCREEN. A colour named in an
         # assertion is a thing the test says, not a thing the view draws.
         cut = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", body, re.M)
@@ -7560,7 +9405,7 @@ let
             # THE REASON IS RE-MEASURED, never taken on trust. If the band and
             # the lit rule have gone, the excuse has gone with them.
             for door in EXCUSED[name]:
-                said = (shell / door).read_text()
+                said = code_of((shell / door).read_text())
                 for mark in (BAND, LIT):
                     if mark not in said:
                         wrong.append(
@@ -7573,11 +9418,7 @@ let
             "(`text.here.acts` / `text.here.read`)"
         )
 
-    if len(swept) < 10:
-        wrong.append(
-            f"only {len(swept)} views were swept ({swept}); `Row::focused` is "
-            "not being recognised any more"
-        )
+    floor(len(swept), 10, "views swept for a cursor colour")
 
     for w in wrong:
         print(f"ERROR: {w}", file=sys.stderr)
@@ -7601,6 +9442,11 @@ let
   labels-of-a-view-are-distinct = mkCheck "labels-of-a-view-are-distinct" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a view is a FILE here — the census is "every source with a
+    # `struct View`" — and the keys it asks for may be named anywhere in it.
+    # The cut at `mod tests` is the narrowing.
 
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
 
@@ -7683,17 +9529,15 @@ let
     VIEWS = sorted(
         f.name
         for f in shell.glob("*.rs")
-        if re.search(r"^(?:pub )?struct View\b", f.read_text(), re.M)
+        if re.search(r"^(?:pub )?struct View\b", code_of(f.read_text()), re.M)
     )
-    if len(VIEWS) < 8:
-        raise SystemExit(
-            f"ERROR: only {len(VIEWS)} views found ({VIEWS}); the sweep is not "
-            "finding them by their `struct View` any more"
-        )
+    floor(len(VIEWS), 8, "views found by their `struct View`")
     wrong, checked = [], 0
     for name in VIEWS:
         f = shell / name
-        body = f.read_text()
+        # `code_of` and not the raw text: a `key::SOMETHING` named in a comment
+        # is a MENTION of a key, and it used to count as the view asking for one.
+        body = code_of(f.read_text())
         # ONLY WHAT IS DRAWN AS A LABEL. A key named inside the trailing test
         # module is an assertion about the screen, not a row on it.
         #
@@ -7722,8 +9566,7 @@ let
                     wrong.append(f"{name} in {lang}: {which} all say {said[:48]!r}")
 
     # THE FLOOR SCALES WITH THE LANGUAGES, since every one of them is swept.
-    if checked < 200 * len(LANGUAGES):
-        wrong.append(f"only {checked} labels read; the sweep is not reaching them")
+    floor(checked, 200 * len(LANGUAGES), "labels read across the views")
 
     if wrong:
         print("ERROR: one view, two labels, one word.", file=sys.stderr)
@@ -7757,7 +9600,11 @@ let
   every-window-knows-its-scale = mkCheck "every-window-knows-its-scale" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a door is a FILE here — the census is "every source with an
+    # `impl CompositorHandler`" — and inside one the questions are narrowed
+    # twice over, by `span_of` for a function and by `shut_at` for a call.
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     wrong, doors = [], 0
 
@@ -7772,97 +9619,29 @@ let
     # inside one of the spans scanned below would have made the matcher run
     # past the call it was reading and find the word it wanted in whatever came
     # next, which is the exact failure the matcher was written to fix.
-    def code_of(text):
-        out, i, n = [], 0, len(text)
-        while i < n:
-            c = text[i]
-            # A RAW STRING, `r"…"` or `r#"…"#`: no escapes, and it ends at the
-            # quote followed by as many `#` as it opened with.
-            if c == "r":
-                j = i + 1
-                while j < n and text[j] == "#":
-                    j += 1
-                if j < n and text[j] == '"' and (j > i + 1 or not text[i - 1 : i].isalnum()):
-                    close = '"' + "#" * (j - i - 1)
-                    end = text.find(close, j + 1)
-                    i = n if end == -1 else end + len(close)
-                    out.append('""')
-                    continue
-            if c == '"':
-                i += 1
-                while i < n:
-                    if text[i] == "\\":
-                        i += 2
-                        continue
-                    if text[i] == '"':
-                        i += 1
-                        break
-                    i += 1
-                out.append('""')
-                continue
-            # A CHARACTER, but not a LIFETIME: `'a` is not a literal, and
-            # skipping to the next `'` from one would eat the code between two
-            # lifetimes. A literal is a quote, one character or one escape,
-            # and a closing quote.
-            if c == "'":
-                m = re.match(r"'(?:\\.|[^\\'])'", text[i:])
-                if m:
-                    i += m.end()
-                    # AN UNDERSCORE AND NOT A PAIR OF SINGLE QUOTES: this
-                    # file is a Nix indented string, and such a pair closes the
-                    # fence — inside a comment as readily as in code.
-                    out.append("_")
-                    continue
-            if c == "/" and text[i : i + 2] == "//":
-                while i < n and text[i] != "\n":
-                    i += 1
-                continue
-            out.append(c)
-            i += 1
-        return "".join(out)
+    # `code_of` was written here first, and the prelude took this copy: it is
+    # the one that knows a raw string ends only at its matching hash count,
+    # that a lifetime is not a character literal, and that an empty pair of
+    # single quotes would close this file's own fence. Six other checks had a
+    # poorer copy; now there is one.
+
 
     EMPTY = re.compile(r"fn scale_factor_changed\((?:[^)]*)\)\s*\{\s*\}", re.S)
 
-    def shut_at(text, opened):
-        """The text of a call, from just after its `(` to its matching `)`.
+    # `shut_at` was written here first, and the prelude took this copy when a
+    # second check needed the same walk — see `numeric-selectors-get-numbers`.
 
-        By PARENTHESES and not by a closing string: a call can end `) {` or
-        `)?` or `),` as easily as `);`, and a scan that guesses one of those
-        runs into the next function and reads whatever is there.
+    def span_of(text, name):
+        """The prelude's `body_of`, with this check's two conveniences.
+
+        It answers "" and not `None` where the item is absent, because every
+        reader below scans the span with a regex; and it takes the bare name,
+        because `body_of` matches `fn NAME` as a word rather than finding a
+        string somewhere in the file — which is what stopped `fn configure`
+        being answered by the word `configure` in a call above it.
         """
-        deep, at = 0, opened
-        while at < len(text):
-            if text[at] == "(":
-                deep += 1
-            elif text[at] == ")":
-                if deep == 0:
-                    return text[opened:at]
-                deep -= 1
-            at += 1
-        return text[opened:]
+        return body_of(text, name) or ""
 
-    def body_of(text, name):
-        """A function's body, from its first `{` to the matching `}`.
-
-        By BRACES, and on text `code_of` has already taken the comments and the
-        string literals out of — a `{` inside either is not a block.
-        """
-        at = text.find(name)
-        if at == -1:
-            return ""
-        open_at = text.find("{", at)
-        if open_at == -1:
-            return ""
-        deep, i = 0, open_at
-        while i < len(text):
-            if text[i] == "{":
-                deep += 1
-            elif text[i] == "}":
-                deep -= 1
-                if deep == 0:
-                    return text[open_at : i + 1]
-            i += 1
-        return text[open_at:]
 
     for f in sorted(shell.rglob("*.rs")):
         body = code_of(f.read_text())
@@ -7914,7 +9693,7 @@ let
         # `asked` may be written from ONE place, and that place is the
         # configure, because `cfg.new_size` is the only thing that carries the
         # compositor's own number.
-        configured = body_of(body, "fn configure")
+        configured = span_of(body, "configure")
         elsewhere = body.replace(configured, " ") if configured else body
         for m in re.finditer(r"\.asked(?:\.[01])?\s*=", elsewhere):
             wrong.append(
@@ -7971,7 +9750,7 @@ let
         # AND A LOCAL CALLED `asked` COMES FROM THE FIELD. The two rules above
         # read the CALL; this reads where the name came from, which is the
         # third way the same ratchet can be written.
-        for span in (body_of(body, "fn configure"), body_of(body, "fn scale_factor_changed")):
+        for span in (span_of(body, "configure"), span_of(body, "scale_factor_changed")):
             for m in re.finditer(r"let\s+asked\s*=\s*([^;]*);", span, re.S):
                 if ".asked" not in m.group(1):
                     wrong.append(
@@ -7980,9 +9759,9 @@ let
                         "does not"
                     )
 
-        built = body_of(body, "fn assemble_gpu") or body_of(body, "fn ensure_gpu")
+        built = span_of(body, "assemble_gpu") or span_of(body, "ensure_gpu")
         for span, why in (
-            (body_of(body, "fn configure"),
+            (span_of(body, "configure"),
              "does not resize on `configure`, so no resize follows the size the "
              "compositor just gave"),
             (built,
@@ -8032,7 +9811,7 @@ let
         # exactly: on a clamped buffer the scale is what moves the number of
         # columns, and a window dragged between two monitors gets no
         # `configure` to repair it.
-        scaled = body_of(body, "fn scale_factor_changed")
+        scaled = span_of(body, "scale_factor_changed")
         if scaled:
             # AND WHAT IS KEPT IS THE ANSWER, by the NAMES the `Some((…))`
             # bound. `.width =` alone passes `self.width = self.asked.0`,
@@ -8065,9 +9844,21 @@ let
             # inside it: the check passed the buffer host for the wrong reason
             # for a round, because `"draw()"` is a substring of it — so the
             # verb the comment named was not the verb that matched.
+            # AND `ask_paint()` IS ONE OF THEM. It is the one-frame model's
+            # verb: it marks a frame OWED, and the loop's callback settles the
+            # debt with `re_render()` and then `paint()`. So it says the same
+            # thing as `re_render()` here, deferred by exactly one turn of the
+            # queue — and `one-frame-model` is what keeps that true, by
+            # refusing a door with `ask_paint` and no `settle`.
             if not any(
                 v in scaled
-                for v in ("recount()", "re_render()", "request_redraw()", "self.draw()")
+                for v in (
+                    "recount()",
+                    "re_render()",
+                    "request_redraw()",
+                    "ask_paint()",
+                    "self.draw()",
+                )
             ):
                 wrong.append(
                     f"{f.name}: `scale_factor_changed` keeps a new size and "
@@ -8076,7 +9867,7 @@ let
                 )
         # AND SO DOES THE CONSTRUCTOR. `Gpu::new` clamps too, and `configure`
         # counts the columns before there is a GPU to clamp anything.
-        built = body_of(body, "fn assemble_gpu") or body_of(body, "fn ensure_gpu")
+        built = span_of(body, "assemble_gpu") or span_of(body, "ensure_gpu")
         if built and "fn recount" in body and "recount()" not in built:
             wrong.append(
                 f"{f.name}: the GPU is assembled and the columns are not "
@@ -8230,7 +10021,7 @@ let
         # `#[must_use]` happy, and leaves the door laying out against the size
         # it had before the scale changed. That is the whole defect this module
         # exists for, passing every rule written about it.
-        inside = body_of(text, "pub fn followed")
+        inside = span_of(text, "followed")
         if "resized(" not in inside:
             wrong.append(
                 "hidpi.rs: `followed` never calls `resized`; it then answers a "
@@ -8258,8 +10049,7 @@ let
     # checked like the rest, and a door that loses its `CompositorHandler`
     # takes the sweep below the number and says so. It was nine, which is the
     # count from before the screens grew a window of their own.
-    if doors < 10:
-        wrong.append(f"only {doors} compositor handlers found; the sweep is not reaching them")
+    floor(doors, 10, "compositor handlers found")
 
     if wrong:
         print("ERROR: a door that does not know how sharp its screen is.", file=sys.stderr)
@@ -8282,7 +10072,12 @@ let
   every-window-repeats = mkCheck "every-window-repeats" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a door asks for its keyboard wherever it builds its seat, and
+    # the question is whether the call is in the file at all. The strip is what
+    # stops a comment ABOUT `get_keyboard_with_repeat` — and the two excused
+    # doors have one — from answering for the call.
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     # TWO DOORS ARE EXCUSED, AND EACH ONE PROVES ITS OWN EXCUSE.
     #
@@ -8311,7 +10106,7 @@ let
     handlers = 0
 
     for f in sorted(shell.rglob("*.rs")):
-        body = f.read_text()
+        body = code_of(f.read_text())
         if "impl KeyboardHandler for" not in body:
             continue
         handlers += 1
@@ -8350,8 +10145,7 @@ let
             wrong.append(f"{name} is excused and is not there any more")
 
     # AND THE CHECK ITSELF IS NOT VACUOUS: it has to have found the windows.
-    if handlers < 6:
-        wrong.append(f"only {handlers} keyboard handlers found; the sweep is not reaching them")
+    floor(handlers, 6, "keyboard handlers found")
 
     if wrong:
         print("ERROR: a keyboard that does not repeat.", file=sys.stderr)
@@ -8408,8 +10202,18 @@ let
       ETC
       python3 - <<'END'
       import pathlib, re, sys
+      exec(open("${pyPrelude}").read())
 
-      text = pathlib.Path("rules.js").read_text()
+      # FILE-WIDE: the merged rules of the whole system are one JavaScript
+      # file with no function of ours to narrow to; each `if` and each `return`
+      # is narrowed by its own parentheses, below.
+      #
+      # `uncommented` and never `code_of`: every action id, unit and verb this
+      # audits is a STRING literal, and emptying them would leave a check that
+      # audits an empty set and calls it agreed. What the strip buys is that a
+      # `||` written in a comment is no longer read as an alternative.
+      text = uncommented(pathlib.Path("rules.js").read_text())
+      floor(len(text), 500, "characters of the merged polkit rules")
 
       # NOTHING SMUGGLES A RULE IN THROUGH `environment.etc`. The upstream
       # packages that ship their own live in the store and are read by polkit
@@ -8447,7 +10251,7 @@ let
       #
       # So: read the condition of every `if`/`while` however it is spelled, and
       # every `return` expression, and put each through `top_of`.
-      loose = []
+      loose, conditions = [], 0
       for m in re.finditer(r"\b(?:if|while)\s*\(", text):
           deep, i = 0, m.end() - 1
           while i < len(text):
@@ -8459,11 +10263,13 @@ let
                       break
               i += 1
           top = top_of(text[m.end() : i])
+          conditions += 1
           if "&&" in top and "||" in top:
               loose.append(text[m.start() : i + 1].strip().splitlines()[0])
       # AND A `return` THAT DECIDES BY ITSELF. `return a && b || c;` and
       # `return a && b || c ? YES : NO;` grant exactly what the bracketed
       # condition would, with no `if` anywhere near them.
+      floor(conditions, 5, "conditions read out of the merged rules")
       for m in re.finditer(r"\breturn\b([^;]*);", text):
           top = top_of(m.group(1))
           if "&&" in top and "||" in top:
@@ -8637,9 +10443,19 @@ let
   one-syncthing-boundary = mkCheck "one-syncthing-boundary" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a boundary is broken by a NAME appearing anywhere outside it,
+    # so the file is the question. The cut at `mod tests` is the narrowing.
+    #
+    # `uncommented` and never `code_of`: every name here is a string literal —
+    # a program, a header, a path — and emptying the strings would leave a
+    # sweep that can never find one. What the strip is for is the other half:
+    # a name written in a comment is prose ABOUT the boundary, and three of
+    # these files explain themselves that way.
     crates = pathlib.Path("${../crates}")
     boundary = crates / "ronoctua-syncthing" / "src" / "rest.rs"
+    swept = 0
     unit = crates / "ronoctua-syncthing" / "src" / "unit.rs"
     wrong = []
 
@@ -8673,15 +10489,22 @@ let
         cut = list(re.finditer(r"^#\[cfg\(test\)\]\s*\nmod tests", text, re.M))
         if cut:
             text = text[: cut[-1].start()]
-        code = "\n".join(re.sub(r"//.*", "", line) for line in text.splitlines())
+        # AND `uncommented` IS WHAT TELLS A SENTENCE FROM A CALL. It was a
+        # `re.sub` over `//.*`, which cuts at a `//` inside a STRING as
+        # readily as at a comment — a URL or a path would have hidden
+        # everything after it on that line.
+        code = uncommented(text)
+        swept += 1
         for name in NAMES:
             if name in code:
                 wrong.append(f"{f.relative_to(crates)} names `{name}` outside the boundary")
 
+    floor(swept, 100, "sources of the workspace swept for a Syncthing name")
     if not boundary.exists():
         wrong.append("crates/ronoctua-syncthing/src/rest.rs is gone; what is this checking?")
     else:
-        body = boundary.read_text()
+        body = uncommented(boundary.read_text())
+        floor(len(body), 1000, "characters of rest.rs")
         for name in ("/rest/events", "/rest/system/status", "X-API-Key"):
             if name not in body:
                 wrong.append(f"the boundary no longer names `{name}` — has it moved?")
@@ -8736,17 +10559,17 @@ let
   every-view-follows-its-cursor = mkCheck "every-view-follows-its-cursor" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    src = pathlib.Path("${../crates/ronoctua-shell/src/surface.rs}").read_text()
+    src = code_of(pathlib.Path("${../crates/ronoctua-shell/src/surface.rs}").read_text())
+    floor(len(src), 100000, "characters of surface.rs")
     bad = []
 
     # THE VIEWS ARE READ FROM THE ENUM, never from a list typed here: a list
     # would be one more place to forget the next view.
-    enum = src[src.index("enum ViewState {") :]
-    enum = enum[: enum.index("\n}\n")]
+    enum = must(scope(src, r"enum ViewState\b"), "`enum ViewState`")
     views = re.findall(r"^    (\w+),", enum, re.M)
-    if len(views) < 12:
-        bad.append(f"only {len(views)} views found; the sweep is not reading the enum")
+    floor(len(views), 12, "views declared by `ViewState`")
 
     # THE THREE THAT HAVE NO CURSOR, and each is a claim about what it is.
     #
@@ -8755,8 +10578,11 @@ let
     #   `NoneOf`  — the region is closed.
     WITHOUT = {"Manual", "Leader", "NoneOf"}
 
-    at = src.index("fn list_cursor(&self)")
-    table = src[at : src.index("\n    }\n", at)]
+    # BY BRACES, never by the next `\n    }`: a nested block that closes at
+    # that indent ends the capture early, and everything after it reads as
+    # absent. `body_of` counts the braces.
+    table = must(body_of(src, "list_cursor"), "`list_cursor`")
+    floor(len(table), 200, "characters of `list_cursor`")
     named = set(re.findall(r"ViewState::(\w+)", table))
     for v in views:
         if v in WITHOUT or v in named:
@@ -8772,16 +10598,16 @@ let
     # AND THE ONE CALLER THAT MAKES IT HAPPEN. `typed` is the human-key path;
     # if the call leaves it, every view stops following at once and no test of
     # a single view would say so.
-    key = src.index("fn typed(&mut self, event: KeyEvent)")
-    wrapper = src[key : src.index("\n    }\n", key)]
+    wrapper = must(body_of(src, "typed"), "`Footer::typed`")
+    floor(len(wrapper), 100, "characters of `typed`")
     if "follow_cursor()" not in wrapper:
         bad.append(
             "`Footer::typed` no longer follows the cursor: it is the one place "
             "that knows a PERSON moved something, and an arrival must not"
         )
     # AND NOT FROM THE PAINT, which is the arrival's path.
-    paint = src.index("fn draw_and_paint(&mut self)")
-    if "follow_cursor" in src[paint : src.index("\n    }\n", paint)]:
+    painting = must(body_of(src, "draw_and_paint"), "`draw_and_paint`")
+    if "follow_cursor" in painting:
         bad.append(
             "`draw_and_paint` follows the cursor: a daemon's arrival redraws "
             "too, and that is the forced scroll the owner reported once already"
@@ -8813,6 +10639,14 @@ let
     python3 - <<'END'
     import pathlib, re, sys
 
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a call site may be anywhere in any crate, and what bounds the
+    # search is the 400 characters of the CALL — its own parentheses — rather
+    # than a function. The `.ftl` half is a catalogue with no functions at all.
+    #
+    # `code_of` on the Rust: a `t_with` written out in a comment as an example
+    # is not a call, and this check names the file and the key when it fails.
     root = pathlib.Path("${self}")
     bad = []
 
@@ -8846,26 +10680,26 @@ let
                 key, body = None, []
         close(key, body)
 
-    if len(numeric) < 3:
-        bad.append(
-            f"only {len(numeric)} keys with a numeric branch were found; the "
-            "sweep is not reading the .ftl"
-        )
+    floor(len(numeric), 3, "keys with a numeric branch")
 
     # THE CONSTANT IS THE KEY IN THE SHAPE THE GENERATOR WRITES IT.
     consts = {k.upper().replace("-", "_"): k for k in numeric}
+    swept = 0
 
     # AND THE CALL SITES. `t_with` and `t_marked` take `&str` arguments and can
     # only ever hand Fluent a string; `t_args` is the one that carries a type.
     for f in sorted(root.glob("crates/**/*.rs")):
         if "target" in f.parts:
             continue
-        text = f.read_text()
+        text = code_of(f.read_text())
+        swept += 1
         for m in re.finditer(r"\bt_(with|marked)\s*\(", text):
-            window = text[m.end() : m.end() + 400]
-            # The call ends at the first `);` — good enough to name the key,
-            # which is always the first argument.
-            window = window.split(");", 1)[0]
+            # THE CALL'S OWN PARENTHESES, and not four hundred characters cut
+            # at the first `);`. Neither bound is the call: rustfmt ends a
+            # nested one `),`, so the window ran past it into the NEXT call and
+            # blamed `t_args` for what `t_with` was doing — and a `);` inside a
+            # string literal cut it short the other way.
+            window = shut_at(text, m.end())
             for const, key in consts.items():
                 if re.search(rf"\b{const}\b", window):
                     bad.append(
@@ -8874,6 +10708,7 @@ let
                         "string — every number falls through to the default branch"
                     )
 
+    floor(swept, 100, "sources of the workspace swept for a call site")
     for b in bad:
         print(f"ERROR: {b}", file=sys.stderr)
     if bad:
@@ -8897,12 +10732,419 @@ let
   # them. None of the three has any business here, and `symlink_metadata` is
   # what has to be present: a walk with neither would be one that does not look
   # at all.
+  # THE BRAIN CAN BE PHOTOGRAPHED, and for a long time it could not.
+  #
+  # Its whole screen is the mind the host pushes in, and `render-png` had no
+  # way to push one — so every picture of it was a title over the words "no
+  # tasks yet", which the tool's own header called "the honest picture of what
+  # they have". It was honest and it was useless: the buffer this repository
+  # most needed to review was the one it could not open. The owner said so in
+  # as many words.
+  #
+  # `--mind` closes it, and this is what keeps it closed. The fixture is the
+  # DAEMON'S OWN JSON — one line off its socket is a valid argument — so it
+  # cannot drift into a shape only the tool understands.
+  #
+  # WHAT IS ASSERTED, and the first two attempts at it were both wrong.
+  #
+  # "The two languages differ" does not catch an empty screen: without a mind
+  # the page says `Nothing is set up yet` in one and `Nada configurado ainda`
+  # in the other, which differ perfectly well. Neither does "there is ink" —
+  # a header and one sentence is plenty of ink.
+  #
+  # What separates the two is how MUCH is on the screen, and the tool already
+  # prints it: the number of runs in the frame it drew. An empty brain is a
+  # header and a sentence; one with a mind is a list, a log, a footer and a
+  # paragraph. The floor is set well under what this fixture produces and well
+  # over what an empty screen can reach, and the two numbers are far enough
+  # apart that nothing has to be tuned.
+  #
+  # The size and the difference between languages stay, because they are cheap
+  # and they close the rest of the chain in one comparison — component,
+  # display list, i18n, tokens, wgpu, pixel.
+  the-brain-is-photographable = mkCheck "the-brain-is-photographable" [ pkgs.python3 ] ''
+    export VK_DRIVER_FILES=${xvfb.icd}
+    export VK_ICD_FILENAMES=${xvfb.icd}
+    export LIBGL_ALWAYS_SOFTWARE=1
+    export RONOCTUA_COVERAGE_FONTS=${rust.atRunTime.RONOCTUA_COVERAGE_FONTS}
+
+    cat > mind.json <<'JSON'
+    {"now":1789800000,
+     "pulse":{"at":1789800000,"ram-used-pct":31,"memory-stall":4,"cpu-stall":40,"on-battery":false},
+     "tasks":[
+       {"id":"system-update","kind":"routine","standing":"idle","enabled":true,
+        "interval-days":7,"part-of-day":"afternoon","next":1789886400,"hold":null,"why-not":"",
+        "last":{"task":"system-update","began":1789540000,"ended":1789540291,"kind":"done",
+                "at":"","why":"","trouble":"","steps":[]},
+        "history":[{"task":"system-update","began":1789540000,"ended":1789540291,"kind":"done",
+                    "at":"","why":"","trouble":"","steps":[]}],
+        "steps":[{"id":"a-root-step","command":"nix flake update","needs-root":true,
+                  "on":true,"on-by-default":true}]},
+       {"id":"cache-sweep","kind":"once","standing":"idle","enabled":true,
+        "interval-days":10,"part-of-day":"night","next":1789807200,"hold":null,"why-not":"",
+        "last":null,"history":[],"steps":[]}],
+     "queue":[],"running":"","announcement":null,"rehearsing":null,"postponed":null,
+     "journal":[{"task":"cache-sweep","began":1789700000,"ended":1789700060,"kind":"held",
+                 "at":"","why":"ram","trouble":"","steps":[]}],
+     "prefs":{"gate":{"ram-ceiling-pct":70,"cpu-stall-per-mille":200,"abort-on-battery":true},
+              "tasks":{}}}
+    JSON
+
+    : > runs.txt
+    for language in ${lib.concatStringsSep " " languages}; do
+      ${rust.workspace}/bin/ronoctua-render-png \
+        ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
+        --mind mind.json --columns 100 --lines 30 --language "$language" \
+        --out "$PWD/$language.png" | tee -a runs.txt
+      # AND THE PAGE BEHIND ONE, which is the half a mind is needed for twice:
+      # without a task there is nothing to open.
+      ${rust.workspace}/bin/ronoctua-render-png \
+        ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
+        --mind mind.json --columns 100 --lines 30 --language "$language" \
+        --key enter --out "$PWD/$language-task.png" | tee -a runs.txt
+      # AND THE POINTER AT REST, which is the third thing a photograph could
+      # not reach. The wall carries a hover now, and a screen this tool cannot
+      # drive is a screen nobody reviews — the hole is in the photographer,
+      # never in the buffer.
+      ${rust.workspace}/bin/ronoctua-render-png \
+        ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
+        --mind mind.json --columns 100 --lines 30 --language "$language" \
+        --hover 30,3 --out "$PWD/$language-hover.png" | tee -a runs.txt
+    done
+
+    # THE HOVER LIGHTS A ROW, and a row the CURSOR is not on: the two are
+    # different questions and wear different grounds. Asked of the display
+    # list, because a tone this close is not a thing to assert from pixels.
+    ${rust.workspace}/bin/ronoctua-render-png \
+      ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
+      --mind mind.json --columns 100 --lines 30 --language en-GB \
+      --hover 30,3 --list > hovered.txt
+    # BY THE TWO THINGS THAT MATTER, and not by the whole `Debug` spelling:
+    # the row and the ground it wears. Written out in full it broke the day the
+    # band gained a column and a width — a change this check has no opinion
+    # about, and a check that argues with every edit argues with none of them.
+    grep -E 'Selection \{ line: 3,.*surface-hover' hovered.txt > /dev/null \
+      || { echo "ERROR: the pointer rested on a row and nothing lit under it." >&2; exit 1; }
+    grep -q 'surface-selection' hovered.txt \
+      || { echo "ERROR: the cursor's own band went away with the hover." >&2; exit 1; }
+
+    python3 - <<'END'
+    import pathlib, struct, sys, zlib
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: what is read here is a log this check itself produced and a
+    # set of PNGs, neither of which has a function in it.
+    # PARSED: the pictures are decoded — the IDAT chunks are inflated and the
+    # bytes compared — and the log is split on a fixed word. Neither is
+    # searched for a name, so there is no prose for a comment to hide in and
+    # nothing for a stripper to take off.
+
+    def pixels(name):
+        raw = pathlib.Path(name).read_bytes()
+        if raw[:8] != b"\x89PNG\r\n\x1a\n":
+            sys.exit("ERROR: " + name + " is not a PNG")
+        wide, tall = struct.unpack(">II", raw[16:24])
+        # The IDAT, decompressed and un-filtered enough to count colours: every
+        # row is one filter byte and then RGBA.
+        data = b"".join(
+            raw[i + 8 : i + 8 + struct.unpack(">I", raw[i : i + 4])[0]]
+            for i in range(8, len(raw))
+            if raw[i + 4 : i + 8] == b"IDAT"
+            for _ in [0]
+        )
+        return wide, tall, zlib.decompress(data)
+
+    # HOW MANY RUNS THE FRAME HAD. An empty brain draws about sixteen — the
+    # header's ladder and one sentence. This fixture draws over forty.
+    FLOOR = 30
+
+    seen = {}
+    for language in "${lib.concatStringsSep " " languages}".split():
+        for what in (language, language + "-task"):
+            wide, tall, body = pixels(what + ".png")
+            if (wide, tall) == (0, 0):
+                sys.exit("ERROR: " + what + " has no size")
+            seen[what] = body
+
+    floor(len(seen), 4, "pictures taken of the brain")
+    drew = 0
+    for line in pathlib.Path("runs.txt").read_text().splitlines():
+        if " runs," not in line:
+            continue
+        drew += 1
+        drawn = int(line.split(" runs,")[0].split()[-1])
+        if drawn < FLOOR:
+            sys.exit(
+                "ERROR: a page drew only " + str(drawn) + " runs (" + line.strip() + "). "
+                "The brain drew its empty screen, which is what `--mind` exists to stop."
+            )
+    floor(drew, 6, "pages whose run count was read back")
+
+    for what in ("", "-task"):
+        bodies = {l: seen[l + what] for l in "${lib.concatStringsSep " " languages}".split()}
+        if len(set(map(bytes, bodies.values()))) != len(bodies):
+            sys.exit(
+                "ERROR: the brain's" + (what or " home") + " page is the same in every language — "
+                "which is what an empty screen looks like"
+            )
+
+    print("OK: the brain's two pages draw, in every language, from a mind off the daemon's own socket")
+    END
+  '';
+
+  # EVERY KEY THE BRAIN BINDS IS A KEY ITS SCREEN TEACHES.
+  #
+  # THE DEFECT THIS CATCHES is one the owner reported twice, in those words:
+  # they asked for a way to run a task by hand and to switch one off, and both
+  # times the answer was that the keys existed — `m r` and `m o` — and neither
+  # appeared anywhere on the page. A key that is not on the screen is a key
+  # nobody has.
+  #
+  # It went unnoticed because the page taught from a hand-written list, so the
+  # list and the keymap were two truths. The buffer's own test asserts they
+  # agree; this asserts the SHAPE that makes agreeing possible — the header is
+  # built from tables of pairs and not from runs written out one by one, so a
+  # key added to the keymap and not to a table is a test failure rather than a
+  # silence.
+  the-brain-header-is-generated = mkCheck "the-brain-header-is-generated" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: `KEYMAP` and the four `*_TEACHES` tables are module-level.
+    # `rungs` is narrowed by name below.
+    #
+    # `uncommented` and never `code_of`: a KEY and a command id are string
+    # literals, and emptying them would leave two empty sets that agree.
+    src = uncommented((pathlib.Path("${self}") / "buffers" / "brain" / "src" / "lib.rs").read_text())
+    floor(len(src), 10000, "characters of the brain buffer's lib.rs")
+
+    bound = set(re.findall(r'\("([^"]+)", "brain-[^"]+"\),', src))
+    floor(len(bound), 5, "keys the brain binds")
+
+    # WHAT THE PAGES TEACH, out of the same shape.
+    taught = set()
+    for table in ("HOME_TEACHES", "TASK_TEACHES", "ANSWER_TEACHES", "NOTICE_TEACHES"):
+        block = re.search(table + r": &\[Teach\] = &\[(.*?)\];", src, re.S)
+        if not block:
+            sys.exit("ERROR: `" + table + "` went away; the header is built from it")
+        taught |= set(re.findall(r'\("([^"]+)",', block.group(1)))
+    floor(len(taught), 5, "keys the pages teach")
+
+    missing = sorted(k for k in bound if k not in taught)
+    if missing:
+        sys.exit(
+            "ERROR: the brain binds keys no page teaches: " + ", ".join(missing)
+            + ". A key that is not on the screen is a key nobody has."
+        )
+
+    # AND THE HEADER IS DRAWN FROM THE TABLES. A `put` of a literal notation in
+    # the header's own builder is the hand-written list coming back.
+    head = must(body_of(src, "header"), "`State::header`")
+    floor(len(head), 400, "characters of the header's builder")
+    for literal in re.findall(r'Run::datum\("([^"]+)"\)', head):
+        sys.exit("ERROR: the header draws the literal `" + literal + "` instead of a table's pair")
+
+    # AND IT IS LAID OUT ONCE. The height, the ink and the POINTER all read
+    # `ladder`; three walks of the same table is how a rung comes to answer
+    # for its neighbour — the same class of defect the scrollbar had, where
+    # what paints and what catches were two arithmetics.
+    ladder = must(body_of(src, "ladder"), "`State::ladder`")
+    floor(len(ladder), 400, "characters of `ladder`")
+    for who, why in (
+        ("header", "the header paints a ladder it laid out itself"),
+        ("header_rows", "the height counts a ladder of its own"),
+        ("clicked", "a click on a shortcut is resolved by a second walk"),
+    ):
+        body = must(body_of(src, who), "`State::" + who + "`")
+        if "ladder()" not in body:
+            sys.exit("ERROR: " + why + " — one walk, read three times")
+
+    print("OK: every key the brain binds is taught, and the header is one walk read three times")
+    END
+  '';
+
+  # THE SWITCH ON THE UPDATE'S PAGE REACHES THE RUN.
+  #
+  # It did not. `m t` wrote an entry into `brain.json` and nothing on the
+  # machine ever read it: what decides whether a step runs is
+  # `/etc/ronoctua/updates.conf`, generated from a NixOS option, which needs a
+  # rebuild. So the page offered a key, the key wrote a file, and the sequence
+  # went on running exactly what it ran before — with nothing anywhere to say
+  # so.
+  #
+  # The fix is a third layer in `turned_on`, read after the machine's table:
+  # the person's own flips, written by the brain out of `brain.json`. This
+  # refuses the two ways it could quietly come undone — the script dropping
+  # the layer, and the brain dropping the file.
+  the-step-switch-reaches-the-run =
+    mkCheck "the-step-switch-reaches-the-run"
+      [
+        pkgs.bash
+        pkgs.gnused
+      ]
+      ''
+        # IT RUNS THE GENERATED FUNCTION, and does not read the generator.
+        #
+        # The first shape of this read the script's SOURCE for the name of the
+        # person's file, and a sabotage walked straight past it: pointing the
+        # guard at `/nonexistent` while leaving the redirect below it kept the
+        # name in the text and broke the feature. A check that greps measures
+        # how the source is spelled, which is not the property.
+        #
+        # So it lifts `turned_on` and `default_on` out of the real script and
+        # asks them the four questions that matter, with tables planted under
+        # them. If the person's layer stops being read, one of the four gives
+        # the wrong answer.
+        export HOME="$PWD/home"
+        export XDG_STATE_HOME="$HOME/.local/state"
+        mkdir -p "$XDG_STATE_HOME/ronoctua"
+
+        script=${updateRunners}/bin/ronoctua-update
+        [ -x "$script" ] || { echo "ERROR: the person's half was not built" >&2; exit 1; }
+
+        # THE TWO FUNCTIONS, and nothing else: the rest of that file starts a
+        # unit and updates a machine.
+        {
+          echo 'set -uo pipefail'
+          sed -n '/^turned_on() {/,/^}/p' "$script"
+          sed -n '/^default_on() {/,/^}/p' "$script"
+        } > lifted.sh
+        grep -q 'turned_on' lifted.sh || {
+          echo "ERROR: \`turned_on\` is not in the generated script any more" >&2; exit 1; }
+
+        ask() {
+          # `$1` the step, `$2` what is expected. No `/etc` table here, so the
+          # distro's own defaults answer until the person's file speaks.
+          if bash -c ". ./lifted.sh; turned_on $1"; then said=on; else said=off; fi
+          if [ "$said" != "$2" ]; then
+            echo "ERROR: $1 is $said and should be $2 ($3)" >&2
+            failed=1
+          fi
+        }
+
+        failed=0
+        : > "$XDG_STATE_HOME/ronoctua/update-steps.conf"
+        ask tldr-cache on "the distro ships it on and nobody has said otherwise"
+        ask rust-toolchains off "the distro ships it off and nobody has said otherwise"
+
+        # AND NOW THE PERSON SAYS OTHERWISE, in both directions. This is the
+        # whole feature: a key on the brain's page changing what the sequence
+        # runs, with no rebuild.
+        printf '%s\n' 'system-update rust-toolchains' > "$XDG_STATE_HOME/ronoctua/update-steps.conf"
+        ask rust-toolchains on "the person switched it on"
+        ask tldr-cache on "a flip on one step moved another"
+
+        printf '%s\n' 'system-update tldr-cache' > "$XDG_STATE_HOME/ronoctua/update-steps.conf"
+        ask tldr-cache off "the person switched it off"
+
+        # AND A FLIP BELONGING TO ANOTHER TASK IS NOT THIS SEQUENCE'S.
+        printf '%s\n' 'cache-sweep tldr-cache' > "$XDG_STATE_HOME/ronoctua/update-steps.conf"
+        ask tldr-cache on "another task's flip was applied to this one"
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: a step switched on the brain's page is a step the sequence runs"
+      '';
+
+  # THE BRAIN READS WHERE THE UNITS WRITE, and it did not.
+  #
+  # `ronoctua_brain::runner::reports_dir` said `/run/ronoctua-brain` and
+  # NOTHING ON THE MACHINE EVER WROTE THERE: the person's units write into
+  # `%t`, which for them is `$XDG_RUNTIME_DIR`, and the update's script kept a
+  # TSV in a third place. `Report::watch` polls one path's mtime, so a path
+  # that never appears never changes — every run the brain started sat there
+  # until its patience ran out and came back `runaway`. Two hours, on a rebuild
+  # that had worked.
+  #
+  # Nothing could have caught it. Every test points `Runner::reporting_in` at a
+  # scratch directory, which is right — a test that wrote into the real one
+  # would be a test that talks to the machine — and that is exactly why none of
+  # them named it.
+  #
+  # So this reads the three places the name is spelled and refuses a
+  # disagreement: the daemon's constant, the `--report` argument in the units,
+  # and the generator that writes the update's own sheet.
+  the-brain-reads-what-the-units-write =
+    mkCheck "the-brain-reads-what-the-units-write" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
+
+        root = pathlib.Path("${self}")
+        # THE CODE AND NOT THE PROSE. The comment beside `reports_dir` names the
+        # old path on purpose — it is the whole story of the defect — and a check
+        # that read it would refuse the explanation of what it is checking for.
+        # FILE-WIDE: a constant, a unit's command line and a generator's
+        # variable — all module-level, in three languages.
+        #
+        # The local `code` dropped a line that BEGAN with a comment marker.
+        # `uncommented` and `hashless` are the prelude's, one per language, and
+        # they take a comment off the end of a line too; `uncommented` also
+        # knows that a `//` inside a string is not a comment, which matters
+        # here because every needle below is a PATH.
+
+        runner = uncommented((root / "crates" / "ronoctua-brain" / "src" / "runner.rs").read_text())
+        module = hashless((root / "nix" / "modules" / "cache.nix").read_text())
+        generator = hashless((root / "nix" / "scripts" / "gen-updates.py").read_text())
+        floor(len(runner), 1000, "characters of runner.rs")
+        floor(len(module), 500, "characters of nix/modules/cache.nix")
+        floor(len(generator), 2000, "characters of gen-updates.py")
+
+        said = re.search(r'pub const REPORTS_LEAF: &str = "([^"]+)";', runner)
+        if not said:
+            sys.exit("ERROR: `REPORTS_LEAF` went away; it is the name the units have to agree with")
+        leaf = said.group(1)
+
+        # THE DAEMON LOOKS IN THE RUNTIME DIRECTORY, and the unit's `%t` is that
+        # directory. A daemon that resolved an absolute path of its own would be
+        # back where this started.
+        if "XDG_RUNTIME_DIR" not in runner:
+            sys.exit("ERROR: the brain no longer resolves its reports under the runtime directory")
+        for absolute in ("/run/ronoctua-brain", "/var/run/ronoctua-brain"):
+            if absolute in runner:
+                sys.exit(
+                    "ERROR: the brain looks in " + absolute + ", which no unit of the person's can write"
+                )
+
+        # AND THE UNITS WRITE THERE. Both of them, and the rehearsal beside the
+        # real one — `report_path` builds `<id>-rehearsal.json` for a rehearsal,
+        # and a unit that wrote the plain name would have its rehearsal watched
+        # against the last true run's file.
+        wanted = "%t/" + leaf + "/"
+        if module.count("--report " + wanted) != 2:
+            sys.exit("ERROR: nix/modules/cache.nix does not write into `" + wanted + "` twice")
+        for kind in ("cache-sweep", "trash-expire"):
+            for name in (kind + ".json", kind + "-rehearsal.json"):
+                if name not in module:
+                    sys.exit("ERROR: no unit writes `" + name + "`")
+        if "-rehearsal.json" not in runner and "rehearsal" not in runner:
+            sys.exit("ERROR: the brain no longer watches a rehearsal's own file")
+
+        # AND THE UPDATE'S SCRIPT WRITES ONE AT ALL, which is the half that was
+        # missing entirely: it kept a TSV and the brain wanted JSON.
+        if 'REPORTS_LEAF = "' + leaf + '"' not in generator:
+            sys.exit("ERROR: the update's generator does not spell the same directory")
+        for wanted in ("sheet_file", "sheet_ended", "finish()"):
+            if wanted not in generator:
+                sys.exit("ERROR: the update's script no longer writes the sheet the brain reads")
+
+        print("OK: the brain reads the directory the units write into, rehearsals included")
+        END
+      '';
+
   the-sweep-only-looks-at-links = mkCheck "the-sweep-only-looks-at-links" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a call that resolves a link, made anywhere in the crate, is
+    # the offence — there is no function to narrow to, because the point is
+    # that it may appear in one that does not exist yet. The cut at `mod tests`
+    # is the narrowing.
     sweep = pathlib.Path("${../crates}") / "ronoctua-cache-sweep" / "src"
     wrong = []
+    swept = 0
 
     THROUGH = ("std::fs::metadata(", "fs::canonicalize(", "fs::read_link(", ".canonicalize()")
     looked = False
@@ -8914,6 +11156,8 @@ let
         cut = list(re.finditer(r"^#\[cfg\(test\)\]\s*\nmod tests", text, re.M))
         if cut:
             text = text[: cut[-1].start()]
+        text = code_of(text)
+        swept += 1
         if "symlink_metadata(" in text:
             looked = True
         for name in THROUGH:
@@ -8934,9 +11178,10 @@ let
     # person configured in one file — and it is asked before this is started.
     # A second opinion here would be a second policy that drifts from the first,
     # which is the refusal `tasks/update.rs` already writes out about itself.
+    floor(swept, 2, "sources of the sweep read for a resolving call")
     GATE = ("pressure", "on_battery", "ram_used", "cpu_stall", "/proc", "loadavg")
     for f in sorted(sweep.rglob("*.rs")):
-        text = f.read_text()
+        text = code_of(f.read_text())
         for name in GATE:
             if name in text:
                 wrong.append(
@@ -8966,9 +11211,17 @@ let
   cache-has-one-list = mkCheck "cache-has-one-list" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: the declaration is a Nix attribute set and the offence in Rust
+    # is a constant written ANYWHERE in the tree — neither is a question about
+    # one function.
+    #
+    # `hashless` for the Nix, `code_of` for the Rust: a number named in a
+    # comment beside the code is exactly what used to answer for the code.
     root = pathlib.Path("${../.}")
-    declared = (root / "assets" / "cache.nix").read_text()
+    declared = hashless((root / "assets" / "cache.nix").read_text())
+    floor(len(declared), 200, "characters of assets/cache.nix")
     wrong = []
 
     # THE DECLARATION ITSELF, so this check knows what it is guarding.
@@ -8982,7 +11235,8 @@ let
     # AND THE GENERATOR REFUSES THE ONE RELATIONSHIP. Read here too, because a
     # generator that stopped asserting would be a build that stopped refusing,
     # and nothing else in the tree would notice.
-    generator = (root / "nix" / "cache.nix").read_text()
+    generator = hashless((root / "nix" / "cache.nix").read_text())
+    floor(len(generator), 500, "characters of nix/cache.nix")
     if "freshDays < declared.keepDays" not in generator:
         wrong.append(
             "nix/cache.nix no longer refuses `freshDays >= keepDays`: a thumbnail "
@@ -8993,8 +11247,10 @@ let
     # number appears in Rust; a literal beside a name that means one of these is
     # a second answer waiting to disagree.
     NAMES = ("KEEP_DAYS", "EVERY_DAYS", "FRESH_DAYS", "PART_OF_DAY")
+    swept = 0
     for f in sorted((root / "crates").rglob("*.rs")):
-        text = f.read_text()
+        text = code_of(f.read_text())
+        swept += 1
         for name in NAMES:
             for line in text.splitlines():
                 if re.search(rf"\b{name}\s*[:=]\s*\S", line) and "policy::" not in line:
@@ -9003,6 +11259,7 @@ let
                         "numbers come from assets/cache.nix, through nix/cache.nix"
                     )
 
+    floor(swept, 100, "sources of the workspace swept for a cache number")
     if wrong:
         for line in wrong:
             print("ERROR:", line, file=sys.stderr)
@@ -9015,9 +11272,18 @@ let
   one-zip-reader = mkCheck "one-zip-reader" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a zip walked by hand anywhere outside the reader is the
+    # offence, and a manifest is an attribute set. The cuts at `mod tests` and
+    # `mod fixture` are the narrowing.
+    #
+    # `uncommented` for the Rust, `hashless` for the manifests: a dependency
+    # commented out is not a dependency, and that is exactly the shape a
+    # drawing crate comes back in.
     crates = pathlib.Path("${../crates}")
     reader = crates / "ronoctua-zip"
+    swept = 0
     wrong = []
 
     # WHAT ONLY A ZIP READER WRITES: the two directory signatures. A comment
@@ -9040,6 +11306,8 @@ let
             text = text[: cut[-1].start()]
         if "mod fixture" in text:
             text = text[: text.index("mod fixture")]
+        text = uncommented(text)
+        swept += 1
         for name in NAMES:
             if name in text:
                 wrong.append(
@@ -9047,11 +11315,13 @@ let
                     "`ronoctua-zip` is where that lives"
                 )
 
+    floor(swept, 100, "sources of the workspace swept for a hand-walked zip")
     heart = reader / "src" / "lib.rs"
     if not heart.exists():
         wrong.append("crates/ronoctua-zip/src/lib.rs is gone; what is this checking?")
     else:
-        body = heart.read_text()
+        body = uncommented(heart.read_text())
+        floor(len(body), 1000, "characters of ronoctua-zip's lib.rs")
         for name in ("pub fn members", "pub fn member_bytes", "pub fn member_up_to"):
             if name not in body:
                 wrong.append(f"the zip reader no longer has `{name}` — has it moved?")
@@ -9061,10 +11331,8 @@ let
     # path that downloads and bakes.
     DRAWING = ("ronoctua-atlas =", "resvg", "tiny-skia", "image =", "image.workspace")
     for name in ("ronoctua-atlas-packs", "ronoctua-transfers"):
-        manifest = (crates / name / "Cargo.toml").read_text()
-        body = "\n".join(
-            line for line in manifest.splitlines() if not line.lstrip().startswith("#")
-        )
+        body = hashless((crates / name / "Cargo.toml").read_text())
+        floor(len(body), 100, "characters of " + name + "'s Cargo.toml")
         for draws in DRAWING:
             if draws in body:
                 wrong.append(
@@ -9085,7 +11353,16 @@ let
     python3 - <<'END'
     import pathlib, re, sys
 
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a boundary is broken by a NAME appearing anywhere outside it,
+    # so the file is the question. The cut at `mod tests` is the narrowing.
+    #
+    # `uncommented` and never `code_of`: every name here is a string literal —
+    # a header, a status line — and emptying the strings would leave a sweep
+    # that can never find one.
     crates = pathlib.Path("${../crates}")
+    swept = 0
     # THE FRAMER IS A CRATE, not one file of it. It was `lib.rs` alone, and the
     # day the crate grew `ws.rs` — the RFC 6455 handshake, which is an HTTP
     # request and an HTTP answer — this check called the crate's own second
@@ -9107,7 +11384,8 @@ let
         cut = list(re.finditer(r"^#\[cfg\(test\)\]\s*\nmod tests", text, re.M))
         if cut:
             text = text[: cut[-1].start()]
-        code = "\n".join(re.sub(r"//.*", "", line) for line in text.splitlines())
+        code = uncommented(text)
+        swept += 1
         for name in NAMES:
             if name in code:
                 wrong.append(
@@ -9115,10 +11393,12 @@ let
                     "`ronoctua-http` is where that lives"
                 )
 
+    floor(swept, 100, "sources of the workspace swept for a hand-written frame")
     if not heart.exists():
         wrong.append("crates/ronoctua-http/src/lib.rs is gone; what is this checking?")
     else:
-        body = heart.read_text()
+        body = uncommented(heart.read_text())
+        floor(len(body), 1000, "characters of ronoctua-http's lib.rs")
         for name in ("fn dechunked", "fn status_of", "fn over_unix", "fn over_tcp"):
             if name not in body:
                 wrong.append(f"the framer no longer has `{name}` — has it moved?")
@@ -9152,9 +11432,17 @@ let
         DECLARED
         python3 - <<'END'
         import json, pathlib, sys
+        exec(open("${pyPrelude}").read())
 
         declared = json.load(open("declared.json"))
+        # PARSED: and FILE-WIDE.
+        # FILE-WIDE: two declarations compared whole — an attribute set and a
+        # schema — neither of which has a function in it.
+        # PARSED: both sides arrive as JSON and are `json.loads`-ed, not
+        # searched. JSON has no comment for a false answer to hide in, so
+        # there is nothing for a stripper to take off.
         schema = json.loads(pathlib.Path("${../tests/fixtures/syncthing-schema.json}").read_text())
+        floor(len(schema), 4, "scopes in the pinned schema")
         wrong = []
 
         # WHAT IS DELIBERATELY NOT OFFERED, and why. Every name here is a
@@ -9271,14 +11559,20 @@ let
       WRITTEN
       python3 - <<'END'
       import json, pathlib, sys
+      exec(open("${pyPrelude}").read())
 
       declared = json.load(open("declared.json"))
+      # PARSED: and FILE-WIDE.
+      # FILE-WIDE: two lists of names compared whole; neither has a function.
+      # PARSED: the declaration arrives as JSON and the module's names as one
+      # per line, both written by the build a moment ago. Neither is searched
+      # for a name inside prose, so there is nothing for a stripper to remove.
       written = {l.strip() for l in pathlib.Path("written.txt").read_text().split() if l.strip()}
       fixed = {e["key"] for e in declared["global"] if e.get("fixed")}
       wrong = []
 
-      if not written:
-          sys.exit("ERROR: the module writes no option at all; the eval is not reaching it")
+      floor(len(written), 5, "options the module writes")
+      floor(len(fixed), 5, "rows drawn refusing")
 
       for key in sorted(written - fixed):
           wrong.append(
@@ -9326,10 +11620,14 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
         crate = pathlib.Path("${../crates/ronoctua-syncthing/src}")
         shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-        prefs = (crate / "prefs.rs").read_text()
+        # FILE-WIDE: the `#[default]` attribute and the footer's call are
+        # module-level facts. `shows` and `syncthing_mark` are narrowed by name.
+        prefs = code_of((crate / "prefs.rs").read_text())
+        floor(len(prefs), 500, "characters of prefs.rs")
         wrong = []
 
         # 1. THE DEFAULT IS `WhenOff`, and it is derived rather than written out —
@@ -9341,11 +11639,12 @@ let
 
         # 2. AND `WhenOff` DRAWS NOTHING WHILE IT IS SYNCING. The arithmetic is one
         #    function; this is what says it did not get turned round.
-        shows = re.search(r"pub const fn shows\(self, syncing: bool\) -> bool \{(.+?)\n    \}", body, re.S)
+        shows = body_of(body, "shows")
         if not shows:
             wrong.append("`Mark::shows` went away or changed shape")
         else:
-            arms = shows.group(1)
+            arms = shows
+            floor(len(arms), 40, "characters of `Mark::shows`")
             if "Self::WhenOff => !syncing" not in arms:
                 wrong.append("`WhenOff` no longer means `nothing is travelling`")
             if "Self::Never => false" not in arms:
@@ -9353,7 +11652,8 @@ let
 
         # 3. AND THE FOOTER ASKS THE PREFERENCE BEFORE IT DRAWS. A modeline that
         #    read the snapshot alone would draw the mark for everybody.
-        surface = (shell / "surface.rs").read_text()
+        surface = code_of((shell / "surface.rs").read_text())
+        floor(len(surface), 100000, "characters of surface.rs")
         if "self.syncthing_prefs.mark.shows(syncing)" not in surface:
             wrong.append("the footer draws the mark without asking the preference")
 
@@ -9365,15 +11665,13 @@ let
         #    rewrite that loses the `?` fails here instead of in a VM ten
         #    minutes later. A service that is genuinely DOWN still draws: the
         #    watching thread sends a snapshot saying so, which is a fact.
-        mark = re.search(
-            r"fn syncthing_mark\(&self\) -> Option<bool> \{(.+?)\n    \}", surface, re.S
-        )
+        mark = body_of(surface, "syncthing_mark")
         if not mark:
             wrong.append("`syncthing_mark` went away or changed shape")
-        elif "self.syncthing_snapshot.as_ref()?" not in mark.group(1):
+        elif "self.syncthing_snapshot.as_ref()?" not in mark:
             wrong.append("the mark is drawn before any reading has arrived")
         elif not (
-            "Standing::Absent" in mark.group(1) and "Standing::Unknown" in mark.group(1)
+            "Standing::Absent" in mark and "Standing::Unknown" in mark
         ):
             wrong.append(
                 "the mark is drawn where it cannot be justified — `Absent` is a "
@@ -9487,16 +11785,20 @@ let
   syncthing-options-have-text = mkCheck "syncthing-options-have-text" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     owed = pathlib.Path("${syncthingOptionsRs}/keys.txt").read_text().split()
     root = pathlib.Path("${../assets/i18n}")
     wrong = []
 
-    if len(owed) < 100:
-        sys.exit(f"ERROR: only {len(owed)} keys are owed; the generator is not reaching this")
+    # FILE-WIDE: a generated list of keys against the catalogues. Neither has
+    # a function in it, and `hashless` is what makes a key that was COMMENTED
+    # OUT of a `.ftl` count as missing rather than as present.
+    floor(len(owed), 100, "option keys the generator owes")
 
     for ftl in sorted(root.glob("*.ftl")):
-        have = set(re.findall(r"^([a-z0-9-]+) *=", ftl.read_text(), re.M))
+        have = set(re.findall(r"^([a-z0-9-]+) *=", hashless(ftl.read_text()), re.M))
+        floor(len(have), 500, "keys declared by " + ftl.name)
         for key in owed:
             if key not in have:
                 wrong.append(f"{ftl.name} does not carry `{key}`")
@@ -9758,7 +12060,12 @@ let
   files-notices-the-directory = mkCheck "files-notices-the-directory" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: the census is "which files build a files::View", which is a
+    # question about the whole tree. Inside a door it narrows twice — by
+    # function, through the indent walk below, and by braces, through `scope`
+    # on the `Report::Stirred` arm.
     crates = pathlib.Path("${../crates}")
     bad = []
 
@@ -9781,31 +12088,18 @@ let
         cut = text.find("#[cfg(test)]")
         return text if cut < 0 else text[:cut]
 
-    def body_from(text, opening):
-        """The braces balanced from 'opening' to its match, or None."""
-        start = text.find(opening)
-        if start < 0:
-            return None
-        i = text.index("{", start)
-        depth = 0
-        for j in range(i, len(text)):
-            if text[j] == "{":
-                depth += 1
-            elif text[j] == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[i : j + 1]
-        return None
+    # `body_from` was a seventh copy of the brace walk. `scope` is the
+    # prelude's, and it takes a PATTERN for the header rather than a literal.
 
-    files = {f: production(f, f.read_text()) for f in sorted(crates.rglob("*.rs"))}
+    files = {f: production(f, code_of(f.read_text())) for f in sorted(crates.rglob("*.rs"))}
+    floor(len(files), 100, "sources of the workspace swept for a door")
 
     # ONE. Every door that builds a view builds a watcher.
     #
     # This is the reported bug in check form: the window door existed for
     # months with no way at all to notice a directory changing.
     doors = [f for f, body in files.items() if "View::at(" in body]
-    if not doors:
-        bad.append("no door builds a files::View at all — has the grep gone stale?")
+    floor(len(doors), 2, "doors that build a files::View")
     for f in doors:
         if "Notice::watching" not in files[f]:
             bad.append(
@@ -9857,7 +12151,7 @@ let
     # every time something is pinned.
     arms = 0
     for f, text in files.items():
-        arm = body_from(text, "Report::Stirred =>")
+        arm = scope(text, r"Report::Stirred\s*=>")
         if arm is None:
             continue
         arms += 1
@@ -9894,7 +12188,8 @@ let
     if not notice.is_file():
         print("ERROR: crates/ronoctua-files/src/notice.rs is gone.", file=sys.stderr)
         raise SystemExit(1)
-    mask = notice.read_text()
+    mask = code_of(notice.read_text())
+    floor(len(mask), 1000, "characters of notice.rs")
     for flag in ("CREATE", "DELETE", "MOVED_TO", "MOVED_FROM", "ATTRIB", "CLOSE_WRITE"):
         if f"WatchFlags::{flag}" not in mask:
             print(f"ERROR: the watch no longer asks for {flag}.", file=sys.stderr)
@@ -9922,7 +12217,15 @@ let
   inspect-mesh-is-in-process = mkCheck "inspect-mesh-is-in-process" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a reach for a program anywhere in a reader is the offence,
+    # and the table's row is a module-level literal. `How::tool` is narrowed by
+    # name below.
+    #
+    # `uncommented` and never `code_of`: the eleven media types the mesh row
+    # claims are STRING literals, and emptying them would leave the row
+    # claiming nothing and the check agreeing.
     src = pathlib.Path("${../crates/ronoctua-inspect/src}")
     bad = []
     mesh = src / "mesh"
@@ -9940,13 +12243,12 @@ let
     if not mesh.is_dir():
         bad.append("the mesh readers are gone")
     readers = sorted(mesh.glob("*.rs")) if mesh.is_dir() else []
-    if len(readers) < 12:
-        bad.append(f"only {len(readers)} files under mesh/ — the readers are one per file")
+    floor(len(readers), 12, "files under mesh/")
     for f in readers + [solid]:
         if not f.is_file():
             bad.append(f"{f.name} is gone")
             continue
-        body = f.read_text()
+        body = uncommented(f.read_text())
         for word in ("Command", "tools::", "Tool::", "std::process"):
             if word in body:
                 bad.append(f"{f.name} names '{word}' — a shape is drawn here, not fetched")
@@ -9971,26 +12273,20 @@ let
     # None of them weakens clause ONE by a line: the mesh readers and the
     # rasteriser still name no program at all, which is the thing this check is
     # called after.
-    tools = (src / "tools.rs").read_text()
+    tools = uncommented((src / "tools.rs").read_text())
+    floor(len(tools), 500, "characters of tools.rs")
     if "pub const ALL: [Self; 6]" not in tools:
         bad.append("tools.rs no longer declares exactly six programs")
 
     # THREE. The table's mesh row asks for no program.
-    pixels = (src / "pixels.rs").read_text()
-    at = pixels.find("pub const fn tool(")
-    if at < 0:
+    pixels = uncommented((src / "pixels.rs").read_text())
+    floor(len(pixels), 1000, "characters of pixels.rs")
+    tool = body_of(pixels, "tool")
+    if tool is None:
         bad.append("pixels.rs has no How::tool — what does the grep match?")
     else:
-        depth, end = 0, at
-        for i in range(pixels.index("{", at), len(pixels)):
-            if pixels[i] == "{":
-                depth += 1
-            elif pixels[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    end = i
-                    break
-        arms = re.findall(r"([^=>\n{}]+)=>\s*([^,\n]+),", pixels[at:end])
+        floor(len(tool), 40, "characters of `How::tool`")
+        arms = re.findall(r"([^=>\n{}]+)=>\s*([^,\n]+),", tool)
         found = [(a, b) for a, b in arms if "Mesh" in a]
         if not found:
             bad.append("How::Mesh has no arm in How::tool")
@@ -10021,7 +12317,7 @@ let
         ):
             if kind not in row.group(0):
                 bad.append(f"the mesh row no longer claims {kind}")
-    if solid.is_file() and "pub fn draw(" not in solid.read_text():
+    if solid.is_file() and "pub fn draw(" not in uncommented(solid.read_text()):
         bad.append("solid.rs no longer draws anything")
 
     if bad:
@@ -10300,8 +12596,18 @@ let
         # when the binary is the package's default.
         python3 - <<'PY'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
-        dev = pathlib.Path("${../nix/dev.nix}").read_text()
+        # FILE-WIDE: a `cargo build` line in a shell script and the `[[bin]]`
+        # blocks of a dozen manifests. Neither has a function to narrow to;
+        # the `cargo build … 2>&1` match and the split on `[[bin]]` are the
+        # narrowing.
+        #
+        # `hashless` for both, whose comment is `#`: a `--bin` named in a
+        # comment is not a binary the loop builds, and a `name =` commented out
+        # of a manifest is not a binary that exists.
+        dev = hashless(pathlib.Path("${../nix/dev.nix}").read_text())
+        floor(len(dev), 2000, "characters of nix/dev.nix")
         # The reload's command: from `cargo build` to the `; then` that ends it.
         line = re.search(r"cargo build (.*?)2>&1", dev, re.S)
         if not line:
@@ -10309,13 +12615,14 @@ let
         words = line.group(1).replace("\\\n", " ").split()
         chosen = {w for f, w in zip(words, words[1:]) if f == "-p"}
         wanted = [w for f, w in zip(words, words[1:]) if f == "--bin"]
-        if not chosen or not wanted:
-            sys.exit("ERROR: the command selects no package or names no binary")
+        floor(len(chosen), 1, "packages the loop's command selects")
+        floor(len(wanted), 1, "binaries the loop's command names")
 
         # Every binary the tree declares, and which package declares it.
-        owner = {}
+        owner, seen = {}, 0
         for manifest in sorted(pathlib.Path("${../crates}").glob("*/Cargo.toml")):
-            text = manifest.read_text()
+            text = hashless(manifest.read_text())
+            seen += 1
             crate = re.search(r'^name = "([\w-]+)"', text, re.M)
             if crate:
                 owner.setdefault(crate.group(1), crate.group(1))
@@ -10324,6 +12631,7 @@ let
                 if named and crate:
                     owner[named.group(1)] = crate.group(1)
 
+        floor(seen, 10, "manifests read for a binary's owner")
         gaps = []
         for b in wanted:
             has = owner.get(b)
@@ -10465,7 +12773,14 @@ let
   tests-do-not-touch-the-machine = mkCheck "tests-do-not-touch-the-machine" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: the offence is a spawn ANYWHERE below `mod tests {`, and the
+    # cut at that line is the narrowing.
+    #
+    # `uncommented` and never `code_of`: every program named here is a STRING
+    # literal — `Command::new("systemctl")` — so emptying the strings would
+    # leave a check that can find nothing at all.
     root_dir = pathlib.Path("${self}")
 
     # The programs a test must never start. `systemd-run` is on the list for a
@@ -10504,27 +12819,29 @@ let
     # permission.
     ALLOWED = {"/bin/sh"}
 
-    gaps = []
+    gaps, swept, tails = [], 0, 0
     for rs in sorted((root_dir / "crates").rglob("*.rs")):
         if "target" in rs.parts:
             continue
-        source = rs.read_text()
+        source = uncommented(rs.read_text())
+        swept += 1
         # Everything from `mod tests {` to the end of the file: a test module is
         # conventionally last here, and taking the tail is what makes this
         # robust against nesting rather than counting braces.
         at = source.find("mod tests {")
         if at < 0:
             continue
+        tails += 1
         tail = source[at:]
         for n, line in enumerate(tail.splitlines(), 1):
             stripped = line.strip()
-            if stripped.startswith("//") or stripped.startswith("///"):
-                continue
             m = SPAWN.search(line)
             if (m and m.group(1) not in ALLOWED) or FORBIDDEN.search(line):
                 rel = rs.relative_to(root_dir)
                 gaps.append(f"{rel}: mod tests + {n}: {stripped[:70]}")
 
+    floor(swept, 100, "sources of the workspace swept for a test")
+    floor(tails, 30, "test modules found")
     if gaps:
         print("ERROR: a test starts a program on the machine.", file=sys.stderr)
         print("", file=sys.stderr)
@@ -11002,17 +13319,23 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
+        # FILE-WIDE: what is asked is the ORDER of lines in two shell scripts —
+        # which export comes before which launch, which write before which
+        # kill. A script has no functions to narrow to.
+        #
+        # A COMMENT IS NOT A PROMISE. Both files are Nix strings holding shell,
+        # and both comment with `#`. `hashless` is the prelude's answer, and it
+        # is the better one: it takes a `#` off the END of a line too, which
+        # the `startswith` test let stand.
         def code(path):
-            # A COMMENT IS NOT A PROMISE. Both files are Nix strings holding
-            # shell, and both comment with `#`.
-            return "\n".join(
-                l for l in pathlib.Path(path).read_text().splitlines()
-                if not l.lstrip().startswith("#")
-            )
+            return hashless(pathlib.Path(path).read_text())
 
         dev = code("${../nix/dev.nix}")
         single = code("${../nix/footer-single.nix}")
+        floor(len(dev), 2000, "characters of nix/dev.nix")
+        floor(len(single), 1000, "characters of nix/footer-single.nix")
         bad = []
 
         # --- ONE. The session can reach the watcher at all -------------------
@@ -11104,30 +13427,43 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
+        # FILE-WIDE: for the two doors, the offence is a `covers` asked per
+        # field ANYWHERE a row is painted, and there were two such loops in
+        # two different methods. `lit_field` itself is narrowed by name.
         home = pathlib.Path("${../crates/ronoctua-shell/src}")
         bad = []
 
         # THE ONE WALK, and it is a free function because two different types
         # carry the same fields: the manager's `Row` and the footer's expansion
         # row. A method on either would have been a second ruler for the other.
-        files = (home / "files.rs").read_text()
-        if "pub fn lit_field(fields: &[Field], cell: u16) -> Option<usize>" not in files:
+        files = code_of((home / "files.rs").read_text())
+        floor(len(files), 10000, "characters of files.rs")
+        # BY NAME AND BRACES. The whole signature was written out here, so
+        # adding a parameter to `lit_field` reported that it had been deleted —
+        # and `rposition` was looked for in the WHOLE FILE, where any other
+        # backwards walk answered for it.
+        lit = body_of(files, "lit_field")
+        if lit is None:
             bad.append("files.rs no longer defines lit_field; there is nothing for "
                        "the two doors to agree through")
-        if "lit_field(&self.fields, cell)" not in files:
-            bad.append("Row::field_index_at no longer goes through lit_field, so "
-                       "the click and the paint are two walks again")
-        if "rposition" not in files:
+        elif "rposition" not in lit:
             bad.append("lit_field no longer walks from the RIGHT; with `position` "
                        "the cell under a character answers for the character "
                        "BEFORE it, through the gap rule")
+        else:
+            floor(len(lit), 30, "characters of `lit_field`")
+        if "lit_field(&self.fields, cell)" not in files:
+            bad.append("Row::field_index_at no longer goes through lit_field, so "
+                       "the click and the paint are two walks again")
 
         # AND NEITHER PAINTER DECIDES FOR ITSELF. What is refused is `covers`
         # inside the loop that paints a row's fields — the shape the defect had
         # in both doors.
         for door, what in [("files_window.rs", "the window"), ("surface.rs", "the footer")]:
-            src = (home / door).read_text()
+            src = code_of((home / door).read_text())
+            floor(len(src), 10000, "characters of " + door)
             for hit in re.finditer(r"for \(?[^\n]*\bfields\b[^\n]*\{\n((?:[^\n]*\n){0,6})", src):
                 if ".covers(" in hit.group(1):
                     line = src[: hit.start()].count("\n") + 1
@@ -11166,12 +13502,18 @@ let
   atlas-crate-is-pure = mkCheck "atlas-crate-is-pure" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: purity is a property of the FILE — a `std::fs` anywhere in it
+    # is the offence — and the dependency block is found by its header below.
     home = pathlib.Path("${../crates/ronoctua-atlas}")
     bad = []
 
     # --- ONE. No dependency at all ---------------------------------------
-    manifest = (home / "Cargo.toml").read_text()
+    # `hashless`: a manifest's comment begins with `#`, and a dependency
+    # commented out is not a dependency.
+    manifest = hashless((home / "Cargo.toml").read_text())
+    floor(len(manifest), 100, "characters of Cargo.toml")
     block = re.search(r"\n\[dependencies\]\n(.*?)(\n\[|\Z)", manifest, re.S)
     lines = [
         l
@@ -11186,14 +13528,15 @@ let
         )
 
     # --- TWO. `no_std`, and nothing that needs one -----------------------
-    lib = (home / "src/lib.rs").read_text()
+    lib = code_of((home / "src/lib.rs").read_text())
+    floor(len(lib), 1000, "characters of lib.rs")
     if "#![no_std]" not in lib:
         bad.append("lib.rs does not declare #![no_std]; the names it must not use "
                    "would be in scope again")
+    swept = 0
     for source in sorted(home.rglob("*.rs")):
-        text = "\n".join(
-            l for l in source.read_text().splitlines() if not l.lstrip().startswith("//")
-        )
+        text = code_of(source.read_text())
+        swept += 1
         for forbidden, why in [
             ("std::fs", "a filesystem"),
             ("std::env", "the environment"),
@@ -11204,6 +13547,7 @@ let
                 bad.append(f"{source.name} reaches for {forbidden} — {why} is the "
                            "caller's, and this crate is compiled where it does not exist")
 
+    floor(swept, 3, "sources of ronoctua-atlas swept for an impurity")
     if bad:
         for b in bad:
             print("ERROR: " + b, file=sys.stderr)
@@ -11223,15 +13567,23 @@ let
   atlas-returns-a-role = mkCheck "atlas-returns-a-role" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a hand-written colour anywhere in the crate is the offence, so
+    # the file is the question. `ink_color` and `enum Ink` are narrowed by name
+    # below.
+    #
+    # `uncommented` and never `code_of`: the second assertion looks for a HEX
+    # LITERAL, and `code_of` would empty every string in the crate — leaving a
+    # check that can no longer find the thing it exists to refuse.
     crate = pathlib.Path("${../crates/ronoctua-atlas}")
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     bad = []
+    swept = 0
 
     for source in sorted(crate.rglob("*.rs")):
-        text = "\n".join(
-            l for l in source.read_text().splitlines() if not l.lstrip().startswith("//")
-        )
+        text = uncommented(source.read_text())
+        swept += 1
         if "ronoctua_tokens" in text:
             bad.append(f"{source.name} names ronoctua_tokens; a colour is a token "
                        "value and this crate is compiled where there is none")
@@ -11240,18 +13592,28 @@ let
             bad.append(f"{source.name} writes a colour out by hand (invariant 9)")
 
     # --- AND THE WALL IS ONE `match`, and exhaustive ---------------------
-    wall = (shell / "globe.rs").read_text()
-    if "pub const fn ink_color(ink: Ink) -> tokens::Color" not in wall:
+    floor(swept, 3, "sources of ronoctua-atlas swept for a colour")
+    wall = uncommented((shell / "globe.rs").read_text())
+    floor(len(wall), 4000, "characters of globe.rs")
+    # BY NAME, not by the signature: adding a parameter to `ink_color` used to
+    # be reported as the function having been deleted.
+    arm = body_of(wall, "ink_color")
+    if arm is None:
         bad.append("globe.rs no longer holds ink_color; there is no single place "
                    "that turns a role into a colour")
-    inks = re.findall(r"\n    (\w+),", (crate / "src/globe.rs").read_text())
-    arm = re.search(r"pub const fn ink_color.*?\n\}", wall, re.S)
-    for ink in re.findall(r"pub enum Ink \{(.*?)\n\}", (crate / "src/globe.rs").read_text(), re.S):
+    else:
+        floor(len(arm), 100, "characters of `ink_color`")
+    role = uncommented((crate / "src/globe.rs").read_text())
+    ink = scope(role, r"pub enum Ink\b")
+    if ink is None:
+        bad.append("ronoctua-atlas no longer declares `enum Ink`")
+    else:
         names = re.findall(r"\n    (\w+),", ink)
+        floor(len(names), 3, "roles the atlas answers with")
         for name in names:
-            if arm is None or f"Ink::{name}" not in arm.group(0):
+            if arm is None or f"Ink::{name}" not in arm:
                 bad.append(f"Ink::{name} has no colour in globe::ink_color")
-    if "_ =>" in (arm.group(0) if arm else ""):
+    if "_ =>" in (arm or ""):
         bad.append("ink_color has a catch-all arm; the next role added would be "
                    "drawn in whatever colour that arm names")
 
@@ -11279,8 +13641,17 @@ let
   atlas-is-at-run-time = mkCheck "atlas-is-at-run-time" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    rust = pathlib.Path("${../nix/rust.nix}").read_text()
+    # FILE-WIDE: for the Rust half, what is asked is whether `globe.rs` reaches
+    # for the path through `option_env!` ANYWHERE in it. The Nix half is
+    # narrowed to one attribute block by `block` below.
+    #
+    # `hashless` for the Nix, whose comment is `#`; `uncommented` for the Rust,
+    # because both needles there are string literals — the name of the variable
+    # is the whole of what is being asserted.
+    rust = hashless(pathlib.Path("${../nix/rust.nix}").read_text())
+    floor(len(rust), 2000, "characters of nix/rust.nix")
     bad = []
 
     def block(name):
@@ -11298,7 +13669,8 @@ let
             )
 
     # AND THE READER ASKS THE ENVIRONMENT, never the compiler.
-    globe = pathlib.Path("${../crates/ronoctua-shell/src}/globe.rs").read_text()
+    globe = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/globe.rs").read_text())
+    floor(len(globe), 4000, "characters of globe.rs")
     if 'option_env!("RONOCTUA_ATLAS")' in globe:
         bad.append("globe.rs bakes the atlas path in with option_env!; the store "
                    "path would be a reference this binary carries into every closure")
@@ -11323,7 +13695,13 @@ let
   atlas-credits-are-carried = mkCheck "atlas-credits-are-carried" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
+    exec(open("${pyPrelude}").read())
 
+    # PROSE: the attribution IS prose, and it lives in four whole files.
+    # FILE-WIDE: none of the four has a function in it. CC BY 4.0 is
+    # satisfied by the words being there — in a licence file, in a comment
+    # above the sources, in a sentence on the screen. Stripping the comments
+    # would take away three of the four places it lives.
     bad = []
     places = {
         "LICENSE-DATA.txt": pathlib.Path("${../LICENSE-DATA.txt}"),
@@ -11343,7 +13721,9 @@ let
 
     # AND THE TABLE CARRIES IT TOO, which is what makes a copy of the file
     # impossible to separate from its licence.
+    floor(len(places), 4, "places the attribution has to live")
     gen = pathlib.Path("${../nix/scripts/gen-atlas.py}").read_text()
+    floor(len(gen), 2000, "characters of gen-atlas.py")
     if "--credits" not in gen:
         bad.append("gen-atlas.py writes no credits section into the table")
 
@@ -11369,17 +13749,29 @@ let
   atlas-quantisation-is-declared = mkCheck "atlas-quantisation-is-declared" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: the three constants are module-level, in two files, and there
+    # is no function to narrow to.
+    #
+    # HALF OF THIS CHECK IS ABOUT THE PROSE, and that half reads `raw` on
+    # purpose: it compares the metres the comment CLAIMS against the metres the
+    # constant works out to. The other half is about the constants, and reads
+    # the stripped text — so a number written in a sentence can no longer
+    # answer for a number in the code.
     raw = pathlib.Path("${../crates/ronoctua-atlas/src}/baked.rs").read_text()
+    code = code_of(raw)
+    floor(len(code), 500, "characters of baked.rs")
     # THE PROSE, UNWRAPPED. A doc comment carries `//!` at the start of every
     # line, so a sentence that wrapped has a marker in the middle of it — and a
     # check that searched the file as it is would report a missing comment that
     # is right there.
     baked = re.sub(r"\n\s*//[/!]?", " ", raw)
-    gen = pathlib.Path("${../nix/scripts/gen-atlas.py}").read_text()
+    gen = hashless(pathlib.Path("${../nix/scripts/gen-atlas.py}").read_text())
+    floor(len(gen), 2000, "characters of gen-atlas.py")
     bad = []
 
-    steps = re.search(r"pub const LON_STEPS: f32 = ([\d_]+)\.0;", raw)
+    steps = re.search(r"pub const LON_STEPS: f32 = ([\d_]+)\.0;", code)
     if steps is None:
         bad.append("baked.rs no longer declares LON_STEPS")
     else:
@@ -11406,7 +13798,7 @@ let
                        "at the edges")
 
     for name in ("CELLS_LON", "CELLS_LAT"):
-        mine = re.search(name + r"(?::  *usize)? = (\d+)", raw)
+        mine = re.search(name + r"(?::  *usize)? = (\d+)", code)
         theirs = re.search(name + r" = (\d+)", gen)
         if not mine or not theirs or mine.group(1) != theirs.group(1):
             bad.append(f"{name} differs between the reader and the generator")
@@ -11431,9 +13823,16 @@ let
   atlas-fill-is-even-odd = mkCheck "atlas-fill-is-even-odd" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a fill rule is named where the path is built, and the parity
+    # test is one line of one function — but the offence is either of them
+    # appearing ANYWHERE in its file, which is what makes the file the right
+    # question. The strip is what stops the prose explaining the rule from
+    # answering for the rule.
     bad = []
-    painter = pathlib.Path("${../crates/ronoctua-shell/src}/globe.rs").read_text()
+    painter = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/globe.rs").read_text())
+    floor(len(painter), 4000, "characters of globe.rs")
     if "FillRule::Winding" in painter:
         bad.append("globe.rs fills with the winding rule — a shapefile does not "
                    "tag inner rings, so this puts land in the Caspian")
@@ -11441,7 +13840,8 @@ let
         bad.append("globe.rs no longer names EvenOdd; the fill rule is the line "
                    "that decides whether a lake is a hole")
 
-    lookup = pathlib.Path("${../crates/ronoctua-atlas/src}/lookup.rs").read_text()
+    lookup = code_of(pathlib.Path("${../crates/ronoctua-atlas/src}/lookup.rs").read_text())
+    floor(len(lookup), 1000, "characters of lookup.rs")
     if "crossings % 2 == 1" not in lookup:
         bad.append("lookup.rs no longer answers by parity; a point inside a lake "
                    "inside a country would come back as being in neither")
@@ -11469,15 +13869,20 @@ let
   globe-keys-are-unique-per-owner = mkCheck "globe-keys-are-unique-per-owner" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    globe = pathlib.Path("${../crates/ronoctua-shell/src}/globe.rs").read_text()
+    # FILE-WIDE: `Globe::new`'s signature and the absence of a `Default` are
+    # module-level facts. `texture_key` is narrowed by name below.
+    globe = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/globe.rs").read_text())
+    floor(len(globe), 4000, "characters of globe.rs")
     bad = []
 
-    key = re.search(r"pub fn texture_key\(&self\) -> String \{(.*?)\n    \}", globe, re.S)
+    key = body_of(globe, "texture_key")
     if key is None:
         bad.append("globe.rs no longer builds a texture key")
     else:
-        body = key.group(1)
+        body = key
+        floor(len(body), 40, "characters of `texture_key`")
         for part, why in [
             ("owner", "two views showing one coordinate would overwrite each "
                       "other's frame every tick"),
@@ -11512,9 +13917,15 @@ let
   files-panels-have-two-pictures = mkCheck "files-panels-have-two-pictures" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    image = pathlib.Path("${../crates/ronoctua-render/src}/image.rs").read_text()
-    window = pathlib.Path("${../crates/ronoctua-shell/src}/files_window.rs").read_text()
+    # FILE-WIDE: `CEILING` and the `Painted` struct are module-level — neither
+    # is inside a function — and the `re.search` for the constant below is the
+    # narrowing that matters.
+    image = code_of(pathlib.Path("${../crates/ronoctua-render/src}/image.rs").read_text())
+    window = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/files_window.rs").read_text())
+    floor(len(image), 4000, "characters of image.rs")
+    floor(len(window), 10000, "characters of files_window.rs")
     bad = []
 
     if "MANAGER_PICTURES" not in image:
@@ -11547,9 +13958,16 @@ let
   the-grid-is-one-arithmetic = mkCheck "the-grid-is-one-arithmetic" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: "does any function outside the named ones divide by `across`"
+    # is a question about the whole file by construction — the offence is a
+    # SECOND arithmetic appearing anywhere. `whose` is what says which function
+    # each hit landed in, and it is the prelude's copy of the `walls` idiom
+    # this check used to carry by hand.
     files = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
-    grid = pathlib.Path("${../crates/ronoctua-design/src}/grid.rs").read_text()
+    grid = code_of(pathlib.Path("${../crates/ronoctua-design/src}/grid.rs").read_text())
+    floor(len(grid), 1000, "characters of grid.rs")
     bad = []
 
     # THE DEFINITION STILL DEFINES. A check that only forbids would pass on the
@@ -11586,29 +14004,19 @@ let
     # the module.
     cut = [m.start() for m in re.finditer(r"^#\[cfg\(test\)\]", files, re.M)]
     files = files[: cut[-1]] if cut else files
-    code = "\n".join(
-      re.sub(r"\s*//.*", "", l) for l in files.split("\n") if not l.strip().startswith("//")
-    )
+    code = code_of(files)
+    floor(len(code), 10000, "characters of files.rs before its tests")
     named = ("listing_room", "visual_cursor", "follow", "wheel", "thumb_shape",
              "shelf_rows", "moving_thumbs", "grid_pictures", "wants_thumbs",
              "sections_of")
-    walls = [(m.start(), m.group(1)) for m in re.finditer(r"\n\s*(?:pub )?fn (\w+)", code)]
     seen = 0
     for m in re.finditer(r"[/%]\s*(?:usize::from\()?\s*(?:g\.)?across\b", code):
       seen += 1
-      whose = "nothing"
-      for at, name in walls:
-        if at < m.start():
-          whose = name
-        else:
-          break
-      if whose not in named:
-        line = code[: m.start()].count("\n") + 1
-        bad.append(f"`{whose}` divides by `across` and is not one of the named "
+      inside = whose(code, m.start())
+      if inside not in named:
+        bad.append(f"`{inside}` divides by `across` and is not one of the named "
                    "conversions; that is a second grid arithmetic")
-    if seen == 0:
-      bad.append("no conversion between entries and shelves was found at all; "
-                 "the sweep has stopped reaching them")
+    floor(seen, 3, "conversions between entries and shelves")
 
     if bad:
         for b in bad:
@@ -11634,7 +14042,12 @@ let
   both-doors-draw-thumbnails = mkCheck "both-doors-draw-thumbnails" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: the question is whether a DOOR calls a thing at all, and a
+    # door may call it from any of its handlers — there is no one function to
+    # narrow to. What the strip buys is that the list of calls in this check's
+    # own prose, quoted in a comment in either door, cannot answer for it.
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     bad = []
 
@@ -11649,14 +14062,16 @@ let
       "hover_thumb(": "start a film under the pointer",
     }
     for door in ("files_window.rs", "surface.rs"):
-      body = (shell / door).read_text()
+      body = code_of((shell / door).read_text())
+      floor(len(body), 10000, "characters of " + door)
       for call, why in OWED.items():
         if call not in body:
           bad.append(f"{door} does not `{call}` — it cannot {why}")
 
     # AND THE VIEW STILL OFFERS THEM, so a check that only reads the doors
     # cannot be satisfied by deleting the feature.
-    files = (shell / "files.rs").read_text()
+    files = code_of((shell / "files.rs").read_text())
+    floor(len(files), 10000, "characters of files.rs")
     for name in ("pub fn wants_thumbs", "pub fn grid_pictures", "pub fn hover_thumb",
                  "pub fn moving_thumbs", "pub fn thumb_pixels"):
       if name not in files:
@@ -11685,9 +14100,15 @@ let
   the-grid-never-drops-a-picture = mkCheck "the-grid-never-drops-a-picture" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    image = pathlib.Path("${../crates/ronoctua-render/src}/image.rs").read_text()
-    files = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
+    # FILE-WIDE: for the renderer's half, `CEILING` and the buffer sized by it
+    # are module-level, not inside a function. The manager's half is narrowed
+    # to `thumb_item` by name.
+    image = code_of(pathlib.Path("${../crates/ronoctua-render/src}/image.rs").read_text())
+    files = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text())
+    floor(len(image), 4000, "characters of image.rs")
+    floor(len(files), 10000, "characters of files.rs")
     bad = []
 
     ceiling = re.search(r"const CEILING: usize =(.*?);", image, re.S)
@@ -11702,11 +14123,11 @@ let
       bad.append("the instance buffer is no longer sized by CEILING")
 
     # AND THE MANAGER REFUSES TO ASK FOR MORE.
-    item = re.search(r"fn thumb_item\(.*?\n    \}", files, re.S)
+    item = body_of(files, "thumb_item")
     if item is None:
       bad.append("files.rs no longer chooses the thumbnail size in `thumb_item`")
     else:
-      body = item.group(0)
+      body = item
       if "FILES_THUMBMOST" not in body:
         bad.append("thumb_item does not bound itself by `space.files.thumbMost`; "
                    "a wide screen would ask for pictures the renderer drops")
@@ -11734,16 +14155,19 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
-        files = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
+        files = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text())
+        floor(len(files), 10000, "characters of files.rs")
         bad = []
 
-        side = re.search(r"fn thumb_side\(.*?\n\}", files, re.S)
+        side = body_of(files, "thumb_side")
         if side is None:
           bad.append("files.rs no longer works out a thumbnail's decode size in "
                      "`thumb_side`")
         else:
-          body = side.group(0)
+          body = side
+          floor(len(body), 100, "characters of `thumb_side`")
           if "FILES_PICTUREAIR" not in body:
             bad.append("thumb_side does not give up the air `picture_in` sheds, so "
                        "every thumbnail is decoded larger than it is drawn and "
@@ -11776,16 +14200,19 @@ let
   only-visible-cells-are-asked-for = mkCheck "only-visible-cells-are-asked-for" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    files = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
+    files = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text())
+    floor(len(files), 10000, "characters of files.rs")
     bad = []
 
     for name in ("wants_thumbs", "moving_thumbs", "grid_pictures"):
-      fn = re.search(r"fn " + name + r"\(.*?\n    \}", files, re.S)
+      fn = body_of(files, name)
       if fn is None:
         bad.append(f"files.rs no longer has `{name}`")
         continue
-      body = fn.group(0)
+      body = fn
+      floor(len(body), 100, "characters of `" + name + "`")
       # THE WALK STOPS WHERE THE SCREEN DOES. `Section::line_of` answers `None`
       # past the last shelf that fits, which is the one place that knows.
       if "line_of(" not in body:
@@ -11811,8 +14238,13 @@ let
   an-animator-holds-one-frame = mkCheck "an-animator-holds-one-frame" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    thumbs = pathlib.Path("${../crates/ronoctua-shell/src}/thumbs.rs").read_text()
+    # FILE-WIDE: "does anything in this file collect a film's frames" is a
+    # question about the FILE — a collect anywhere costs the memory — and the
+    # sweep below reports the line it found. `retune` is narrowed by name.
+    thumbs = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/thumbs.rs").read_text())
+    floor(len(thumbs), 4000, "characters of thumbs.rs")
     bad = []
 
     if "image::Frames<'static>" not in thumbs:
@@ -11823,8 +14255,8 @@ let
       bad.append(f"thumbs.rs:{line} collects a film's frames; fifty animated "
                  "GIFs would be 215 MiB, measured")
     # AND THE CEILING ON HOW MANY MOVE AT ONCE.
-    tune = re.search(r"fn retune\(.*?\n\}", thumbs, re.S)
-    if tune is None or "FILES_THUMBANIMATORS" not in tune.group(0):
+    tune = body_of(thumbs, "retune")
+    if tune is None or "FILES_THUMBANIMATORS" not in tune:
       bad.append("the animator does not stop at `space.files.thumbAnimators`; "
                  "a folder of sixty GIFs would open sixty decoders")
 
@@ -11846,14 +14278,21 @@ let
   files-panel-rows-skip-the-reserve = mkCheck "files-panel-rows-skip-the-reserve" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
+    exec(open("${pyPrelude}").read())
 
-    files = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
+    files = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text())
+    floor(len(files), 10000, "characters of files.rs")
     bad = []
 
-    if "_ if inside < sec.above => usize::MAX," not in files:
+    # NARROWED TO `hit`, because the two arms below are the pointer's answer
+    # and nothing else's. Read against the whole file, an arm written out in a
+    # comment — or the same shape in a neighbouring `match` — answers for them.
+    hit = must(body_of(files, "hit"), "files.rs's `hit`")
+    floor(len(hit), 200, "characters of `hit`")
+    if "_ if inside < sec.above => usize::MAX," not in hit:
         bad.append("hit() does not skip a panel's reserved lines; the pointer on "
                    "the globe would answer for the first fact")
-    if "_ => sec.offset + inside - sec.above," not in files:
+    if "_ => sec.offset + inside - sec.above," not in hit:
         bad.append("hit() adds a panel's reserve to its row index")
     if "pub fn info_room(&self)" not in files:
         bad.append("there is no one answer for how many ROWS the info panel has")
@@ -12723,21 +15162,27 @@ let
       # than a hole: anything else that wants a loose size is still refused.
       EXCEPT = "run_size"
 
-      loose = []
+      exec(open("${pyPrelude}").read())
+
+      # FILE-WIDE: a glyph centred in its cell with a loose size is an offence
+      # wherever it is written — there is no function to narrow to, because the
+      # point is that it may appear in one that does not exist yet. `whose` is
+      # the prelude's copy of the `walls` idiom, and it is what names the
+      # function a hit landed in.
+      loose, sources = [], 0
       for f in sorted(shell.rglob("*.rs")):
-          body = f.read_text()
-          walls = [(m.start(), m.group(1)) for m in re.finditer(r"\n\s*(?:pub )?fn (\w+)", body)]
+          body = code_of(f.read_text())
+          sources += 1
           for m in re.finditer(r"Size::OnTheCell\(", body):
               line = body[: m.start()].count("\n") + 1
               tail = body[m.start() : body.find("\n", m.start() + 200) + 1]
               if MEASURED.search(tail):
                   continue
-              whose = next(
-                  (name for at, name in reversed(walls) if at < m.start()), "nothing"
-              )
-              if whose == EXCEPT:
+              inside = whose(body, m.start())
+              if inside == EXCEPT:
                   continue
-              loose.append(f"{f.name}:{line} (in `{whose}`)")
+              loose.append(f"{f.name}:{line} (in `{inside}`)")
+      floor(sources, 30, "sources of the shell swept for a loose size")
 
       if loose:
           print("ERROR: a glyph centred in the cell with a size outside the measurement:")
@@ -12827,9 +15272,20 @@ let
     python3 - <<'PY'
     import pathlib, re, sys
 
-    generator = pathlib.Path("${../nix/scripts/gen-notifications.py}").read_text()
-    table = pathlib.Path("${notificationsRs}/notifications.rs").read_text()
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: the generator's sets and the generated table are both
+    # module-level. `impl <enum>` and its `id()` are narrowed by `scope` and by
+    # name below.
+    #
+    # `hashless` for the Python generator and `uncommented` for the Rust: every
+    # name compared here is a string literal on both sides.
+    generator = hashless(pathlib.Path("${../nix/scripts/gen-notifications.py}").read_text())
+    table = uncommented(pathlib.Path("${notificationsRs}/notifications.rs").read_text())
     keys = pathlib.Path("${notificationsRs}/keys.txt").read_text().split()
+    floor(len(generator), 1000, "characters of gen-notifications.py")
+    floor(len(table), 1000, "characters of the generated table")
+    floor(len(keys), 20, "keys the catalogue requires")
 
     failed = False
 
@@ -12860,16 +15316,16 @@ let
         `Show` AND `Life`, and `rule.rs` holds `Field` AND `Test`, so grabbing
         every arrow in the file gives one enum the other's names.
         """
-        src = pathlib.Path(path).read_text()
-        impl = re.search(rf"\nimpl {enum} \{{(.*?)\n\}}\n", src, re.S)
+        src = uncommented(pathlib.Path(path).read_text())
+        impl = scope(src, rf"\nimpl {enum}\b")
         if not impl:
             print(f"ERROR: could not find `impl {enum}` in {path}")
             return set()
-        fn = re.search(r"fn id\(&?self\)[^{]*\{(.*?)\n    \}", impl.group(1), re.S)
+        fn = body_of(impl, "id")
         if not fn:
             print(f"ERROR: `{enum}` has no `id()` — the name would have no way of going and coming back")
             return set()
-        return set(re.findall(r'=> "([^"]+)"', fn.group(1)))
+        return set(re.findall(r'=> "([^"]+)"', fn))
 
     NOTIFY = "${../crates/ronoctua-notify/src}"
     pairs = [
@@ -12901,7 +15357,8 @@ let
     # sides with no compiler between them. Diverging, the notification arrives
     # as a stranger: quiet, short, with no action and no explanation of why a
     # window disappeared.
-    surface = pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text()
+    surface = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text())
+    floor(len(surface), 100000, "characters of surface.rs")
     stamped = set(re.findall(r'pub const [A-Z_]+: &str = "([a-z-]+)";', surface))
     known = set(re.findall(r'Test::Is\("([a-z-]+)"\.to_owned\(\)\)', table))
     for tag in stamped:
@@ -12933,9 +15390,20 @@ let
   screenshot-notification-contract = mkCheck "screenshot-notification-contract" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    source = pathlib.Path("${inputs.niri}/src/utils/mod.rs").read_text()
-    catalogue = pathlib.Path("${../assets/notifications.nix}").read_text()
+    # FILE-WIDE: the pair this depends on is sent from one function of the
+    # pinned compositor and recognised by a filter in an attribute set. Neither
+    # is a question about the inside of one of ours. `notification_program` is
+    # narrowed by name below.
+    #
+    # `uncommented` for the Rust and `hashless` for the Nix: the summary, the
+    # app name and the two variables are all string literals, and `code_of`
+    # would empty every one of them.
+    source = uncommented(pathlib.Path("${inputs.niri}/src/utils/mod.rs").read_text())
+    catalogue = hashless(pathlib.Path("${../assets/notifications.nix}").read_text())
+    floor(len(source), 1000, "characters of the pinned niri's utils")
+    floor(len(catalogue), 1000, "characters of assets/notifications.nix")
 
     failed = False
 
@@ -12968,7 +15436,8 @@ let
     # `nix/rust.nix`, and the one `notoExtra` and `icons.superpack` cost before
     # that. Read from the environment, `ronoctua.media.enable = false` really
     # removes it and the action simply is not offered.
-    rust_nix = pathlib.Path("${../nix/rust.nix}").read_text()
+    rust_nix = hashless(pathlib.Path("${../nix/rust.nix}").read_text())
+    floor(len(rust_nix), 2000, "characters of nix/rust.nix")
     if "RONOCTUA_SWAPPY" in rust_nix:
         print("ERROR: `RONOCTUA_SWAPPY` is in nix/rust.nix — baked into the binary.")
         print("       That puts swappy in every closure, and the profile's")
@@ -12982,16 +15451,16 @@ let
     # so at runtime every `Run` action was dropped as "not installed". The
     # screenshot's band came out two lines instead of three, with no actions and
     # nothing failing. It took a screenshot to see.
-    resolver = re.search(
-        r"pub fn notification_program\(.*?\n\}",
-        pathlib.Path("${../crates/ronoctua-shell/src}/actions.rs").read_text(),
-        re.S,
+    resolver = body_of(
+        uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/actions.rs").read_text()),
+        "notification_program",
     )
     if not resolver:
         print("ERROR: `notification_program` went away or changed shape")
         failed = True
     else:
-        body = resolver.group(0)
+        body = resolver
+        floor(len(body), 100, "characters of `notification_program`")
         if "XDG_OPEN" not in body:
             print("ERROR: the action's `open` does not come from the path baked in at build time")
             failed = True
@@ -13033,11 +15502,20 @@ let
   switches-that-do-nothing-say-so = mkCheck "switches-that-do-nothing-say-so" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     notify = pathlib.Path("${../crates/ronoctua-notify/src}")
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    presentation = (notify / "presentation.rs").read_text()
-    manager = (shell / "notifications.rs").read_text()
+    # FILE-WIDE: `INERT` and the fields of `Presentation` are module-level,
+    # and what is asked of each door is whether it draws the reason anywhere.
+    #
+    # `uncommented` and never `code_of`: a field name and the key that explains
+    # it are string literals inside the `INERT` table, and emptying them would
+    # leave a check with nothing to read.
+    presentation = uncommented((notify / "presentation.rs").read_text())
+    manager = uncommented((shell / "notifications.rs").read_text())
+    floor(len(presentation), 500, "characters of presentation.rs")
+    floor(len(manager), 1000, "characters of notifications.rs")
 
     failed = False
 
@@ -13046,9 +15524,7 @@ let
         r'Inert \{\s*field: "([a-z-]+)",\s*why: "([a-z-]+)",',
         presentation,
     )
-    if not inert:
-        print("ERROR: `INERT` is empty or changed shape")
-        sys.exit(1)
+    floor(len(inert), 2, "switches declared inert")
     print(f"switches declared inert: {[f for f, _ in inert]}")
 
     # (a) every one of them is a real field of `Presentation`.
@@ -13071,10 +15547,9 @@ let
     #     the name anywhere in the file and passed on a doc link — a check
     #     against the CRITERION and not against the CODE, which is the way
     #     `AGENTS.md` puts it. Only a line that is not a comment answers.
-    reads_it = any(
-        "ronoctua_notify::INERT" in line and not line.lstrip().startswith("//")
-        for line in manager.splitlines()
-    )
+    # The `startswith` test is gone: `uncommented` took the comments off
+    # already, and it takes one off the END of a line too.
+    reads_it = "ronoctua_notify::INERT" in manager
     if not reads_it:
         print("ERROR: the manager does not read `INERT`; the reason would not reach the screen")
         failed = True
@@ -13089,7 +15564,8 @@ let
         print("ERROR: the manager has no way of saying the reason")
         failed = True
     for door, name in (("footer", "surface.rs"), ("window", "notifications_window.rs")):
-        drawn = (shell / name).read_text()
+        drawn = uncommented((shell / name).read_text())
+        floor(len(drawn), 1000, "characters of " + name)
         if "manager.note(" not in drawn and "view.note(" not in drawn:
             print(f"ERROR: the {door} does not draw the reason on the message line")
             failed = True
@@ -13098,9 +15574,7 @@ let
     #     something. A knob nobody can find in either list is the defect.
     knobs = set(re.findall(r'Self::(\w+) => "([a-z-]+)",', manager))
     names = {name for _, name in knobs}
-    if not names:
-        print("ERROR: could not find the names of the manager's knobs")
-        failed = True
+    floor(len(names), 4, "knobs the manager draws")
     for field, _ in inert:
         if field not in names:
             print(f"ERROR: `{field}` is inert and the manager does not even draw it")
@@ -13123,10 +15597,16 @@ let
   bluetooth-bus-policy-is-open = mkCheck "bluetooth-bus-policy-is-open" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: what is asked of each of our own files is whether it spawns a
+    # privileged program ANYWHERE in it, and whether it asks for a bus name at
+    # all. Neither is a question about one function. The bluez policy is XML
+    # and is narrowed by its own `<policy>` elements below.
     policy = pathlib.Path(
       "${pkgs.bluez}/share/dbus-1/system.d/bluetooth.conf"
     ).read_text()
+    floor(len(policy), 500, "characters of bluez's bus policy")
     wrong = []
 
     # 1. ANY CLIENT MAY TALK TO THE DAEMON.
@@ -13146,20 +15626,25 @@ let
     # THE CODE, NOT THE PROSE. Every file here EXPLAINS that it writes no
     # rule and spawns nothing, and a check that read the whole text would
     # fail on the explanation — which is how this one first failed.
-    def code(text, marks):
-        return "\n".join(
-            l for l in text.splitlines() if not any(l.strip().startswith(m) for m in marks)
-        )
+    # The hand-written stripper here took a comment off only where it BEGAN a
+    # line. `hashless` and `uncommented` are the prelude's, and they take one
+    # off the end of a line too.
 
     modules = pathlib.Path("${../nix/modules}")
-    bluetooth = code((modules / "bluetooth.nix").read_text(), ("#",))
+    bluetooth = hashless((modules / "bluetooth.nix").read_text())
+    floor(len(bluetooth), 200, "characters of nix/modules/bluetooth.nix")
     if "polkit" in bluetooth:
         wrong.append("nix/modules/bluetooth.nix writes a polkit rule")
     if "hardware.bluetooth" not in bluetooth:
         wrong.append("nix/modules/bluetooth.nix does not turn the radio on")
     crate = pathlib.Path("${../crates/ronoctua-bluetooth/src}")
+    swept = 0
     for f in sorted(crate.glob("*.rs")):
-        body = code(f.read_text(), ("//",))
+        # `uncommented` and never `code_of`: the four programs below are named
+        # in STRING literals — `Command::new("pkexec")` — and emptying the
+        # strings would leave this loop unable to find any of them.
+        body = uncommented(f.read_text())
+        swept += 1
         for asked in ("pkexec", "pkttyagent", "sudo ", "systemd-run"):
             if asked in body:
                 wrong.append(f"{f.name} spawns `{asked.strip()}`")
@@ -13173,6 +15658,7 @@ let
         if "connection::Builder" in body or "request_name" in body:
             wrong.append(f"{f.name} asks for a well-known bus name")
 
+    floor(swept, 3, "sources of ronoctua-bluetooth swept for a privileged call")
     if wrong:
         for w in wrong:
             print("ERROR: " + w, file=sys.stderr)
@@ -13191,10 +15677,17 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
         modules = pathlib.Path("${../nix/modules}")
-        power = (modules / "power.nix").read_text()
+        # FILE-WIDE: a polkit rule anywhere in a module is the offence, and a
+        # Nix module has no functions to narrow to. `hashless` is what stops a
+        # rule written out in a `#` comment — the shape one is usually left
+        # behind in — from reading as a rule.
+        power = hashless((modules / "power.nix").read_text())
+        floor(len(power), 200, "characters of nix/modules/power.nix")
         wrong = []
+        swept = 0
 
         # 1. THE MODULE ACTUALLY TURNS THE DAEMONS ON.
         for daemon in ("services.upower", "services.power-profiles-daemon"):
@@ -13207,14 +15700,16 @@ let
 
         # 3. NOR DOES ANY OTHER MODULE NAME A LOGIND, UPOWER OR PROFILE ACTION.
         for f in sorted(modules.glob("*.nix")):
-            body = f.read_text().lower()
+            body = hashless(f.read_text()).lower()
+            swept += 1
             for action in ("org.freedesktop.login1.", "org.freedesktop.upower.", "powerprofiles."):
                 if action in body and "polkit.addrule" in body and f.name != "rescue.nix":
                     wrong.append(f"{f.name} names a {action} action in a polkit rule")
 
         # 4. AND THE RULES THAT SHOULD EXIST STILL DO.
         for name in ["files.nix", "rescue.nix", "memory.nix", "keyboard.nix", "update.nix"]:
-            body = (modules / name).read_text()
+            floor(swept, 10, "modules swept for a power action")
+            body = hashless((modules / name).read_text())
             if "polkit.addRule" not in body:
                 wrong.append(f"{name} lost the polkit rule it MUST have")
 
@@ -13253,8 +15748,20 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
-        source = pathlib.Path("${../crates/ronoctua-display/src}/fragment.rs").read_text()
+        # FILE-WIDE: what is read here is a raw literal pinned inside a test,
+        # found by the test's own name — there is no function to narrow to that
+        # is not the one already being searched for.
+        #
+        # `uncommented` and NEVER `code_of`: the payload IS a literal. This
+        # check takes the fragment the writer pins and hands it to niri, so a
+        # stripper that emptied it would validate an empty file and call that
+        # a pass.
+        source = uncommented(
+            pathlib.Path("${../crates/ronoctua-display/src}/fragment.rs").read_text()
+        )
+        floor(len(source), 2000, "characters of fragment.rs")
 
         # THE ONE LITERAL, and not every literal that happens to start with
         # `output`. Other tests in that file pin FRAGMENTS of a block — the
@@ -13367,27 +15874,27 @@ let
   one-text-size = mkCheck "one-text-size" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     tokens = pathlib.Path("${../crates/ronoctua-tokens/src}/lib.rs").read_text()
     wrong = []
 
     # 1. NO CODE LINE IN THE SHELL READS THE ANCHOR.
+    #
+    # FILE-WIDE: the question is "does any line of any file in the shell read
+    # the anchor", which is about the tree and not about one function. The
+    # floor below is what keeps it honest — a sweep that stopped finding files
+    # would otherwise report nothing wrong.
+    #
+    # THE PROSE COMES OFF FIRST, and the strings before it. A comment may NAME
+    # the anchor — it is about the anchor — and a `//` inside a string literal
+    # is not a comment at all: cutting there would hide everything after it,
+    # so `let u = "http://x"; let s = SIZE_BASE;` was invisible. `code_of` in
+    # the prelude is the one answer to both, and it knows about raw strings
+    # and lifetimes besides, which this hand-written one did not.
     def code(line):
-        # THE PROSE COMES OFF FIRST. A comment may name the anchor — it is
-        # ABOUT the anchor — and a comment at the END of a code line is still
-        # a comment. Without this, explaining the rule beside a line of code
-        # breaks the rule.
-        #
-        # AND THE STRINGS COME OFF BEFORE THE COMMENT. A `//` inside a string
-        # literal — a URL, a path — is not the start of a comment, and
-        # cutting there would hide everything after it: `let u = "http://x";
-        # let s = SIZE_BASE;` would have been invisible. It is the same class
-        # as the bare-import hole, pointing the other way.
-        bare = line.lstrip()
-        if bare.startswith(("//", "///", "//!")):
-            return ""
-        return re.sub(r'"(?:[^"\\]|\\.)*"', '""', line).split("//", 1)[0]
+        return code_of(line)
 
     seen_files = 0
     asks = 0
@@ -13405,6 +15912,8 @@ let
                     f"{rest}:{n} draws at `font::SIZE_BASE`, which the person cannot move. "
                     "Ask `ronoctua_tokens::text::size()`."
                 )
+
+    floor(seen_files, 30, "files of the shell swept for a fixed size")
 
     # 2. THE ACCESSOR EXISTS, AND IS THE ANCHOR SCALED.
     if "pub mod text {" not in tokens:
@@ -13770,8 +16279,15 @@ let
   display-fragment-has-one-name = mkCheck "display-fragment-has-one-name" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-    rust = pathlib.Path("${../crates/ronoctua-display/src/fragment.rs}").read_text()
+    # FILE-WIDE: the name is a module-level constant and the includes are lines
+    # of three configuration files. Neither is inside a function.
+    #
+    # `uncommented` for the Rust, because the NAME is the string literal being
+    # read out; `hashless` for the Nix, whose comment is `#`.
+    rust = uncommented(pathlib.Path("${../crates/ronoctua-display/src/fragment.rs}").read_text())
+    floor(len(rust), 200, "characters of fragment.rs")
     m = re.search(r'pub const FILE: &str = "([^"]+)";', rust)
     if not m:
         print("ERROR: `fragment::FILE` is not there to compare against.", file=sys.stderr)
@@ -13789,12 +16305,9 @@ let
     # raw text, so the sentence was not enforced: deleting the real include and
     # leaving `# we used to include niri-display.kdl here` kept this green,
     # which is exactly the state the error message below describes.
-    def code_of(text):
-        out = []
-        for line in text.splitlines():
-            cut = line.find("#")
-            out.append(line if cut < 0 else line[:cut])
-        return out
+    # This was a local `code_of` that took a `#` off each line and handed back
+    # a LIST. It is `hashless` now — the prelude's, which answers with text —
+    # and the name no longer shadows the Rust-shaped stripper of the same name.
 
     # AND THE WHOLE PATH, NOT THE BASENAME.
     #
@@ -13816,7 +16329,7 @@ let
     ):
         lines = [
             l
-            for l in code_of(pathlib.Path(path).read_text())
+            for l in hashless(pathlib.Path(path).read_text()).splitlines()
             if "include" in l and name in l
         ]
         if not lines:
@@ -13836,7 +16349,8 @@ let
     # the write, or in a comment — so swapping the write itself for a literal
     # left this green, and a later rename then writes one name and includes
     # another. That is the one scenario this whole check exists for.
-    crate = pathlib.Path("${../crates/ronoctua-display/src}/lib.rs").read_text()
+    crate = code_of(pathlib.Path("${../crates/ronoctua-display/src}/lib.rs").read_text())
+    floor(len(crate), 2000, "characters of ronoctua-display's lib.rs")
     writes = re.findall(r"write_atomically\(([^;]*?)\)\s*(?:\.|;|$)", crate, re.S)
     frag = [w for w in writes if "fragment::FILE" in w]
     if not writes:
@@ -13942,9 +16456,16 @@ let
       ''
         python3 - <<'END'
         import pathlib, sys
+        exec(open("${pyPrelude}").read())
 
+        # FILE-WIDE: a reach for authority anywhere in the module is the
+        # offence, and a Nix module has no functions to narrow to.
+        #
+        # `hashless`: a `pkexec` named in a comment is prose about a thing we
+        # do not do, and it used to read as the thing itself.
         modules = pathlib.Path("${../nix/modules}")
-        display = (modules / "display.nix").read_text()
+        display = hashless((modules / "display.nix").read_text())
+        floor(len(display), 200, "characters of nix/modules/display.nix")
         wrong = []
 
         # 1. THE MODULE ACTUALLY OPENS THE TWO DOORS.
@@ -14022,11 +16543,21 @@ let
   power-never-asks = mkCheck "power-never-asks" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
     crate = pathlib.Path("${../crates/ronoctua-power/src}")
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     wrong = []
-    login = (crate / "login.rs").read_text()
-    lib = (crate / "lib.rs").read_text()
+    swept = 0
+    # FILE-WIDE: what is asked of each file is whether a name appears in it at
+    # all — a signature, a call, a program. None is a question about the inside
+    # of one function.
+    #
+    # `uncommented` and never `code_of`: the last sweep looks for a program
+    # named INSIDE a string literal, which is the only place one can be named.
+    login = uncommented((crate / "login.rs").read_text())
+    lib = uncommented((crate / "lib.rs").read_text())
+    floor(len(login), 500, "characters of login.rs")
+    floor(len(lib), 1000, "characters of lib.rs")
     # Every action method is declared with an `interactive` flag…
     for verb in ("suspend", "hibernate", "hybrid_sleep", "suspend_then_hibernate", "power_off", "reboot"):
         if not re.search(rf"fn {verb}\(&self, interactive: bool\)", login):
@@ -14039,11 +16570,13 @@ let
         if arg.strip() != "false":
             wrong.append(f"lib.rs: `{verb}` is called with `{arg}`, which may ask")
     for f in list(crate.glob("*.rs")) + [shell / "power.rs", shell / "power_window.rs", shell / "power_words.rs"]:
-        body = f.read_text()
+        body = uncommented(f.read_text())
+        swept += 1
         for word in ("sudo", "pkexec", "pkttyagent", "systemd-run"):
             for i, line in enumerate(body.splitlines(), 1):
                 if re.search(rf'"[^"]*\b{re.escape(word)}\b', line) and not line.lstrip().startswith("//"):
                     wrong.append(f"{f.name}:{i} spawns `{word}`")
+    floor(swept, 6, "sources swept for a privileged call")
     if wrong:
         for w in wrong:
             print("ERROR: " + w, file=sys.stderr)
@@ -14061,8 +16594,14 @@ let
   notifications-have-text = mkCheck "notifications-have-text" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a generated list of keys against a catalogue of sentences.
+    # PROSE: and the second half is about the WORDS — whether an action's
+    # sentence begins in upper case, which is how a button is written. That is
+    # a question about the value and not about any code.
     keys = pathlib.Path("${notificationsRs}/keys.txt").read_text().split()
+    floor(len(keys), 20, "keys the catalogue requires")
     failed = False
     for language in ${builtins.toJSON languages}:
         ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
@@ -14132,11 +16671,10 @@ let
   audio-names-have-text = mkCheck "audio-names-have-text" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     keys = pathlib.Path("${audioNamesRs}/keys.txt").read_text().split()
-    if len(keys) < 6:
-        print(f"ERROR: only {len(keys)} sockets carry a word of their own — the table lost its content")
-        sys.exit(1)
+    floor(len(keys), 6, "sockets carry a word of their own")
 
     failed = False
     for language in ${builtins.toJSON languages}:
@@ -14149,10 +16687,20 @@ let
         else:
             print(f"ok  {language}: the table's {len(keys)} sentences are there")
 
-    crate = pathlib.Path("${../crates/ronoctua-audio/src}/lib.rs").read_text()
+    # FILE-WIDE: "does the crate wire the generated table in at all" is a
+    # question about the FILE, not about one function — the `include!` is at
+    # module level and the normalisation is in a method whose name is not the
+    # thing being asserted. What narrows it is the split below.
+    #
+    # `uncommented` and not `code_of`: two of the three needles ARE string
+    # literals — the path of the file included, and the prefix the key is
+    # normalised through — and emptying them would leave assertions that any
+    # `include!` of any file satisfies.
+    crate = uncommented(pathlib.Path("${../crates/ronoctua-audio/src}/lib.rs").read_text())
     # THE PRODUCT, NOT ITS TESTS: the fixtures below name the same things, and
     # a check that read them would be reading its own evidence.
     crate = crate.split("#[cfg(test)]")[0]
+    floor(len(crate), 2000, "characters of the crate before its tests")
     for wanted, why in [
         ("include!(concat!(env!(\"OUT_DIR\"), \"/names.rs\"))",
          "the generated table is not included"),
@@ -14176,11 +16724,10 @@ let
   bluetooth-profiles-have-text = mkCheck "bluetooth-profiles-have-text" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     keys = pathlib.Path("${bluetoothProfilesRs}/keys.txt").read_text().split()
-    if len(keys) < 12:
-        print(f"ERROR: only {len(keys)} services carry a sentence — the table lost its content")
-        sys.exit(1)
+    floor(len(keys), 12, "services carry a sentence")
 
     failed = False
     for language in ${builtins.toJSON languages}:
@@ -14197,11 +16744,20 @@ let
     # crate stopped consulting the generated table — it would answer `None` for
     # everything and every row would go back to being a raw id, with both
     # languages still perfectly translated.
-    crate = pathlib.Path("${../crates/ronoctua-bluetooth/src}/lib.rs").read_text()
+    # FILE-WIDE: the `include!` is at module level and the guard is two string
+    # literals inside a function whose name is not what is being asserted. The
+    # split below is the narrowing that matters here, and it is the one that
+    # was missing when this check read its own fixtures.
+    #
+    # `uncommented`, because the guard IS the pair of literals: emptied by
+    # `code_of` the check would pass over a slice that no longer demands the
+    # base UUID's tail.
+    crate = uncommented(pathlib.Path("${../crates/ronoctua-bluetooth/src}/lib.rs").read_text())
     # THE PRODUCT, NOT ITS TESTS. The base UUID appears thirteen times in the
     # `mod tests` fixtures, so searching the whole file found it however the
     # guard was broken — the check was reading its own evidence.
     crate = crate.split("#[cfg(test)]")[0]
+    floor(len(crate), 2000, "characters of the crate before its tests")
     for wanted, why in [
         ("include!(concat!(env!(\"OUT_DIR\"), \"/profiles.rs\"))",
          "the generated table is not included"),
@@ -14253,21 +16809,34 @@ let
   bluetooth-keys-reach-both-doors = mkCheck "bluetooth-keys-reach-both-doors" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: `OF_THE_VIEW` and the notation table are module-level, and the
+    # three narrowings that matter — `press_of`, the footer's click arm, the
+    # window's — are taken by name and by braces below.
+    #
+    # `uncommented` and never `code_of`: a NOTATION is a string literal and so
+    # is a command id. Emptying them would leave every table in this check
+    # reading back as empty, and empty tables agree with each other.
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    view = (shell / "bluetooth.rs").read_text()
-    words = (shell / "bluetooth_words.rs").read_text()
-    window = (shell / "bluetooth_window.rs").read_text()
-    footer = (shell / "surface.rs").read_text()
+    view = uncommented((shell / "bluetooth.rs").read_text())
+    words = uncommented((shell / "bluetooth_words.rs").read_text())
+    window = uncommented((shell / "bluetooth_window.rs").read_text())
+    footer = uncommented((shell / "surface.rs").read_text())
+    for name, text in (("bluetooth.rs", view), ("bluetooth_words.rs", words),
+                       ("bluetooth_window.rs", window), ("surface.rs", footer)):
+        floor(len(text), 2000, "characters of " + name)
     gaps = []
 
     # 1) THE TABLE, which is what both doors teach.
-    table = re.search(r"pub const OF_THE_VIEW: &\[\(&str, &str, Where\)\] = &\[(.*?)\n\];", view, re.S)
+    # THE ELEMENT TYPE IS NOT WRITTEN OUT. The manager's table grew a third
+    # field once and the check that spelled its type went blind the same day;
+    # this one is anchored on the NAME and stops at the closing bracket.
+    table = re.search(r"OF_THE_VIEW[^=]*= &\[(.*?)\n\];", view, re.S)
     if not table:
         sys.exit("ERROR: `OF_THE_VIEW` went away or changed shape")
     rows = re.findall(r'\("([^"]+)",\s*"([a-z0-9-]+)"', table.group(1))
-    if len(rows) < 15:
-        sys.exit(f"ERROR: only {len(rows)} rows read out of `OF_THE_VIEW` — the shape changed")
+    floor(len(rows), 15, "rows of `OF_THE_VIEW`")
 
     # 2) WHAT EACH ID MEANS. The footer goes id -> press through this map, so it
     #    is the footer's whole answer once the notation has matched.
@@ -14278,23 +16847,29 @@ let
     #    guarded one would shadow it and shift would stop meaning anything. The
     #    order is part of the answer, and reading it in order is what catches
     #    that.
-    body = re.search(r"fn press_of\(event: &KeyEvent, mods: Modifiers\)(.*?)\n\}\n", window, re.S)
-    if not body:
+    # TWO QUESTIONS, ASKED APART. One is "does `press_of` still take the
+    # modifiers", which IS about the signature and is asked of it; the other is
+    # "what does its body answer", which `body_of` walks by braces. Written as
+    # one search of the whole signature, renaming a parameter gave the wrong
+    # diagnosis for the wrong reason.
+    press_body = body_of(window, "press_of")
+    if not press_body:
+        sys.exit("ERROR: the window's `press_of` went away")
+    floor(len(press_body), 100, "characters of `press_of`")
+    if not re.search(r"fn press_of\([^)]*\bModifiers\b", window):
         sys.exit(
-            "ERROR: the window's `press_of` went away, or stopped taking the modifiers — "
+            "ERROR: the window's `press_of` stopped taking the modifiers — "
             "without them `<right>` and `S-<right>` are the same key"
         )
     arms = []
-    for line in body.group(1).splitlines():
-        line = line.split("//")[0]
+    for line in press_body.splitlines():
         m = re.match(
             r"\s*(Keysym::\w+(?:\s*\|\s*Keysym::\w+)*)(\s+if mods\.shift)?\s*=> Press::(\w+),",
             line,
         )
         if m:
             arms.append((set(re.findall(r"Keysym::(\w+)", m.group(1))), bool(m.group(2)), m.group(3)))
-    if len(arms) < 4:
-        sys.exit(f"ERROR: only {len(arms)} arms read out of the window's `press_of` — the shape changed")
+    floor(len(arms), 4, "arms of the window's `press_of`")
 
     def answered_by_the_window(keysym, shift):
         # A guarded arm answers only while shift is held; an unguarded one
@@ -14353,14 +16928,17 @@ let
             )
 
     # 5) AND THE SHIFT HAS TO SURVIVE THE TRIP, in both doors.
-    at = footer.find("crate::bluetooth::OF_THE_VIEW")
-    if at < 0:
+    # NARROWED TO THE BRANCH, by braces, and not to a count of characters above
+    # the lookup. Two things were wrong with the count. The branch explains
+    # itself by NAMING `Key::simple` and saying why it is wrong, so the check
+    # was reading its own evidence — `uncommented` answers that. And a window
+    # of 1600 characters moves whenever anything above it does: with the prose
+    # gone it reached into a neighbouring view's arm and found THAT view's
+    # `Key::simple`, which is a correct file failing.
+    branch = scope(footer, r"if self\.view\(\) == ViewState::Bluetooth")
+    if branch is None or "crate::bluetooth::OF_THE_VIEW" not in branch:
         sys.exit("ERROR: the footer no longer looks the bluetooth table up by notation")
-    # THE CODE, NOT ITS COMMENTS. The branch explains itself by NAMING
-    # `Key::simple` and saying why it is wrong, so searching the text found the
-    # words in the explanation and the check failed on a correct file — the
-    # same "reading its own evidence" this repository has hit before.
-    branch = "\n".join(l.split("//")[0] for l in footer[max(0, at - 1600):at].splitlines())
+    floor(len(branch), 400, "characters of the footer's bluetooth branch")
     if "shift: key.mods.shift" not in branch:
         gaps.append(
             "the footer builds the notation without the shift, so `S-<right>` arrives as "
@@ -14379,11 +16957,11 @@ let
     #    exception. A pairing question opens over whatever was on the screen; a
     #    door that acted on a click there would put `yes` about an unknown
     #    device one movement of a hand away.
-    arm = re.search(r"Some\(Click::Bluetooth\(n\)\) => \{(.*?)\n            \}\n", footer, re.S)
-    block = re.search(r"if let Some\(row\) = clicked \{(.*?)\n        \}\n", window, re.S)
+    arm = scope(footer, r"Some\(Click::Bluetooth\(n\)\)\s*=>")
+    block = scope(window, r"if let Some\(row\) = clicked")
     if not arm or not block:
         sys.exit("ERROR: the click path of one of the two doors went away or changed shape")
-    for door, text in [("footer", arm.group(1)), ("window", block.group(1))]:
+    for door, text in [("footer", arm), ("window", block)]:
         if "Press::Enter" not in text:
             gaps.append(f"a click in the {door} no longer does what `RET` does")
         if "asking()" not in text:
@@ -14419,16 +16997,21 @@ let
   keyboard-choices-have-text = mkCheck "keyboard-choices-have-text" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a generated list of keys against a catalogue of sentences.
+    # Neither file has a function in it.
+    #
+    # `hashless` on the `.ftl`, whose comment is `#`: a key that was commented
+    # out is a key that is not there, and it used to read as present.
     keys = pathlib.Path("${keyboardsRs}/keys.txt").read_text().split()
-    if len(keys) < 12:
-        print(f"ERROR: only {len(keys)} words in the vocabulary — the table lost its content")
-        sys.exit(1)
+    floor(len(keys), 12, "words in the vocabulary")
 
     failed = False
     for language in ${builtins.toJSON languages}:
-        ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
+        ftl = hashless(pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text())
         have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
+        floor(len(have), 500, "keys declared by " + language)
         missing = [k for k in keys if k not in have]
         if missing:
             print(f"ERROR: {language} does not have: {', '.join(missing)}")
@@ -14532,8 +17115,16 @@ let
       ''
         python3 - <<'PY'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
 
-        declared = pathlib.Path("${../assets/keyboards.nix}").read_text()
+        # FILE-WIDE: a rendered keyd file and a tmpfiles line have no functions
+        # in them, and the two facts asked of the crate — that it builds the
+        # leader once and writes it into every file — are about the file.
+        #
+        # `hashless` for the Nix and the tmpfiles rules; `uncommented` for the
+        # Rust, because `EVERYONE` is the string literal being read out.
+        declared = hashless(pathlib.Path("${../assets/keyboards.nix}").read_text())
+        floor(len(declared), 100, "characters of assets/keyboards.nix")
         key = re.search(r'key = "([a-z0-9]+)";', declared)
         action = re.search(r'action = "([^"]+)";', declared)
         if not key or not action:
@@ -14558,8 +17149,9 @@ let
         # the unit test that proves it by rendering cannot run from here — and
         # what would break this is somebody writing the rule into the catch-all
         # only, which reads as correct until a keyboard is configured.
-        crate = pathlib.Path("${../crates/ronoctua-keyboards/src}/lib.rs").read_text()
+        crate = uncommented(pathlib.Path("${../crates/ronoctua-keyboards/src}/lib.rs").read_text())
         product = crate.split("#[cfg(test)]")[0]
+        floor(len(product), 1000, "characters of the crate before its tests")
         if "let leader = format!" not in product:
             print("ERROR: the renderer no longer builds the leader's line once")
             failed = True
@@ -14570,7 +17162,8 @@ let
             failed = True
 
         # AND THE DIRECTORY IS OURS TO WRITE.
-        rules = pathlib.Path("${tmpfilesOfTheKeyboard}").read_text()
+        rules = hashless(pathlib.Path("${tmpfilesOfTheKeyboard}").read_text())
+        floor(len(rules), 40, "characters of the tmpfiles rules")
         if not re.search(r"^d /var/lib/ronoctua/keyd .* ${user} ", rules, re.M):
             print("ERROR: the keyd directory does not belong to the session's user")
             print(f"       {rules}")
@@ -15385,6 +17978,7 @@ let
   english-names = mkCheck "english-names" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     # The stems this refactor removed. Adding here is cheap; taking one out
     # requires explaining why the word became acceptable again.
@@ -15651,8 +18245,18 @@ let
         r"(fn|struct|enum|trait|type|const|static|mod)\s+([A-Za-z_][A-Za-z0-9_]*)"
     )
 
+    # PROSE: this check's subject IS the prose. Invariant 18 is about the
+    # WORDS — a comment, a message, a flag's help — so the comments are read on
+    # purpose and a stripper over the tree would take away most of what it
+    # exists to examine. Where a pass is about NAMES instead, it strips the
+    # line itself, one language at a time (`//` for Rust, `#` for Nix and
+    # Python), which is the only correct way to do it here: the marker belongs
+    # to the language, and a `#` inside a Rust string is not a comment.
+    # FILE-WIDE: a Portuguese word anywhere in any file of the tree is the
+    # offence, which is the whole of what the invariant says.
     root_dir = pathlib.Path("${self}")
     gaps = []
+    swept = 0
 
     # 1) FILE AND DIRECTORY NAMES
     for p in root_dir.rglob("*"):
@@ -15842,6 +18446,7 @@ let
         for f in root_dir.rglob(suf):
             if any(x in f.parts for x in (".git", "result", "target", ".direnv")):
                 continue
+            swept += 1
             for n, line in enumerate(f.read_text(errors="replace").splitlines(), 1):
                 # Prose, not a definition: `fontes (passa de 1 GB)` inside a
                 # comment matches the same shape as a call.
@@ -16282,6 +18887,7 @@ let
         for f in sorted(root_dir.rglob(suf)):
             if any(x in f.parts for x in (".git", "result", "target", ".direnv")):
                 continue
+            swept += 1
             lines = f.read_text(errors="replace").splitlines()
             for n, line in enumerate(lines, 1):
                 if line.lstrip().startswith("#") or not SHOWN.search(line):
@@ -16314,6 +18920,7 @@ let
         print("       Every NAME and every COMMENT is English.", file=sys.stderr)
         print("       In pt-BR, only the 4 docs, the VALUE of a key and the search tag.", file=sys.stderr)
         raise SystemExit(1)
+    floor(swept, 200, "files of the tree swept for a Portuguese word")
     print("OK: nothing in Portuguese — name, key, comment, subcommand, flag,")
     print("    message, shader AND what the build says out loud")
     END
@@ -16330,21 +18937,37 @@ let
   generator-flags-agree = mkCheck "generator-flags-agree" [ pkgs.python3 ] ''
     python3 - <<'END'
     import collections, pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a flag is declared at the top of a script and passed from a
+    # line of a Nix file, and neither lives inside a function worth narrowing
+    # to. The fifteen-line window after the script's name is the narrowing.
+    #
+    # `hashless` for both sides — `#` is the comment of Python and of Nix — and
+    # it is what stops a flag that was COMMENTED OUT of a generator from still
+    # counting as declared, or one mentioned in prose from counting as passed.
     root_dir = pathlib.Path("${self}")
     declared = collections.defaultdict(set)
     for p in (root_dir / "nix/scripts").glob("*.py"):
-        for m in re.finditer(r'add_argument\(\s*"(--[a-z0-9-]+)"', p.read_text()):
+        for m in re.finditer(r'add_argument\(\s*"(--[a-z0-9-]+)"', hashless(p.read_text())):
             declared[p.name].add(m.group(1))
+    floor(len(declared), 5, "generators declaring a flag")
 
     # `cp --reflink` and friends: a flag of a coreutils call, not of the script.
     NOT_OURS = {"--reflink"}
     gaps = []
+    swept = 0
     for p in root_dir.rglob("*.nix"):
         if any(x in p.parts for x in (".git", "result", "target", ".direnv")):
             continue
-        t = p.read_text(errors="replace")
-        for m in re.finditer(r"(gen-[a-z-]+\.py|scripts/[a-z-]+\.py)([^\n]*(?:\n\s+[^\n]*){0,14})", t):
+        t = hashless(p.read_text(errors="replace"))
+        swept += 1
+        # `[ \t]` AND NOT `\s`, because `\s` matches a newline: across a blank
+        # line the "fifteen lines" became as many as the file had runs of
+        # whitespace, and the window read an unrelated invocation below. It
+        # only showed once the comments were stripped, which is what turns a
+        # comment line into a whitespace-only one.
+        for m in re.finditer(r"(gen-[a-z-]+\.py|scripts/[a-z-]+\.py)([^\n]*(?:\n[ \t]+[^\n]*){0,14})", t):
             script = m.group(1).split("/")[-1]
             if script not in declared:
                 continue
@@ -16353,6 +18976,7 @@ let
                     n = t.count("\n", 0, m.start()) + 1
                     gaps.append(f"{p.relative_to(root_dir)}:{n}: {script} receives {f}")
 
+    floor(swept, 30, "Nix files swept for a generator call")
     if gaps:
         print("ERROR: a flag passed that the generator does not declare.", file=sys.stderr)
         for g in sorted(set(gaps)):
@@ -16379,7 +19003,16 @@ let
   format-captures-resolve = mkCheck "format-captures-resolve" [ pkgs.python3 ] ''
     python3 - <<'END'
     import builtins, pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: a capture with no name in scope is an offence wherever it is
+    # written, and what bounds it is the SCOPE — the region and its `defined`
+    # set — rather than one function.
+    # PARSED: this check does not search its files, it parses them: `fences`
+    # walks the Nix string delimiters and `fstrings` walks the Python quoting,
+    # and both are what tell code from prose here. Running a stripper first
+    # would cut the fences it exists to find — `hashless` would take a `#` out
+    # of the middle of a shell script inside one — so the parse IS the strip.
     CAP = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)")
     FSTR = re.compile(r"""(?:\bf|\bfr|\brf)(\"\"\"|'''|\"|')""")
     DEFINE = [
@@ -16461,7 +19094,7 @@ let
     pre = root_dir / "tests/niri-xvfb.nix"
     prelude = "\n".join(b for _, b in fences(pre.read_text())) if pre.exists() else ""
 
-    orphans = []
+    orphans, swept, scanned = [], 0, 0
     for p in sorted(root_dir.rglob("*")):
         if p.suffix not in (".nix", ".py") or not p.is_file():
             continue
@@ -16471,8 +19104,10 @@ let
         regions = [(0, t)] if p.suffix == ".py" else list(fences(t))
         extra = prelude if p.suffix == ".nix" else ""
         known = defined("\n".join(b for _, b in regions) + "\n" + extra)
+        swept += 1
         for base, region in regions:
             for off, body in fstrings(region):
+                scanned += 1
                 for m in CAP.finditer(body):
                     if m.group(1) in known:
                         continue
@@ -16483,6 +19118,8 @@ let
                     n = t.count("\n", 0, base + off + m.start()) + 1
                     orphans.append(f"{p.relative_to(root_dir)}:{n}: {m.group(1)}")
 
+    floor(swept, 50, "Nix and Python files swept for a format capture")
+    floor(scanned, 200, "format strings read")
     if orphans:
         print("ERROR: a format capture with no name in scope.", file=sys.stderr)
         for o in orphans:
@@ -16708,9 +19345,18 @@ let
   buffer-keys-have-text = mkCheck "buffer-keys-have-text" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     root_dir = pathlib.Path("${self}")
-    owed = {}
+    owed, seen_files = {}, 0
+
+    # FILE-WIDE: a buffer may declare its `mod key` anywhere in any of its
+    # files, so there is no function to narrow to — the `mod key` block IS the
+    # narrowing, and it is the one this check learned to make. What the strip
+    # adds is that a key named in PROSE no longer counts: a comment showing the
+    # old spelling of a constant would have demanded a `.ftl` line for it.
+    #
+    # `uncommented` and not `code_of`, because the key is the string literal.
 
     # INSIDE `mod key`, AND NOWHERE ELSE.
     #
@@ -16726,7 +19372,8 @@ let
     for rs in sorted((root_dir / "buffers").rglob("*.rs")):
         if "target" in rs.parts:
             continue
-        source = rs.read_text()
+        source = uncommented(rs.read_text())
+        seen_files += 1
         for block in re.findall(r"\nmod key \{(.*?)\n\}", source, re.S):
             for k in re.findall(r'pub const [A-Z_0-9]+: &str = "([a-z0-9-]+)";', block):
                 # A TRAILING `-` MEANS PREFIX, NOT KEY. `glyphs-sheet-tags-` is
@@ -16739,9 +19386,8 @@ let
                     continue
                 owed.setdefault(k, rs.relative_to(root_dir))
 
-    if not owed:
-        print("ERROR: no buffer key found — did the pattern change?", file=sys.stderr)
-        raise SystemExit(1)
+    floor(seen_files, 8, "buffer sources swept for a `mod key`")
+    floor(len(owed), 40, "buffer text keys found")
 
     failed = 0
     for language in ${builtins.toJSON languages}:
@@ -16773,9 +19419,20 @@ let
   buffer-modes-have-text = mkCheck "buffer-modes-have-text" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     root_dir = pathlib.Path("${self}")
     ID = re.compile(r'^\s+(name|mode):\s*"([a-z][a-z0-9-]*)"')
+    seen_files = 0
+
+    # FILE-WIDE: the question is "which ids does any component declare", and a
+    # descriptor sits at module level in a file whose name is not the id. The
+    # `Descriptor {` block and the `APP_ID` constant are the narrowings, and
+    # they are what this check is made of.
+    #
+    # `uncommented`, because an id IS a string literal — and because a
+    # descriptor written out in a comment as an example would otherwise demand
+    # a key for an id no component has.
 
     # The ids as the COMPONENT declares them, read out of the descriptor block —
     # the same place `english-names` reads, and for the same reason: nothing ties
@@ -16785,7 +19442,8 @@ let
         if "target" in rs.parts:
             continue
         inside = False
-        for line in rs.read_text().splitlines():
+        seen_files += 1
+        for line in uncommented(rs.read_text()).splitlines():
             if "Descriptor {" in line:
                 inside = True
                 continue
@@ -16798,8 +19456,8 @@ let
             if m:
                 wanted.add(("buffer" if m.group(1) == "name" else "mode", m.group(2)))
 
-    if not wanted:
-        sys.exit("ERROR: no descriptor found — did the block's shape change?")
+    floor(seen_files, 8, "buffer sources swept for a descriptor")
+    floor(len(wanted), 6, "ids declared by a component")
 
     # AND THE NATIVE WINDOWS, which are not buffers and reach the same place.
     #
@@ -16812,9 +19470,12 @@ let
     # Found while adding the fifth. One list, one rule, one place to add the
     # next one.
     APP_ID = re.compile(r'pub const APP_ID[A-Z_]*: &str = "br\.ronoctua\.([a-z][a-z0-9-]*)"')
+    native = 0
     for rs in sorted((root_dir / "crates/ronoctua-shell/src").rglob("*.rs")):
-        for ident in APP_ID.findall(rs.read_text()):
+        for ident in APP_ID.findall(uncommented(rs.read_text())):
             wanted.add(("mode", ident))
+            native += 1
+    floor(native, 4, "native windows declaring an app id")
 
     missing = []
     for language in ${builtins.toJSON languages}:
@@ -16837,9 +19498,10 @@ let
   buffer-commands-have-labels = mkCheck "buffer-commands-have-labels" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     root_dir = pathlib.Path("${self}")
-    ids = set()
+    ids, seen_files = set(), 0
 
     # TWO SHAPES, because a buffer may BUILD its bindings instead of writing
     # them out.
@@ -16857,14 +19519,20 @@ let
     for rs in sorted((root_dir / "buffers").rglob("*.rs")):
         if "target" in rs.parts:
             continue
-        source = rs.read_text()
+        # FILE-WIDE: and `uncommented`. A binding may be written anywhere in a
+        # buffer, so there is no function to narrow to — but an id inside a
+        # `//` comment is a MENTION of a command and not a command, and a file
+        # that listed the old spelling in prose would have demanded a key for
+        # it. The ids themselves are string literals, which is why the strings
+        # stay.
+        source = uncommented(rs.read_text())
+        seen_files += 1
         ids.update(re.findall(r'command:\s*"([a-z0-9-]+)"', source))
         for table in re.findall(r"KEYMAP:\s*&\[\(&str, &str\)\]\s*=\s*&\[(.*?)\n\];", source, re.S):
             ids.update(re.findall(r'\(\s*"[^"]+"\s*,\s*"([a-z0-9-]+)"\s*\)', table))
 
-    if not ids:
-        print("ERROR: no buffer command found — did the pattern change?", file=sys.stderr)
-        raise SystemExit(1)
+    floor(seen_files, 8, "buffer sources swept for a binding")
+    floor(len(ids), 30, "buffer commands found")
 
     failed = 0
     for language in ${builtins.toJSON languages}:
@@ -17277,8 +19945,17 @@ let
   architecture-sections = mkCheck "architecture-sections" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # PROSE: this check's subject IS the prose.
+    # FILE-WIDE: and every file of the tree is swept for it. What it asks is
+    # whether a sentence — nearly always a `//` comment — points at a section
+    # of a document that exists. Stripping the comments would leave it sweeping
+    # a tree for a pattern that no longer occurs anywhere in it, and reporting
+    # nothing wrong for ever. The floor below is what stands in for the strip:
+    # a sweep that stopped finding references is refused.
     doc = pathlib.Path("${self}/docs/ARCHITECTURE.md").read_text()
+    floor(len(doc), 10000, "characters of docs/ARCHITECTURE.md")
 
     # EXACT match, and not "contains": the chapter heading `1. Fontes, glifos e
     # icones` contains the word `Fontes`, so a substring test would go on
@@ -17307,6 +19984,7 @@ let
             if target not in titles:
                 broken.append(f"{f}: section \"{target}\" does not exist in ARCHITECTURE.md")
 
+    floor(seen, 2, "cross-references by section name")
     if broken:
         print("ERROR: a cross-reference to a section that does not exist:", file=sys.stderr)
         for b in broken:
@@ -17333,7 +20011,12 @@ let
   dev-exports-before-it-starts = mkCheck "dev-exports-before-it-starts" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
+    # FILE-WIDE: the question is the ORDER of two lines in a shell script —
+    # which export comes before which launch — and a script has no functions to
+    # narrow to.
+    #
     # What the SHELL reads at runtime and no build bakes. A variable that
     # arrives late is a variable that did not arrive.
     AT_RUNTIME = [
@@ -17348,12 +20031,16 @@ let
         "RONOCTUA_ATLAS",
     ]
 
-    text = pathlib.Path("${../nix/dev.nix}").read_text()
+    # `hashless` keeps one line per line, so the line NUMBERS this check
+    # reports are still the file's — and it takes a `#` off the end of a line,
+    # which the `startswith` test below let stand.
+    text = hashless(pathlib.Path("${../nix/dev.nix}").read_text())
+    floor(len(text), 2000, "characters of nix/dev.nix")
     lines = text.splitlines()
 
     launch = None
     for n, line in enumerate(lines, 1):
-        if "ronoctua-footer-single" in line and not line.lstrip().startswith("#"):
+        if "ronoctua-footer-single" in line:
             launch = n
             break
     if launch is None:
@@ -17496,6 +20183,11 @@ let
       ''
         python3 - <<'END'
         import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
+
+        # FILE-WIDE: a door draws the sentence wherever it lays out its hint
+        # line, and what bounds the question is the 900 characters after the
+        # call that produced it — a window, not a function.
 
         # THE SENTENCE UNDER THE HINT LINE IS DRAWN IN TWELVE PLACES, and it has to
         # read the same in all of them.
@@ -17515,7 +20207,7 @@ let
         bad = []
         doors = []
         for f in sorted(src.rglob("*.rs")):
-            body = f.read_text()
+            body = code_of(f.read_text())
             # WHERE THE SENTENCE IS TAKEN OUT, in either of its two spellings: the
             # windows ask `Hinted::said`, the footer keeps its own field.
             for m in re.finditer(r"(hinted\.said\(\)|self\.hint_said\.as_ref\(\))", body):
@@ -17539,7 +20231,9 @@ let
         # The tone itself is the theme generator's to hold — `text.subtle.explain`
         # is gated against both registers of the hint and all three steps of the
         # content ramp — and this is the half that says the shell ASKS for it.
-        chrome = (src / "chrome.rs").read_text()
+        floor(len(doors), 12, "doors drawing the pointer's sentence")
+        chrome = code_of((src / "chrome.rs").read_text())
+        floor(len(chrome), 20000, "characters of chrome.rs")
         if "Self::Explain => tokens::color::TEXT_SUBTLE_EXPLAIN," not in chrome:
             bad.append("`Register::Explain` no longer resolves to `text.subtle.explain`")
 
@@ -17556,6 +20250,7 @@ let
   shots-scenes-are-total = mkCheck "shots-scenes-are-total" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
     # WHAT THE BATTERY PHOTOGRAPHS, read from both sides.
     #
@@ -17566,7 +20261,14 @@ let
     # nobody can ask for on its own, which is the whole of what the list is
     # for.
     root = pathlib.Path("${self}")
-    listed = (root / "nix/shots-scenes.nix").read_text()
+    # FILE-WIDE: a list of scenes against a script of subtests, neither of
+    # which has a function to narrow to. The `if wanted(...)` line and the
+    # indentation below it are the narrowing.
+    #
+    # `hashless` on the list: a scene commented out is a scene that is not
+    # declared, and it used to read as declared.
+    listed = hashless((root / "nix/shots-scenes.nix").read_text())
+    floor(len(listed), 500, "characters of nix/shots-scenes.nix")
     declared = re.findall(r"id = \"([a-z0-9-]+)\";", listed)
     # WHICH SCENES SAY THEY CANNOT STAND ALONE.
     needy = set(
@@ -17582,8 +20284,7 @@ let
 
     if len(declared) != len(set(declared)):
         bad.append("nix/shots-scenes.nix names the same scene twice")
-    if len(declared) < 10:
-        bad.append(f"only {len(declared)} scenes declared; the sweep is not reading the list")
+    floor(len(declared), 10, "scenes declared")
 
     used = []
     for n, line in enumerate(script):
@@ -17811,9 +20512,20 @@ let
       sections-do-not-share-a-line
       one-offset-per-list
       every-list-can-be-dragged
+      checks-do-not-pass-by-coincidence
       one-frame-model
+      a-rule-follows-its-ground
+      every-ground-is-measured
       one-pixel-rail
       one-scrollbar
+      a-buffer-draws-inside-its-regions
+      a-state-change-repaints
+      a-buffer-can-be-hovered
+      a-bar-is-grabbed-where-it-is-drawn
+      a-buffer-answers-the-pointer
+      a-row-is-never-drawn-small
+      the-host-shows-what-it-draws
+      the-shortcut-line-is-the-systems
       manager-builds-its-own-rows
       inspect-keys-exist
       update-has-one-list
@@ -17995,6 +20707,10 @@ let
       one-syncthing-boundary
       one-http-writer
       one-zip-reader
+      the-brain-header-is-generated
+      the-brain-is-photographable
+      the-brain-reads-what-the-units-write
+      the-step-switch-reaches-the-run
       the-sweep-only-looks-at-links
       cache-has-one-list
       numeric-selectors-get-numbers
@@ -18477,9 +21193,20 @@ let
       sections-do-not-share-a-line
       one-offset-per-list
       every-list-can-be-dragged
+      checks-do-not-pass-by-coincidence
       one-frame-model
+      a-rule-follows-its-ground
+      every-ground-is-measured
       one-pixel-rail
       one-scrollbar
+      a-buffer-draws-inside-its-regions
+      a-state-change-repaints
+      a-buffer-can-be-hovered
+      a-bar-is-grabbed-where-it-is-drawn
+      a-buffer-answers-the-pointer
+      a-row-is-never-drawn-small
+      the-host-shows-what-it-draws
+      the-shortcut-line-is-the-systems
       manager-builds-its-own-rows
       inspect-keys-exist
       update-has-one-list

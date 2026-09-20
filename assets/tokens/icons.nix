@@ -213,6 +213,19 @@
   # direction rather than as a state.
   expand = "cod-chevron_down";
   collapse = "cod-chevron_up";
+  # THE DOT BETWEEN ONE SHORTCUT AND THE NEXT, for a BUFFER.
+  #
+  # The minibuffer already draws one, and it draws it from `mark.separator` —
+  # a codepoint, which is a token value the wall does not let a component name
+  # (invariants 9 and 11). So a buffer teaching its own keys had nothing to put
+  # between two pairs but empty cells, and the owner read the result beside the
+  # file manager's line and said what it is: the same control, not looking like
+  # the same control.
+  #
+  # An ICON is the shape that crosses. It resolves to the same dot the hint
+  # line uses, and a buffer names the token rather than the character — which
+  # is the whole of what the invariant asks.
+  separator = "cod-circle_small_filled";
   list = "cod-list_unordered";
   history = "cod-history";
 
@@ -486,6 +499,21 @@
   # same holds here: this line appears without being asked for, and the mark is
   # what says WHOSE it is before a word is read.
   brain = "md-brain";
+
+  # THE TWO KINDS OF TASK, and they are ONE DRAWING APART on purpose.
+  #
+  # `md-repeat` is an arrow that comes back round; `md-repeat_once` is the same
+  # arrow with a `1` in it. A person who has read one has read the other, which
+  # is the whole job: the list has two kinds of row and nothing in the words
+  # tells them apart — both are a name, a moment and a standing.
+  #
+  # Two glyphs from different families would have been two things to learn, and
+  # the difference between them would have read as a difference of importance
+  # rather than of kind. A colour says it again (`text.once`), because a glyph
+  # two cells wide is a small thing to hang a distinction on.
+  task-routine = "md-repeat";
+  task-once = "md-repeat_once";
+
   memory = "md-memory";
   disk = "md-harddisk";
   # A DRIVE ONE CAN PULL OUT, in the file manager's sidebar. It is a different

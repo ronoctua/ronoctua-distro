@@ -47,6 +47,17 @@ use crate::task::{Due, Hold, Report, RunRecord, Verdict};
 /// minute to redraw an identical line.
 pub const TICK: Duration = Duration::from_secs(30);
 
+/// HOW MANY OF A TASK'S OWN RUNS A SCREEN IS TOLD ABOUT.
+///
+/// Ten, and the owner asked for ten in those words.
+///
+/// It is [`crate::journal::RECENT`] and not a second number, which is the
+/// whole point of it living there: the journal's pruning uses it as a FLOOR —
+/// a task keeps its last ten whatever else fills the list — and the screen
+/// uses it as a count. Two constants would let the screen promise ten of
+/// something the journal had already thrown away.
+pub use crate::journal::RECENT;
+
 /// How often a run in flight is looked at.
 ///
 /// Two seconds. It is a `stat` of one file — no process spawned, no journal
@@ -54,18 +65,49 @@ pub const TICK: Duration = Duration::from_secs(30);
 /// unit that stops.
 pub const BEAT: Duration = Duration::from_secs(2);
 
-/// Where the unit writes what it did.
+/// The directory a unit writes its report into, and the brain reads.
 ///
-/// `/run` and not the person's state directory, because the unit is a SYSTEM
-/// one: a system unit has no `%h` and cannot be told where somebody's home is.
-/// `RuntimeDirectory=` in the unit creates it, and the brain only ever reads —
-/// which is why the previous report is MARKED rather than deleted
-/// ([`crate::task::Report::mark`]).
+/// # Why the runtime directory and not `/run`
+///
+/// Because it was `/run/ronoctua-brain` and **nothing on the machine ever wrote
+/// there.** The units are the person's — `%t` for them is `$XDG_RUNTIME_DIR`,
+/// which is `/run/user/<uid>` — so the daemon watched a path that did not
+/// exist, `Report::watch` never saw an mtime change, and every run the brain
+/// started ended as [`crate::task::Watched::Runaway`] once the patience ran
+/// out: two hours for an update, half an hour for a sweep. The screen then
+/// said `failed / runaway` about a rebuild that had worked.
+///
+/// It had no symptom anybody could see quickly, because the tests all point
+/// `Runner::reporting_in` at a scratch directory and never name this one. What
+/// closes that is `the-brain-reads-what-the-units-write`, which reads the
+/// argument out of `nix/modules/*.nix` and compares it with this function.
+///
+/// The brain only ever READS here, which is why the previous report is MARKED
+/// rather than deleted ([`crate::task::Report::mark`]).
 ///
 /// The environment may override it, for the same reason `RONOCTUA_YT_DLP`
 /// exists: what sets it is the flake, inside the block that decides whether any
 /// of this is installed at all.
-pub const REPORTS: &str = "/run/ronoctua-brain";
+#[must_use]
+pub fn reports_dir() -> std::path::PathBuf {
+    if let Some(said) = std::env::var_os("RONOCTUA_BRAIN_REPORTS") {
+        return std::path::PathBuf::from(said);
+    }
+    // NO FALLBACK TO `/tmp`, and none to `/run` either. Without a runtime
+    // directory there is nowhere a unit of this person's could have written,
+    // so a path here would be a guess that reads as an answer. What this
+    // returns then cannot exist, and `watch` says `runaway` — which is the
+    // honest end for a run nobody can hear.
+    std::env::var_os("XDG_RUNTIME_DIR").map_or_else(
+        || std::path::PathBuf::from("/nonexistent/ronoctua-brain"),
+        |dir| std::path::PathBuf::from(dir).join(REPORTS_LEAF),
+    )
+}
+
+/// The one name the daemon and the units have to agree on.
+///
+/// Spelled once here and read by the check against the `.nix` that writes it.
+pub const REPORTS_LEAF: &str = "ronoctua-brain";
 
 /// The general gate: can the machine afford anything at all right now.
 ///
@@ -126,10 +168,7 @@ impl Runner {
             .state
             .as_deref()
             .map_or_else(Journal::fresh, Journal::read_from);
-        let reports = std::env::var_os("RONOCTUA_BRAIN_REPORTS").map_or_else(
-            || std::path::PathBuf::from(REPORTS),
-            std::path::PathBuf::from,
-        );
+        let reports = reports_dir();
         Self {
             shared,
             tasks,
@@ -142,9 +181,22 @@ impl Runner {
     }
 
     /// Where the report of a task is written and read.
+    ///
+    /// # Why the rehearsal has a file of its own
+    ///
+    /// Because the units do: `ronoctua-cache-sweep-rehearsal.service` writes
+    /// `cache-sweep-rehearsal.json`, beside the real one. Watching the real
+    /// file during a rehearsal reads whatever the last true run left there —
+    /// an mtime that never changes, so the rehearsal ran out its patience and
+    /// came back `runaway` while the rehearsal unit finished in a second.
     #[must_use]
-    pub fn report_path(&self, task: &str) -> std::path::PathBuf {
-        self.reports.join(format!("{task}.json"))
+    pub fn report_path(&self, task: &str, rehearsal: bool) -> std::path::PathBuf {
+        let leaf = if rehearsal {
+            format!("{task}-rehearsal.json")
+        } else {
+            format!("{task}.json")
+        };
+        self.reports.join(leaf)
     }
 
     /// Points the reports somewhere else — what a test does.
@@ -227,26 +279,52 @@ impl Runner {
         // row is built inside `change` where the tasks are no longer in reach —
         // and a row that resolved the preferences some other way would draw a
         // cadence the schedule does not use. See `Task::defaults`.
-        let rows: Vec<(&'static str, Due, &'static [crate::task::Step], TaskPrefs)> = self
+        let rows: Vec<(
+            &'static str,
+            crate::task::Kind,
+            Due,
+            &'static [crate::task::Step],
+            TaskPrefs,
+        )> = self
             .tasks
             .all()
             .map(|t| {
                 let due = t.due(now, &prefs, self.journal.last(t.id()));
-                (t.id(), due, t.steps(), prefs.of_task(t))
+                (t.id(), t.kind(), due, t.steps(), prefs.of_task(t))
             })
             .collect();
 
+        // THE LOG, COPIED ONCE PER PASS. It is bounded by `ACTIVITY` here and
+        // not on the way out, so what a screen is told and what the socket
+        // carries are the same list — the argument `wire` makes about sending
+        // the mind whole only holds if the mind IS what is sent.
+        let log: Vec<crate::task::RunRecord> = self
+            .journal
+            .all()
+            .iter()
+            .rev()
+            .take(crate::journal::ACTIVITY)
+            .rev()
+            .cloned()
+            .collect();
         self.shared.change(|mind| {
             mind.now = now;
             mind.pulse = pulse;
+            mind.journal.clone_from(&log);
             let running = mind.running.clone();
             let queued: Vec<String> = mind.queue.clone();
             let old: Vec<TaskState> = std::mem::take(&mut mind.tasks);
             mind.tasks = rows
                 .iter()
-                .map(|(id, due, steps, mine)| {
+                .map(|(id, kind, due, steps, mine)| {
                     let mine = mine.clone();
                     let was = old.iter().find(|t| t.id == *id);
+                    // AND THE LAST FEW RUNS OF THIS ONE, asked of the journal
+                    // per TASK: the journal is one list for every task, so on a
+                    // machine where one runs weekly and another monthly the
+                    // second one's records fall off the end of a shared window
+                    // while its own row still has to show them.
+                    let history = self.journal.recent(id, RECENT);
                     let standing = if running == *id {
                         Standing::Running
                     } else if queued.iter().any(|q| q == *id) {
@@ -265,6 +343,7 @@ impl Runner {
                     };
                     TaskState {
                         id: (*id).to_owned(),
+                        kind: *kind,
                         standing,
                         enabled: mine.enabled,
                         interval_days: mine.interval_days,
@@ -282,15 +361,25 @@ impl Runner {
                             Due::Not { why } => (*why).to_owned(),
                             _ => String::new(),
                         },
-                        last: self.journal.latest(id).cloned(),
+                        last: history.first().cloned(),
+                        history,
                         steps: steps
                             .iter()
                             .map(|s| StepState {
                                 id: s.id.to_owned(),
                                 command: s.command.to_owned(),
                                 needs_root: s.needs_root,
-                                on: !mine.steps_off.contains(s.id),
-                                changed: mine.steps_off.contains(s.id) == s.on_by_default,
+                                // ONE LINE FOR BOTH ANSWERS, and it is the
+                                // whole of the fix. `on` used to be
+                                // `!contains(id)`, which reads the set as a
+                                // list of switched-off steps and so assumes
+                                // every step ships ON. Six of the update's
+                                // twelve ship OFF, so on an untouched machine
+                                // those six drew with a tick AND the note
+                                // "you changed" — see `TaskPrefs::steps_flipped`,
+                                // which carries the whole story.
+                                on: s.on_by_default ^ mine.steps_flipped.contains(s.id),
+                                on_by_default: s.on_by_default,
                             })
                             .collect(),
                     }
@@ -317,11 +406,28 @@ impl Runner {
             return;
         }
         let Some(id) = mind.queue.first().cloned() else {
-            // NOTHING WAITING, NOTHING ANNOUNCED. An announcement outliving its
-            // queue would be a countdown on the footer for something that was
-            // cancelled.
-            if mind.announcement.is_some() {
-                self.shared.change(|m| m.announcement = None);
+            // NOTHING WAITING, NOTHING ANNOUNCED AND NOTHING HELD.
+            //
+            // An announcement outliving its queue would be a countdown on the
+            // footer for something that was cancelled — and a HOLD outliving
+            // it is the same defect one step quieter. A hold means "this is
+            // waiting for a better moment"; with nothing waiting there is
+            // nothing to be held, and the row went on saying there was.
+            //
+            // It showed up the moment the brain's screen grew a line that
+            // alarms: a task held at two in the morning left "nothing will
+            // start while the processor is this busy" on the page for the rest
+            // of the day, on a machine doing nothing at all. The row carried
+            // it all along; before there was a danger line, nobody could see
+            // it.
+            let stale = mind.tasks.iter().any(|t| t.hold.is_some());
+            if mind.announcement.is_some() || stale {
+                self.shared.change(|m| {
+                    m.announcement = None;
+                    for row in &mut m.tasks {
+                        row.hold = None;
+                    }
+                });
             }
             return;
         };
@@ -341,6 +447,48 @@ impl Runner {
             held => held,
         };
         if let Verdict::Hold(hold) = verdict {
+            // ONCE PER EPISODE, and never once per tick.
+            //
+            // This pass runs every thirty seconds, so an hour of a busy
+            // machine is a hundred and twenty looks at the same fact. Writing
+            // one down each time would make the activity log a wall of "RAM is
+            // busy" with everything that actually happened buried under it —
+            // and it would evict the real runs through the journal's ceiling.
+            //
+            // The episode is "the row was not already held by this". The row
+            // is cleared the moment anything else happens to the task, so a
+            // hold that lifts and comes back is two episodes, which is what a
+            // person reading the log wants to know.
+            let already = self
+                .shared
+                .snapshot()
+                .0
+                .task(&id)
+                .is_some_and(|t| t.hold == Some(hold));
+            if !already {
+                let record = RunRecord::of(
+                    &id,
+                    now,
+                    now,
+                    crate::task::Outcome::Skipped {
+                        why: hold.word().to_owned(),
+                    },
+                );
+                // `Held` AND NOT `Skipped`, which is what `Outcome::Skipped`
+                // would have made it: skipped is a run that was considered and
+                // dropped, held is a run still waiting for a better moment.
+                // The screen draws them in different words.
+                let record = RunRecord {
+                    kind: crate::task::OutcomeKind::Held,
+                    ..record
+                };
+                self.journal.put(record);
+                if let Some(dir) = self.store.state.as_deref()
+                    && let Err(e) = self.journal.write_to(dir)
+                {
+                    tracing::error!(error = %e, "could not write the brain's journal");
+                }
+            }
             self.shared.change(|m| {
                 if let Some(row) = m.task_mut(&id) {
                     row.hold = Some(hold);
@@ -415,7 +563,7 @@ impl Runner {
             u64::from(self.shared.snapshot().0.prefs.of_task(task).runaway_minutes) * 60,
         );
         let mut report = Report::at(
-            self.report_path(id),
+            self.report_path(id, rehearsal),
             patience,
             BEAT,
             self.shared.stop_flag(),
@@ -438,6 +586,9 @@ impl Runner {
 
         tracing::info!(task = id, rehearsal, "starting");
         let outcome = task.run(&report);
+        // AND WHAT IT WANTS SAID, which is not what it did. A watch's whole
+        // output is a sentence; see `task::Notice`.
+        let said = report.said();
         let ended = self.clock.now();
         tracing::info!(task = id, ?outcome, "finished");
 
@@ -462,6 +613,13 @@ impl Runner {
             if let Some(row) = m.task_mut(id) {
                 row.standing = Standing::Idle;
                 row.last = Some(record.clone());
+            }
+            // THE NOTICE IS REPLACED AND NOT MERGED, including with `None`:
+            // a watch that finds nothing wrong takes its own line down. Only
+            // the task that raised one may clear it, so a sweep finishing
+            // does not silence a warning about Emacs.
+            if said.is_some() || m.notice.as_ref().is_some_and(|n| n.task == id) {
+                m.notice.clone_from(&said);
             }
         });
     }
@@ -765,11 +923,25 @@ mod tests {
     }
 
     #[test]
-    fn a_hold_is_published_and_never_written_down() {
-        // THE DEFECT THIS CATCHES: the machine being busy at two in the
-        // morning recorded as an event, and a weekly update pushed a whole week
-        // — for something that never happened. A hold is a state of the
-        // MACHINE; it belongs on the row and nowhere else.
+    fn a_hold_is_written_down_once_per_episode() {
+        // THE DEFECT THIS CATCHES, and it is not the one this test used to
+        // catch. It used to assert that a hold is NEVER written down, and the
+        // reason was sound as far as it went: the machine being busy at two in
+        // the morning is not an event, and recording one would push a weekly
+        // update a whole week for something that never happened.
+        //
+        // What changed is that the home page now shows the last hundred things
+        // the brain did, and "nothing, because the memory was busy" is one of
+        // the most useful of them — on a machine where a task keeps not
+        // running, it is the ONLY thing that explains why. So a hold is a
+        // record, and it is a record that does not move the schedule: nothing
+        // reads `Held` as a run.
+        //
+        // What it must not be is a record per TICK. This pass runs every
+        // thirty seconds, so an hour of a busy machine would be a hundred and
+        // twenty identical lines — a wall of "RAM is busy" with everything
+        // that actually happened buried underneath it, and the journal's
+        // ceiling evicting the real runs to make room.
         let busy = Pulse {
             ram_used_pct: Some(99),
             ..Pulse::default()
@@ -777,13 +949,72 @@ mod tests {
         let (shared, mut runner) = a_runner(vec![Box::new(Always)], busy, 1000);
         runner.pump();
         runner.pump();
-        assert!(
-            runner.journal.runs.is_empty(),
-            "it wrote the wait into the journal"
+        runner.pump();
+        assert_eq!(
+            runner.journal.runs.len(),
+            1,
+            "three passes over one busy machine wrote {} lines",
+            runner.journal.runs.len()
+        );
+        let wrote = &runner.journal.runs[0];
+        assert_eq!(wrote.kind, crate::task::OutcomeKind::Held);
+        assert_eq!(
+            wrote.why, "ram",
+            "the record does not say what was in the way"
         );
         assert_eq!(
             shared.snapshot().0.task("always").and_then(|t| t.hold),
             Some(Hold::Ram)
+        );
+
+        // AND IT DOES NOT OUTLIVE THE QUEUE.
+        //
+        // A hold means "this is waiting for a better moment"; with nothing
+        // waiting there is nothing to be held, and a row that went on saying
+        // so put "the processor is too busy" on the brain's screen for the
+        // rest of the day on a machine doing nothing at all. The row carried
+        // it all along — before there was a line that alarms, nobody could
+        // see it.
+        //
+        // THE QUEUE IS CLEARED AND THE TASK IS TAKEN AWAY, because `enrol`
+        // puts a still-due task straight back: emptying the queue under a
+        // task that is due is not a state this daemon can be in. A task
+        // ABORTED or POSTPONED is, and that is what this stands for.
+        let (quiet, mut alone) = a_runner(Vec::new(), busy, 1000);
+        quiet.change(|m| {
+            m.tasks = shared.snapshot().0.tasks;
+            m.queue.push("always".to_owned());
+        });
+        assert_eq!(
+            quiet.snapshot().0.task("always").and_then(|t| t.hold),
+            Some(Hold::Ram)
+        );
+        quiet.change(|m| m.queue.clear());
+        alone.pump();
+        assert_eq!(
+            quiet.snapshot().0.task("always").and_then(|t| t.hold),
+            None,
+            "a hold outlived the queue it belonged to"
+        );
+
+        // AND IT DOES NOT MOVE THE SCHEDULE.
+        //
+        // `Journal::last` is what `due` counts from, and a wait is not a run.
+        // With the hold as the only record this has to answer NOTHING — the
+        // task has never run — and not "it ran at the moment it was refused",
+        // which would push a weekly task a whole week every time the machine
+        // was busy at its moment.
+        assert_eq!(
+            runner.journal.last("always"),
+            None,
+            "a wait was counted as a run"
+        );
+        // And the SCREEN still sees it, which is the half that makes the log
+        // worth having: `latest` answers with the last thing that happened,
+        // whatever it was.
+        assert_eq!(
+            runner.journal.latest("always").map(|r| r.kind),
+            Some(crate::task::OutcomeKind::Held)
         );
     }
 
@@ -923,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn a_step_the_person_switched_off_is_drawn_as_changed() {
+    fn a_step_nobody_touched_is_not_changed() {
         static STEPS: &[Step] = &[
             Step {
                 id: "on-by-default",
@@ -959,27 +1190,70 @@ mod tests {
                 Outcome::Done(Vec::new())
             }
         }
+        // FIRST, THE MACHINE NOBODY HAS TOUCHED. This is the case that was
+        // wrong, and it was wrong in the direction that is hardest to notice:
+        // the set of exceptions is empty, so `!contains(id)` answered "on" for
+        // BOTH rows, and "changed" — which was `contains(id) == on_by_default`
+        // — answered true for the one that ships off. The owner read six of
+        // those on the update's page and asked what they meant.
         let (shared, mut runner) = a_runner(vec![Box::new(Stepped)], Pulse::default(), 1);
-        // The person switches off the one that ships on, and switches ON the
-        // one that ships off — both are "changed", and the screen says so.
+        runner.pump();
+        let (mind, _) = shared.snapshot();
+        let steps = &mind.task("stepped").expect("row").steps;
+        assert!(
+            steps[0].on,
+            "a step that ships on is off with no file at all"
+        );
+        assert!(
+            !steps[1].on,
+            "a step that ships OFF is drawn as on with no file at all"
+        );
+        for s in steps {
+            assert_eq!(
+                s.on, s.on_by_default,
+                "`{}` differs from its default on a machine nobody has touched",
+                s.id
+            );
+        }
+
+        // AND NOW ONE FLIP, which moves exactly one row and in one direction.
+        let (shared, mut runner) = a_runner(vec![Box::new(Stepped)], Pulse::default(), 1);
         shared.change(|m| {
             m.prefs
                 .mine("stepped")
-                .steps_off
+                .steps_flipped
                 .insert("on-by-default".into());
         });
         runner.pump();
         let (mind, _) = shared.snapshot();
         let steps = &mind.task("stepped").expect("row").steps;
         assert!(!steps[0].on, "the switched-off step is still on");
-        assert!(
-            steps[0].changed,
-            "the default was switched off and the screen did not say so"
+        assert_ne!(
+            steps[0].on, steps[0].on_by_default,
+            "the row the person moved does not read as moved"
         );
-        assert!(steps[1].on, "the step the person switched on is still off");
-        assert!(
-            steps[1].changed,
-            "the step that comes switched off is on and the screen did not say so"
+        assert!(!steps[1].on, "flipping one step moved another one with it");
+        assert_eq!(
+            steps[1].on, steps[1].on_by_default,
+            "an untouched row reads as moved"
+        );
+
+        // AND THE OTHER DIRECTION, which the old shape could not express at
+        // all: switching ON a step the distro ships OFF.
+        let (shared, mut runner) = a_runner(vec![Box::new(Stepped)], Pulse::default(), 1);
+        shared.change(|m| {
+            m.prefs
+                .mine("stepped")
+                .steps_flipped
+                .insert("off-by-default".into());
+        });
+        runner.pump();
+        let (mind, _) = shared.snapshot();
+        let steps = &mind.task("stepped").expect("row").steps;
+        assert!(steps[1].on, "a step that was switched on is still off");
+        assert_ne!(
+            steps[1].on, steps[1].on_by_default,
+            "the row the person moved does not read as moved"
         );
     }
 

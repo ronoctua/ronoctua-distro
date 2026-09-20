@@ -14,8 +14,8 @@
 # lasts. And a unit gets `IOSchedulingClass=idle` for nothing, which is the
 # argument `nix/modules/memory.nix` already makes about collecting the store —
 # it competes with everything for the disk, so it yields to whatever the person
-# is doing. The first run on the owner's machine frees 150 GiB; without this it
-# is a machine nobody can type on.
+# is doing. A run takes whole cache directories at once, which is a lot of
+# `unlink`; without this it is a machine nobody can type on while it happens.
 #
 # WHAT IT MAY NOT DO
 # ------------------
@@ -69,7 +69,13 @@ let
             # in a way that reads as a bug in the walk.
             "--root %C"
             # THE REPORT THE BRAIN WATCHES. `%t` is the user's runtime
-            # directory, which is where `ronoctua_brain::runner::REPORTS` looks.
+            # directory, which is where `ronoctua_brain::runner::reports_dir`
+            # looks — and the two agreeing is not a comment, it is
+            # `the-brain-reads-what-the-units-write`, which reads this line and
+            # that function. They disagreed once (the daemon looked in
+            # `/run/ronoctua-brain`, which nothing ever wrote), and the symptom
+            # was every run the brain started ending as `runaway` after its
+            # whole patience had gone by.
             "--report %t/ronoctua-brain/${report}"
             "--days ${toString cfg.keepDays}"
           ]
@@ -116,6 +122,55 @@ let
         RestrictAddressFamilies = [ "AF_UNIX" ];
       };
     };
+  # THE TRASH'S OWN UNIT, and the differences from the sweep's are the point:
+  # another binary, another number, and `%S` rather than `%C` as the one
+  # writable path — a sweep that could reach the trash would be a cache cleaner
+  # deleting the only copy of somebody's file.
+  trashUnit =
+    {
+      what,
+      report,
+      execute,
+    }:
+    {
+      description = "ronoctua — ${what}";
+
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = lib.concatStringsSep " " (
+          [
+            "${ronoctua.emptyTrash}/bin/ronoctua-empty-trash"
+            "--data-home %S"
+            # THE SAME AGREEMENT the sweep above spells out, and the same check
+            # reads this line too.
+            "--report %t/ronoctua-brain/${report}"
+            "--days ${toString cfg.trashDays}"
+          ]
+          ++ lib.optional execute "--execute"
+        );
+
+        CPUSchedulingPolicy = "idle";
+        IOSchedulingClass = "idle";
+        Slice = "session.slice";
+        OOMPolicy = "stop";
+
+        ProtectSystem = "strict";
+        ProtectHome = "read-only";
+        ReadWritePaths = [
+          "%S"
+          "%t/ronoctua-brain"
+        ];
+        PrivateDevices = true;
+        NoNewPrivileges = true;
+        RestrictSUIDSGID = true;
+        ProtectKernelTunables = true;
+        ProtectControlGroups = true;
+        RestrictNamespaces = true;
+        SystemCallFilter = [ "@system-service" ];
+        PrivateNetwork = true;
+        RestrictAddressFamilies = [ "AF_UNIX" ];
+      };
+    };
 in
 {
   options.ronoctua.cache = {
@@ -132,6 +187,22 @@ in
         The default comes from `assets/cache.nix`, which is also where the Rust
         side reads it — the option exists so a machine can differ, not so the
         number can be written twice.
+      '';
+    };
+
+    trashDays = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = declared.trashDays;
+      description = ''
+        How long something stays in the trash before it is thrown away for good,
+        in days.
+
+        Counted from the `DeletionDate` the freedesktop spec writes into every
+        note, never from the file's own timestamps: a document written a year
+        ago and thrown away this morning has been in the trash for a morning.
+
+        This is the one number in this module that decides something
+        irreversible, which is why it is four days and not forty.
       '';
     };
   };
@@ -152,6 +223,23 @@ in
     systemd.user.services.ronoctua-cache-sweep = sweepUnit {
       what = "sweep cached files nothing has used";
       report = "cache-sweep.json";
+      execute = true;
+    };
+
+    # AND THE TRASH, which is NOT a cache — what is in there is the only copy,
+    # which is why it has its own binary, its own number (four days, not forty)
+    # and its own writable path. The two live in one module because they are the
+    # same question asked of two directories: what may the machine throw away by
+    # itself, and after how long.
+    systemd.user.services.ronoctua-empty-trash-rehearsal = trashUnit {
+      what = "rehearse emptying the trash — deletes nothing";
+      report = "trash-expire-rehearsal.json";
+      execute = false;
+    };
+
+    systemd.user.services.ronoctua-empty-trash = trashUnit {
+      what = "empty the trash of what has been in it long enough";
+      report = "trash-expire.json";
       execute = true;
     };
   };

@@ -785,6 +785,9 @@
               # its own: a program whose job is `unlink` must not have the
               # whole shell in its closure.
               cacheSweep = rust.cacheSweep;
+              # And the one that empties the trash, extracted for the same
+              # reason and one sharper: what it deletes is the only copy.
+              emptyTrash = rust.emptyTrash;
               # The browser extension, already generated: `nix/modules/browser-extension.nix`
               # packs and signs it on the machine, because the id comes from a
               # key that may not live in this repository.

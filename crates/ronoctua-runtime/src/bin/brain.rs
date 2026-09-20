@@ -1,4 +1,4 @@
-//! Exercises the brain's panel — `LEADER b b`.
+//! Exercises the brain's panel — `LEADER b`.
 //!
 //! # Why a binary, and not a `#[test]` in the buffer
 //!
@@ -67,7 +67,12 @@ const TASK: &str = "system-update";
 /// A LIST AND NOT A READ of `crates/ronoctua-brain/src/tasks/`: this binary
 /// runs inside a check with no source tree, and the day a third task arrives
 /// the line here is the same line the registry needs.
-const TASKS: &[&str] = &["system-update", "cache-sweep"];
+const TASKS: &[&str] = &[
+    "system-update",
+    "cache-sweep",
+    "trash-expire",
+    "emacs-daemon",
+];
 
 /// The update sequence's table, as the build generated it.
 ///
@@ -134,6 +139,36 @@ fn look(inst: &mut ronoctua_runtime::Instance) -> Result<ronoctua_protocol::Disp
     Ok(list)
 }
 
+/// Fill in the names the HOST would have resolved, in this language.
+///
+/// # Why the driver has to do it at all
+///
+/// Because `TaskState::name_text` and `RunRecord::task_text` are the words the
+/// component MEASURES — it draws the key beside them — and the production host
+/// resolves them in `mind_wire::task_of`. A driver that sent the ids instead
+/// would hand the buffer a thirteen-cell name and then measure a seventeen-cell
+/// translation against the column it reserved, which is exactly what this
+/// check caught the first time it ran: four labels reported as cut, on a
+/// screen that cuts none of them.
+fn named(mind: &mut Mind, words: &std::collections::HashMap<String, String>) {
+    let say = |id: &str| {
+        words
+            .get(&format!("brain-task-{id}"))
+            .cloned()
+            .unwrap_or_else(|| id.to_owned())
+    };
+    for t in &mut mind.tasks {
+        t.name_text = say(&t.id);
+        t.last.task_text = say(&t.last.task);
+        for r in &mut t.history {
+            r.task_text = say(&r.task);
+        }
+    }
+    for r in &mut mind.activity {
+        r.task_text = say(&r.task);
+    }
+}
+
 /// A task in whichever shape the screen is being asked about.
 fn task(standing: Standing, hold: HoldKind, why_not: &str, ran: bool) -> TaskState {
     // THE IDS COME FROM THE DECLARATION, never from here — see `TABLE`. Two
@@ -142,6 +177,15 @@ fn task(standing: Standing, hold: HoldKind, why_not: &str, ran: bool) -> TaskSta
     let declared = declared_steps();
     TaskState {
         id: TASK.to_owned(),
+        // THE NAME AS THE HOST WOULD HAVE RESOLVED IT. This driver has no
+        // bundle, and the point of the field is the WIDTH — so it carries a
+        // word of the right shape rather than an empty string, which would
+        // photograph a column the real screen never has.
+        name_text: "Rebuild the system".to_owned(),
+        // THE KIND, and the driver pushes BOTH: a one-shot row is drawn in
+        // different colours and with a different glyph, and a driver that only
+        // ever built routines would never measure the other half.
+        kind: ronoctua_protocol::TaskKind::Routine,
         standing,
         enabled: true,
         interval_days: 7,
@@ -153,7 +197,10 @@ fn task(standing: Standing, hold: HoldKind, why_not: &str, ran: bool) -> TaskSta
         hold,
         why_not: why_not.to_owned(),
         ran,
+        history: Vec::new(),
         last: RunRecord {
+            task: TASK.to_owned(),
+            task_text: "Rebuild the system".to_owned(),
             began: NOW - 7200,
             ended: NOW - 7000,
             when_text: "yesterday, 03:00".to_owned(),
@@ -174,14 +221,14 @@ fn task(standing: Standing, hold: HoldKind, why_not: &str, ran: bool) -> TaskSta
                 command: "nix flake update".to_owned(),
                 needs_root: false,
                 on: true,
-                changed: false,
+                on_by_default: true,
             },
             TaskStep {
                 id: declared.get(1).cloned().unwrap_or_default(),
                 command: "nix store optimise".to_owned(),
                 needs_root: true,
                 on: false,
-                changed: true,
+                on_by_default: true,
             },
         ],
     }
@@ -200,6 +247,10 @@ fn mind(one: TaskState, announcement: Announcement) -> Mind {
         Vec::new()
     };
     Mind {
+        // The journal's own cap, so the activity block's title can say what
+        // its window is onto.
+        remembers: 100,
+        recent: 10,
         now: NOW,
         pulse: Pulse {
             at: NOW,
@@ -228,6 +279,14 @@ fn mind(one: TaskState, announcement: Announcement) -> Mind {
         tasks: std::iter::once(one)
             .chain(TASKS.iter().filter(|id| **id != TASK).map(|id| TaskState {
                 id: (*id).to_owned(),
+                name_text: (*id).to_owned(),
+                // ONE OF THEM IS A ONE-SHOT, so the labels and the colours of
+                // that row are measured too.
+                kind: if *id == TASKS[TASKS.len() - 1] {
+                    ronoctua_protocol::TaskKind::Once
+                } else {
+                    ronoctua_protocol::TaskKind::Routine
+                },
                 standing: Standing::Idle,
                 enabled: true,
                 interval_days: 5,
@@ -237,6 +296,7 @@ fn mind(one: TaskState, announcement: Announcement) -> Mind {
                 hold: HoldKind::None,
                 why_not: String::new(),
                 ran: false,
+                history: Vec::new(),
                 last: RunRecord::default(),
                 steps: Vec::new(),
             }))
@@ -251,6 +311,37 @@ fn mind(one: TaskState, announcement: Announcement) -> Mind {
             abort_on_battery: true,
         },
         cadence: vec![1, 7, 30],
+        // NOTHING WRONG IN THE DRIVER'S OWN MIND. The notice's own shapes are
+        // driven by `every_label_fits` through the `.ftl`, and a permanent one
+        // here would put a danger line over every screen it photographs.
+        notice: ronoctua_protocol::Notice::default(),
+        // AND THE LOG, with every outcome in it — `held` included, which is
+        // the one added last and therefore the one a `.ftl` would be missing.
+        activity: [
+            ronoctua_protocol::OutcomeKind::Done,
+            ronoctua_protocol::OutcomeKind::Failed,
+            ronoctua_protocol::OutcomeKind::Skipped,
+            ronoctua_protocol::OutcomeKind::Held,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(n, outcome)| RunRecord {
+            task: TASKS[n % TASKS.len()].to_owned(),
+            task_text: TASKS[n % TASKS.len()].to_owned(),
+            began: NOW - 3600 * (n as u64 + 1),
+            ended: NOW - 3600 * (n as u64 + 1) + 60,
+            when_text: "2026-08-23 13:00".to_owned(),
+            outcome,
+            at: String::new(),
+            why: if outcome == ronoctua_protocol::OutcomeKind::Held {
+                "ram".to_owned()
+            } else {
+                String::new()
+            },
+            trouble: String::new(),
+            steps: Vec::new(),
+        })
+        .collect(),
     }
 }
 
@@ -266,9 +357,48 @@ fn main() -> Result<()> {
     let rt = ronoctua_runtime::Runtime::fresh()?;
     let cwasm = rt.precompile(&wasm)?;
     let component = rt.load(&cwasm)?;
-    let mut inst = rt.open(&component)?;
+
+    // ---- ONCE PER LANGUAGE, AND A FRESH COMPONENT EACH TIME ----
+    //
+    // This used to hand the buffer English and then measure every language
+    // against what it reserved. That was right for as long as a buffer could
+    // only reserve BLIND — it emits a key, the host translates, and a fixed
+    // budget is all anybody has to go on.
+    //
+    // The brain's header no longer reserves blind: `Input::Phrases` hands it
+    // the words and it MEASURES them, which is what let its shortcuts be
+    // packed as tightly as the minibuffer's instead of each being charged a
+    // thirteen-cell column. A measured budget is one language's width, so
+    // there is no single number that could satisfy every language — and there
+    // does not need to be. The budget IS the text.
+    //
+    // So the drive happens once for each language, with that language's words,
+    // and each pass is measured against itself. The guarantee is not weaker:
+    // it is the same guarantee, asked once per language rather than once for
+    // all of them.
+    let spoken = ronoctua_runtime::driven::languages(&i18n)?;
+    for language in &spoken {
+        ronoctua_runtime::driven::forget();
+        drive(&rt, &component, &i18n, language)?;
+    }
+    println!("OK: the brain's panel takes from the host, and every label it draws fits");
+    Ok(())
+}
+
+/// Walk every screen of the brain, in one language, and measure what it drew.
+fn drive(
+    rt: &ronoctua_runtime::Runtime,
+    component: &wasmtime::component::Component,
+    i18n: &str,
+    language: &str,
+) -> Result<()> {
+    let i18n = i18n.to_owned();
+    // THE LANGUAGE'S OWN WORDS, for the names the host would have resolved.
+    // The same table `hand_phrases` reads one line below; see `named`.
+    let words = ronoctua_runtime::driven::ftl(&format!("{i18n}/{language}.ftl"))?;
+    let mut inst = rt.open(component)?;
     let d = inst.init()?;
-    ronoctua_runtime::driven::hand_phrases(&mut inst, &d, &i18n, "en-GB")?;
+    ronoctua_runtime::driven::hand_phrases(&mut inst, &d, &i18n, language)?;
 
     // ---- THE DESCRIPTOR ----
     if d.mode != "brain" {
@@ -342,7 +472,9 @@ fn main() -> Result<()> {
         ),
     ];
     for (what, one, announcement) in shapes {
-        inst.event(&Input::Mind(mind(one, announcement)))?;
+        let mut m = mind(one, announcement);
+        named(&mut m, &words);
+        inst.event(&Input::Mind(Box::new(m)))?;
         let list = look(&mut inst)?;
         if list.commands.is_empty() {
             bail!("the `{what}` mind drew an empty screen");
@@ -350,35 +482,75 @@ fn main() -> Result<()> {
         println!("home      {what}");
     }
 
-    // ---- AND THE UPDATE'S OWN PAGE ----
+    // ---- AND EVERY REASON A TASK CAN BE HELD FOR ----
+    //
+    // Because `every_label_fits` measures what was DRAWN, and one shape above
+    // draws one of these. With only `Ram` among them the other five crossed
+    // untouched, and the widest of the six was one of those five: in pt-BR
+    // `brain-hold-cpu` is `Processador ocupado`, nineteen cells, against a
+    // column that reserved twelve. It was cut on every machine that ever ran
+    // out of processor, and the check that exists to catch exactly that had
+    // never looked at it. One frame each is what makes the budget a measured
+    // number rather than one somebody checked by hand once.
+    for hold in [
+        HoldKind::Ram,
+        HoldKind::Cpu,
+        HoldKind::Battery,
+        HoldKind::Busy,
+        HoldKind::Network,
+        HoldKind::Asleep,
+    ] {
+        let one = task(Standing::Queued, hold, "", true);
+        let mut m = mind(one, Announcement::default());
+        named(&mut m, &words);
+        inst.event(&Input::Mind(Box::new(m)))?;
+        if look(&mut inst)?.commands.is_empty() {
+            bail!("a mind held by {hold:?} drew an empty screen");
+        }
+    }
+    println!("held      all six reasons a task waits, each measured in every language");
+
+    // ---- AND A TASK'S OWN PAGE ----
     //
     // It is a state the buffer DECLARED, so it is reached the way the footer
-    // reaches it, and it is where the steps table and the run record are drawn
-    // — three more key families, none of which the home page shows.
-    let has_update = d.states.iter().any(|s| s.id == "update");
-    if !has_update {
-        bail!("the buffer no longer declares the `update` state this page lives in");
+    // reaches it, and it is where the schedule, the steps and the history are
+    // drawn — key families the home page does not show.
+    //
+    // `task` and not `update`: the page belongs to whichever task is under the
+    // cursor, and it always did — the state was called `update` back when the
+    // update was the only task with a page. Four tasks later the name was
+    // telling readers something false.
+    const PAGE: &str = "task";
+    if !d.states.iter().any(|s| s.id == PAGE) {
+        bail!("the buffer no longer declares the `{PAGE}` state this page lives in");
     }
-    inst.event(&Input::EnterState("update".to_owned()))?;
+    inst.event(&Input::EnterState(PAGE.to_owned()))?;
     let behind = look(&mut inst)?;
     if behind.commands.is_empty() {
-        bail!("the update's page drew nothing");
+        bail!("a task's own page drew nothing");
     }
-    println!("page      the update's own, with its steps and its last run");
+    println!("page      a task's own, with its schedule, its steps and its history");
 
-    // ---- AND EVERY LABEL FITS THE BUDGET, IN EVERY LANGUAGE ----
+    // AND THE CURSOR WALKS IT, which is what puts the footer on each kind of
+    // row in turn: a schedule row, a step, and a run of the history. Each
+    // hands the footer a different family of keys, and a page drawn only at
+    // rest would measure none of them.
+    for _ in 0..12 {
+        inst.event(&Input::Down)?;
+        let walked = look(&mut inst)?;
+        if walked.commands.is_empty() {
+            bail!("a task's page drew nothing with the cursor moved");
+        }
+    }
+    println!("walked    the cursor over every kind of row, measuring each footer");
+
+    // ---- AND EVERY LABEL FITS THE BUDGET, IN THIS LANGUAGE ----
     //
-    // The point of this whole binary. A buffer cannot measure a sentence it
-    // does not have: it emits a KEY and the host translates (invariant 11), so
-    // what it declares is what it RESERVED. Here the reservation is a number
-    // inside a `Table` and the key is assembled at run time — neither is
-    // readable from the source, and both are in the frame.
-    let measured = ronoctua_runtime::driven::every_label_fits(&i18n, ON_PURPOSE, COLUMNS)?;
-    println!(
-        "labels    {measured} measured in {} languages, all inside their budget",
-        ronoctua_runtime::driven::languages(&i18n)?.len()
-    );
-
-    println!("OK: the brain's panel takes from the host, and every label it draws fits");
+    // The point of this whole binary. What a buffer declares is what it
+    // RESERVED — a number inside a `Table`, with the key assembled at run
+    // time, so neither is readable from the source and both are in the frame.
+    let measured =
+        ronoctua_runtime::driven::every_label_fits_in(&i18n, ON_PURPOSE, COLUMNS, language)?;
+    println!("labels    {measured} measured in {language}, all inside their budget");
     Ok(())
 }

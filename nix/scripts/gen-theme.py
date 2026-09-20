@@ -126,12 +126,36 @@ TEXT_STEPS = (
 #: is allowed to be the theme, and a BAND or a RULE is a signal drawn on top
 #: of it, so its colour has to stay its own. The tint falls off as the ladder
 #: climbs out of the background and into the signals.
-NEUTRAL_GROUNDS = frozenset({"ground", "chrome", "window", "chrome-raised", "chrome-loud"})
+NEUTRAL_GROUNDS = frozenset({"ground", "chrome", "window", "chrome-raised", "chrome-loud", "chrome-band"})
 NEUTRAL_PAINT = (
     ("window", 0.018),
     ("chrome-raised", 0.053),
     ("hover", 0.070),
     ("chrome-loud", 0.078),
+    # THE BAND ACROSS THE TOP OF A PAGE, and it is a step of its own because
+    # `chrome-loud` could not move.
+    #
+    # `chrome-loud` sits 0.008 above `hover`, and until 2026-09-20 nothing
+    # measured the two against each other: the GROUNDS climb in one chain
+    # (`ground → chrome → window → chrome-raised → chrome-loud`) and the
+    # SIGNALS in another (`chrome → hover → border → border-strong`), and the
+    # ladder gate walks each chain on its own. Where the two chains CROSS, no
+    # rule looked — and they cross here. Measured across the nine themes, a
+    # header and a hover band were 0.0043 apart in darkside: two bands on one
+    # page, the same colour, one meaning "this is the page's name" and the
+    # other "your pointer is here".
+    #
+    # `chrome-loud` could not be the thing that moved, because it is also
+    # `notification.background` and `glance.ground`, and the first of those is
+    # one of the 52 keys frozen in `owl.reference.nix`. So the header takes a
+    # rung of its own, 0.017 above it — the same size of step that already
+    # separates a container from a header, and which the page reads as two
+    # surfaces rather than one.
+    #
+    # It sits BELOW `border` by 0.008, which is the other half of this change:
+    # a rule drawn on this ground is `rule.raised`, never `rule.default`. See
+    # `Role::RuleRaised`.
+    ("chrome-band", 0.095),
     ("border", 0.103),
     ("border-strong", 0.178),
 )
@@ -589,12 +613,26 @@ def shaped_tokens(theme: Theme) -> dict[str, Resolved]:
 
 SIX_GROUNDS = ("surface.chrome", "modeline.background", "notification.background", "surface.hover", "surface.buffer", "surface.base")
 
+#: THE TWO RAISED GROUNDS, which no gate measured at all until 2026-09-20.
+#
+# `surface.container` is what a region shaped like a card is filled with and
+# `surface.header` is the band across the top of a buffer's page. Fifteen tones
+# are drawn on one or the other in the nine themes, and NOTHING in this file
+# had ever looked at one of them — the brain's page was the first screen built
+# out of both, and what it showed was a rule on the header measuring ΔL 0.025,
+# which is a line nobody can see.
+#
+# They are a tuple of their own and not appended to `SIX_GROUNDS` because that
+# name is sliced (`[:5]`), and a list whose length is part of another rule is a
+# list nobody may add to.
+RAISED_GROUNDS = ("surface.container", "surface.header")
+
 #: (text key, ground keys, Fail below, Warn below). Lc = |APCA|.
 CONTRAST_GATES = (
-    ("text.primary", (*SIX_GROUNDS, "surface.selection"), 75, 82),
-    ("text.secondary", SIX_GROUNDS, 43, 45),
+    ("text.primary", (*SIX_GROUNDS, "surface.selection", *RAISED_GROUNDS), 75, 82),
+    ("text.secondary", (*SIX_GROUNDS, *RAISED_GROUNDS), 43, 45),
     ("text.secondary", ("surface.selection",), 40, 45),
-    ("text.dim", SIX_GROUNDS[:5], 15, 20),
+    ("text.dim", (*SIX_GROUNDS[:5], *RAISED_GROUNDS), 15, 20),
     # ON THE BAND TOO: the file manager lifts its dim fields to secondary there
     # (`lift_onto_a_band`), but the notification manager's summary column and
     # the update window's step glyphs are dim on a banded row and lift nothing.
@@ -612,6 +650,62 @@ CONTRAST_GATES = (
     ("text.subtle.default", ("surface.buffer",), 18, 18),
     ("text.subtle.faint", ("surface.buffer",), 7, 7),
     ("text.subtle.alternate", ("surface.buffer",), 38, 38),
+    # AND ON THE TWO RAISED GROUNDS, because a buffer's HEADER is where the
+    # hint family is drawn now: the brain's header line carries its glyph, its
+    # name and every shortcut it answers to, in `Role::Key` and `Role::Prose`,
+    # which are this family. Not one of those four was measured against the
+    # ground they are drawn on until the raised rungs were gated.
+    #
+    # The floors are `surface.buffer`'s, with no warn band, for the reason
+    # written there: the difference between these grounds is the ladder's own
+    # rung, and a warn band that fires on the rung itself is a warning about
+    # the design rather than about a theme.
+    ("text.subtle.strong", RAISED_GROUNDS, 40, 40),
+    # THE RUNG COSTS ABOUT 1,6 Lc, AND THE FLOOR SAYS SO OUT LOUD. On the
+    # chrome this tone is floored at 18 and measures 19-21; on a raised ground
+    # it measures 16,0-17,4, because the ground climbed and the tone did not.
+    # The floor here is not 18 lowered to fit — it is 15, which is a whole
+    # step of the subtle ladder below what the rung gives, so a theme that
+    # loses a step is still caught and the rung itself is not reported as a
+    # defect every time this file is read.
+    ("text.subtle.default", RAISED_GROUNDS, 15, 15),
+    # `text.subtle.faint` IS NOT HERE, AND THAT IS THE FINDING.
+    #
+    # Measured on every one of the nine themes: on `surface.header` and on
+    # `surface.container` it comes to Lc 0,0000 — APCA's way of saying there
+    # is no contrast at all. The quietest step of the subtle ladder sits a
+    # hair over the CHROME, and a raised ground eats the hair whole.
+    #
+    # So it is not floored here, it is made unreachable: `Pen` lifts
+    # `Role::Faint` to `Role::Prose` inside a block whose ground was raised,
+    # the same move `files::lift_onto_a_band` makes for a dim field on a band.
+    # A buffer cannot draw invisible text by choosing the wrong role, and the
+    # line above is what measures what it gets instead.
+    ("text.subtle.alternate", RAISED_GROUNDS, 38, 38),
+    # THE ACCENT AND THE ALARM ON THEM TOO. A container is where the brain
+    # draws a run that FAILED and a header is where the accent marks the page,
+    # so both are drawn on a raised ground on the first screen built out of
+    # these two rungs.
+    ("state.accent", RAISED_GROUNDS, 45, 45),
+    # THE SHELF'S OWN GROUND. `surface.shelf` is the network view's box — a
+    # list inside a list — and it is drawn under rows of `text.primary` and
+    # `text.dim`. It was never measured because it resolves to
+    # `neutral.window`, the same rung as `surface.buffer`, and "the same as
+    # something that IS measured" is not a measurement: the day the rung moves
+    # nothing would say so.
+    ("text.primary", ("surface.shelf",), 75, 82),
+    ("text.dim", ("surface.shelf",), 15, 20),
+    # AND THE FILM'S CONTROLS, which are text on the one surface in the system
+    # with an alpha. The gate measures it OPAQUE — its own hex over nothing —
+    # which is the worst case it can be composited onto: the token is 80%
+    # opaque over a frame of film, and a frame of film can be any colour.
+    ("text.primary", ("surface.transport",), 60, 70),
+    ("state.error", RAISED_GROUNDS, 45, 45),
+    # 36 AND NOT 40 for the same reason as the subtle default above: measured
+    # 38,2-39,5 on the header, which is the rung's own cost and not a theme
+    # drifting.
+    ("text.once", RAISED_GROUNDS, 36, 36),
+    ("text.group", RAISED_GROUNDS, 45, 45),
     ("text.group", ("surface.chrome",), 45, 55),
     ("brain.text", ("brain.background",), 90, 95),
     ("brain.dim", ("brain.background",), 44, 46),
@@ -652,6 +746,26 @@ DISTANCE_GATES = (
     ("surface.chrome", "modeline.background", 0.03, 0.04),
     ("modeline.background", "notification.background", 0.02, 0.024),
     ("surface.chrome", "surface.hover", 0.05, 0.06),
+    # THE TWO BANDS ON ONE PAGE. A buffer's header is a band across the top and
+    # the hover is a band on a row, and until this line nothing compared them:
+    # the grounds climb in one chain and the signals in another, and the ladder
+    # gate walks each on its own. Where they CROSS, this looks — and what it
+    # found was 0,0043 in darkside, which is the same colour twice.
+    #
+    # The floor is the one `modeline.background vs notification.background`
+    # already carries, and for the same reason: two chrome grounds one rung
+    # apart, which is the whole of what a page needs to say they are two
+    # things. See `NEUTRAL_PAINT`'s `chrome-band`.
+    ("surface.header", "surface.hover", 0.02, 0.024),
+    ("surface.header", "surface.container", 0.02, 0.024),
+    ("surface.container", "surface.chrome", 0.05, 0.06),
+    # A RULE ON A RAISED GROUND IS THE STRONG ONE, and this is what says the
+    # default one would be invisible there: measured, `surface.header` against
+    # `rule.default` is 0,025 and against `rule.strong` is 0,098. The `Pen`
+    # resolves it from the ground the region was filled with, so a buffer
+    # cannot choose wrong; these two are what keep the ANSWER worth having.
+    ("surface.header", "rule.raised", 0.05, 0.06),
+    ("surface.container", "rule.raised", 0.05, 0.06),
     ("surface.hover", "rule.default", 0.02, 0.03),
     ("rule.default", "rule.strong", 0.05, 0.06),
     ("surface.selection", "rule.strong", 0.05, 0.06),
@@ -729,6 +843,12 @@ DISTANCE_GATES = (
 )
 #: Pairs reported but never gated: they are never drawn side by side.
 DISTANCE_NOTES = (
+    # THE RAISED GROUNDS AGAINST WHAT IS DRAWN NEAR THEM, reported before they
+    # are gated, because a floor chosen before the number is read is a floor
+    # chosen to fit whatever is there.
+    ("surface.header", "rule.default"),
+    ("surface.container", "rule.default"),
+    ("surface.header", "surface.selection"),
     ("surface.chrome", "surface.buffer"),
     ("surface.hover", "notification.background"),
     ("brain.background", "modeline.background"),
@@ -789,7 +909,7 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
     for a, b in DISTANCE_NOTES:
         findings.append(Finding("Note", "distance", f"{a} vs {b}", de(a, b), "reported only: never adjacent"))
 
-    ladders = [("neutral", ("ground", "chrome", "window", "chrome-raised", "chrome-loud")), ("neutral", ("ground", "backdrop", "chrome")), ("neutral", ("chrome", "hover", "border", "border-strong")), ("neutral", tuple(n for n, _ in TEXT_STEPS))]
+    ladders = [("neutral", ("ground", "chrome", "window", "chrome-raised", "chrome-loud", "chrome-band")), ("neutral", ("ground", "backdrop", "chrome")), ("neutral", ("chrome", "hover", "border", "border-strong")), ("neutral", tuple(n for n, _ in TEXT_STEPS))]
     for family in theme.families:
         ladders.append((family, tuple(n for n, _, _ in PAINT_STEPS)))
         ladders.append((family, tuple(n for n, _ in TEXT_STEPS)))

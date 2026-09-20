@@ -635,21 +635,60 @@ impl Leader {
     }
 }
 
-/// How `brain-abort` is typed, after the leader.
+/// How `brain-abort` is typed — inside the brain's buffer.
 ///
 /// A constant and not a literal in two places: the BAND DRAWS IT, because a
 /// control whose key is only in the manual is a control nobody presses — and a
 /// sequence that lived in the table and again in the drawing would be two
 /// answers to "which key stops it", with the wrong one on screen.
 ///
-/// `b` is the BRAIN's own prefix — the machine's agenda, at the first level by
-/// the owner's decision — and `a` is the letter the brain's own buffer already
-/// uses for the same verb under its local leader (`m a`). One letter, two
-/// prefixes, one meaning.
-pub const BRAIN_ABORT_KEYS: &str = "b a";
+/// # Why it is no longer a leader sequence
+///
+/// It was `LEADER b a`, beside `LEADER b b` for the screen itself. The owner
+/// asked for `LEADER b` to open the brain with nothing in between, and the
+/// keymap refuses — at BUILD time — a sequence that is both a command and the
+/// prefix of another. So `b a` and `b p` had to go, and what they did already
+/// existed inside the buffer under its own leader: `m a` and `m p`.
+///
+/// This is what the band prints, so the line that appears without anybody
+/// asking still says where the keyboard's answer is. The mouse keeps both
+/// buttons on the band itself; the keyboard opens the brain first.
+pub const BRAIN_ABORT_KEYS: &str = "m a";
 
-/// The same, for `brain-proceed`. `p`, as in the buffer's `m p`.
-pub const BRAIN_PROCEED_KEYS: &str = "b p";
+/// The same, for `brain-proceed`.
+pub const BRAIN_PROCEED_KEYS: &str = "m p";
+
+/// The commands reachable by NAME and by name only.
+///
+/// # Why the list is here and not at the one place that reads it
+///
+/// Because two places read it: `check-keymap`, which is what `nix flake check`
+/// runs, and the test beside it, which is what `cargo test` runs. They were
+/// two literals, and the day they disagreed would be the day one of them
+/// passed on a keymap the other refuses.
+///
+/// # Why each one is on it
+///
+/// `brain-abort` and `brain-proceed` are the band's two answers. They had
+/// keys — `LEADER b a` and `LEADER b p` — until `LEADER b` became the brain
+/// itself, and a sequence cannot be a command and the prefix of another. What
+/// they do lives in the brain's buffer as `m a` and `m p`; they stay in the
+/// registry because the band CLICKS them and `LEADER :` reaches them by name.
+///
+/// `brain-start-emacs` is what a standing notice offers. A sequence for it
+/// would be a key that does nothing on every machine where the daemon is up,
+/// which is almost all of them, almost all of the time.
+///
+/// It is a LIST OF NAMES and not a prefix on purpose: `brain-` as a prefix
+/// would exempt the next brain command somebody forgets to bind.
+pub const BY_NAME_ONLY: &[&str] = &["brain-abort", "brain-proceed", "brain-start-emacs"];
+
+/// And for the button a standing notice offers.
+///
+/// `m n`, inside the brain, for the same reason the two above are `m a` and
+/// `m p`: the band's controls are answered from the brain's own buffer, and
+/// the band prints what that buffer binds.
+pub const BRAIN_NOTICE_KEYS: &str = "m n";
 
 /// The prefix the buffer's STATE chooser hangs off — `w`, the window's letter,
 /// where the buffer commands live — and the key under it.
@@ -821,7 +860,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "memory-open",
             label: key::CMD_MEMORY_OPEN,
         },
-        // `LEADER b b` — what the machine does BY ITSELF. The panel's own
+        // `LEADER b` — what the machine does BY ITSELF. The panel's own
         // commands are not here either: they live in the buffer's descriptor,
         // under `SPC m`, and its host resolves them while it holds the
         // keyboard.
@@ -844,6 +883,17 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "brain-proceed",
             label: key::CMD_BRAIN_PROCEED,
+        },
+        // AND WHAT A STANDING NOTICE OFFERS.
+        //
+        // A command of the registry and not a special case inside the band,
+        // because that is what makes a notice's button a thing anybody can
+        // reach: `LEADER :` runs it by name, the buffer's `m n` runs it, and
+        // the band clicks it. A notice names a COMMAND ID; it does not carry
+        // a thing to do.
+        Command {
+            id: "brain-start-emacs",
+            label: key::CMD_BRAIN_START_EMACS,
         },
         // THE SCREENS — `LEADER s d`, and the gestures of the view itself,
         // which are commands like any other so the manual and the locator can
@@ -2070,16 +2120,20 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `w` — a buffer IS a window of the compositor (invariant 4), and the
         // two groups were one thing spelled twice.
         //
-        // `b b` and not `b` alone: `b` is a PREFIX, and hanging a command off
-        // a prefix is the collision `PrefixWithCommand` exists to flag.
-        // Doubling the letter is the convention `s n n`, `t t`, `. .` and `n n`
-        // already follow.
-        ("b b", "brain-open", None),
-        // AND THE TWO THE BAND DRAWS, beside the screen under the same prefix:
-        // they act on what the machine ANNOUNCED, and one does not have to
-        // open a screen to answer it. The band draws these two sequences.
-        (BRAIN_ABORT_KEYS, "brain-abort", None),
-        (BRAIN_PROCEED_KEYS, "brain-proceed", None),
+        // `b` ALONE, and that is the whole of the group: the owner asked for
+        // `LEADER b` to open the brain with nothing in between, and a
+        // sequence cannot be a command and a prefix at once —
+        // `PrefixWithCommand` is the collision the keymap refuses at BUILD
+        // time, not at run time.
+        //
+        // So the two that used to sit beside it — `b a` and `b p`, the band's
+        // answers — are gone from here. They live in the buffer's own keymap
+        // as `m a` and `m p`, which is where everything else this screen does
+        // already lived, and the band now draws THOSE notations. The cost,
+        // said plainly: somebody at the keyboard answers a countdown with
+        // `LEADER b` and then `m a`, where it used to be `LEADER b a`. The
+        // band keeps both buttons for the mouse.
+        ("b", "brain-open", None),
         // `LEADER s u` — `u` for update, under the SYSTEM group, beside the
         // memory panel and the disk formatter. It was free, and it is where
         // somebody looks for "do something to this machine".
@@ -2243,8 +2297,6 @@ pub fn default_of() -> Result<(Tree, Registry)> {
     const DIGITS: [&str; 9] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
     const GROUPS: &[(&str, &str)] = &[
-        // `b` FOR BRAIN — the buffer commands it used to hold live under `w`.
-        ("b", key::GROUP_BRAIN),
         // `.` FOR FILES, and it is the only prefix in this table that is not a
         // letter.
         //
@@ -2838,7 +2890,7 @@ mod tests {
             // to all 141 would spend the whole keymap on what is almost never
             // used. The exception is recognisable by its prefix, so it cannot
             // grow without someone writing `niri-` on purpose.
-            if c.id.starts_with("niri-") {
+            if c.id.starts_with("niri-") || BY_NAME_ONLY.contains(&c.id) {
                 continue;
             }
             assert!(
@@ -2866,8 +2918,11 @@ mod tests {
         let (tree, _) = default_of().unwrap();
         let mut l = Leader::default();
         l.activate();
+        // `s` and not `b`: `b` was a prefix until `LEADER b` became the brain
+        // itself, and a command ENDS the sequence, which is the opposite of
+        // what this is testing.
         assert!(matches!(
-            l.key(&tree, Key::simple(Sym::Char('b'))),
+            l.key(&tree, Key::simple(Sym::Char('s'))),
             Effect::Continue { .. }
         ));
         assert!(matches!(
@@ -3044,11 +3099,13 @@ mod tests {
         l.activate();
         assert_eq!(l.prefix("SPC"), "SPC-");
         assert_eq!(l.raw_prefix("SPC"), "SPC");
-        l.key(&tree, Key::simple(Sym::Char('b')));
-        assert_eq!(l.prefix("SPC"), "SPC b-");
+        // `s` and not `b`, for the reason `esc_always_ends_it` gives: `b` is a
+        // command now and a command ends the sequence.
+        l.key(&tree, Key::simple(Sym::Char('s')));
+        assert_eq!(l.prefix("SPC"), "SPC s-");
         // Without the ellipsis: in an error message it would lie, because
         // there the sequence has ended and there is no continuation.
-        assert_eq!(l.raw_prefix("SPC"), "SPC b");
+        assert_eq!(l.raw_prefix("SPC"), "SPC s");
     }
 
     #[test]
@@ -3210,6 +3267,7 @@ mod tests {
             "monitor-bottom",
             "keyboard-open",
             "memory-open",
+            "brain-start-emacs",
             // THE BRAIN. `brain-open` is the screen; the other two answer the
             // countdown on the footer's own line, with no window open — which
             // is why they are commands of the registry and not keys of a view.

@@ -2171,8 +2171,14 @@ impl State {
             | Input::Queue(_)
             | Input::Rack(_)
             | Input::Mind(_)
+            | Input::Hover { .. }
+            | Input::Unhover
             | Input::Keyboards(_)
             | Input::Formatted(_)
+            // A CATALOGUE PAGES, it does not scroll — and a bar it does not
+            // draw is a bar nobody can drag.
+            | Input::Wheel(_)
+            | Input::Scrolled(_)
             | Input::EnterState(_) => redraw,
         }
     }
@@ -2267,7 +2273,7 @@ impl State {
                 // search field is a minibuffer.
                 .base(),
             );
-            row.put(field::COUNTER, Run::datum(&self.counter()).small().quiet());
+            row.put(field::COUNTER, Run::datum(&self.counter()).quiet());
             row.put(
                 field::FILTER,
                 Run::glyph(Icon::Filter).large().playing(
@@ -2326,7 +2332,7 @@ impl State {
                 Run::datum(&i.cp.to_string()).large().playing(Role::Title),
             );
             row.put(field::NAME, Run::datum(&i.name).playing(Role::Body));
-            row.put(field::TAGS, Run::datum(&tags).small().dim());
+            row.put(field::TAGS, Run::datum(&tags).dim());
             let _ = row.done();
         }
         screen
@@ -2808,8 +2814,14 @@ impl State {
                 | Input::Queue(_)
                 | Input::Rack(_)
                 | Input::Mind(_)
+            | Input::Hover { .. }
+            | Input::Unhover
                 | Input::Formatted(_)
                 | Input::Keyboards(_)
+                // A CATALOGUE PAGES, it does not scroll: `C-,` turns the
+                // page and the grid is sized to the window.
+                | Input::Wheel(_)
+                | Input::Scrolled(_)
                 | Input::EnterState(_) => {
                     vec![]
                 }

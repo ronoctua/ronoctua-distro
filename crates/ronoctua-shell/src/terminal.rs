@@ -455,7 +455,7 @@ impl TerminalWindow {
         let texts = crate::language::texts();
         // The window's COLUMNS: the host guarantees that nothing leaks past the
         // edge, and a terminal line wider than the window is the common case.
-        let spans = crate::paint::spans_of(&list, &texts, self.columns);
+        let spans = crate::paint::spans_of(&list, &texts, self.columns, self.lines);
         // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
         // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes.
         // See `crate::hidpi::told_before_present`.

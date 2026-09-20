@@ -53,7 +53,7 @@ use ronoctua_design::guest::Wit;
 use ronoctua_design::types::{
     AIR, Amount, Binding, BufferState, Capability, Column, Command, Context, Demand, Descriptor,
     Effect, Engine, Errand, Guest, ICON, Icon, Input, Job, Layout, Queue, Request, Role, Run,
-    Screen, Stage, Table, Tone,
+    Screen, Scroll, Stage, Table, Tone,
 };
 
 /// The frame this buffer draws into, with the palette that resolves a role to
@@ -176,6 +176,10 @@ struct State {
     asked: bool,
     /// The line the list starts on, so a click can be resolved.
     list_top: Option<u16>,
+    /// How many rows of it the last frame drew, for the wheel and the bar.
+    list_lines: u16,
+    /// The cell the pointer is on, if it is on one.
+    hover: Option<(u16, u16)>,
 }
 
 impl State {
@@ -188,6 +192,8 @@ impl State {
             pending: None,
             asked: false,
             list_top: None,
+            list_lines: 0,
+            hover: None,
         }
     }
 }
@@ -690,6 +696,7 @@ impl State {
 
         if self.queue.jobs.is_empty() {
             self.list_top = None;
+            self.list_lines = 0;
             if line < foot {
                 screen.put(line, Run::label(key::EMPTY));
             }
@@ -699,20 +706,63 @@ impl State {
         let room = usize::from(foot.saturating_sub(AIR).saturating_sub(line)).max(1);
         self.scroll(room);
 
-        let layout = row_layout(screen.columns());
+        // A CELL IS KEPT FOR THE BAR, and every band and every column stops
+        // before it: the band is full-bleed and the bar is drawn after it, so
+        // without this the control sits on top of the selected row.
+        let body = screen.columns().saturating_sub(1);
+        let layout = row_layout(body);
         self.list_top = Some(line);
+        let first = line;
 
-        for job in self.queue.jobs.iter().skip(self.top).take(room) {
+        for (n, job) in self.queue.jobs.iter().enumerate().skip(self.top).take(room) {
             // `room` is at least one even in a window that has no room at all;
             // this is what keeps that last row off the hint.
             if line >= foot {
                 break;
             }
             if Some(job.id) == self.on {
-                screen.band(line);
+                screen.ground_in(line, 0, body, Role::Band);
+            } else if self.hovered_row() == Some(n) {
+                // THE ROW UNDER THE POINTER, in a tone of its own: the cursor
+                // is where the KEYBOARD is and the hover is where a click
+                // would land.
+                screen.ground_in(line, 0, body, Role::Hover);
             }
             line = line.saturating_add(row(screen, line, job, &layout));
         }
+        self.list_lines = line.saturating_sub(first);
+        // AND THE BAR, over the rows it belongs to: a queue longer than its
+        // window is a queue whose end the mouse could not reach at all.
+        // THE BAND AND THE WINDOW ARE ONE NUMBER, and it is how many rows were
+        // DRAWN: the host says so out loud when they differ, and with a queue
+        // shorter than the room they do.
+        screen.bar(
+            first,
+            self.list_lines,
+            screen.columns().saturating_sub(1),
+            Scroll {
+                total: self.queue.jobs.len(),
+                lines: usize::from(self.list_lines),
+                offset: self.top,
+                top: 0,
+            },
+        );
+    }
+
+    /// Which row of the list the pointer is on, if it is on one.
+    fn hovered_row(&self) -> Option<usize> {
+        let (_, line) = self.hover?;
+        let first = self.list_top?;
+        if line < first || line >= first.saturating_add(self.list_lines) {
+            return None;
+        }
+        let n = self.top + usize::from(line - first);
+        (n < self.queue.jobs.len()).then_some(n)
+    }
+
+    /// How many rows of the list the window holds.
+    fn room(&self) -> usize {
+        usize::from(self.list_lines).max(1)
     }
 
     /// One job, field by field — where the whole path and the whole failure
@@ -721,6 +771,7 @@ impl State {
         let mut line = screen.heading(Icon::List, key::DETAIL);
         let foot = screen.lines().saturating_sub(1);
         self.list_top = None;
+        self.list_lines = 0;
 
         let Some(job) = self.focused() else {
             if line < foot {
@@ -1097,6 +1148,41 @@ impl State {
                 }
             }
             Input::Toggle => s.command("transfers-detail"),
+            // THE POINTER AT REST, and the two gestures that move the window.
+            Input::Hover(p) => {
+                let now = Some((p.column, p.line));
+                if s.hover == now {
+                    return Vec::new();
+                }
+                s.hover = now;
+                vec![Effect::Redraw]
+            }
+            Input::Unhover => {
+                if s.hover.is_none() {
+                    return Vec::new();
+                }
+                s.hover = None;
+                vec![Effect::Redraw]
+            }
+            // THE WHEEL SCROLLS THE WINDOW and leaves the cursor where it is:
+            // this page explains whatever the cursor is on, and a wheel that
+            // moved it would change the explanation under the hand reading it.
+            Input::Wheel(w) => {
+                let most = s.queue.jobs.len().saturating_sub(s.room());
+                s.top = if w.lines < 0 {
+                    s.top.saturating_sub(w.lines.unsigned_abs() as usize)
+                } else {
+                    (s.top + w.lines as usize).min(most)
+                };
+                vec![Effect::Redraw]
+            }
+            // AND THE BAR IS DRAGGED.
+            Input::Scrolled(d) => {
+                let room = s.room();
+                let total = s.queue.jobs.len();
+                s.top = (d.first as usize).min(total.saturating_sub(room.min(total)));
+                vec![Effect::Redraw]
+            }
             Input::Click(p) => {
                 let Some(first) = s.list_top else {
                     return Vec::new();
@@ -1107,6 +1193,13 @@ impl State {
                 let n = s.top + usize::from(p.line - first);
                 match s.queue.jobs.get(n) {
                     Some(job) => {
+                        // THE SECOND CLICK ON THE SAME ROW IS ITS `RET`, which
+                        // here opens the job's own page — the rule the file
+                        // manager already has written down, and the one the
+                        // owner asked to be absolute.
+                        if s.on == Some(job.id) {
+                            return s.confirm();
+                        }
                         s.on = Some(job.id);
                         s.pending = None;
                         s.asked = false;
