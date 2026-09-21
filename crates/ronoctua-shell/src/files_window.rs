@@ -47,7 +47,9 @@ use smithay_client_toolkit::{
 use wayland_client::{
     Connection, Proxy as _, QueueHandle,
     globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{
+        wl_data_device_manager::DndAction, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
+    },
 };
 
 /// The window's `app_id`.
@@ -331,6 +333,10 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
 
     let mut state = FilesWindow {
         conn: conn.clone(),
+        // THE DRAG-AND-DROP MACHINERY. `None` where the compositor has no
+        // `wl_data_device_manager` — absence is not an error, and everything
+        // else goes on working.
+        carrying: crate::carry::Carrying::bind(&globals, &qh),
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
         seats: SeatState::new(&globals, &qh),
@@ -338,6 +344,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         keyboard: None,
         pointer: None,
         mods: Modifiers::default(),
+        pressed_at: 0,
         window,
         width: 0,
         height: 0,
@@ -436,6 +443,15 @@ struct FilesWindow {
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
     mods: Modifiers,
+    /// Entries carried out of the listing, and drops landing in it. See
+    /// [`crate::carry`].
+    carrying: Option<crate::carry::Carrying>,
+    /// The serial of the press a drag would start from.
+    ///
+    /// `start_drag` takes the PRESS's own serial and the compositor refuses
+    /// any other, with no error on this side — so it is kept from the event
+    /// that carried it rather than asked for later.
+    pressed_at: u32,
     window: Window,
     /// The window's size in LOGICAL pixels — what the compositor configured
     /// it to, what the columns are counted from, what the pointer arrives in.
@@ -2783,6 +2799,31 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
                 }
             }
         }
+        // AND THE RUBBER BAND, with them and for the same reason: it is a
+        // claim about what is UNDER it, and a grid is pictures edge to edge.
+        // Drawn with the other backgrounds it would be invisible exactly
+        // where it matters.
+        //
+        // AND THE FOLDER A DROP WOULD LAND IN, in the same ink and for the
+        // same reason: both say *"this is what the button is about"*, and both
+        // have to be legible over a picture.
+        for claim in [
+            s.view.sweep_box(s.geo.columns, s.geo.room()),
+            s.view.landing_box(s.geo.columns, s.geo.room()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let (c0, c1, l0, l1) = claim;
+            quads.push(crate::files::sweep_px(
+                (c0, c1),
+                (l0, l1),
+                CONTENT_MARGIN,
+                cell,
+                line_px,
+                s.geo.metric.y_of(s.geo.metric.first),
+            ));
+        }
         quads.len() - before
     };
     Painted {
@@ -2942,6 +2983,11 @@ impl SeatHandler for FilesWindow {
                 Ok(p) => self.pointer = Some(p),
                 Err(e) => tracing::warn!(error = %e, "no pointer; keyboard only"),
             }
+            // AND THE SEAT'S DATA DEVICE, which is what carries a drag. It
+            // hangs off the SEAT and so cannot be made before one arrives.
+            if let Some(c) = self.carrying.as_mut() {
+                c.took_a_seat(qh, &seat);
+            }
         }
     }
 
@@ -2965,6 +3011,227 @@ impl SeatHandler for FilesWindow {
     }
 
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+// ---------------------------------------------------------------------------
+// THE DRAG — entries carried out, and files dropped in
+// ---------------------------------------------------------------------------
+//
+// Three traits, and each is a thin translation into `files::View`. The DRAG's
+// point comes in the surface's own pixels, so it goes through the same
+// `line_and_cell` and the same `View::hit` the pointer does — what lights a
+// folder under a drag and what a drop lands in are one answer, read twice.
+
+impl smithay_client_toolkit::data_device_manager::data_device::DataDeviceHandler for FilesWindow {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        device: &wayland_client::protocol::wl_data_device::WlDataDevice,
+        x: f64,
+        y: f64,
+        _: &wl_surface::WlSurface,
+    ) {
+        let Some(offer) = device
+            .data::<smithay_client_toolkit::data_device_manager::data_device::DataDeviceData>()
+            .and_then(|d| d.drag_offer())
+        else {
+            return;
+        };
+        // WHAT WE CAN TAKE, said out loud. A destination that accepts nothing
+        // is a destination the compositor draws a "no" cursor over, which is
+        // the right answer for a drag of plain text and the wrong one for a
+        // drag of files.
+        let takeable =
+            offer.with_mime_types(|kinds| kinds.iter().any(|k| k == crate::carry::URI_LIST));
+        offer.accept_mime_type(
+            offer.serial,
+            takeable.then(|| crate::carry::URI_LIST.to_owned()),
+        );
+        if !takeable {
+            return;
+        }
+        // AND WHICH ACTION WE PREFER. `Move` unless the source only offers a
+        // copy — the destination has a say, and a drop into a different
+        // filesystem or out of a program that cannot give its file up is a
+        // copy whatever anybody asked for.
+        let wanted = if offer.source_actions.contains(DndAction::Move) {
+            DndAction::Move
+        } else {
+            DndAction::Copy
+        };
+        offer.set_actions(DndAction::Copy | DndAction::Move, wanted);
+        self.view.carrying_from_afar(wanted == DndAction::Copy);
+        self.carried_to(x, y, wanted == DndAction::Copy);
+    }
+
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_device::WlDataDevice,
+    ) {
+        if self.view.carried_away() {
+            self.ask_paint();
+        }
+    }
+
+    fn motion(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        device: &wayland_client::protocol::wl_data_device::WlDataDevice,
+        x: f64,
+        y: f64,
+    ) {
+        let offer = device
+            .data::<smithay_client_toolkit::data_device_manager::data_device::DataDeviceData>()
+            .and_then(|d| d.drag_offer());
+        let copies = offer
+            .as_ref()
+            .is_some_and(|o| o.selected_action == DndAction::Copy);
+        self.carried_to(x, y, copies);
+        // AND THE OFFER IS TOLD WHETHER THERE IS ANYWHERE TO GO. Accepting
+        // everywhere and doing nothing on the drop is a cursor that says "yes"
+        // over a file it cannot take — see `View::landing_now`.
+        if let Some(offer) = offer {
+            offer.accept_mime_type(
+                offer.serial,
+                self.takes_a_drop()
+                    .then(|| crate::carry::URI_LIST.to_owned()),
+            );
+        }
+    }
+
+    /// THE SELECTION IS NOT THIS MODULE'S. `crate::clipboard` watches it
+    /// through `zwlr_data_control`, for the reason written out there.
+    fn selection(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_device::WlDataDevice,
+    ) {
+    }
+
+    fn drop_performed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        device: &wayland_client::protocol::wl_data_device::WlDataDevice,
+    ) {
+        let offer = device
+            .data::<smithay_client_toolkit::data_device_manager::data_device::DataDeviceData>()
+            .and_then(|d| d.drag_offer());
+        let Some(offer) = offer else {
+            self.view.carried_away();
+            return;
+        };
+        // OUR OWN DRAG IS NOT READ BACK THROUGH THE COMPOSITOR.
+        //
+        // A client that is both ends of a drag cannot read its own pipe from
+        // inside this handler: the write is a Wayland event, and the read
+        // blocks the loop that would deliver it — see `carry::Carrying::offering`
+        // for the two log lines that measured it. A drag from somewhere else
+        // IS read, with a deadline.
+        let mine = self
+            .carrying
+            .as_ref()
+            .and_then(crate::carry::Carrying::offering)
+            .map(<[_]>::to_vec);
+        let paths = mine.unwrap_or_else(|| {
+            offer
+                .receive(crate::carry::URI_LIST.to_owned())
+                .ok()
+                .and_then(crate::carry::read)
+                .unwrap_or_default()
+        });
+        offer.finish();
+        tracing::info!(dropped = paths.len(), "files were let go over the listing");
+        let step = self.view.dropped(paths);
+        self.apply(step);
+    }
+}
+
+impl smithay_client_toolkit::data_device_manager::data_source::DataSourceHandler for FilesWindow {
+    fn accept_mime(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_source::WlDataSource,
+        _: Option<String>,
+    ) {
+    }
+
+    fn send_request(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_source::WlDataSource,
+        mime: String,
+        pipe: smithay_client_toolkit::data_device_manager::WritePipe,
+    ) {
+        if let Some(c) = self.carrying.as_ref() {
+            c.send(&mime, pipe);
+        }
+    }
+
+    fn cancelled(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) {
+        self.let_the_drag_go();
+    }
+
+    fn dnd_dropped(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) {
+    }
+
+    fn dnd_finished(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) {
+        self.let_the_drag_go();
+    }
+
+    fn action(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_source::WlDataSource,
+        _: DndAction,
+    ) {
+    }
+}
+
+impl smithay_client_toolkit::data_device_manager::data_offer::DataOfferHandler for FilesWindow {
+    fn source_actions(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
+        _: DndAction,
+    ) {
+    }
+
+    fn selected_action(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        offer: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
+        action: DndAction,
+    ) {
+        // THE COMPOSITOR HAS DECIDED, and the line has to say the same thing
+        // the drop will do.
+        self.carried_to(offer.x, offer.y, action == DndAction::Copy);
+    }
 }
 
 impl KeyboardHandler for FilesWindow {
@@ -3050,7 +3317,7 @@ impl PointerHandler for FilesWindow {
     fn pointer_frame(
         &mut self,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
@@ -3108,6 +3375,23 @@ impl PointerHandler for FilesWindow {
                         }
                     }
                     self.aim(e.position.0, e.position.1);
+                    // AND A BUTTON THAT IS DOWN ON THE LISTING IS A GESTURE
+                    // NOW, or still a click — see `files::View::moved_to`.
+                    if let Some((line, cell)) = self.line_and_cell(e.position.0, e.position.1)
+                        && self.view.moved_to(self.columns, self.room(), line, cell)
+                    {
+                        self.ask_paint();
+                    }
+                    // AND A DRAG THAT HAS JUST PICKED SOMETHING UP HANDS IT TO
+                    // THE COMPOSITOR. From here on the pointer is its, and
+                    // what this surface hears is `wl_data_device`.
+                    if let Some((paths, copies)) = self.view.begun_carrying() {
+                        let surface = self.window.wl_surface().clone();
+                        let serial = self.pressed_at;
+                        if let Some(c) = self.carrying.as_mut() {
+                            c.begin(qh, &surface, serial, paths, copies);
+                        }
+                    }
                 }
                 PointerEventKind::Leave { .. } => {
                     // THE SENTENCE GOES WITH THE POINTER: one that leaves
@@ -3120,8 +3404,18 @@ impl PointerHandler for FilesWindow {
                     self.line_under_pointer = None;
                     self.view.pointing(None);
                     self.view.pointing_at(None);
+                    // AND A BAND ENDS WHERE THE HAND LEFT IT. What it took was
+                    // drawn, entry by entry, the whole way — undoing that
+                    // silently is the worse of the two answers.
+                    if self.view.gave_up() {
+                        self.ask_paint();
+                    }
                 }
-                PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
+                PointerEventKind::Press { button, serial, .. } if button == LEFT_BUTTON => {
+                    // THE PRESS'S OWN SERIAL, kept because a drag started from
+                    // any other is refused by the compositor with nothing said
+                    // on this side — see `carry::Carrying::begin`.
+                    self.pressed_at = serial;
                     self.aim(e.position.0, e.position.1);
                     // THE LINE'S OWN CONTROL FIRST: it sits on line 0, which
                     // belongs to no section, so nothing below here would ever
@@ -3167,6 +3461,22 @@ impl PointerHandler for FilesWindow {
                         // it is a target, and a drag starting on it could never
                         // be the press that frames on the coordinate.
                         self.dragging_globe = Some(e.position);
+                    } else if let Some((line, cell)) =
+                        self.line_and_cell(e.position.0, e.position.1)
+                        && self.view.pressed(
+                            self.columns,
+                            self.room(),
+                            line,
+                            cell,
+                            crate::chrome::held(self.mods),
+                            &self.texts,
+                        )
+                    {
+                        // THE VIEW TOOK IT, and a press on the listing is no
+                        // longer a click: until the pointer moves or the button
+                        // comes up there is nothing that says which of the
+                        // three gestures it is. The click fires on the RELEASE
+                        // — see `files::View::pressed`.
                     } else {
                         left = self.under_pointer.clone();
                     }
@@ -3182,11 +3492,22 @@ impl PointerHandler for FilesWindow {
                     self.dragging_fold = false;
                     self.spinning = None;
                     self.dragging_globe = None;
+                    // AND A PRESS THAT NEVER BECAME A GESTURE IS A CLICK, on
+                    // what it landed on and not on what is under the pointer
+                    // now — a hand that slipped a cell still clicked what it
+                    // aimed at.
+                    if let Some(at) = self.view.let_go() {
+                        left = Some(at);
+                    }
                 }
                 // THE RIGHT BUTTON OPENS THE MENU. It draws in this window's own
                 // region, has no surface of its own and does not float — see the
                 // note in `surface.rs`, where the same decision is written out.
                 PointerEventKind::Press { button, .. } if button == RIGHT_BUTTON => {
+                    // THE OTHER BUTTON ENDS A BAND FIRST. The menu is about
+                    // `chosen()` and its title counts the marks, so one opened
+                    // mid-sweep would be about a set that is still moving.
+                    self.view.gave_up();
                     self.aim(e.position.0, e.position.1);
                     // THE PRESS ITSELF, and not the row it landed on: the
                     // subject is `under_pointer`, which was just resolved, and
@@ -3431,8 +3752,42 @@ impl FilesWindow {
         // sidebar's, one in the facts is the facts', and one on the listing's
         // chrome is the path's or the header's. Working it out again here was
         // the second place it could be got wrong, and it was.
-        let step = self.view.click(target.row, &target.hit);
+        let step = self
+            .view
+            .click(target.row, &target.hit, crate::chrome::held(self.mods));
         self.apply(step);
+    }
+
+    /// WHERE A DRAG WOULD LAND, resolved through the pointer's own path.
+    ///
+    /// The same `line_and_cell` and the same `View::hit`: what lights under a
+    /// drag and what a drop takes are one answer, which is the law this
+    /// manager's controls are all held to.
+    fn carried_to(&mut self, x: f64, y: f64, copies: bool) {
+        let Some((line, cell)) = self.line_and_cell(x, y) else {
+            return;
+        };
+        if self
+            .view
+            .carry_to(self.columns, self.room(), line, cell, copies, &self.texts)
+        {
+            self.ask_paint();
+        }
+    }
+
+    /// Is there anywhere under the pointer for a drop to go?
+    fn takes_a_drop(&self) -> bool {
+        self.view.landing_now()
+    }
+
+    /// A drag of OURS ended, however it ended.
+    fn let_the_drag_go(&mut self) {
+        if let Some(c) = self.carrying.as_mut() {
+            c.done();
+        }
+        if self.view.carried_away() {
+            self.ask_paint();
+        }
     }
 
     /// A right click: focus that row, then open the action menu.

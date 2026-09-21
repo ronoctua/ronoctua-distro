@@ -700,6 +700,20 @@ CONTRAST_GATES = (
     # which is the worst case it can be composited onto: the token is 80%
     # opaque over a frame of film, and a frame of film can be any colour.
     ("text.primary", ("surface.transport",), 60, 70),
+    # AND THE RUBBER BAND, which is the system's SECOND alpha and the same
+    # reasoning one line up: measured OPAQUE, its own hex over nothing, because
+    # at 34% it is composited over a thumbnail and a thumbnail can be any
+    # colour. What is read through it is what the band exists to say — the NAME
+    # of each file it is about to take, and the dim columns beside it.
+    #
+    # MEASURED: the name reads 49-56 Lc and the dim columns 18,5-19,6 in the
+    # three themes whose accent is darkest — over the warn line's 20 by a hair,
+    # and the reason that is accepted rather than tuned is that the worst case
+    # measured here CANNOT HAPPEN: 34% of the accent over the listing's own
+    # ground is lighter than the accent alone, so what the eye gets is better
+    # than what the gate reads. The floor is what matters, and it is 15.
+    ("text.primary", ("surface.sweep",), 45, 55),
+    ("text.dim", ("surface.sweep",), 15, 20),
     ("state.error", RAISED_GROUNDS, 45, 45),
     # 36 AND NOT 40 for the same reason as the subtle default above: measured
     # 38,2-39,5 on the header, which is the rung's own cost and not a theme

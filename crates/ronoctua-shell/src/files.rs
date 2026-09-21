@@ -1723,6 +1723,42 @@ pub fn band_px(cells: (u16, u16), lead: u16, cell: f32) -> (f32, f32) {
     (from, wide)
 }
 
+/// THE RUBBER BAND'S RECTANGLE, from what [`View::sweep_box`] answered.
+///
+/// # Why the conversion is here and not in the two doors
+///
+/// Because it is the SAME conversion, and a rectangle worked out twice is a
+/// rectangle that disagrees with itself the first time one of the two is
+/// edited — the law this manager's bars are already held to. The doors bring
+/// only the three numbers the view cannot have: how wide a cell is, how tall a
+/// line is, and where the region's first line sits on their own surface.
+///
+/// `cells` and `lines` are half-open, exactly as `sweep_box` gives them, and
+/// the colour is `surface.sweep` — an alpha, because this is painted OVER the
+/// thumbnails and what is underneath has to go on being visible.
+#[must_use]
+pub fn sweep_px(
+    cells: (u16, u16),
+    lines: (usize, usize),
+    lead: u16,
+    cell: f32,
+    line_px: f32,
+    first: f32,
+) -> ronoctua_render::quad::Quad {
+    let (x, width) = band_px(cells, lead, cell);
+    #[allow(clippy::cast_precision_loss)]
+    let y = first + lines.0 as f32 * line_px;
+    #[allow(clippy::cast_precision_loss)]
+    let height = lines.1.saturating_sub(lines.0) as f32 * line_px;
+    ronoctua_render::quad::Quad {
+        x,
+        y,
+        width,
+        height,
+        color: ronoctua_tokens::color::SURFACE_SWEEP,
+    }
+}
+
 #[must_use]
 pub fn band_of(
     panes: Panes,
@@ -2234,6 +2270,18 @@ pub enum Hit {
     /// nothing about which of two things it would do, and a click on an eject
     /// glyph is not a guess.
     Eject(usize),
+    /// THE LISTING'S AIR: past the last column of a shelf, below the last
+    /// entry, and the blank lines under a short list.
+    ///
+    /// It carries no index because there is no row there — that is the whole
+    /// of what it says. A click on it puts the marks down, which is `C-A`
+    /// (`files-unmark-all`) through the key's own code, so the one-directional
+    /// rule holds: the pointer reaches nothing new.
+    ///
+    /// It is NOT produced over a modal. With a menu, a picker or a sheet up
+    /// the listing's section carries the modal's rows, and clearing there
+    /// would take away the marks the menu's own title is counting.
+    Air,
     /// Nothing happens here.
     Nothing,
 }
@@ -2796,6 +2844,76 @@ pub struct Target {
     pub explain: Option<Explanation>,
 }
 
+/// WHAT A PRESS ON THE LISTING TURNED INTO.
+///
+/// A press can no longer act on its own: until the pointer moves or the button
+/// comes up there is nothing that says which of these it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gesture {
+    /// A rubber band over the listing, from a press on its AIR.
+    Sweeping,
+    /// Entries being carried out of the listing, from a press on one of them.
+    Carrying,
+}
+
+/// A BUTTON THAT IS DOWN ON THE LISTING, and everything the gesture needs.
+///
+/// # Why it is on the view and not on each door
+///
+/// Because what it produces is `marks`, which is the view's and which
+/// `View::reread` prunes; because the rectangle it describes is PAINTED, and
+/// every other band in this manager is measured by the view and converted by
+/// the door; and because `base` and `add` are selection semantics, which
+/// written into two doors is the divergence this arrangement exists to stop.
+///
+/// The doors keep nothing: they hand in an absolute point in the same lines
+/// and cells they already hand `View::hit`, so there is no residue for them to
+/// remember — unlike the globe's pan and the shape's spin, which are handed a
+/// DELTA and so must keep the last position.
+#[derive(Debug, Clone)]
+struct Press {
+    /// Where it landed, resolved once, by `View::hit`.
+    at: Target,
+    /// The point it landed on: a line of the region, and a cell.
+    from: (usize, u16),
+    /// Where the pointer is now. Equal to `from` until it moves.
+    to: (usize, u16),
+    /// The listing's first drawn entry when the press landed.
+    ///
+    /// The anchor is a point on the SCREEN and the list can scroll under it —
+    /// the wheel is the one thing that can, with a button held.
+    offset: usize,
+    /// The marks as they stood at the press.
+    ///
+    /// What a cancel puts back, and what an additive band adds to. The band is
+    /// rebuilt from this on every motion, which is what lets dragging BACK
+    /// un-take what it took.
+    base: BTreeSet<String>,
+    /// Whether the gesture adds to `base` instead of replacing it.
+    add: bool,
+    /// What it became, once the pointer left the slack. `None` is still a
+    /// click.
+    became: Option<Gesture>,
+}
+
+/// ENTRIES BEING CARRIED OUT OF THE LISTING, while they are.
+///
+/// The paths are FROZEN when the drag begins: the marks can move while the
+/// compositor is carrying — a re-read prunes them, a directory changes under
+/// the hand — and what was picked up has to be what is put down.
+#[derive(Debug, Clone)]
+struct Carry {
+    /// The paths, as `View::chosen` answered at the press.
+    paths: Vec<PathBuf>,
+    /// Where a drop would land: the directory, and the row that says so, so
+    /// the same answer can be LIT and TAKEN.
+    over: Option<(PathBuf, Pane, usize)>,
+    /// `Ctrl`: copy instead of move.
+    copies: bool,
+    /// Whether the door has been told to start the Wayland drag yet.
+    told: bool,
+}
+
 impl Row {
     /// WHICH field a cell belongs to, as an index.
     ///
@@ -3073,6 +3191,24 @@ pub enum Doing {
     Shred(Vec<PathBuf>),
     /// Copy or move what was cut or copied into this directory.
     Paste(PathBuf),
+    /// Copy or move what was DROPPED into this directory.
+    ///
+    /// # Why it is not `Paste`
+    ///
+    /// Because `Paste` spends `View::clip`, and a drop has nothing to do with
+    /// what somebody copied: routing it through the clipboard would empty it
+    /// as a side effect of a gesture that never mentioned it. The two end in
+    /// the same `Work::Paste` on the queue — same three arguments, same
+    /// engine — and differ only in where the paths came from.
+    Drop {
+        /// What was carried.
+        paths: Vec<PathBuf>,
+        /// The directory it landed in.
+        into: PathBuf,
+        /// Whether the source's files go away, which is what the compositor
+        /// negotiated with the modifier as a preference.
+        moves: bool,
+    },
     /// Pack these into an archive.
     Compress(Vec<PathBuf>, &'static str),
     /// Unpack this one here.
@@ -3394,6 +3530,10 @@ pub struct View {
     /// Marked entries, BY NAME. An index would move under the marks the moment
     /// the directory is re-read or the sort changes.
     marks: BTreeSet<String>,
+    /// The button that is down on the listing, while one is. See [`Press`].
+    press: Option<Press>,
+    /// What is being carried out of the listing. See [`Carry`].
+    carry: Option<Carry>,
     /// What was typed. TYPING ALWAYS GOES HERE — there is no mode.
     ///
     /// It used to be a mode entered with `/`, guarded by a `filtering` flag,
@@ -4066,6 +4206,8 @@ impl View {
             shown: Vec::new(),
             cursor: 0,
             marks: BTreeSet::new(),
+            press: None,
+            carry: None,
             filter: String::new(),
             sort: Sort::default(),
             // The owner's rule, and Unix's own accident refused: the whole
@@ -4266,6 +4408,18 @@ impl View {
         // applying to whatever takes the name later.
         let present: BTreeSet<String> = self.entries.iter().map(|e| e.name.clone()).collect();
         self.marks.retain(|m| present.contains(m));
+        // AND SO DOES A MARK A RUBBER BAND IS STILL HOLDING.
+        //
+        // `Press::base` is a SECOND copy of the marks, taken when the button
+        // went down and used to rebuild them on every motion — so a directory
+        // that changes under a live band (inotify fires, this runs) would put
+        // a deleted file's name straight back on the next pixel, and
+        // `View::chosen` would hand a path that is not there to a copy or a
+        // delete. Pruned in the same breath as the marks themselves, because
+        // it is the same fact about the same directory.
+        if let Some(press) = self.press.as_mut() {
+            press.base.retain(|m| present.contains(m));
+        }
         self.refilter();
         if let Some(name) = was
             && let Some(at) = self
@@ -4290,6 +4444,10 @@ impl View {
         self.cursor = 0;
         self.filter.clear();
         self.marks.clear();
+        // AND A BAND GOES WITH THEM. It is about a rectangle over THIS
+        // directory's entries; kept, it would go on taking rows of the next
+        // one on the next motion.
+        self.press = None;
         self.measured = None;
         self.detail = None;
         self.menu = None;
@@ -8479,6 +8637,9 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
             into,
             moves: clip.moves,
         }),
+        // THE SAME ENGINE, and the paths come from the DROP instead of from
+        // the clipboard — see `Doing::Drop`.
+        Doing::Drop { paths, into, moves } => queued(Work::Paste { paths, into, moves }),
         Doing::Compress(paths, extension) => {
             let Some(first) = paths.first().cloned() else {
                 return Errand::Done;
@@ -9040,6 +9201,27 @@ fn lift_onto_a_band(fields: &mut [Field], banded: bool) {
 /// last whole one turns into a line index ONE PAST the section — and answered
 /// nothing. The owner found it with the pointer: *"nem o hover do mouse
 /// funciona nesse espaço"*, on the very strip the film's controls are painted
+/// WHICH ROW OF ITS OWN LIST a line of a section is, and `None` for the lines
+/// that are not rows at all.
+///
+/// The listing's chrome is not one of them, and neither is the reserve a panel
+/// keeps above its facts — with the globe taking lines off the top of the info
+/// panel, counting them in would answer for the first fact on the picture,
+/// which is the same defect one column along.
+///
+/// Read twice on purpose: [`View::hit`] asks it for the row under a FIELD, and
+/// [`View::row_under`] for the row under a POINT. Written out in both, the two
+/// would eventually disagree about which line is the first entry, and the
+/// symptom of that is a drop landing one folder away from the one that was lit.
+fn row_of_line(sec: &Section, inside: usize, chrome: usize) -> Option<usize> {
+    match sec.pane {
+        Pane::Listing if inside < chrome => None,
+        Pane::Listing => Some(sec.offset + inside - chrome),
+        _ if inside < sec.above => None,
+        _ => Some(sec.offset + inside - sec.above),
+    }
+}
+
 /// across. That is the `or_else` below.
 fn at_line(sections: &[Section], which: Pane, line: usize) -> Option<(&Section, usize)> {
     let sec = sections
@@ -9803,10 +9985,7 @@ impl View {
                 }
                 Step::Changed
             }
-            Some("files-unmark-all") => {
-                self.marks.clear();
-                Step::Changed
-            }
+            Some("files-unmark-all") => self.unmark_all(),
             Some("files-first") => {
                 self.cursor = 0;
                 Step::Changed
@@ -10218,13 +10397,60 @@ impl View {
             .map_or(Step::Nothing, |a| self.run_side(a))
     }
 
-    /// A click on a cell of a row.
+    /// A click on a cell of a row, with whatever was held when it landed.
     ///
     /// Every branch here goes through the SAME code the key goes through. That
     /// is not tidiness: it is what keeps the two from drifting, which is how a
     /// file manager ends up with a mouse gesture that does something no key
     /// does — and then somebody has to reach for the mouse.
-    pub fn click(&mut self, row: usize, hit: &Hit) -> Step {
+    ///
+    /// # Why the modifiers travel, and in this type
+    ///
+    /// `ronoctua_keymap::Mods` is the modifier this whole shell speaks and it
+    /// knows nothing about Wayland, which is the only thing a view of two
+    /// doors may hold. Each door reads it off its own `Modifiers` at the press
+    /// — never through the keyboard's converter: the footer's discounts the
+    /// leader's inheritance, which is a fact about a SEQUENCE, and the
+    /// window's swallows `Shift` because xkb has already applied it to a
+    /// character. A pointer has no character and is in no sequence.
+    pub fn click(&mut self, row: usize, hit: &Hit, mods: ronoctua_keymap::Mods) -> Step {
+        // A MODIFIER IS ANOTHER GESTURE, NOT A MODIFIED ONE, so it is answered
+        // before the table below and never falls through it.
+        //
+        // The rule that has to be kept out of its way is `Hit::Name`'s own:
+        // "the second click on the same row opens". `Ctrl` on the row the
+        // cursor is already on would OPEN the file — a video played by a
+        // gesture that means "this one as well".
+        if let Hit::Name(n) | Hit::Mark(n) = hit
+            && matches!(self.pane, Pane::Listing)
+        {
+            // CTRL TAKES ONE, through the key's own toggle. `mark_focused`
+            // walks on afterwards, which is right for a key held down and
+            // wrong for a pointer that is already somewhere else.
+            if mods.ctrl && !mods.shift {
+                self.cursor = *n;
+                return self.mark_row(*n);
+            }
+            // AND SHIFT TAKES THE RUN, from the cursor to here.
+            //
+            // Over `shown` and never over `entries`: `Hit::Name` carries a
+            // place in the drawn list, and a range built over the entries
+            // would mark what the filter and `C-h` are hiding.
+            if mods.shift {
+                let (from, to) = if self.cursor <= *n {
+                    (self.cursor, *n)
+                } else {
+                    (*n, self.cursor)
+                };
+                for row in from..=to {
+                    self.mark_row(row);
+                }
+                // AND THE CURSOR COMES HERE, so a second `Shift` extends from
+                // where the hand expects it to.
+                self.cursor = *n;
+                return Step::Changed;
+            }
+        }
         match hit {
             Hit::Nothing => Step::Nothing,
             // THE TRANSPORT'S TWO, AND THROUGH THE KEYS' OWN CODE. The rule
@@ -10344,6 +10570,8 @@ impl View {
                 self.cursor = *n;
                 Step::Changed
             }
+            // THE AIR PUTS THE MARKS DOWN, through `C-A`'s own code.
+            Hit::Air => self.unmark_all(),
             Hit::Mark(n) => {
                 self.cursor = *n;
                 self.mark_focused()
@@ -11259,22 +11487,45 @@ impl View {
                 explain: f.and_then(|f| f.explain.clone()),
             });
         }
+        // AND THE LISTING'S AIR ANSWERS FOR ITSELF.
+        //
+        // Past the last column of a shelf, below the last entry, and on the
+        // blank lines under a short list there is no row and no field — so the
+        // press fell through to nothing and a click there did nothing at all.
+        // What it means in every listing anybody has used is "never mind":
+        // it puts the marks down. It goes through `C-A`'s own code.
+        //
+        // THREE GUARDS, and each one is load-bearing:
+        //
+        //   - the LISTING and nothing else, or the blank half of the sidebar
+        //     and the lines under the last fact would clear the marks too;
+        //   - `plain()`, which is the SECOND LOCK and says so. With a menu, a
+        //     picker or a sheet up the section is still called `Pane::Listing`
+        //     and carries the MODAL's rows, so a blank line under a short menu
+        //     would put down the very marks that menu's own title is counting.
+        //     It cannot happen today, and the reason is one line away rather
+        //     than here: `sections_of` gives a modal `lines: take.min(rows)`,
+        //     so its section is exactly as tall as its own list and there is no
+        //     blank line inside it to ask about. This guard is what holds if
+        //     that number is ever loosened — it was measured unreachable by
+        //     sabotage, and is kept because the thing it guards is a silent
+        //     loss of somebody's selection;
+        //   - past the chrome, because the path's crumbs and the column header
+        //     live there and answer for themselves.
+        if matches!(sec.pane, Pane::Listing)
+            && self.plain()
+            && inside >= chrome.len()
+            && sec.row_at(inside, cell).is_none()
+        {
+            return Some(Target {
+                pane: sec.pane,
+                row: usize::MAX,
+                hit: Hit::Air,
+                explain: None,
+            });
+        }
         let f = sec.content.get(inside)?.field_at(cell)?;
-        // WHICH ROW OF ITS OWN LIST. The listing's chrome is not one of them —
-        // `usize::MAX` is what both doors already spell for the header — and
-        // every other section is indexed from its own offset.
-        let row = match sec.pane {
-            Pane::Listing if inside < chrome.len() => usize::MAX,
-            Pane::Listing => sec.offset + inside - chrome.len(),
-            // AND A PANEL'S RESERVE IS NOT ONE OF ITS ROWS EITHER.
-            //
-            // `above` was the listing's alone, so this arm added it to the row
-            // index. With the globe taking lines off the top of the info
-            // panel, the pointer on the picture would answer for the first
-            // fact — which is the same defect one column along.
-            _ if inside < sec.above => usize::MAX,
-            _ => sec.offset + inside - sec.above,
-        };
+        let row = row_of_line(sec, inside, chrome.len()).unwrap_or(usize::MAX);
         Some(Target {
             pane: sec.pane,
             row,
@@ -12589,23 +12840,581 @@ impl View {
     }
 
     fn mark_focused(&mut self) -> Step {
-        // AND NEVER THE WAY OUT, for the reason `files-mark-all` gives one
-        // screen up: it is not a file, and a mark on it would carry the parent
-        // directory into whatever the marks are then used for. It still moves
-        // on, so holding the key down a row too far costs nothing.
-        if self.focused().is_some_and(Entry::is_parent) {
-            self.move_by(1);
-            return Step::Changed;
+        let step = self.mark_row(self.cursor);
+        // The cursor moves on, so marking a run of files is one key repeated —
+        // which is what `m` is for in every listing that has it.
+        //
+        // THE KEY MOVES ON AND THE POINTER DOES NOT, which is why this is the
+        // outer of the two: a key is pressed again in the same place, and a
+        // pointer is already somewhere else. `Ctrl` with a click calls
+        // [`View::mark_row`] straight.
+        self.move_by(1);
+        step
+    }
+
+    // -----------------------------------------------------------------------
+    // THE BUTTON THAT IS DOWN — a click, a rubber band, or entries carried
+    // -----------------------------------------------------------------------
+
+    /// A BUTTON WENT DOWN ON THE LISTING. `true` when the view took it.
+    ///
+    /// Taking it means the door must NOT click: a press is no longer a click,
+    /// because until the pointer moves or the button comes up there is nothing
+    /// that says which of the three gestures it is. The door calls
+    /// [`View::let_go`] on the release and clicks whatever comes back.
+    ///
+    /// It is asked LAST in both doors' order of first refusal, after every bar,
+    /// the fold, the shape and the globe — the listing's own scrollbar is drawn
+    /// inside the listing's cells (`Section::bar_box`), so a press taken here
+    /// first would make it impossible to grab.
+    pub fn pressed(
+        &mut self,
+        width: u16,
+        room: usize,
+        line: usize,
+        cell: u16,
+        mods: ronoctua_keymap::Mods,
+        texts: &ronoctua_i18n::Texts,
+    ) -> bool {
+        self.press = None;
+        let Some(at) = self.hit(width, room, line, cell, texts) else {
+            return false;
+        };
+        // THE LISTING AND NOTHING ELSE. A press in the sidebar, in a panel or
+        // on the path acts on the press as it always has — there is no gesture
+        // there for it to be waiting on.
+        if at.pane != Pane::Listing || !self.plain() {
+            return false;
         }
-        let Some(name) = self.focused().map(|e| e.name.clone()) else {
+        self.press = Some(Press {
+            at,
+            from: (line, cell),
+            to: (line, cell),
+            offset: self.list_offset(),
+            base: self.marks.clone(),
+            // CTRL AND SHIFT BOTH ADD, because both mean "as well as". Without
+            // one the band REPLACES, which is what makes a sweep over an empty
+            // corner the way to start again.
+            add: mods.ctrl || mods.shift,
+            became: None,
+        });
+        true
+    }
+
+    /// The pointer moved with the button down. `true` when something changed.
+    ///
+    /// The first motion past the slack turns the press into a gesture, and
+    /// which one is decided by where it LANDED: on the air, a rubber band; on
+    /// an entry, the entries are carried. Inside the slack it is still a click
+    /// — a hand that trembles on the way up has not asked for anything.
+    pub fn moved_to(&mut self, width: u16, room: usize, line: usize, cell: u16) -> bool {
+        let Some(press) = self.press.as_mut() else {
+            return false;
+        };
+        if press.to == (line, cell) {
+            return false;
+        }
+        press.to = (line, cell);
+        if press.became.is_none() {
+            let slack = ronoctua_tokens::space::FILES_SWEEPSLACK;
+            let aside = cell.abs_diff(press.from.1) > slack;
+            let down = line != press.from.0;
+            if !aside && !down {
+                return false;
+            }
+            press.became = Some(match press.at.hit {
+                Hit::Air => Gesture::Sweeping,
+                _ => Gesture::Carrying,
+            });
+        }
+        match self.press.as_ref().and_then(|p| p.became) {
+            Some(Gesture::Sweeping) => self.sweep_marks(width, room),
+            Some(Gesture::Carrying) => {
+                // AND WHAT IS BEING CARRIED IS FROZEN HERE, once.
+                //
+                // `chosen()` is the marks when there are any and the row under
+                // the press when there are not — the same answer every menu row
+                // acts on. Frozen because the compositor now owns the pointer:
+                // the marks can be pruned by a re-read while the hand is still
+                // moving, and what was picked up has to be what is put down.
+                if self.carry.is_none() {
+                    // THE ROW THE PRESS LANDED ON, and not the one the cursor
+                    // happened to be on: a drag is about what was grabbed.
+                    let row = self.press.as_ref().map_or(usize::MAX, |p| p.at.row);
+                    let here = self
+                        .shown
+                        .get(row)
+                        .and_then(|k| self.entries.get(*k))
+                        .map(|e| e.name.clone());
+                    let Some(name) = here else {
+                        return true;
+                    };
+                    // A PRESS ON A ROW THAT IS NOT MARKED IS ABOUT THAT ROW,
+                    // which is the rule the other button already keeps: a drag
+                    // started on a file nobody selected must not carry off the
+                    // selection somewhere else on the screen.
+                    if !self.marks.is_empty() && !self.marks.contains(&name) {
+                        self.marks.clear();
+                    }
+                    self.pane = Pane::Listing;
+                    self.cursor = row;
+                    let paths = self.chosen();
+                    if paths.is_empty() {
+                        return true;
+                    }
+                    self.carry = Some(Carry {
+                        paths,
+                        over: None,
+                        copies: false,
+                        told: false,
+                    });
+                }
+                true
+            }
+            None => true,
+        }
+    }
+
+    /// The button came up. `Some` when the press never became a gesture, and
+    /// then it is a CLICK on what it landed on.
+    pub fn let_go(&mut self) -> Option<Target> {
+        let press = self.press.take()?;
+        press.became.is_none().then_some(press.at)
+    }
+
+    // -----------------------------------------------------------------------
+    // ENTRIES CARRIED OUT, and where a drop would land
+    // -----------------------------------------------------------------------
+
+    /// THE PATHS A DRAG HAS JUST PICKED UP, answered ONCE.
+    ///
+    /// The door asks after every [`View::moved_to`] and starts the compositor's
+    /// drag with whatever comes back. Once, because `start_drag` may be called
+    /// once per gesture and the second call is a protocol error.
+    pub fn begun_carrying(&mut self) -> Option<(Vec<PathBuf>, bool)> {
+        let carry = self.carry.as_mut()?;
+        if carry.told {
+            return None;
+        }
+        carry.told = true;
+        Some((carry.paths.clone(), carry.copies))
+    }
+
+    /// WHERE A DROP WOULD LAND, resolved through the same `View::hit` the
+    /// pointer uses. `true` when the answer moved.
+    ///
+    /// `copies` comes from the compositor's negotiated action rather than from
+    /// our own modifier: the destination has a say, and a drop into a program
+    /// that can only copy is a copy whatever was asked for.
+    pub fn carry_to(
+        &mut self,
+        width: u16,
+        room: usize,
+        line: usize,
+        cell: u16,
+        copies: bool,
+        texts: &ronoctua_i18n::Texts,
+    ) -> bool {
+        let over = self.landing(width, room, line, cell, texts);
+        let Some(carry) = self.carry.as_mut() else {
+            return false;
+        };
+        let moved = carry.over != over || carry.copies != copies;
+        carry.over = over;
+        carry.copies = copies;
+        moved
+    }
+
+    /// The same, for a drag that came from somewhere ELSE.
+    ///
+    /// A drop from another window or another program has no `Carry` of ours to
+    /// hang on, and it still has to LIGHT the folder it would land in — the
+    /// pointer must say what it is about wherever the drag started.
+    pub fn carrying_from_afar(&mut self, copies: bool) {
+        if self.carry.is_none() {
+            self.carry = Some(Carry {
+                paths: Vec::new(),
+                over: None,
+                copies,
+                // NOTHING FOR THE DOOR TO START: the drag is already running,
+                // and it is somebody else's.
+                told: true,
+            });
+        }
+    }
+
+    /// IS THERE ANYWHERE FOR A DROP TO GO, right now?
+    ///
+    /// The door tells the OFFER: accepting the type everywhere and then doing
+    /// nothing on a drop is a cursor that says "yes" over a file it cannot
+    /// take. Refusing is what makes the compositor draw the "no" — a refusal
+    /// that is drawn is a refusal, and a silent one is a defect.
+    #[must_use]
+    pub fn landing_now(&self) -> bool {
+        self.carry.as_ref().is_some_and(|c| c.over.is_some())
+    }
+
+    /// WHICH CELLS AND LINES THE LANDING COVERS — what the door lights.
+    ///
+    /// The same shape [`View::sweep_box`] answers, and drawn by the same
+    /// `files::sweep_px`: one claim by the pointer, one rectangle, one token.
+    #[must_use]
+    pub fn landing_box(&self, width: u16, room: usize) -> Option<(u16, u16, usize, usize)> {
+        let (_, pane, row) = self.carry.as_ref()?.over.as_ref()?;
+        let sec = self
+            .sections_of(
+                &self.chrome_rows(width, &self.texts),
+                room,
+                width,
+                &self.texts,
+                Some(*pane),
+            )
+            .into_iter()
+            .find(|s| s.pane == *pane)?;
+        let line = sec.line_of(*row)?;
+        let deep = sec.grid.map_or(1, |g| usize::from(g.down.max(1)));
+        let (from, to) = sec.cells_of(*row).unwrap_or((sec.from, sec.to));
+        Some((from, to, line, line + deep))
+    }
+
+    /// WHICH ROW A POINT IS OVER, gaps and all — never a field.
+    ///
+    /// # Why a drop cannot go through `hit`
+    ///
+    /// Because `hit` ends in `field_at`, and a row is not covered by fields
+    /// edge to edge: a FOLDER has no size, so past its name the rest of the
+    /// line answers nothing at all. Measured in the photo battery, dragging a
+    /// file onto a folder three columns wide: `at=None`, the folder never lit,
+    /// and the drop went nowhere — and on the same screen the same point over
+    /// the FILE one line below answered, because a file has a size to draw.
+    /// A drop target that has to be aimed at by a few characters of name is the
+    /// defect the thumbnails already fixed one panel along (`Section::row_at`),
+    /// and it is worse here: the thing being aimed at is where somebody's files
+    /// are about to go.
+    ///
+    /// So this asks the SECTION, which is arithmetic and has nothing to fail to
+    /// answer, and the row it computes is [`row_of_line`] — the very function `hit`
+    /// uses, so the two can never disagree about which line is the first entry.
+    /// Hover and click are untouched: they are about a field, and what the eye
+    /// sees lit is still exactly what a click takes.
+    fn row_under(
+        &self,
+        width: u16,
+        room: usize,
+        line: usize,
+        cell: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<(Pane, usize)> {
+        let chrome = self.chrome_rows(width, texts);
+        let panes = self.panes(width);
+        let in_strip = panes.strip > 0 && line >= room;
+        let which = panes.section_at(cell, width, in_strip);
+        let sections = self.sections_of(&chrome, room, width, texts, Some(which));
+        let (sec, inside) = at_line(&sections, which, line)?;
+        // SIDE BY SIDE THE CELL DECIDES, because a shelf is many rows to a line.
+        if sec.grid.is_some() {
+            return sec.row_at(inside, cell).map(|r| (sec.pane, r));
+        }
+        // AND A LINE WITH NOTHING DRAWN ON IT IS NOT A ROW. The blank lines
+        // under a short list belong to the listing's AIR, which means "here" —
+        // and that answer comes from `hit`, not from arithmetic that would
+        // happily name the row after the last one.
+        sec.content.get(inside)?;
+        Some((sec.pane, row_of_line(sec, inside, chrome.len())?))
+    }
+
+    /// WHERE A POINT WOULD DROP: a directory, and the row that says so.
+    ///
+    /// Four answers and one refusal:
+    ///
+    ///   - a FOLDER of the listing, which is the ordinary one;
+    ///   - a PLACE of the sidebar, which is a folder somewhere else;
+    ///   - a CRUMB of the path, which is a folder above this one;
+    ///   - the listing's AIR, which is the folder one is looking at — dropping
+    ///     "here" is what a drag into an empty part of a window means
+    ///     everywhere;
+    ///   - and NOTHING over a file, over a panel, or over a folder that is one
+    ///     of the things being carried. A folder cannot be dropped into
+    ///     itself, and a listing that offered it would be offering to lose it.
+    fn landing(
+        &self,
+        width: u16,
+        room: usize,
+        line: usize,
+        cell: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<(PathBuf, Pane, usize)> {
+        // A ROW FIRST, AND THE WHOLE ROW: see `View::row_under` for the folder
+        // that could not be dropped on because it had no size to draw.
+        let (into, pane, row) =
+            if let Some((Pane::Listing, row)) = self.row_under(width, room, line, cell, texts) {
+                let entry = self.shown.get(row).and_then(|k| self.entries.get(*k))?;
+                let into = if entry.is_parent() {
+                    self.where_.parent().map(Path::to_path_buf)?
+                } else if matches!(entry.opens_as(), Kind::Directory) {
+                    self.where_.join(&entry.name)
+                } else {
+                    // A FILE IS A REFUSAL AND NOT A FALL-THROUGH: the line is
+                    // taken, and what it holds does not take a drop.
+                    return None;
+                };
+                (into, Pane::Listing, row)
+            } else {
+                let at = self.hit(width, room, line, cell, texts)?;
+                let into = match &at.hit {
+                    Hit::Air => self.where_.clone(),
+                    Hit::Sidebar(n) | Hit::Eject(n) => {
+                        let row = self
+                            .side
+                            .shown(self.hidden)
+                            .get(*n)
+                            .and_then(|r| *r)?
+                            .clone();
+                        match row.target {
+                            ronoctua_files::sidebar::Target::Place(p) => p,
+                            _ => return None,
+                        }
+                    }
+                    Hit::Crumb(n) => self.crumb_target(*n)?,
+                    _ => return None,
+                };
+                (into, at.pane, at.row)
+            };
+        // AND NEVER INTO WHAT IS BEING CARRIED. Dropping a folder into itself
+        // or into one of its own children is how a listing loses a tree.
+        if let Some(carry) = self.carry.as_ref()
+            && carry
+                .paths
+                .iter()
+                .any(|p| into == *p || into.starts_with(p))
+        {
+            return None;
+        }
+        Some((into, pane, row))
+    }
+
+    /// THE DROP. `paths` are the ones the offer named.
+    ///
+    /// The destination is what was LIT while the hand was over it — the same
+    /// answer, read back rather than resolved a second time.
+    pub fn dropped(&mut self, paths: Vec<PathBuf>) -> Step {
+        let Some(carry) = self.carry.take() else {
             return Step::Nothing;
         };
+        let Some((into, _, _)) = carry.over else {
+            return Step::Nothing;
+        };
+        if paths.is_empty() {
+            return Step::Nothing;
+        }
+        // NOT THROUGH `Doing::Paste`, which spends the CLIPBOARD: a drop that
+        // emptied what somebody had copied would be a gesture with a side
+        // effect nobody asked for.
+        tracing::info!(
+            count = paths.len(),
+            into = %into.display(),
+            moves = !carry.copies,
+            "a drop lands"
+        );
+        Step::Do(Doing::Drop {
+            paths,
+            into,
+            moves: !carry.copies,
+        })
+    }
+
+    /// The drag ended without a drop — or left this surface.
+    pub fn carried_away(&mut self) -> bool {
+        self.carry.take().is_some()
+    }
+
+    /// The gesture is over without a release — the pointer left, or the view
+    /// is closing. The marks the band took STAY.
+    ///
+    /// A band that is visible on screen and then silently undone is worse than
+    /// one that ends where the hand left it: what was taken was drawn, entry by
+    /// entry, the whole way.
+    pub fn gave_up(&mut self) -> bool {
+        self.press.take().is_some()
+    }
+
+    /// WHAT THE RUBBER BAND COVERS, in the listing's own cells and the
+    /// region's own lines: `(from cell, to cell, first line, last line)`.
+    ///
+    /// # The one function, read twice
+    ///
+    /// The painter in each door turns it into pixels with [`band_px`] and the
+    /// line height, exactly as it already does for `focus_cells`; and
+    /// [`View::swept`] crosses it with each entry's own rectangle. Neither door
+    /// gains any arithmetic, and the band cannot be drawn in one place and
+    /// taken from another — which is the law this manager's bars are already
+    /// held to.
+    ///
+    /// Half-open on both axes, and already CLIPPED to the listing's own band,
+    /// so it can never be drawn over the sidebar or a panel.
+    ///
+    /// `None` while there is no band: no press, a press that is still a click,
+    /// or a press that became a carry.
+    #[must_use]
+    pub fn sweep_box(&self, width: u16, room: usize) -> Option<(u16, u16, usize, usize)> {
+        let press = self.press.as_ref()?;
+        if press.became != Some(Gesture::Sweeping) {
+            return None;
+        }
+        let sec = self.the_listing(width, room)?;
+        // THE ANCHOR FOLLOWS THE SCROLL. It is a point on the SCREEN, and the
+        // wheel is the one thing that can move the list under a held button.
+        // On a grid the offset only ever moves by whole shelves (`View::wheel`
+        // snaps it), so this is exact rather than approximate.
+        let anchor = press.from.0 as isize - self.scrolled_since(&sec, press.offset);
+        let (first, last) = if anchor <= press.to.0 as isize {
+            (anchor, press.to.0 as isize)
+        } else {
+            (press.to.0 as isize, anchor)
+        };
+        let top = (sec.top + sec.above) as isize;
+        let bottom = (sec.top + sec.lines) as isize;
+        let first = first.max(top);
+        let last = (last + 1).min(bottom);
+        if first >= last {
+            return None;
+        }
+        let (from, to) = if press.from.1 <= press.to.1 {
+            (press.from.1, press.to.1)
+        } else {
+            (press.to.1, press.from.1)
+        };
+        let from = from.max(sec.from);
+        let to = to.saturating_add(1).min(sec.to);
+        (from < to).then_some((from, to, first as usize, last as usize))
+    }
+
+    /// How far the listing has scrolled since the press, IN LINES.
+    ///
+    /// The conversion belongs to the GRID and is asked for, never repeated
+    /// here: `Grid::lines_of` is the same sum as `Grid::at`, and a second one
+    /// written beside it is how a band comes to be drawn over one shelf and
+    /// take another. One entry to a line, there is nothing to convert.
+    fn scrolled_since(&self, sec: &Section, then: usize) -> isize {
+        let now = sec.offset;
+        let Some(g) = sec.grid else {
+            return now as isize - then as isize;
+        };
+        // BOTH ENDS THROUGH THE SAME FUNCTION, because the difference of two
+        // conversions is not the conversion of a difference when a part of a
+        // shelf costs the whole shelf.
+        let lines = |k: usize| isize::try_from(g.lines_of(k)).unwrap_or(0);
+        lines(now) - lines(then)
+    }
+
+    /// THE ENTRIES THE BAND IS OVER — the other reading of [`View::sweep_box`].
+    ///
+    /// Only what is DRAWN: an entry scrolled past the end of the grid has no
+    /// line, and a rubber band takes what it is over.
+    fn swept(&self, width: u16, room: usize) -> Vec<usize> {
+        let Some((c0, c1, l0, l1)) = self.sweep_box(width, room) else {
+            return Vec::new();
+        };
+        let Some(sec) = self.the_listing(width, room) else {
+            return Vec::new();
+        };
+        let deep = sec.grid.map_or(1, |g| usize::from(g.down.max(1)));
+        let mut out = Vec::new();
+        for row in sec.offset..sec.total {
+            let Some(line) = sec.line_of(row) else {
+                break;
+            };
+            if line >= l1 || line + deep <= l0 {
+                continue;
+            }
+            // ONE ROW PER LINE OWNS ITS WHOLE COLUMN — `cells_of` answers
+            // `None` and says so — so only a grid is asked sideways.
+            if let Some((from, to)) = sec.cells_of(row)
+                && (from >= c1 || to <= c0)
+            {
+                continue;
+            }
+            out.push(row);
+        }
+        out
+    }
+
+    /// The name of a shown row, for the tests.
+    #[cfg(test)]
+    #[must_use]
+    pub fn name_of(&self, n: usize) -> Option<String> {
+        self.shown
+            .get(n)
+            .and_then(|k| self.entries.get(*k))
+            .map(|e| e.name.clone())
+    }
+
+    /// The rows a band is over, for the tests: the other reading of
+    /// [`View::sweep_box`], which is what the check pins.
+    #[cfg(test)]
+    #[must_use]
+    pub fn swept_rows(&self, width: u16, room: usize) -> Vec<usize> {
+        self.swept(width, room)
+    }
+
+    /// The marks the band is asking for. `true` when they moved.
+    ///
+    /// Rebuilt from `base` every time, which is what makes dragging BACK
+    /// un-take what the band took — and what keeps the answer a function of
+    /// where the band IS rather than of where it has BEEN.
+    fn sweep_marks(&mut self, width: u16, room: usize) -> bool {
+        let Some(press) = self.press.as_ref() else {
+            return false;
+        };
+        let mut want = if press.add {
+            press.base.clone()
+        } else {
+            BTreeSet::new()
+        };
+        for row in self.swept(width, room) {
+            // AND NEVER THE WAY OUT. The refusal lives with the marks and not
+            // with the geometry: the band is OVER it like anything else, and
+            // is drawn over it.
+            if let Some(entry) = self.shown.get(row).and_then(|k| self.entries.get(*k))
+                && !entry.is_parent()
+            {
+                want.insert(entry.name.clone());
+            }
+        }
+        if want == self.marks {
+            return false;
+        }
+        self.marks = want;
+        true
+    }
+
+    /// Puts every mark down.
+    ///
+    /// `C-A` and a click on the listing's AIR, through one function — see
+    /// [`Hit::Air`].
+    fn unmark_all(&mut self) -> Step {
+        self.marks.clear();
+        Step::Changed
+    }
+
+    /// Turns ONE entry's mark over, by its place in `shown`.
+    ///
+    /// The refusal and the toggle, and nothing about where the cursor goes
+    /// afterwards — see [`View::mark_focused`] for why the two are separate.
+    fn mark_row(&mut self, n: usize) -> Step {
+        // AND NEVER THE WAY OUT, for the reason `files-mark-all` gives one
+        // screen up: it is not a file, and a mark on it would carry the parent
+        // directory into whatever the marks are then used for.
+        let Some(entry) = self.shown.get(n).and_then(|k| self.entries.get(*k)) else {
+            return Step::Nothing;
+        };
+        if entry.is_parent() {
+            return Step::Changed;
+        }
+        let name = entry.name.clone();
         if !self.marks.remove(&name) {
             self.marks.insert(name);
         }
-        // The cursor moves on, so marking a run of files is one key repeated —
-        // which is what `m` is for in every listing that has it.
-        self.move_by(1);
         Step::Changed
     }
 
@@ -12731,6 +13540,16 @@ impl View {
             self.side_cursor = *n;
             return self.open_menu();
         }
+        // THE LISTING'S AIR IS THE SAME ANSWER AS NO FIELD AT ALL.
+        //
+        // `Hit::Air` was made so that a PRESS on the blank part of the listing
+        // puts the marks down; it says "there is no row here", which is exactly
+        // what `None` said before it existed. Without this line an EMPTY
+        // directory would stop having a menu — its blank lines now resolve, so
+        // the `None if self.is_empty()` arm below would never be reached, and
+        // that arm is the one `Footer::open_files_menu` records as the survivor
+        // of the last defect in this family.
+        let target = target.filter(|t| !matches!(t.hit, Hit::Air));
         // THE LISTING'S CHROME IS NOT ABOUT A FILE. The path line and the
         // column headers are `usize::MAX`, which is how both doors already
         // spell "this row is not an entry".
@@ -12745,6 +13564,28 @@ impl View {
             // not moved to is the common case, and a menu that acted on the
             // cursor's row instead would act on something else entirely.
             Some(t) if t.pane == Pane::Listing => {
+                // AND THE MARKS GO WITH THE POINTER.
+                //
+                // The menu acts on `chosen()` — the marks when there are any —
+                // and its title counts them. Right-clicking a row that is NOT
+                // among them would open a menu saying "N items" about files
+                // somewhere else on the screen, with the pointer resting on
+                // one it is not about: `delete` from there is one press away
+                // from the wrong files. Every manager answers this the same
+                // way, and the rule is the one this whole function keeps —
+                // what is under the pointer is what the gesture is about.
+                //
+                // A row that IS marked keeps them, which is how one acts on a
+                // set that was built on purpose.
+                if !self.marks.is_empty()
+                    && !self
+                        .shown
+                        .get(t.row)
+                        .and_then(|k| self.entries.get(*k))
+                        .is_some_and(|e| self.marks.contains(&e.name))
+                {
+                    self.marks.clear();
+                }
                 if matches!(self.focus_row(t.row), Step::Nothing) {
                     return Step::Nothing;
                 }
@@ -18442,6 +19283,174 @@ mod tests {
     }
 
     #[test]
+    fn the_air_of_the_listing_puts_the_marks_down() {
+        // AND THE AIR OF A MENU DOES NOT.
+        //
+        // With a modal up the section is still called `Pane::Listing` and
+        // carries the MENU's rows, so a press under a short menu would put
+        // down the very marks its own title is counting.
+        let root = scratch("air");
+        for n in ["a.txt", "b.txt", "c.txt"] {
+            std::fs::write(root.join(n), b"x").unwrap();
+        }
+        let mut v = view_at(&root);
+        v.key(of_view("C-a"));
+        assert!(v.chosen().len() >= 3, "`C-a` marked nothing");
+        // THE AIR, THROUGH THE SAME DOOR A CLICK COMES THROUGH.
+        v.click(usize::MAX, &Hit::Air, ronoctua_keymap::Mods::default());
+        assert_eq!(
+            v.chosen(),
+            v.focused_path().into_iter().collect::<Vec<_>>(),
+            "the air did not put the marks down"
+        );
+
+        // AND NO LINE OF A MODAL ANSWERS AS THE LISTING'S AIR.
+        //
+        // What holds it is that a modal's section is exactly as tall as its own
+        // list (`sections_of`: `lines: take.min(rows)`), so there is no blank
+        // line inside it — and `View::hit`'s `plain()` guard is the second lock
+        // behind that number. Both are asked here: the height, and the answer.
+        v.key(of_view("C-a"));
+        v.key(of_view("C-m"));
+        assert!(!v.plain(), "the menu did not open");
+        let many = v.chosen().len();
+        let chrome = v.chrome_rows(80, &bundle());
+        let sec = v
+            .sections(&chrome, 60, 80, &bundle())
+            .into_iter()
+            .find(|s| s.pane == Pane::Listing)
+            .expect("the modal is the listing's section");
+        assert_eq!(
+            sec.lines,
+            sec.content.len(),
+            "a modal was given more lines than it has rows"
+        );
+        let found = (0..60).any(|line| {
+            v.hit(80, 60, line, 4, &bundle())
+                .is_some_and(|t| matches!(t.hit, Hit::Air))
+        });
+        assert!(!found, "a line of a modal answered as the listing's air");
+        assert_eq!(v.chosen().len(), many, "the menu lost the marks it counts");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_second_button_on_an_unmarked_row_is_about_that_row() {
+        // THE DEFECT THIS CATCHES: the menu acts on `chosen()`, which is the
+        // MARKS when there are any. Right-clicking a row that is not among
+        // them opened a menu saying "N items" about files elsewhere on the
+        // screen, with the pointer resting on one it was not about.
+        let root = scratch("right-marks");
+        for n in ["a.txt", "b.txt", "c.txt"] {
+            std::fs::write(root.join(n), b"x").unwrap();
+        }
+        let mut v = view_at(&root);
+        // Mark the first file, then aim at a different one.
+        let first = v.amount() - 2;
+        let other = v.amount() - 1;
+        v.click(first, &Hit::Name(first), ronoctua_keymap::Mods::default());
+        v.key(of_view("C-SPC"));
+        assert_eq!(v.chosen().len(), 1);
+        v.menu_at(Some(&Target {
+            pane: Pane::Listing,
+            row: other,
+            hit: Hit::Name(other),
+            explain: None,
+        }));
+        // THE MENU FOCUSED THE ROW IT WAS ABOUT, so `chosen()` is that row's
+        // path and nothing else.
+        assert_eq!(
+            v.chosen(),
+            v.focused_path().into_iter().collect::<Vec<_>>(),
+            "the menu is about the marks and not about the row under the pointer"
+        );
+        assert_eq!(v.cursor(), other, "the menu did not come to the row");
+
+        // AND A ROW THAT IS MARKED KEEPS THEM, which is how one acts on a set
+        // that was built on purpose.
+        v.key(of_view("C-a"));
+        let many = v.chosen().len();
+        v.menu_at(Some(&Target {
+            pane: Pane::Listing,
+            row: other,
+            hit: Hit::Name(other),
+            explain: None,
+        }));
+        assert_eq!(v.chosen().len(), many, "a marked row lost the set");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_modifier_with_a_click_marks_and_never_opens() {
+        // THE DEFECT THIS CATCHES, and it is the reason the modifier arms come
+        // BEFORE the table: `Hit::Name`'s own rule is "the second click on the
+        // same row opens", so `Ctrl` on the row the cursor is already on would
+        // launch the file with a gesture that means "this one as well".
+        let root = scratch("ctrl-click");
+        for n in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+            std::fs::write(root.join(n), b"x").unwrap();
+        }
+        let mut v = view_at(&root);
+        let ctrl = ronoctua_keymap::Mods {
+            ctrl: true,
+            ..ronoctua_keymap::Mods::default()
+        };
+        // THE ROW THE CURSOR IS ALREADY ON — the one a bare click would open.
+        let here = v.cursor();
+        let step = v.click(here, &Hit::Name(here), ctrl);
+        assert!(
+            !matches!(step, Step::Do(_)),
+            "`Ctrl` on the focused row opened it instead of marking it"
+        );
+        assert_eq!(v.chosen().len(), 1, "`Ctrl` marked nothing");
+        // AND AGAIN TAKES IT BACK: it is a toggle, and the cursor did not walk
+        // on the way `C-SPC` makes it.
+        v.click(here, &Hit::Name(here), ctrl);
+        assert_eq!(v.cursor(), here, "the pointer moved the cursor on");
+        assert_eq!(
+            v.chosen(),
+            v.focused_path().into_iter().collect::<Vec<_>>(),
+            "`Ctrl` twice left a mark behind"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn shift_with_a_click_takes_the_whole_run() {
+        // AND OVER `shown`, NEVER OVER `entries`: a range built over the
+        // entries would mark what the filter and `C-h` are hiding, which is
+        // the same class of defect as marking the way out.
+        let root = scratch("shift-click");
+        for n in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+            std::fs::write(root.join(n), b"x").unwrap();
+        }
+        let mut v = view_at(&root);
+        let shift = ronoctua_keymap::Mods {
+            shift: true,
+            ..ronoctua_keymap::Mods::default()
+        };
+        let last = v.amount() - 1;
+        // THE CURSOR ON THE SECOND ROW, put there the way a plain click puts
+        // it — the gesture this one extends from.
+        v.click(1, &Hit::Name(1), ronoctua_keymap::Mods::default());
+        v.click(last, &Hit::Name(last), shift);
+        // THE WAY OUT IS INSIDE THE RANGE AND IS NOT TAKEN — `mark_row` keeps
+        // that refusal, and the range goes through it.
+        let taken = v.chosen();
+        assert!(
+            taken.len() >= 3,
+            "the run took {} of the rows it covered",
+            taken.len()
+        );
+        assert!(
+            !taken.iter().any(|p| p.ends_with("..")),
+            "the run took the way out"
+        );
+        assert_eq!(v.cursor(), last, "the cursor did not come to the click");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn the_way_out_is_the_first_row_and_nothing_can_be_done_to_it() {
         // THE OWNER ASKED FOR THE ROW: *"crie a pasta `..` para retornar no
         // path"*. Three keys and the breadcrumbs already went up; the row is
@@ -18871,7 +19880,11 @@ mod tests {
         let b = bundle();
 
         // ROW ONE: row zero is `..`, whose cells are the way out.
-        v.click(1, &Hit::Bit(1, mode::Who::Group, mode::What::Write));
+        v.click(
+            1,
+            &Hit::Bit(1, mode::Who::Group, mode::What::Write),
+            ronoctua_keymap::Mods::default(),
+        );
         let rows = v.drawn(120, &b);
         let question = rows[0].fields[0].text.clone();
         assert!(
@@ -19081,7 +20094,11 @@ mod tests {
         // screen, and the answer is what carries the change.
         // ROW ONE, because row zero is `..` — and every cell of that row is
         // the way out, never a permission bit of the directory one is in.
-        let step = v.click(1, &Hit::Bit(1, mode::Who::Group, mode::What::Write));
+        let step = v.click(
+            1,
+            &Hit::Bit(1, mode::Who::Group, mode::What::Write),
+            ronoctua_keymap::Mods::default(),
+        );
         assert!(
             matches!(step, Step::Changed),
             "clicking a bit must not apply straight away: {step:?}"
@@ -19092,7 +20109,11 @@ mod tests {
         };
         // The cursor starts on "no": a stray Enter must change nothing.
         assert!(matches!(v.key(enter), Step::Changed));
-        let step = v.click(1, &Hit::Bit(1, mode::Who::Group, mode::What::Write));
+        let step = v.click(
+            1,
+            &Hit::Bit(1, mode::Who::Group, mode::What::Write),
+            ronoctua_keymap::Mods::default(),
+        );
         assert!(matches!(step, Step::Changed), "{step:?}");
         v.key(Key {
             mods: ronoctua_keymap::Mods::default(),
@@ -19599,19 +20620,31 @@ mod tests {
                 .collect()
         };
 
-        let step = v.click(usize::MAX, &Hit::Sort(Column::Size));
+        let step = v.click(
+            usize::MAX,
+            &Hit::Sort(Column::Size),
+            ronoctua_keymap::Mods::default(),
+        );
         assert!(matches!(step, Step::Changed));
         assert_eq!(names(&v), ["..", "small.txt", "large.txt"]);
         assert_eq!(v.focused().map(|e| e.name.clone()), watching);
 
         // Again on the same column: it reverses, and does not go back to name.
-        v.click(usize::MAX, &Hit::Sort(Column::Size));
+        v.click(
+            usize::MAX,
+            &Hit::Sort(Column::Size),
+            ronoctua_keymap::Mods::default(),
+        );
         assert_eq!(names(&v), ["..", "large.txt", "small.txt"]);
 
         // A DIFFERENT column starts ascending, rather than inheriting the
         // reversal — otherwise clicking `name` after reversing `size` would
         // give Z to A, which nobody asked for.
-        v.click(usize::MAX, &Hit::Sort(Column::Name));
+        v.click(
+            usize::MAX,
+            &Hit::Sort(Column::Name),
+            ronoctua_keymap::Mods::default(),
+        );
         assert_eq!(names(&v), ["..", "large.txt", "small.txt"]);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -19696,7 +20729,11 @@ mod tests {
         let root = scratch("header-ink");
         std::fs::write(root.join("um.txt"), b"x").unwrap();
         let mut v = view_at(&root);
-        v.click(usize::MAX, &Hit::Sort(Column::Size));
+        v.click(
+            usize::MAX,
+            &Hit::Sort(Column::Size),
+            ronoctua_keymap::Mods::default(),
+        );
         let header = v.header(120, &bundle());
         let arrows: Vec<&Field> = header
             .fields
@@ -19755,7 +20792,11 @@ mod tests {
         // `view_at` HAS THE COLUMNS ONE LOOKS UP ALREADY ON — see `plainly` —
         // and the date is one of them, so there is a header of it to mark.
         let mut v = view_at(&root);
-        v.click(usize::MAX, &Hit::Sort(Column::Modified));
+        v.click(
+            usize::MAX,
+            &Hit::Sort(Column::Modified),
+            ronoctua_keymap::Mods::default(),
+        );
         let header = v.header(120, &bundle());
         let marked: Vec<_> = header
             .fields
@@ -20590,6 +21631,356 @@ mod tests {
     /// How tall the region has to be for several shelves to fit.
     const TALL: usize = 40;
 
+    /// Presses, drags and lets go — the three calls a door makes.
+    fn sweep(v: &mut View, b: &ronoctua_i18n::Texts, from: (usize, u16), to: (usize, u16)) {
+        assert!(
+            v.pressed(
+                120,
+                TALL,
+                from.0,
+                from.1,
+                ronoctua_keymap::Mods::default(),
+                b
+            ),
+            "the view did not take a press at {from:?}"
+        );
+        v.moved_to(120, TALL, to.0, to.1);
+        v.let_go();
+    }
+
+    #[test]
+    fn where_the_band_is_drawn_is_what_it_takes() {
+        // THE LAW THIS MANAGER'S BARS ARE ALREADY HELD TO, on the third
+        // control to need it: one function says what the rubber band covers,
+        // and the painter and the selection are two readings of THAT. Written
+        // twice, the rectangle on screen and the files it took would drift the
+        // first time either was edited — and the symptom is the worst there
+        // is in a listing: a delete that takes something the band was not over.
+        let (mut v, b) = a_grid_of("band-both-ways", 40);
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let g = sec.grid.expect("the listing has a grid");
+        // FROM THE AIR PAST THE LAST COLUMN, which is what starts a band at
+        // all — a press on an entry carries it instead.
+        let air = sec.to.saturating_sub(1);
+        let first = sec.top + sec.above;
+        assert!(
+            v.pressed(120, TALL, first, air, ronoctua_keymap::Mods::default(), &b),
+            "the view did not take a press on the listing's air"
+        );
+        // ACROSS THE FIRST SHELF AND BACK TO THE FIRST COLUMN, ending ONE LINE
+        // SHORT of the second shelf — so the band's bottom edge falls exactly
+        // on a row's own line. An edge that lands between two rows is an edge
+        // no off-by-one can be seen at, and this assertion exists for exactly
+        // that class.
+        let down = first + usize::from(g.down) - 1;
+        assert!(
+            v.moved_to(120, TALL, down, sec.from),
+            "the band took nothing"
+        );
+        let (c0, c1, l0, l1) = v.sweep_box(120, TALL).expect("a band is being dragged");
+        let took: Vec<usize> = v.swept_rows(120, TALL);
+        assert!(!took.is_empty(), "the band covers nothing at all");
+        // EVERY ROW IT TOOK IS INSIDE THE RECTANGLE IT DREW, and every row
+        // inside the rectangle was taken. The two directions are the whole
+        // claim.
+        let deep = usize::from(g.down);
+        for row in sec.offset..sec.total {
+            let Some(line) = sec.line_of(row) else { break };
+            let (from, to) = sec.cells_of(row).expect("a drawn row has cells");
+            let over = line < l1 && line + deep > l0 && from < c1 && to > c0;
+            assert_eq!(
+                took.contains(&row),
+                over,
+                "row {row} is drawn at lines {line}..{} cells {from}..{to}, \
+                 the band is at lines {l0}..{l1} cells {c0}..{c1}, and they disagree",
+                line + deep
+            );
+        }
+        v.let_go();
+    }
+
+    #[test]
+    fn a_band_never_takes_the_way_out_and_only_what_is_drawn() {
+        // THE REFUSAL LIVES WITH THE MARKS AND NOT WITH THE GEOMETRY: the band
+        // is OVER the way out like anything else and is drawn over it, and it
+        // is `mark_row`'s own guard that keeps it out of the marks.
+        let (mut v, b) = a_grid_of("band-way-out", 40);
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let first = sec.top + sec.above;
+        // THE WHOLE REGION, from the air past the last column of the first
+        // shelf down to the bottom left. A press on an ENTRY carries it
+        // instead, which is what the cell has to avoid.
+        sweep(
+            &mut v,
+            &b,
+            (first, sec.to.saturating_sub(1)),
+            (sec.top + sec.lines, sec.from),
+        );
+        let taken = v.chosen();
+        assert!(taken.len() > 1, "the band took {} rows", taken.len());
+        assert!(
+            !taken.iter().any(|p| p.ends_with("..")),
+            "the band took the way out"
+        );
+        // AND NOTHING THAT IS NOT DRAWN. Forty files in two shelves is more
+        // than the grid fits, and a rubber band takes what it is over.
+        assert!(
+            taken.len() < v.amount(),
+            "the band took all {} rows, so it reached past what is on screen",
+            v.amount()
+        );
+    }
+
+    #[test]
+    fn a_press_that_does_not_move_is_still_a_click() {
+        // THE ONE BEHAVIOUR THIS WAVE CHANGES, and the guard on it: the
+        // listing's click now fires when the button comes UP, because until
+        // the pointer moves there is nothing that says which gesture it is. A
+        // hand that trembles inside the slack has not asked for a band.
+        let (mut v, b) = a_grid_of("band-slack", 12);
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let first = sec.top + sec.above;
+        let slack = ronoctua_tokens::space::FILES_SWEEPSLACK;
+        assert!(v.pressed(
+            120,
+            TALL,
+            first,
+            sec.from,
+            ronoctua_keymap::Mods::default(),
+            &b
+        ));
+        // INSIDE THE SLACK: still a click, and `let_go` hands the target back.
+        assert!(!v.moved_to(120, TALL, first, sec.from + slack));
+        assert!(
+            v.sweep_box(120, TALL).is_none(),
+            "a tremor inside the slack drew a band"
+        );
+        assert!(
+            v.let_go().is_some(),
+            "a press that never moved did not come back as a click"
+        );
+        // AND ONE CELL FURTHER IS A GESTURE, which `let_go` does NOT hand
+        // back — the door must not click at the end of a drag.
+        assert!(v.pressed(
+            120,
+            TALL,
+            first,
+            sec.to.saturating_sub(1),
+            ronoctua_keymap::Mods::default(),
+            &b
+        ));
+        v.moved_to(120, TALL, first + 1, sec.from);
+        assert!(v.let_go().is_none(), "a drag came back as a click as well");
+    }
+
+    #[test]
+    fn a_folder_takes_a_drop_anywhere_on_its_line() {
+        // MEASURED IN THE PHOTO BATTERY, and it is why `View::row_under` was
+        // written: dragging a file onto a folder, the folder never lit and the
+        // drop went nowhere. `View::hit` ends in `field_at`, and a FOLDER has
+        // no size to draw — so past its name the rest of the line answers
+        // nothing at all, while the FILE one line below answers everywhere,
+        // because a file HAS a size. A drop target one has to aim at by a few
+        // characters of name is the defect the thumbnails already fixed one
+        // panel along, and here what is being aimed at is where somebody's
+        // files are about to go.
+        let root = scratch("drop-gap");
+        std::fs::create_dir(root.join("in")).unwrap();
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut v = view_at(&root);
+        let b = bundle();
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let file = (0..v.amount())
+            .find(|n| v.name_of(*n).as_deref() == Some("a.txt"))
+            .expect("the file is in the listing");
+        let folder = (0..v.amount())
+            .find(|n| v.name_of(*n).as_deref() == Some("in"))
+            .expect("the folder is in the listing");
+        let at = sec.line_of(file).expect("the file is drawn");
+        let over = sec.line_of(folder).expect("the folder is drawn");
+
+        // THE CELL IS THE ONE THAT ANSWERS NOTHING: past the folder's short
+        // name, where its line has no field at all. The assertion that this
+        // cell is really a gap is made first, so the test cannot pass by
+        // landing on a field and calling it a gap.
+        let gap = sec.from + 12;
+        assert!(
+            gap < sec.to,
+            "the listing is too narrow for this measurement"
+        );
+        assert!(
+            v.hit(120, TALL, over, gap, &b).is_none(),
+            "this cell has a field on it, so it proves nothing about the gaps"
+        );
+
+        assert!(v.pressed(
+            120,
+            TALL,
+            at,
+            sec.from,
+            ronoctua_keymap::Mods::default(),
+            &b
+        ));
+        v.moved_to(120, TALL, at + 1, sec.from);
+        v.begun_carrying().expect("the drag picked nothing up");
+        v.carry_to(120, TALL, over, gap, false, &b);
+        assert!(
+            v.landing_now(),
+            "the empty half of a folder's line does not take a drop"
+        );
+        let step = v.dropped(vec![root.join("a.txt")]);
+        match step {
+            Step::Do(Doing::Drop { into, .. }) => {
+                assert_eq!(into, root.join("in"), "the drop landed elsewhere");
+            }
+            other => panic!("a drop on a folder's own line gave {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_drop_lands_where_it_is_lit() {
+        // THE LAW AGAIN, on the fourth control to need it: the folder that is
+        // LIT under a drag and the folder a drop goes into are one answer.
+        // Resolved twice — once to light and once to take — they would differ
+        // the first time either was edited, and the symptom is a copy that
+        // lands somewhere nobody pointed at.
+        let root = scratch("drop-lit");
+        std::fs::create_dir(root.join("into")).unwrap();
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let mut v = view_at(&root);
+        let b = bundle();
+        let sec = the_shelves(&v, TALL, 120, &b);
+        // PICK UP THE FILE: a press on its row, then a motion out of the cell.
+        let file = (0..v.amount())
+            .find(|n| v.name_of(*n).as_deref() == Some("a.txt"))
+            .expect("the file is in the listing");
+        let at = sec.line_of(file).expect("the file is drawn");
+        assert!(v.pressed(
+            120,
+            TALL,
+            at,
+            sec.from,
+            ronoctua_keymap::Mods::default(),
+            &b
+        ));
+        v.moved_to(120, TALL, at + 1, sec.from);
+        let (paths, _) = v.begun_carrying().expect("the drag picked nothing up");
+        assert_eq!(paths, vec![root.join("a.txt")]);
+        // AND IT IS PICKED UP ONCE: `start_drag` may be called once a gesture.
+        assert!(
+            v.begun_carrying().is_none(),
+            "the drag was handed over twice"
+        );
+
+        // OVER THE FOLDER: it lights, and the drop goes there.
+        let folder = (0..v.amount())
+            .find(|n| v.name_of(*n).as_deref() == Some("into"))
+            .expect("the folder is in the listing");
+        let over = sec.line_of(folder).expect("the folder is drawn");
+        v.carry_to(120, TALL, over, sec.from, false, &b);
+        assert!(v.landing_now(), "nothing under the pointer takes a drop");
+        let lit = v.landing_box(120, TALL).expect("the folder is not lit");
+        let drawn = sec.cells_of(folder).unwrap_or((sec.from, sec.to));
+        assert_eq!(
+            (lit.0, lit.1, lit.2),
+            (drawn.0, drawn.1, over),
+            "the folder is lit somewhere other than where it is drawn"
+        );
+        let step = v.dropped(vec![root.join("a.txt")]);
+        match step {
+            Step::Do(Doing::Drop { into, moves, .. }) => {
+                assert_eq!(into, root.join("into"), "the drop went elsewhere");
+                assert!(moves, "a drop with no modifier copied instead of moving");
+            }
+            other => panic!("the drop did nothing: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn nothing_is_dropped_into_itself_or_onto_a_file() {
+        // DROPPING A FOLDER INTO ITSELF is how a listing loses a tree, and a
+        // file is not a place. Both have to answer "nowhere" — and the OFFER
+        // is told, so the compositor draws the refusal rather than the shell
+        // taking a drop and quietly doing nothing.
+        let root = scratch("drop-refuse");
+        std::fs::create_dir(root.join("here")).unwrap();
+        std::fs::create_dir(root.join("here/inside")).unwrap();
+        std::fs::write(root.join("b.txt"), b"x").unwrap();
+        let mut v = view_at(&root);
+        let b = bundle();
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let folder = (0..v.amount())
+            .find(|n| v.name_of(*n).as_deref() == Some("here"))
+            .expect("the folder is in the listing");
+        let at = sec.line_of(folder).expect("the folder is drawn");
+        assert!(v.pressed(
+            120,
+            TALL,
+            at,
+            sec.from,
+            ronoctua_keymap::Mods::default(),
+            &b
+        ));
+        v.moved_to(120, TALL, at + 1, sec.from);
+        v.begun_carrying().expect("the drag picked nothing up");
+
+        // ONTO ITSELF.
+        v.carry_to(120, TALL, at, sec.from, false, &b);
+        assert!(
+            !v.landing_now(),
+            "a folder offered itself as a place to drop into"
+        );
+        // ONTO A FILE.
+        let file = (0..v.amount())
+            .find(|n| v.name_of(*n).as_deref() == Some("b.txt"))
+            .expect("the file is in the listing");
+        let over = sec.line_of(file).expect("the file is drawn");
+        v.carry_to(120, TALL, over, sec.from, false, &b);
+        assert!(!v.landing_now(), "a file offered to take a drop");
+        assert!(
+            matches!(v.dropped(vec![root.join("b.txt")]), Step::Nothing),
+            "a drop with nowhere to go did something"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_reread_prunes_what_the_band_is_holding() {
+        // THE DEFECT MOST LIKELY TO SHIP, and it is silent: `Press::base` is a
+        // SECOND copy of the marks, and the band is rebuilt from it on every
+        // motion. A directory that changes under a live band would put a
+        // deleted file's name straight back, and `chosen()` would hand a path
+        // that is not there to a copy or a delete.
+        let (mut v, b) = a_grid_of("band-reread", 12);
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let first = sec.top + sec.above;
+        // MARK ONE, then start an ADDITIVE band from the air.
+        v.key(of_view("C-SPC"));
+        let held = v.chosen().first().cloned().expect("`C-SPC` marked nothing");
+        assert!(v.pressed(
+            120,
+            TALL,
+            first,
+            sec.to.saturating_sub(1),
+            ronoctua_keymap::Mods {
+                ctrl: true,
+                ..ronoctua_keymap::Mods::default()
+            },
+            &b
+        ));
+        // THE FILE GOES WHILE THE BUTTON IS STILL DOWN.
+        std::fs::remove_file(&held).unwrap();
+        v.reread();
+        v.moved_to(120, TALL, first + 1, sec.from);
+        assert!(
+            !v.chosen().contains(&held),
+            "the band put back a file that is gone: {}",
+            held.display()
+        );
+        v.let_go();
+    }
+
     #[test]
     fn the_glyph_at_the_end_of_the_path_turns_the_entries_over() {
         // THE DEFECT THIS CATCHES: a glyph drawn where the path is allowed to
@@ -20625,7 +22016,7 @@ mod tests {
             "the path reaches the cell the glyph was given"
         );
         // AND CLICKING IT IS THE KEY. One gesture, two affordances.
-        let step = v.click(usize::MAX, &Hit::Layout);
+        let step = v.click(usize::MAX, &Hit::Layout, ronoctua_keymap::Mods::default());
         assert!(matches!(step, Step::Say(_)));
         assert!(v.grid_shown(), "the glyph did not turn the entries over");
         let turned = &v.chrome_rows(width, &b)[0];
@@ -21096,7 +22487,10 @@ mod tests {
         let (_, narrow) = v.crumb_box(120);
         // AND CLICKING IT IS THE KEY.
         let was = the_shelves(&v, TALL, 120, &b).grid.expect("a grid").step;
-        assert!(matches!(v.click(usize::MAX, &Hit::Sizing), Step::Say(_)));
+        assert!(matches!(
+            v.click(usize::MAX, &Hit::Sizing, ronoctua_keymap::Mods::default()),
+            Step::Say(_)
+        ));
         let now = the_shelves(&v, TALL, 120, &b).grid.expect("a grid").step;
         assert_ne!(was, now, "the click did not change the size");
         // AND IT IS GONE WHEN THERE IS NOTHING TO SIZE, giving its cells back.
@@ -21853,7 +23247,10 @@ mod tests {
             .expect("the row has a field");
         assert_eq!(target.hit, want, "the point resolved to another row");
         assert!(
-            matches!(v.click(target.row, &target.hit), Step::Do(Doing::Copy(_))),
+            matches!(
+                v.click(target.row, &target.hit, ronoctua_keymap::Mods::default()),
+                Step::Do(Doing::Copy(_))
+            ),
             "clicking `copy the path` did not copy it"
         );
     }
@@ -23383,7 +24780,7 @@ mod tests {
         let was = v.where_().to_path_buf();
 
         // FIRST CLICK: the cursor moves and NOTHING opens.
-        let step = v.click(target, &Hit::Name(target));
+        let step = v.click(target, &Hit::Name(target), ronoctua_keymap::Mods::default());
         assert!(
             matches!(step, Step::Changed),
             "the first click did more than select: {step:?}"
@@ -23396,7 +24793,7 @@ mod tests {
         );
 
         // SECOND CLICK on the same row: now it opens.
-        let _ = v.click(target, &Hit::Name(target));
+        let _ = v.click(target, &Hit::Name(target), ronoctua_keymap::Mods::default());
         assert_ne!(
             v.where_(),
             was,
@@ -24303,7 +25700,10 @@ mod tests {
             .expect("a letter");
         let hit = bit.hit.clone();
         assert!(
-            matches!(v.click(0, &hit), Step::Changed),
+            matches!(
+                v.click(0, &hit, ronoctua_keymap::Mods::default()),
+                Step::Changed
+            ),
             "clicking the panel's bit did not open the question"
         );
         let _ = std::fs::remove_dir_all(&dir);

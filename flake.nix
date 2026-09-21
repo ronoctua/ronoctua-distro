@@ -921,6 +921,11 @@
           # region of the footer that no buffer draws, so `nix run .#png`
           # cannot reach it and a real compositor is the only vehicle.
           ronoctua-brain = rust.brain;
+          # AND THE QUEUE, because a drop ends in it. `files::queued` hands the
+          # work to `ronoctua-transfers` over its socket, so a scene that drags
+          # a file onto a folder and then asks whether the file MOVED is asking
+          # a question only the daemon can answer.
+          ronoctua-transfers = rust.transfers;
         };
 
         # AND ONE PACKAGE PER SCENE, so a delivery can photograph the screen it
@@ -948,6 +953,7 @@
             niri = inputs.niri.packages.${system}.niri;
             ronoctua-shell = rust.shell;
             ronoctua-brain = rust.brain;
+            ronoctua-transfers = rust.transfers;
           };
         }) (map (s: s.id) (import ./nix/shots-scenes.nix))
       )

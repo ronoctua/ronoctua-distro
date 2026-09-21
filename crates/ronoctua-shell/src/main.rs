@@ -53,6 +53,7 @@ mod bluetooth_words;
 // THE BRAIN'S LINE, under the minibuffer, and the thread that feeds it.
 mod brain;
 mod buffer;
+mod carry;
 mod chrome;
 mod clipboard;
 mod clipboard_view;

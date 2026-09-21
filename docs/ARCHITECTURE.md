@@ -5242,6 +5242,64 @@ despercebidos numa tela compartilhada; um globo apontando para a casa de alguém
 resolver isso é um comando que TIRA a coordenada do arquivo antes de enviá-lo — que não existe hoje
 e está no `docs/PENDING.md` com essa frase.
 
+### O ponteiro toma vários, arrasta e solta — e o que o gesto NÃO inventou
+
+O pedido do dono foi por *"total suporte ao mouse na versão thumbnail da listagem"*, e na conversa
+que abriu o plano ele estendeu o escopo três vezes: arrastar-e-soltar entra, inclusive entre janelas
+e com programas estrangeiros; o retângulo é desenhado POR CIMA das miniaturas, com alfa; ele vale
+para as DUAS formas da listagem; e o segundo botão sobre um item NÃO marcado limpa as marcas e age
+naquele item.
+
+**Nada disso é um vocabulário novo.** Marcar é o `mark_row` que o `m` do teclado já usava, limpar é
+o `C-A`, e o retângulo cruza a MESMA aritmética que desenha as células (`Grid::at`/`index_at`, uma
+soma lida nos dois sentidos). O que precisou existir foram três coisas, e cada uma paga a própria
+linha:
+
+**Uma função diz o que o retângulo cobre, e duas a leem.** `View::sweep_box` responde em células e
+linhas da região; o pintor a converte com `files::sweep_px` — o mesmo molde do `band_px` que a faixa
+de foco já usa — e a SELEÇÃO sai de `View::swept`, que cruza esse retângulo com o de cada entrada.
+Escrito duas vezes, o desenho e a tomada divergiriam na primeira edição de qualquer um dos dois, e o
+sintoma é um `delete` levando o que a banda não estava por cima. É a lei que as barras deste
+gerenciador já obedecem, chegando num gesto novo.
+
+**E ele é desenhado no grupo de CIMA.** Não há teste de profundidade neste renderizador: a ordem é
+retângulo → imagem → texto, e as duas portas já desenham DUAS faixas de retângulos com as figuras
+entre elas (`Quads::draw_range`, que é o que põe os controles do filme sobre o filme). Um retângulo
+empilhado com os outros fundos é um retângulo debaixo de toda miniatura — invisível numa grade, que
+é figura de borda a borda, e uma grade é o único lugar onde ele importa. Medido na bateria de fotos:
+sobre a mesma coluna, a cor própria das figuras cai de 83 073 para 52 916 pixels enquanto a banda
+está de pé, que é o número que um retângulo desenhado por baixo não produz.
+
+**Arrastar é o protocolo, não um gesto interno.** `carry.rs` é a fronteira com o `wl_data_device` do
+SCTK e o formato é o `text/uri-list` do freedesktop (RFC 2483, `file://` percent-encoded) — é por
+isso que o arrasto atravessa para outra janela nossa e para qualquer programa estrangeiro, nos dois
+sentidos, sem que nenhum dos dois lados saiba do outro. Um gesto interno teria sido mais fácil e
+valeria só dentro desta janela, que é a metade menos útil do que o dono pediu.
+
+**E um cliente que é as DUAS pontas não pode ler o próprio cano.** `wl_data_offer.receive` devolve
+uma ponta de leitura e pede ao COMPOSITOR que mande a fonte escrever; quando a fonte é este mesmo
+processo, essa ordem chega como um EVENTO Wayland, e ler dentro do `drop_performed` bloqueia
+exatamente o laço que a entregaria. Medido, nessa ordem: `dropped=0`, e um décimo de segundo depois
+`the drag's list could not be written error=Broken pipe`. Não havia nada errado com a codificação
+nem com o protocolo — um cliente de uma thread que é as duas pontas tem de pegar o caminho curto, e
+ele já tem a resposta na mão (`Carrying::offering`). De fora, o cano é lido com prazo, que é o que
+faz um escritor estrangeiro lento custar um quarto de segundo em vez da sessão.
+
+**E um destino de drop é uma LINHA, nunca um campo.** Esta é a única coisa que a entrega descobriu
+na TELA e não no teste: `View::hit` acaba em `field_at`, e uma PASTA não tem tamanho para desenhar,
+então depois do nome dela a linha não responde nada. Na bateria de fotos a pasta nunca acendeu e o
+arquivo caiu no vazio, enquanto o ARQUIVO uma linha abaixo respondia em toda a largura — porque um
+arquivo tem tamanho. É o mesmo defeito que as miniaturas já consertaram um painel adiante
+(`Section::row_at`), e aqui o que se mira por três caracteres de nome é para onde os arquivos de
+alguém vão. `View::row_under` pergunta à SEÇÃO, que é aritmética e não tem o que deixar de
+responder, e a linha que ela calcula sai de `row_of_line` — a MESMA função que o `hit` usa, para que as
+duas nunca discordem sobre qual linha é a primeira entrada. Hover e clique não mudaram: eles são
+sobre um campo, e o que o olho vê aceso continua sendo o que o clique pega.
+
+**O que ficou de fora está no `docs/PENDING.md`**, com o motivo de cada um: a figura que acompanha o
+ponteiro, rolar ao encostar na borda, renomear pelo segundo clique e o retângulo que alterna em vez
+de tomar.
+
 ### O globo — três camadas, e nenhuma delas é do gerenciador de arquivos
 
 O dono foi explícito ao recusar a primeira versão do plano: *"o globo, o suporte a coordenada etc.

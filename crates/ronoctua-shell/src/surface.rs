@@ -65,7 +65,9 @@ use smithay_client_toolkit::{
 use wayland_client::{
     Connection, Proxy as _, QueueHandle,
     globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{
+        wl_data_device_manager::DndAction, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
+    },
 };
 
 use crate::leader::{Effect, Leader, Order};
@@ -183,6 +185,14 @@ struct Footer {
     /// Modifiers held RIGHT NOW. The key event does not carry them; they arrive in
     /// an event of their own and hold until the next one.
     mods: Modifiers,
+    /// Entries carried out of the listing, and drops landing in it. See
+    /// [`crate::carry`].
+    carrying: Option<crate::carry::Carrying>,
+    /// The serial of the press a drag would start from.
+    ///
+    /// `start_drag` takes the PRESS's own serial and the compositor refuses
+    /// any other, with no error on this side.
+    pressed_at: u32,
     /// The ones already held when the footer gained the keyboard.
     ///
     /// # Why they have to be discounted
@@ -2063,6 +2073,10 @@ pub fn run() -> Result<()> {
     let notes = ronoctua_notify::store::Where::of_env();
     let mut state = Footer {
         conn: conn.clone(),
+        // THE DRAG-AND-DROP MACHINERY. `None` where the compositor has no
+        // `wl_data_device_manager` — absence is not an error, and everything
+        // else goes on working.
+        carrying: crate::carry::Carrying::bind(&globals, &qh),
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
         _compositor: compositor,
@@ -2075,6 +2089,7 @@ pub fn run() -> Result<()> {
         seats: SeatState::new(&globals, &qh),
         keyboard: None,
         mods: Modifiers::default(),
+        pressed_at: 0,
         inheritance: Inheritance::default(),
         leader: Leader::default(),
         texts: std::rc::Rc::new(crate::language::texts()),
@@ -4410,6 +4425,11 @@ impl SeatHandler for Footer {
                     tracing::warn!(error = %e, "no pointer; the scrollbar does not show")
                 }
             }
+            // AND THE SEAT'S DATA DEVICE, which is what carries a drag. It
+            // hangs off the SEAT and so cannot be made before one arrives.
+            if let Some(c) = self.carrying.as_mut() {
+                c.took_a_seat(qh, &seat);
+            }
         }
     }
 
@@ -4434,6 +4454,229 @@ impl SeatHandler for Footer {
     }
 
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+// ---------------------------------------------------------------------------
+// THE DRAG — entries carried out, and files dropped in
+// ---------------------------------------------------------------------------
+//
+// Three traits, and each is a thin translation into `files::View`. The DRAG's
+// point comes in the surface's own pixels, so it goes through the same
+// `line_and_cell` and the same `View::hit` the pointer does — what lights a
+// folder under a drag and what a drop lands in are one answer, read twice.
+
+impl smithay_client_toolkit::data_device_manager::data_device::DataDeviceHandler for Footer {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        device: &wayland_client::protocol::wl_data_device::WlDataDevice,
+        x: f64,
+        y: f64,
+        _: &wl_surface::WlSurface,
+    ) {
+        let Some(offer) = device
+            .data::<smithay_client_toolkit::data_device_manager::data_device::DataDeviceData>()
+            .and_then(|d| d.drag_offer())
+        else {
+            return;
+        };
+        // WHAT WE CAN TAKE, said out loud. A destination that accepts nothing
+        // is a destination the compositor draws a "no" cursor over, which is
+        // the right answer for a drag of plain text and the wrong one for a
+        // drag of files.
+        let takeable =
+            offer.with_mime_types(|kinds| kinds.iter().any(|k| k == crate::carry::URI_LIST));
+        offer.accept_mime_type(
+            offer.serial,
+            takeable.then(|| crate::carry::URI_LIST.to_owned()),
+        );
+        if !takeable {
+            return;
+        }
+        // AND WHICH ACTION WE PREFER. `Move` unless the source only offers a
+        // copy — the destination has a say, and a drop into a different
+        // filesystem or out of a program that cannot give its file up is a
+        // copy whatever anybody asked for.
+        let wanted = if offer.source_actions.contains(DndAction::Move) {
+            DndAction::Move
+        } else {
+            DndAction::Copy
+        };
+        offer.set_actions(DndAction::Copy | DndAction::Move, wanted);
+        self.files_carrying_from_afar(wanted == DndAction::Copy);
+        self.carried_to(x, y, wanted == DndAction::Copy);
+    }
+
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_device::WlDataDevice,
+    ) {
+        if self.files_carried_away() {
+            self.ask_paint();
+        }
+    }
+
+    fn motion(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        device: &wayland_client::protocol::wl_data_device::WlDataDevice,
+        x: f64,
+        y: f64,
+    ) {
+        let offer = device
+            .data::<smithay_client_toolkit::data_device_manager::data_device::DataDeviceData>()
+            .and_then(|d| d.drag_offer());
+        let copies = offer
+            .as_ref()
+            .is_some_and(|o| o.selected_action == DndAction::Copy);
+        self.carried_to(x, y, copies);
+        // AND THE OFFER IS TOLD WHETHER THERE IS ANYWHERE TO GO. Accepting
+        // everywhere and doing nothing on the drop is a cursor that says "yes"
+        // over a file it cannot take — see `View::landing_now`.
+        if let Some(offer) = offer {
+            offer.accept_mime_type(
+                offer.serial,
+                self.takes_a_drop()
+                    .then(|| crate::carry::URI_LIST.to_owned()),
+            );
+        }
+    }
+
+    /// THE SELECTION IS NOT THIS MODULE'S. `crate::clipboard` watches it
+    /// through `zwlr_data_control`, for the reason written out there.
+    fn selection(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_device::WlDataDevice,
+    ) {
+    }
+
+    fn drop_performed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        device: &wayland_client::protocol::wl_data_device::WlDataDevice,
+    ) {
+        let offer = device
+            .data::<smithay_client_toolkit::data_device_manager::data_device::DataDeviceData>()
+            .and_then(|d| d.drag_offer());
+        let Some(offer) = offer else {
+            self.files_carried_away();
+            return;
+        };
+        // OUR OWN DRAG IS NOT READ BACK THROUGH THE COMPOSITOR.
+        //
+        // A client that is both ends of a drag cannot read its own pipe from
+        // inside this handler: the write is a Wayland event, and the read
+        // blocks the loop that would deliver it — see `carry::Carrying::offering`
+        // for the two log lines that measured it. A drag from somewhere else
+        // IS read, with a deadline.
+        let mine = self
+            .carrying
+            .as_ref()
+            .and_then(crate::carry::Carrying::offering)
+            .map(<[_]>::to_vec);
+        let paths = mine.unwrap_or_else(|| {
+            offer
+                .receive(crate::carry::URI_LIST.to_owned())
+                .ok()
+                .and_then(crate::carry::read)
+                .unwrap_or_default()
+        });
+        offer.finish();
+        tracing::info!(dropped = paths.len(), "files were let go over the listing");
+        let step = self.files.as_mut().map(|v| v.dropped(paths));
+        if let Some(step) = step {
+            self.apply_files_step(step);
+        }
+    }
+}
+
+impl smithay_client_toolkit::data_device_manager::data_source::DataSourceHandler for Footer {
+    fn accept_mime(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_source::WlDataSource,
+        _: Option<String>,
+    ) {
+    }
+
+    fn send_request(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_source::WlDataSource,
+        mime: String,
+        pipe: smithay_client_toolkit::data_device_manager::WritePipe,
+    ) {
+        if let Some(c) = self.carrying.as_ref() {
+            c.send(&mime, pipe);
+        }
+    }
+
+    fn cancelled(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) {
+        self.let_the_drag_go();
+    }
+
+    fn dnd_dropped(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) {
+    }
+
+    fn dnd_finished(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) {
+        self.let_the_drag_go();
+    }
+
+    fn action(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_data_source::WlDataSource,
+        _: DndAction,
+    ) {
+    }
+}
+
+impl smithay_client_toolkit::data_device_manager::data_offer::DataOfferHandler for Footer {
+    fn source_actions(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
+        _: DndAction,
+    ) {
+    }
+
+    fn selected_action(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        offer: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
+        action: DndAction,
+    ) {
+        // THE COMPOSITOR HAS DECIDED, and the line has to say the same thing
+        // the drop will do.
+        self.carried_to(offer.x, offer.y, action == DndAction::Copy);
+    }
 }
 
 impl KeyboardHandler for Footer {
@@ -4667,7 +4910,7 @@ impl PointerHandler for Footer {
     fn pointer_frame(
         &mut self,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
@@ -4707,6 +4950,13 @@ impl PointerHandler for Footer {
         // AND WHERE THE POINTER ENDED UP, so the message line can be asked
         // again once the pause has actually been drawn. See below.
         let mut pointed_at: Option<(f64, f64)> = None;
+        // Whether a rubber band over the listing moved, and so took or gave
+        // back marks. Its own flag because the marks are the VIEW's and the
+        // repaint guard at the end of this function compares the door's.
+        let mut swept = false;
+        // What a drag has just picked up, handed to the compositor after the
+        // loop — the surface and the queue cannot be borrowed inside it.
+        let mut carried: Option<(Vec<std::path::PathBuf>, bool)> = None;
         // AND THE BRAIN'S, which is a third region and not a row: it sits
         // between the minibuffer and the list, and everything below asks the
         // row what it is.
@@ -4853,6 +5103,27 @@ impl PointerHandler for Footer {
                         self.drag_shelf_to(which, e.position.1);
                     } else if self.dragging {
                         self.drag_to(e.position.1);
+                    } else if let (Some(line), Some(cell)) =
+                        (self.row_under_pointer, self.cell_under_pointer)
+                    {
+                        // AND A BUTTON THAT IS DOWN ON THE LISTING IS A GESTURE
+                        // NOW, or still a click — see `files::View::moved_to`.
+                        let (columns, room) = (self.screen_columns(), self.grid().lines);
+                        if self
+                            .files
+                            .as_mut()
+                            .is_some_and(|v| v.moved_to(columns, room, line, cell))
+                        {
+                            swept = true;
+                        }
+                        // AND A DRAG THAT HAS JUST PICKED SOMETHING UP HANDS
+                        // IT TO THE COMPOSITOR. From here on the pointer is
+                        // its, and what this surface hears is
+                        // `wl_data_device`.
+                        carried = self
+                            .files
+                            .as_mut()
+                            .and_then(crate::files::View::begun_carrying);
                     }
                 }
                 PointerEventKind::Leave { .. } => {
@@ -4884,6 +5155,12 @@ impl PointerHandler for Footer {
                     self.hint_said = None;
                     self.dragging = false;
                     self.dragging_shelf = None;
+                    // AND A BAND ENDS WHERE THE HAND LEFT IT. What it took was
+                    // drawn, entry by entry, the whole way — undoing that
+                    // silently is the worse of the two answers.
+                    if self.files.as_mut().is_some_and(crate::files::View::gave_up) {
+                        swept = true;
+                    }
                     if let Some(v) = self.files.as_ref() {
                         v.pointing(None);
                         v.pointing_at(None);
@@ -4909,6 +5186,10 @@ impl PointerHandler for Footer {
                     // THE MODELINE FIRST, because it is not a row: a press on
                     // line 0 has no `ExpansionRow` behind it, and everything
                     // below asks the row what it is.
+                    // THE OTHER BUTTON ENDS A BAND FIRST. The menu is about
+                    // `chosen()` and its title counts the marks, so one opened
+                    // mid-sweep would be about a set that is still moving.
+                    self.files.as_mut().map(crate::files::View::gave_up);
                     if let Some(id) = self.segment_at(e.position.0, e.position.1) {
                         segment_prev = Some(id);
                         continue;
@@ -4934,9 +5215,21 @@ impl PointerHandler for Footer {
                     // the one listing with nothing to act on.
                     menu = true;
                 }
-                PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
+                PointerEventKind::Press { button, serial, .. } if button == LEFT_BUTTON => {
+                    // THE PRESS'S OWN SERIAL, kept because a drag started from
+                    // any other is refused by the compositor with nothing said
+                    // on this side — see `carry::Carrying::begin`.
+                    self.pressed_at = serial;
                     self.row_under_pointer = self.row_at(e.position.0, e.position.1);
                     self.cell_under_pointer = self.cell_at(e.position.0);
+                    // WHAT THE LISTING'S GESTURE NEEDS, taken before the view
+                    // is borrowed at the end of this arm: the width and the
+                    // height the region is drawn at, the modifiers, and the
+                    // texts. See `chrome::held` for why the pointer reads the
+                    // modifiers straight.
+                    let (columns, room) = (self.screen_columns(), self.grid().lines);
+                    let held = crate::chrome::held(self.mods);
+                    let texts = std::rc::Rc::clone(&self.texts);
                     // THE BAND FIRST, because it is above everything and is not
                     // a row: its lines have no `ExpansionRow` behind them, and
                     // everything below here asks the row what it is.
@@ -5060,6 +5353,17 @@ impl PointerHandler for Footer {
                         // scrollbar's rule: the thumb is a target, the trough
                         // is a drag.
                         self.dragging_globe = Some(e.position);
+                    } else if let (Some(line), Some(cell), Some(v)) = (
+                        self.row_under_pointer,
+                        self.cell_under_pointer,
+                        self.files.as_mut(),
+                    ) && v.pressed(columns, room, line, cell, held, &texts)
+                    {
+                        // THE VIEW TOOK IT, and a press on the listing is no
+                        // longer a click: until the pointer moves or the button
+                        // comes up there is nothing that says which of the
+                        // three gestures it is. The click fires on the RELEASE
+                        // — see `files::View::pressed`.
                     } else {
                         clicked = self.row_under_pointer;
                     }
@@ -5071,6 +5375,15 @@ impl PointerHandler for Footer {
                     self.dragging_shelf = None;
                     self.dragging_fold = false;
                     self.spinning = None;
+                    // AND A PRESS THAT NEVER BECAME A GESTURE IS A CLICK.
+                    //
+                    // `clicked` is a line, and the arm it reaches re-resolves
+                    // the point through `files_target()` — which is right here
+                    // too: the pointer has not moved out of its slack, so the
+                    // line it is on is the line it was pressed on.
+                    if self.files.as_mut().is_some_and(|v| v.let_go().is_some()) {
+                        clicked = self.row_under_pointer;
+                    }
                 }
                 // THE WHEEL AND THE TOUCHPAD GESTURE.
                 //
@@ -5120,6 +5433,24 @@ impl PointerHandler for Footer {
                     self.draw_and_paint();
                 }
             }
+        }
+
+        // A DRAG THAT JUST PICKED SOMETHING UP, handed over before anything
+        // else: from here on the compositor owns the pointer.
+        if let Some((paths, copies)) = carried {
+            let surface = self.screens.first().map(|t| t.layer.wl_surface().clone());
+            let serial = self.pressed_at;
+            if let (Some(surface), Some(c)) = (surface, self.carrying.as_mut()) {
+                c.begin(qh, &surface, serial, paths, copies);
+            }
+            return;
+        }
+
+        // A RUBBER BAND THAT MOVED, before everything that acts: while one is
+        // being dragged nothing else on this surface is.
+        if swept {
+            self.draw_and_paint();
+            return;
         }
 
         // THE BAND'S CLICK, before everything: it is the topmost region, and
@@ -12711,6 +13042,57 @@ impl Footer {
     /// door uses: `files_target()`, which is `files::View::hit`. `None` is an
     /// answer and not a failure — the empty directory has no field anywhere and
     /// still has a menu, about the directory itself.
+    ///
+    /// WHERE A DRAG WOULD LAND, resolved through the pointer's own path: the
+    /// same `row_at`/`cell_at` and the same `View::hit`, so what lights under
+    /// a drag and what a drop takes are one answer.
+    fn carried_to(&mut self, x: f64, y: f64, copies: bool) {
+        let (columns, room) = (self.screen_columns(), self.grid().lines);
+        let texts = std::rc::Rc::clone(&self.texts);
+        let (Some(line), Some(cell)) = (self.row_at(x, y), self.cell_at(x)) else {
+            return;
+        };
+        if self
+            .files
+            .as_mut()
+            .is_some_and(|v| v.carry_to(columns, room, line, cell, copies, &texts))
+        {
+            self.draw_and_paint();
+        }
+    }
+
+    /// A drag from somewhere else is over this listing.
+    fn files_carrying_from_afar(&mut self, copies: bool) {
+        if let Some(v) = self.files.as_mut() {
+            v.carrying_from_afar(copies);
+        }
+    }
+
+    /// That drag is gone. `true` when something was lit and is not any more.
+    fn files_carried_away(&mut self) -> bool {
+        self.files
+            .as_mut()
+            .is_some_and(crate::files::View::carried_away)
+    }
+
+    /// Is there anywhere under the pointer for a drop to go?
+    fn takes_a_drop(&self) -> bool {
+        self.files
+            .as_ref()
+            .is_some_and(crate::files::View::landing_now)
+    }
+
+    /// A drag of OURS ended, however it ended.
+    fn let_the_drag_go(&mut self) {
+        if let Some(c) = self.carrying.as_mut() {
+            c.done();
+        }
+        if self.files_carried_away() {
+            self.draw_and_paint();
+        }
+    }
+
+    /// Opens the file manager's menu on whatever is under the pointer.
     fn open_files_menu(&mut self) {
         let target = self.files_target();
         let step = self
@@ -13388,10 +13770,13 @@ impl Footer {
                 let Some(target) = self.files_target() else {
                     return;
                 };
+                // WHAT IS HELD, taken before the view is borrowed — see
+                // `chrome::held`.
+                let held = crate::chrome::held(self.mods);
                 let Some(view) = self.files.as_mut() else {
                     return;
                 };
-                let step = view.click(target.row, &target.hit);
+                let step = view.click(target.row, &target.hit, held);
                 self.apply_files_step(step);
             }
             Some(Click::Candidate(n)) => {
@@ -15573,7 +15958,31 @@ impl Footer {
             // this reads `self`; appended last because they are painted AFTER
             // the pictures, and the order in the list is what says so.
             #[allow(clippy::cast_precision_loss)]
-            let transport_now = self.files_transport(columns, cell, line_height, width as f32);
+            let mut transport_now = self.files_transport(columns, cell, line_height, width as f32);
+            // AND THE RUBBER BAND, with them and for the same reason: it is a
+            // claim about what is UNDER it, and a grid is pictures edge to
+            // edge. Drawn with the other backgrounds it would be invisible
+            // exactly where it matters.
+            //
+            // AND THE FOLDER A DROP WOULD LAND IN, in the same ink and for the
+            // same reason: both say *"this is what the button is about"*, and
+            // both have to be legible over a picture.
+            if let Some(v) = self.files.as_ref() {
+                let room = self.grid().lines;
+                for (c0, c1, l0, l1) in [v.sweep_box(columns, room), v.landing_box(columns, room)]
+                    .into_iter()
+                    .flatten()
+                {
+                    transport_now.push(crate::files::sweep_px(
+                        (c0, c1),
+                        (l0, l1),
+                        crate::chrome::FIELDS_LEAD,
+                        cell,
+                        line_height,
+                        f32::from(first_of_expansion) * line_height,
+                    ));
+                }
+            }
             let mut backgrounds = vec![ronoctua_render::quad::Quad {
                 x: 0.0,
                 y: f32::from(modeline_line) * line_height,

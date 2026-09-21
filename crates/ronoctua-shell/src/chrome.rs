@@ -2219,6 +2219,33 @@ pub fn copied(text: &str, texts: &ronoctua_i18n::Texts) -> String {
     }
 }
 
+/// WHAT IS HELD, for a POINTER.
+///
+/// # Why the keyboard's two converters are not it
+///
+/// Because both of them subtract something that is true of a KEY and false of
+/// a click. `Footer::Inheritance::discount` takes away the modifiers that were
+/// already down when the leader's sequence began — a fact about a sequence,
+/// and a pointer is in none. `files_window::key_of` refuses to count `Shift`
+/// for a character, because xkb has already applied it in producing that
+/// character — and a click produces no character.
+///
+/// So a press reads the modifiers as they are. It is the one conversion of
+/// SCTK's `Modifiers` into the type the rest of this shell speaks, and it is
+/// here rather than in either door for the reason everything else in this
+/// module is: two doors with one answer.
+#[must_use]
+pub const fn held(
+    mods: smithay_client_toolkit::seat::keyboard::Modifiers,
+) -> ronoctua_keymap::Mods {
+    ronoctua_keymap::Mods {
+        ctrl: mods.ctrl,
+        alt: mods.alt,
+        shift: mods.shift,
+        logo: mods.logo,
+    }
+}
+
 /// HOW MANY LINES ONE NOTE MAY WRAP TO.
 ///
 /// A bound on WORK and not on prose: [`ronoctua_render::layout::wrap`] walks

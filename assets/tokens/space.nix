@@ -429,6 +429,27 @@
     # refusal that is drawn is a refusal; one that is silent is a bug.
     thumbAnimators = 12;
 
+    # THE SLACK BETWEEN A CLICK AND A GESTURE, IN CELLS.
+    #
+    # A press on the listing is not yet a click: it becomes one when the button
+    # comes up without the pointer having moved, and a GESTURE — a rubber band
+    # from the air, a drag from an item — on the first motion past this. The
+    # two have to be told apart at all, because a press can no longer act on
+    # its own: until the pointer moves there is nothing that says which of them
+    # it is.
+    #
+    # IN CELLS, because the view may hold no pixel: both doors quantise the
+    # pointer before they hand it in, and a threshold in pixels would need a
+    # third conversion and be the one number the two doors could get different.
+    #
+    # Two. A cell is about nine pixels, so this is the eighteen or so every
+    # toolkit uses — and one cell would not do: a hand that trembles by a cell
+    # on the way up would turn a click into a band, and a band MARKS the entry
+    # instead of selecting it. Sideways only: one whole line down is already
+    # past any tremor, and a shelf is four to six lines, so demanding a line
+    # costs a real sweep nothing.
+    sweepSlack = 2;
+
     # HOW MANY MEBIBYTES OF DECODED THUMBNAIL ARE KEPT IN MEMORY.
     #
     # Sixty-four. The host's cache is what stops a folder being decoded again

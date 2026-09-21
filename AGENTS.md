@@ -263,6 +263,33 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   numa linha só, então uma altura por LINHA fez `trash` e `owner:group` ficarem do tamanho de um
   glifo de miniatura ao lado dele — fotografado também. `files::run_size` é o único lugar onde linhas
   viram um tamanho, e as duas portas o chamam.
+  **O PONTEIRO MARCA VÁRIOS, ARRASTA E SOLTA** (a pedido do dono, e nas DUAS formas da listagem).
+  `Ctrl`+clique marca um item sem abrir, `Shift`+clique toma o renque inteiro de onde o cursor estava
+  até onde se clicou, o clique no AR põe as marcas no chão (o mesmo código do `C-A`), e o segundo
+  botão sobre um item NÃO marcado limpa as marcas e age naquele item — clique direito que operasse em
+  silêncio sobre uma seleção que o olho não tem é como se apaga a pasta errada. **O RETÂNGULO é
+  desenhado POR CIMA das miniaturas** (`files::sweep_px` no grupo de cima do `Quads::draw_range`,
+  `surface.sweep`, a segunda faixa com alfa do sistema): sem teste de profundidade, um retângulo
+  empilhado com os outros fundos é invisível numa grade, que é figura de borda a borda e o único
+  lugar onde ele importa. Uma função diz o que ele cobre (`View::sweep_box`) e o pintor e a seleção
+  (`View::swept`) a LEEM — é `[[um-controle-e-pego-onde-e-desenhado]]` num gesto que, escrito duas
+  vezes, apaga o que a banda não estava por cima.
+  **E ARRASTAR É `wl_data_device`**, não um gesto interno: `carry.rs` é a fronteira, o formato é o
+  `text/uri-list` do freedesktop, e por isso o arrasto atravessa para outra janela nossa e para
+  qualquer programa estrangeiro — nos dois sentidos. A soltura vira `Work::Paste` na FILA
+  (`Doing::Drop`, nunca `Doing::Paste`, que gastaria o clipboard de alguém), e `Move` é preferido a
+  `Copy` a menos que a fonte só ofereça cópia. **Um cliente que é as DUAS pontas não lê o próprio
+  cano**: `receive` pede ao compositor que mande a FONTE escrever, e a fonte é este mesmo laço —
+  medido, `dropped=0` seguido de `Broken pipe`. Quando a `Carrying` tem fonte viva, a lista vem dela
+  (`Carrying::offering`); de fora, o cano é lido com prazo.
+  **E UM DESTINO DE DROP É UMA LINHA, NUNCA UM CAMPO** (`View::row_under`): o `hit` acaba em
+  `field_at` e uma PASTA não tem tamanho para desenhar, então depois do nome dela a linha não
+  responde nada — medido na bateria de fotos, a pasta nunca acendeu e o arquivo caiu no vazio,
+  enquanto o ARQUIVO uma linha abaixo respondia em toda parte porque tem tamanho. É o mesmo defeito
+  que as miniaturas já consertaram (`Section::row_at`), e aqui o que se mira é para onde os arquivos
+  de alguém vão. A aritmética da linha é a MESMA do `hit` (`row_of_line`), para que as duas nunca
+  discordem sobre qual linha é a primeira entrada; hover e clique não mudaram — eles são sobre um
+  campo, e o que o olho vê aceso continua sendo o que o clique pega.
   **E NÃO HÁ FAIXA DE HOVER SOBRE UMA GRADE.** A regra é mais velha que o modo e o `band_belongs` já
   a dizia: uma faixa diz que LINHA DE UMA LISTA está sob o ponteiro, e uma fotografia não é lista —
   lado a lado a região inteira é fotografia. O dono fotografou o que desenhar uma assim mesmo parece:

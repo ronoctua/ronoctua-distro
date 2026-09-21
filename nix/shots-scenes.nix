@@ -113,6 +113,58 @@
   # count cannot do that: with no bar it is nought at both ends and the
   # assertion fails, and with a bar that does not move it is the same at both
   # ends and the assertion fails.
+  # AND THE EXECUTE BIT COLOURS THE GLYPH, measured in BOTH states.
+  #
+  # The owner asked for the colour to move off the name and onto the
+  # type's glyph. One crop cannot say it: `state.success` is somewhere
+  # on a screen full of chrome, so what proves it is the SAME box
+  # answering nought and then something after a `chmod`.
+  #
+  # A DELTA AND NOT AN ABSENCE, and the reason is the palette itself:
+  # in the default theme `state.success` and `syntax.string` are the
+  # SAME INK (`0x6CD586`). Asked whether the green is on the screen at
+  # all, this box answers 134 pixels before anything is chmod-ed —
+  # the `.nix` in the preview, whose strings wear the other token.
+  # Two roles on one primitive is legal (they are never on one line);
+  # what it makes illegal is an absolute assertion about either.
+  #
+  # So what is measured is the SAME box answering more than it did.
+  # The whole window, because the listing's own edges are the
+  # manager's arithmetic and not this driver's.
+  # FOUR: THE CONTROLS ARRIVE WITH THE POINTER, AND NOT BEFORE.
+  #
+  # The owner asked for exactly this — *"controles que aparecem no hover
+  # do mouse"* — and it is the only claim here that has to be written as a
+  # negative as well as a positive. Without the first half, a row that was
+  # always drawn would pass the second.
+  #
+  # The transport is the panel's LAST line, which is where the picture
+  # stops: `View::transport_rows` takes it off the box, so this row is
+  # never ink drawn over the film.
+  # THE BOTTOM OF THE PANEL, which is where the controls go — counted in
+  # the colour a GLYPH is drawn in and not by a threshold. Hovering used
+  # to light the section's own band, and a band is ink: a threshold would
+  # have risen for the hover rather than for the control, and passed
+  # either way. (The band over a picture is gone now — see
+  # `View::band_belongs` — but the measurement stays honest by colour.)
+  # AND NO HOVER BAND ON THE FILM.
+  #
+  # The owner reported it in those words — *"o hover do mouse está
+  # destacando o background da linha no preview de vídeos e imagens, o
+  # que é totalmente desnecessário"*. A band says which ROW of a list the
+  # pointer is on, and a picture is not a list: it lights an arbitrary
+  # stripe across the film and covers part of what one came to look at.
+  #
+  # MEASURED IN BOTH STATES, and that is not caution — it is the only way
+  # this can be measured at all.
+  #
+  # `surface.selection` and `rule.default` are THE SAME VALUE, so a count
+  # of that colour inside the panel includes every divider and rule that
+  # is always there. Asserting it is nought is asserting something
+  # impossible: the baseline is 808 pixels of rules, and it failed on them
+  # while the band it was written for was already gone. What answers the
+  # question is the DIFFERENCE — 808 against 4357 with the band, 877
+  # without it.
   {
     id = "manager-window";
     needs = [ "manager" ];
@@ -157,6 +209,21 @@
   # THE GLOBE, which rides on the window door for the same reason the two above
   # do: it is drawn in the info panel of the manager that scene opened, and on
   # its own it would photograph an empty desktop.
+  # WHAT THIS SCENE DOES NOT PHOTOGRAPH is the globe HALF scrolled,
+  # and the reason is written here so nobody spends the runs again.
+  #
+  # It would not decide anything: the picture's box shrinks from the
+  # bottom whether the drawing is CUT at its top or SQUEEZED into what
+  # is left, so no edge of it tells the two apart — what differs is the
+  # scale of what is inside. `globe::tests::            # what_scrolled_away_is_cut_from_the_top_and_never_squeezed` is what
+  # decides it, by an arithmetic that cannot answer both ways: a band
+  # in the bottom half of a tall box FILLS a short box cut by half and
+  # is ABSENT from a short box that was not cut.
+  #
+  # And the state is hard to reach from here anyway: a turn of the
+  # wheel is several lines and carries the whole band off in one go,
+  # and a two-line drag of the thumb moved nothing at all. Measured,
+  # both, on this scene.
   {
     id = "globe";
     needs = [ "manager-window" ];
@@ -249,7 +316,79 @@
   #   - PRESSING IT GROWS THE LINE. The prose of a hint is `text.subtle`, and
   #     before the press it is on one row; after it, on several. A state test
   #     would compare a `bool` and never look at the rows.
+  # THE RUBBER BAND, and the folder a drop lands in.
+  #
+  # Two scenes for one delivery, and both ride on the window the manager's own
+  # scene opened. They make their own folder: what they count pixels of has to
+  # be a picture this repository does not carry (invariant 13).
+  #
+  # WHAT THE PHOTOGRAPHS ANSWER, and no test of state can:
+  #
+  #   - THE BAND IS DRAWN OVER THE MINIATURE. There is no depth test in this
+  #     renderer — quads, then pictures, then text — so a band pushed with the
+  #     other backgrounds is invisible in a grid, which is pictures edge to
+  #     edge and the one place it matters. What is measured is the PICTURE's
+  #     own colour inside one cell, before the drag and during it: a band on
+  #     top takes some of it away, and a band underneath takes none.
+  #   - AND IT TAKES WHAT IT COVERS. The mark is a glyph in `state.accent`
+  #     (`files.rs`: a glyph and not a colour, because the colour is already
+  #     saying focus), so counting that tone in the listing's own column before
+  #     and after the gesture is counting how many entries the band marked.
+  #   - AND A DROP MOVES THE FILE. `test -e` on the destination, which is a
+  #     fact from outside the picture — the one kind of assertion a stale frame
+  #     or a white mouse pointer cannot answer.
+  {
+    id = "sweep";
+    needs = [ "manager-window" ];
+  }
+  #
+  # AND THE DROP IS TWO MOVES, NOT ONE. A press is not a gesture until the
+  # pointer leaves its slack, and the compositor sends `wl_data_device.enter`
+  # on the motion AFTER the drag has begun — so one jump does both jobs and the
+  # destination is never entered. Measured: the drag started, `enter` never
+  # came, and the file stayed where it was. The first move picks the file up;
+  # the second carries it.
+  #
+  # AND THE QUEUE HAS TO BE UP FOR IT. A drop ends in `ronoctua-transfers`
+  # (`files::queued` hands the work over its socket), so with no daemon the
+  # shell says so on its line and the file stays where it is. The unit is
+  # started by this scene rather than by the battery: it is the only one that
+  # asks a question the queue answers.
+  {
+    id = "drop";
+    needs = [ "manager-window" ];
+  }
   { id = "header"; }
+  # THE ASSERTION THAT WOULD HAVE CAUGHT IT, and it is the second time.
+  #
+  # `Footer::first_of_expansion` counted a row whose existence depended on
+  # how TALL the region is, and `Footer::metric` is built on
+  # `first_of_expansion`. The pointer coming to rest on a key of the hint
+  # line closed the ring: stack overflow, `process::abort`, no modeline
+  # and no minibuffer. Two coredumps of 2026-09-15 carry that stack and
+  # nothing else, and the owner read it as the interface closing when he
+  # hovered a video preview — the video was where the hand was going, the
+  # hint line was what it crossed.
+  #
+  # EVERY LINE OF THE FOOTER, from the bottom up, and not one aimed
+  # number: the hint's own row moves with the band, the glance, the
+  # opened drawer and the brain's line, so a shot that knew where it was
+  # would be photographing a listing row the day any of them appears.
+  #
+  # THE PREVIEW REACHES THE WINDOW TOO, and this line used to assert
+  # the opposite — "the preview is the footer's alone: the window
+  # still wears the first". That WAS true, and the owner read it on
+  # screen and called it a theme worn by a strip of the display: the
+  # minibuffer changed colour while the windows, the desk and the
+  # terminals stayed in the old one. The answer was
+  # `theme::show_everywhere`, which writes `theme.json` — the channel
+  # the other doors already watch — so moving the cursor dresses
+  # every door. The assertion is inverted because the promise was.
+  #
+  # This is `docs/PENDING.md` item 8c's second layer, answered: it was
+  # never a broadcast defect. It was a subtest left asserting a
+  # promise that the themes delivery deliberately reversed, and it
+  # went unread because `.#shots` had not been run since.
   { id = "hints"; }
   # THE LINE THAT OUTLIVES THE FOOTER, and the keyboard reaching its options.
   #

@@ -111,8 +111,24 @@ o tema) fica no nosso também. Custa não reaproveitar a capa que outro gerencia
 custaria consertar é saber capa-de-onda antes de decodificar, que hoje só se sabe depois.
 **Como saber que acabou:** um `.mp3` com capa aparecendo em `thumbnails/normal/`.
 
-**Renomear, arrastar-e-soltar e seleção por retângulo** são gestos que uma grade torna tentadores e
-que o dono não pediu.
+**Arrastar-e-soltar e seleção por retângulo FORAM FEITOS** (a pedido do dono, 2026-09-21), nas duas
+formas da listagem e entre janelas e programas estrangeiros. O que ficou de fora é decisão, não
+esquecimento:
+
+- **Renomear pelo clique** — o segundo clique num nome já selecionado. Ele colide com o gesto que
+  ABRE: os dois são "clicar numa coisa já escolhida", separados só por um relógio, e um relógio é a
+  diferença entre abrir um arquivo e começar a editar o nome dele. `C-r` renomeia, e pergunta.
+- **A FIGURA que acompanha o ponteiro** (`DragSource::start_drag` recebe `None` como ícone). Ela
+  seria uma segunda superfície Wayland, desenhada pelo nosso renderizador, viva só durante o gesto —
+  e o que ela diria já está na tela: a pasta ACESA diz onde o drop vai, que é a pergunta que o
+  arrasto levanta. O compositor desenha o cursor de "copiar" ou "mover" por conta dele.
+- **Rolar ao encostar na borda** durante o arrasto. Precisa de um relógio armado — a coisa que esta
+  árvore evita em toda porta — e o que ele compraria é alcançar uma pasta fora da tela sem soltar;
+  soltar, rolar e pegar de novo faz o mesmo em dois gestos.
+- **O retângulo que ALTERNA em vez de tomar.** Segurar Ctrl e varrer inverteria cada item coberto;
+  hoje `Ctrl` acumula sobre o que já estava marcado, que é o que a varredura precisa para somar duas
+  passadas. Alternar por varredura é um gesto que se lê errado quando a mão passa duas vezes pelo
+  mesmo item.
 
 ### O brain refeito — o que ficou de fora, e por quê · registro
 

@@ -8412,6 +8412,161 @@ let
     END
   '';
 
+  # THE POINTER'S CLAIM IS TAKEN WHERE IT IS DRAWN.
+  #
+  # # What it catches
+  #
+  # The manager's two new claims — the rubber band being dragged over the
+  # listing, and the folder a drop would land in — each measured in one place
+  # and taken in another. It is the law `a-bar-is-grabbed-where-it-is-drawn`
+  # already holds the bars to, on the two controls that came after it: a
+  # rectangle worked out twice is a rectangle that disagrees with itself the
+  # first time one of the two is edited, and here the symptom is the worst a
+  # listing has — a delete that takes what the band was not over, or a copy
+  # that lands where nobody pointed.
+  #
+  # So `View::sweep_box` says what the band covers and BOTH the painter and
+  # `View::swept` read it; `Carry::over` says where a drop would go and both
+  # `View::landing_box` and `View::dropped` read THAT. Neither door may hold
+  # any of it: they bring three numbers the view cannot have — the width of a
+  # cell, the height of a line, and where the region's first line sits — and
+  # `files::sweep_px` is the one place those meet the view's answer.
+  #
+  # The minimal edit that breaks the promise and would still pass a weaker
+  # check: give `View::dropped` its own `self.landing(...)` call instead of
+  # reading `carry.over`. Everything still compiles, the folder still lights,
+  # and a drop resolved a frame later lands in whatever the pointer has since
+  # moved over.
+  a-claim-is-taken-where-it-is-drawn =
+    mkCheck "a-claim-is-taken-where-it-is-drawn" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, sys
+
+        exec(open("${pyPrelude}").read())
+
+        shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+        view = without_tests((shell / "files.rs").read_text())
+        wrong = []
+
+        # THE BAND: one function says what it covers, and the selection reads it.
+        for name, owed, why in (
+            ("swept", "sweep_box(", "does not read the rectangle that is drawn"),
+            ("sweep_box", "the_listing(", "does not clip the band to the listing"),
+            ("landing_box", "carry", "does not read where the drop would go"),
+            ("dropped", "carry", "does not read where the drop would go"),
+        ):
+            body = code_of(body_of(view, name) or "")
+            floor(len(body), 40, f"characters of `{name}`")
+            if owed not in body:
+                wrong.append(f"`View::{name}` {why} (`{owed}` is not there)")
+
+        # AND THE DROP RESOLVES NOTHING OF ITS OWN. `landing` is where a point
+        # becomes a folder, and it is asked while the hand is MOVING — a second
+        # call at the drop would land wherever the pointer had got to by then.
+        if "landing(" in code_of(body_of(view, "dropped") or ""):
+            wrong.append("`View::dropped` resolves the landing a second time")
+
+        # AND NEITHER DOOR KEEPS ANY OF IT. The doors convert; the view measures.
+        for name in ("surface.rs", "files_window.rs"):
+            body = code_of(without_tests((shell / name).read_text()))
+            floor(len(body), 10000, f"characters of {name}")
+            if "sweep_px(" not in body:
+                wrong.append(f"{name}: does not draw the pointer's claim at all")
+            for owed in ("sweep_box(", "landing_box("):
+                if owed not in body:
+                    wrong.append(f"{name}: never asks the view for `{owed[:-1]}`")
+            # A DOOR THAT DID ITS OWN ARITHMETIC would need the grid's own step or
+            # the section's cells; `sweep_px` and `band_px` are the only two places
+            # a cell range becomes pixels.
+            for banned in ("Sweep {", "Carry {", "Gesture::"):
+                if banned in body:
+                    wrong.append(f"{name}: holds the gesture's own state (`{banned}`)")
+
+        if wrong:
+            print("ERROR: the pointer claims one rectangle and takes another.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for w in wrong:
+                print("       " + w, file=sys.stderr)
+            print("", file=sys.stderr)
+            print("       One function says what the pointer has claimed, and the", file=sys.stderr)
+            print("       painter and the action are two readings of it. Written", file=sys.stderr)
+            print("       twice they drift, and here that is a delete on the wrong", file=sys.stderr)
+            print("       files.", file=sys.stderr)
+            raise SystemExit(1)
+
+        print("OK: the band and the landing are measured once and read twice, in both doors")
+        END
+      '';
+
+  # AND THE CLAIM IS DRAWN OVER THE PICTURES.
+  #
+  # # What it catches, and it is INVISIBLE without this
+  #
+  # The band pushed with the other backgrounds. There is no depth test in this
+  # renderer — quads, then pictures, then text — and both doors already draw
+  # two RANGES of quads with the images between them (`Quads::draw_range`),
+  # which is how the film's transport sits ON the film. A rubber band in the
+  # first range is a band underneath every thumbnail: in a grid, which is
+  # pictures edge to edge, it is a band nobody can see, and a grid is the one
+  # place it matters.
+  #
+  # The check reads the OVER group by name in each door — the footer appends to
+  # `transport_now`, the window pushes inside its `let over` block — and
+  # refuses a `sweep_px` call anywhere else in the file.
+  the-claim-is-drawn-over-the-pictures =
+    mkCheck "the-claim-is-drawn-over-the-pictures" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, sys
+
+        exec(open("${pyPrelude}").read())
+
+        shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+        wrong = []
+
+        # THE WINDOW: everything drawn on top lives in one braced block.
+        window = code_of(without_tests((shell / "files_window.rs").read_text()))
+        over = scope(window, r"let over = ")
+        floor(len(over or ""), 200, "characters of the window's over-the-pictures group")
+        if "sweep_px(" not in (over or ""):
+            wrong.append("files_window.rs: the claim is not in the group drawn after the pictures")
+        if window.count("sweep_px(") != (over or "").count("sweep_px("):
+            wrong.append("files_window.rs: a claim is drawn somewhere other than on top")
+
+        # THE FOOTER: the same group is a named list, appended last.
+        footer = code_of(without_tests((shell / "surface.rs").read_text()))
+        body = body_of(footer, "files_transport") or ""
+        floor(len(body), 200, "characters of the footer's transport")
+        for owed, why in (
+            ("transport_now.push(", "the claim is not appended to the over-the-pictures list"),
+            ("sweep_px(", "the claim is never converted"),
+        ):
+            if owed not in footer:
+                wrong.append(f"surface.rs: {why} (`{owed}` is not there)")
+        # AND `draw_range` STILL SPLITS THE TWO GROUPS in both doors, which is what
+        # makes "appended last" mean "drawn on top" at all.
+        for name in ("surface.rs", "files_window.rs"):
+            one = code_of(without_tests((shell / name).read_text()))
+            if one.count("draw_range(") < 2:
+                wrong.append(f"{name}: the quads are no longer drawn in two ranges")
+
+        if wrong:
+            print("ERROR: the pointer's claim is drawn under the pictures.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for w in wrong:
+                print("       " + w, file=sys.stderr)
+            print("", file=sys.stderr)
+            print("       There is no depth test: quads, then pictures, then text.", file=sys.stderr)
+            print("       A grid is pictures edge to edge, so a band in the first", file=sys.stderr)
+            print("       range is a band nobody can see — exactly where it is the", file=sys.stderr)
+            print("       only thing saying what is about to be taken.", file=sys.stderr)
+            raise SystemExit(1)
+
+        print("OK: both doors draw the band and the landing after the pictures")
+        END
+      '';
+
   # EVERY WINDOW'S HEADER OPENS.
   #
   # # What it catches
@@ -14836,16 +14991,31 @@ let
     floor(len(files), 10000, "characters of files.rs")
     bad = []
 
-    # NARROWED TO `hit`, because the two arms below are the pointer's answer
-    # and nothing else's. Read against the whole file, an arm written out in a
-    # comment — or the same shape in a neighbouring `match` — answers for them.
-    hit = must(body_of(files, "hit"), "files.rs's `hit`")
-    floor(len(hit), 200, "characters of `hit`")
-    if "_ if inside < sec.above => usize::MAX," not in hit:
-        bad.append("hit() does not skip a panel's reserved lines; the pointer on "
-                   "the globe would answer for the first fact")
-    if "_ => sec.offset + inside - sec.above," not in hit:
-        bad.append("hit() adds a panel's reserve to its row index")
+    # NARROWED TO `row_of_line`, because the two arms below are the answer about
+    # which line of a section is which ROW and nothing else's. Read against the
+    # whole file, an arm written out in a comment — or the same shape in a
+    # neighbouring `match` — answers for them.
+    #
+    # IT USED TO READ `hit`, which is where the arms lived until a drop needed
+    # the same answer WITHOUT a field under the pointer (`View::row_under`, and
+    # a folder has no size to draw). The arithmetic moved into one function that
+    # both read, which is the promise getting STRONGER — and this check went red
+    # on the move, which is the right way round: the sum has a home, so the
+    # check reads the home. The name is not `row_of`: there is a METHOD of that
+    # name in the same file that builds a `Row`, and `body_of` finds a name.
+    row_of = must(body_of(files, "row_of_line"), "files.rs's `row_of_line`")
+    floor(len(row_of), 100, "characters of `row_of_line`")
+    if "_ if inside < sec.above => None," not in row_of:
+        bad.append("row_of_line() does not skip a panel's reserved lines; the pointer "
+                   "on the globe would answer for the first fact")
+    if "_ => Some(sec.offset + inside - sec.above)," not in row_of:
+        bad.append("row_of_line() adds a panel's reserve to its row index")
+    # AND BOTH READINGS GO THROUGH IT. A second one written out would be the
+    # defect this file exists to refuse, one column along.
+    for who in ("hit", "row_under"):
+        body = must(body_of(files, who), f"files.rs's `{who}`")
+        if "row_of_line(" not in body:
+            bad.append(f"{who}() works the row out itself instead of asking row_of_line()")
     if "pub fn info_room(&self)" not in files:
         bad.append("there is no one answer for how many ROWS the info panel has")
     if "self.info_room()" not in files:
@@ -21145,6 +21315,8 @@ let
       every-window-knows-its-scale
       every-list-window-has-a-bar
       every-window-header-opens
+      a-claim-is-taken-where-it-is-drawn
+      the-claim-is-drawn-over-the-pictures
       every-modal-view-has-a-hint
       the-footer-does-not-ask-itself
       a-dead-footer-is-not-a-dead-desktop
@@ -21224,6 +21396,8 @@ let
       every-window-knows-its-scale
       every-list-window-has-a-bar
       every-window-header-opens
+      a-claim-is-taken-where-it-is-drawn
+      the-claim-is-drawn-over-the-pictures
       every-modal-view-has-a-hint
       the-footer-does-not-ask-itself
       a-dead-footer-is-not-a-dead-desktop

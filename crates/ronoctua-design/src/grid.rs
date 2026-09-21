@@ -103,6 +103,39 @@ impl Grid {
         ))
     }
 
+    /// HOW MANY LINES a run of `items` occupies, unbounded by the page.
+    ///
+    /// The same sum as [`Self::at`] — `index / across` shelves, each `down`
+    /// lines deep — with the two things that make it a different question:
+    /// it counts from zero instead of from [`Self::first`], and it answers
+    /// past [`Self::fit`], where `at` correctly says `None`.
+    ///
+    /// It exists because the placement sum has ONE home. A caller that needs
+    /// "how far did the drawing move when the offset went from A to B" — the
+    /// rubber band is the one that does, since the wheel can turn under a held
+    /// button — would otherwise write `(delta / across) * down` beside the
+    /// grid, and a second placement arithmetic is how a band ends up drawn over
+    /// one shelf and taking another.
+    ///
+    /// A PART of a shelf still costs the whole shelf: `down` lines are spent
+    /// the moment one item lands on them. Nothing here rounds the other way,
+    /// and the manager's offset only ever moves by whole shelves anyway.
+    #[must_use]
+    pub const fn lines_of(&self, items: usize) -> usize {
+        let across = if self.across == 0 {
+            1
+        } else {
+            self.across as usize
+        };
+        let shelves = items.div_ceil(across);
+        let down = if self.down == 0 {
+            1
+        } else {
+            self.down as usize
+        };
+        shelves * down
+    }
+
     /// Which item a cell belongs to. The other direction of [`Self::at`].
     ///
     /// The whole step belongs to the item, air included: a target with slack
@@ -125,6 +158,40 @@ impl Grid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `lines_of` IS `at`, and it says so by being measured against it.
+    ///
+    /// Two functions for one sum is what this file exists to prevent, so the
+    /// second one is not allowed to be believed: on every whole shelf that
+    /// still fits the page, the line `at` places the item on, counted from
+    /// `first`, is the number of lines `lines_of` says came before it.
+    #[test]
+    fn a_run_of_items_is_as_many_lines_as_the_grid_places() {
+        for across in 1u16..7 {
+            for down in 1u16..4 {
+                let g = Grid {
+                    across,
+                    step: 4,
+                    down,
+                    first: 3,
+                    rows: 5,
+                };
+                for shelf in 0..usize::from(g.rows) {
+                    let i = shelf * usize::from(across);
+                    let (line, _) = g.at(i).expect("the shelf is on the page");
+                    assert_eq!(
+                        g.lines_of(i),
+                        usize::from(line - g.first),
+                        "across={across} down={down} shelf={shelf}: the two sums disagree"
+                    );
+                }
+                // AND A PART OF A SHELF COSTS THE WHOLE SHELF.
+                if across > 1 {
+                    assert_eq!(g.lines_of(1), usize::from(down));
+                }
+            }
+        }
+    }
 
     /// NOTHING LEAKS: the last item of a row ends inside the window, at every
     /// width and every item size the browsers use (2 for a glyph, 4 for a

@@ -26,6 +26,7 @@
   defaultTheme,
   ronoctua-shell,
   ronoctua-brain,
+  ronoctua-transfers,
   fonts,
 }:
 
@@ -1243,24 +1244,8 @@ pkgs.testers.runNixOSTest {
                 "scroll"
             )
 
-            # AND THE EXECUTE BIT COLOURS THE GLYPH, measured in BOTH states.
-            #
-            # The owner asked for the colour to move off the name and onto the
-            # type's glyph. One crop cannot say it: `state.success` is somewhere
-            # on a screen full of chrome, so what proves it is the SAME box
-            # answering nought and then something after a `chmod`.
-            #
-            # A DELTA AND NOT AN ABSENCE, and the reason is the palette itself:
-            # in the default theme `state.success` and `syntax.string` are the
-            # SAME INK (`0x6CD586`). Asked whether the green is on the screen at
-            # all, this box answers 134 pixels before anything is chmod-ed —
-            # the `.nix` in the preview, whose strings wear the other token.
-            # Two roles on one primitive is legal (they are never on one line);
-            # what it makes illegal is an absolute assertion about either.
-            #
-            # So what is measured is the SAME box answering more than it did.
-            # The whole window, because the listing's own edges are the
-            # manager's arithmetic and not this driver's.
+            # AND THE EXECUTE BIT COLOURS THE GLYPH, in BOTH states — see
+            # `nix/shots-scenes.nix`.
             w_x, h_x, x_x, y_x = niri_geometry()
             listing = f"{w_x}x{h_x - 2 * LINE}+{x_x}+{y_x + 2 * LINE}"
             green = "#" + token_hex("state.success")
@@ -1463,22 +1448,8 @@ pkgs.testers.runNixOSTest {
                 "as a band, which is the frame's height being guessed again"
             )
 
-            # FOUR: THE CONTROLS ARRIVE WITH THE POINTER, AND NOT BEFORE.
-            #
-            # The owner asked for exactly this — *"controles que aparecem no hover
-            # do mouse"* — and it is the only claim here that has to be written as a
-            # negative as well as a positive. Without the first half, a row that was
-            # always drawn would pass the second.
-            #
-            # The transport is the panel's LAST line, which is where the picture
-            # stops: `View::transport_rows` takes it off the box, so this row is
-            # never ink drawn over the film.
-            # THE BOTTOM OF THE PANEL, which is where the controls go — counted in
-            # the colour a GLYPH is drawn in and not by a threshold. Hovering used
-            # to light the section's own band, and a band is ink: a threshold would
-            # have risen for the hover rather than for the control, and passed
-            # either way. (The band over a picture is gone now — see
-            # `View::band_belongs` — but the measurement stays honest by colour.)
+            # FOUR: THE CONTROLS ARRIVE WITH THE POINTER — see
+            # `nix/shots-scenes.nix`.
             foot = f"{w_m // 4 - 70}x{2 * LINE}+{w_m // 2 + 10}+{2 * LINE + (h_m - 4 * LINE) - 2 * LINE}"
 
             def glyph_pixels(box):
@@ -1566,24 +1537,7 @@ pkgs.testers.runNixOSTest {
                 "more than a line short, so the transport is still costing it room"
             )
 
-            # AND NO HOVER BAND ON THE FILM.
-            #
-            # The owner reported it in those words — *"o hover do mouse está
-            # destacando o background da linha no preview de vídeos e imagens, o
-            # que é totalmente desnecessário"*. A band says which ROW of a list the
-            # pointer is on, and a picture is not a list: it lights an arbitrary
-            # stripe across the film and covers part of what one came to look at.
-            #
-            # MEASURED IN BOTH STATES, and that is not caution — it is the only way
-            # this can be measured at all.
-            #
-            # `surface.selection` and `rule.default` are THE SAME VALUE, so a count
-            # of that colour inside the panel includes every divider and rule that
-            # is always there. Asserting it is nought is asserting something
-            # impossible: the baseline is 808 pixels of rules, and it failed on them
-            # while the band it was written for was already gone. What answers the
-            # question is the DIFFERENCE — 808 against 4357 with the band, 877
-            # without it.
+            # AND NO HOVER BAND ON THE FILM — see `nix/shots-scenes.nix`.
             def band_pixels(path):
                 return int(
                     machine.succeed(
@@ -2004,21 +1958,8 @@ pkgs.testers.runNixOSTest {
                 of="/tmp/globe-before.png",
                 fuzz=4,
             )
-            # WHAT THIS SCENE DOES NOT PHOTOGRAPH is the globe HALF scrolled,
-            # and the reason is written here so nobody spends the runs again.
-            #
-            # It would not decide anything: the picture's box shrinks from the
-            # bottom whether the drawing is CUT at its top or SQUEEZED into what
-            # is left, so no edge of it tells the two apart — what differs is the
-            # scale of what is inside. `globe::tests::            # what_scrolled_away_is_cut_from_the_top_and_never_squeezed` is what
-            # decides it, by an arithmetic that cannot answer both ways: a band
-            # in the bottom half of a tall box FILLS a short box cut by half and
-            # is ABSENT from a short box that was not cut.
-            #
-            # And the state is hard to reach from here anyway: a turn of the
-            # wheel is several lines and carries the whole band off in one go,
-            # and a two-line drag of the thumb moved nothing at all. Measured,
-            # both, on this scene.
+            # WHAT THIS SCENE DOES NOT PHOTOGRAPH — see
+            # `nix/shots-scenes.nix`.
 
             machine.succeed(
                 f"DISPLAY=:99 xdotool mousemove {bar_x} {y_f + 3 * LINE}"
@@ -2382,20 +2323,7 @@ pkgs.testers.runNixOSTest {
                 shot("27-theme-preview", lines=2 + CHOOSER_ROWS)
                 has_colour(second_accent, at_least=20, of="/tmp/27-theme-preview.png")
                 lacks_colour(first_accent, of="/tmp/27-theme-preview.png", fuzz=6)
-                # THE PREVIEW REACHES THE WINDOW TOO, and this line used to assert
-                # the opposite — "the preview is the footer's alone: the window
-                # still wears the first". That WAS true, and the owner read it on
-                # screen and called it a theme worn by a strip of the display: the
-                # minibuffer changed colour while the windows, the desk and the
-                # terminals stayed in the old one. The answer was
-                # `theme::show_everywhere`, which writes `theme.json` — the channel
-                # the other doors already watch — so moving the cursor dresses
-                # every door. The assertion is inverted because the promise was.
-                #
-                # This is `docs/PENDING.md` item 8c's second layer, answered: it was
-                # never a broadcast defect. It was a subtest left asserting a
-                # promise that the themes delivery deliberately reversed, and it
-                # went unread because `.#shots` had not been run since.
+                # THE PREVIEW REACHES THE WINDOW TOO — see `nix/shots-scenes.nix`.
                 crop(upper, "/tmp/window-during-preview.png")
                 has_colour(second_accent, at_least=20, of="/tmp/window-during-preview.png")
                 lacks_colour(first_accent, of="/tmp/window-during-preview.png", fuzz=6)
@@ -2545,6 +2473,139 @@ pkgs.testers.runNixOSTest {
             assert group.lower() != ("#" + token_hex("text.secondary")).lower()
             has_colour(group, at_least=10, of="/tmp/36-the-settings.png", fuzz=6)
 
+    if wanted("sweep"):
+        with subtest("the rubber band: it draws over the pictures and takes what it covers"):
+            # WHY: see `nix/shots-scenes.nix`.
+            machine.succeed("mkdir -p /root/sweep")
+            for n in range(6):
+                machine.succeed(
+                    f"magick -size 200x200 xc:'#FF00AA' /root/sweep/p{n}.png"
+                )
+            machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
+            machine.sleep(2)
+            control("files-window")
+            machine.wait_until_succeeds(
+                "pgrep -f '[b]in/ronoctua-shell files'", timeout=60
+            )
+            machine.sleep(3)
+            control("window-maximize")
+            machine.sleep(2)
+            machine.succeed("DISPLAY=:99 xdotool type --delay 40 'sweep'")
+            machine.sleep(2)
+            machine.succeed("DISPLAY=:99 xdotool key Return")
+            machine.sleep(3)
+            machine.succeed("DISPLAY=:99 xdotool key ctrl+g")
+            machine.sleep(8)
+
+            w_s, h_s, x_s, y_s = niri_geometry()
+            listing = f"{w_s // 2}x{h_s - 4 * LINE}+{x_s}+{y_s + 2 * LINE}"
+            accent = "#" + token_hex("state.accent")
+
+            def pinks(into):
+                machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
+                crop(listing, into=into)
+                return has_colour("#FF00AA", at_least=0, of=into, fuzz=4)
+
+            def marks(into):
+                machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
+                crop(listing, into=into)
+                return has_colour(accent, at_least=0, of=into, fuzz=6)
+
+            # THE POINTER OFF THE LISTING FIRST, so nothing is lit.
+            machine.succeed(
+                f"DISPLAY=:99 xdotool mousemove {x_s + w_s - 40} {y_s + h_s - 40}"
+            )
+            machine.sleep(1)
+            before_pink = pinks("/tmp/sweep-before.png")
+            before_marks = marks("/tmp/sweep-before.png")
+            shot("41-the-grid-before-the-band")
+
+            # PRESSED ON THE AIR past the last column, dragged down and left.
+            top = y_s + 3 * LINE
+            machine.succeed(
+                f"DISPLAY=:99 xdotool mousemove {x_s + w_s // 2 - 8} {top}"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 xdotool mousedown 1")
+            machine.succeed(
+                f"DISPLAY=:99 xdotool mousemove {x_s + 20} {top + 6 * LINE}"
+            )
+            machine.sleep(2)
+            during_pink = pinks("/tmp/sweep-during.png")
+            shot("42-the-band-over-the-pictures")
+            machine.succeed("DISPLAY=:99 xdotool mouseup 1")
+            machine.sleep(2)
+            after_marks = marks("/tmp/sweep-after.png")
+            shot("43-what-the-band-took")
+            print(
+                f"sweep: picture {before_pink} -> {during_pink}, "
+                f"marks {before_marks} -> {after_marks}"
+            )
+
+            assert before_pink > 2000, (
+                f"the grid drew {before_pink} pixel(s) of the picture: this crop "
+                "is not the listing side by side"
+            )
+            # THE BAND IS ON TOP: underneath it would take none of it away.
+            assert during_pink < before_pink, (
+                f"the picture still has {during_pink} of its {before_pink} "
+                "pixels under the band: the band is drawn beneath it"
+            )
+            # AND IT TOOK WHAT IT COVERED.
+            assert after_marks > before_marks, (
+                f"the listing had {before_marks} accent pixel(s) and has "
+                f"{after_marks}: the band marked nothing"
+            )
+
+    if wanted("drop"):
+        with subtest("a drop: the file lands in the folder it was let go over"):
+            # WHY: see `nix/shots-scenes.nix`.
+            # THE QUEUE HAS TO BE UP: a drop ends in it — see
+            # `nix/shots-scenes.nix`.
+            machine.succeed(
+                "systemd-run --unit=transfers "
+                "--setenv=XDG_RUNTIME_DIR=/run/user/0 --setenv=HOME=/root "
+                "${ronoctua-transfers}/bin/ronoctua-transfers"
+            )
+            machine.sleep(2)
+            machine.succeed("mkdir -p /root/drag/into")
+            machine.succeed("echo x > /root/drag/moved.txt")
+            machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
+            machine.sleep(2)
+            control("files-window")
+            machine.wait_until_succeeds(
+                "pgrep -f '[b]in/ronoctua-shell files'", timeout=60
+            )
+            machine.sleep(3)
+            control("window-maximize")
+            machine.sleep(2)
+            machine.succeed("DISPLAY=:99 xdotool type --delay 40 'drag'")
+            machine.sleep(2)
+            machine.succeed("DISPLAY=:99 xdotool key Return")
+            machine.sleep(3)
+
+            w_d, h_d, x_d, y_d = niri_geometry()
+            # `..`, `into`, `moved.txt`: directories first, then the sort.
+            # AND PAST THE SIDEBAR — `+300`, as the manager's own scene aims.
+            row = lambda n: y_d + (2 + n) * LINE + LINE // 2
+            here = x_d + 300
+            machine.succeed(f"DISPLAY=:99 xdotool mousemove {here} {row(2)}")
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 xdotool mousedown 1")
+            # TWO MOVES: see `nix/shots-scenes.nix`.
+            machine.succeed(f"DISPLAY=:99 xdotool mousemove {here + 40} {row(2)}")
+            machine.sleep(1)
+            machine.succeed(f"DISPLAY=:99 xdotool mousemove {here} {row(1)}")
+            machine.sleep(2)
+            shot("44-the-folder-a-drop-would-land-in")
+            machine.succeed("DISPLAY=:99 xdotool mouseup 1")
+            machine.sleep(4)
+            shot("45-after-the-drop")
+
+            # A FACT FROM OUTSIDE THE PICTURE.
+            machine.wait_until_succeeds("test -e /root/drag/into/moved.txt", timeout=30)
+            machine.succeed("test ! -e /root/drag/moved.txt")
+
     if wanted("header"):
         with subtest("a window's header opens, and the chevron is what opens it"):
             # WHY: see `nix/shots-scenes.nix`.
@@ -2618,21 +2679,7 @@ pkgs.testers.runNixOSTest {
 
     if wanted("hints"):
         with subtest("the pointer on the hint line does not take the interface with it"):
-            # THE ASSERTION THAT WOULD HAVE CAUGHT IT, and it is the second time.
-            #
-            # `Footer::first_of_expansion` counted a row whose existence depended on
-            # how TALL the region is, and `Footer::metric` is built on
-            # `first_of_expansion`. The pointer coming to rest on a key of the hint
-            # line closed the ring: stack overflow, `process::abort`, no modeline
-            # and no minibuffer. Two coredumps of 2026-09-15 carry that stack and
-            # nothing else, and the owner read it as the interface closing when he
-            # hovered a video preview — the video was where the hand was going, the
-            # hint line was what it crossed.
-            #
-            # EVERY LINE OF THE FOOTER, from the bottom up, and not one aimed
-            # number: the hint's own row moves with the band, the glance, the
-            # opened drawer and the brain's line, so a shot that knew where it was
-            # would be photographing a listing row the day any of them appears.
+            # THE ASSERTION THAT WOULD HAVE CAUGHT IT — see `nix/shots-scenes.nix`.
             for _ in range(8):
                 machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)

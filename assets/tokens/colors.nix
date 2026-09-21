@@ -165,6 +165,31 @@
       alpha = 0.8;
     };
 
+    # THE SECOND SURFACE WITH AN ALPHA, and it is what the POINTER has claimed.
+    #
+    # Two things wear it, and they are one thing said twice: the rectangle a
+    # rubber band is being dragged over the listing, and the folder a drop
+    # would land in. Both mean *"this is what the button is about"*, and both
+    # have to be legible over a MINIATURE — a grid is pictures edge to edge,
+    # and there is no depth test, so the band is pushed with the quads that are
+    # drawn AFTER the images (`Quads::draw_range`), exactly as the transport is.
+    #
+    # THE ACCENT AND NOT A NEUTRAL, which is the difference from `transport`.
+    # That one darkens a picture so glyphs can be read on it; this one has to
+    # say "chosen" over a picture whose own colours are unknown, and the only
+    # thing in this palette that means chosen is the accent.
+    #
+    # A THIRD, and it is low on purpose. The band is a claim about what is
+    # underneath, so what is underneath has to go on being visible: at two
+    # thirds a thumbnail inside the band becomes a coloured rectangle and the
+    # person can no longer see what they are selecting. Under about a fifth it
+    # stops being visible over a bright photograph, which is the case it exists
+    # for.
+    sweep = {
+      of = "accent.element";
+      alpha = 0.34;
+    };
+
     # THE MATERIAL A SHAPE IS DRAWN IN — `.stl` and `.3mf`.
     #
     # One colour and not a palette: the file carries no colours (neither
