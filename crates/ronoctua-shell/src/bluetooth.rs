@@ -123,20 +123,22 @@ impl Where {
 /// fifth connected device is in the view, which is where the rest of it is.
 pub const POOL: [&str; 4] = ["bt-1", "bt-2", "bt-3", "bt-4"];
 
-/// The width `key()` builds rows at, and why a constant is honest here.
+/// The width the tests build rows at.
+///
+/// # Why production no longer has one
 ///
 /// A key acts on the row under the cursor, so it has to know the rows — and it
-/// does not know how wide the screen is: the two doors measure differently and
-/// the footer's region is not the window's. It builds them at a fixed width
-/// instead, which is only correct while the row COUNT and the row TARGETS do
-/// not depend on the width. They do not: `rows()` reaches the width in
-/// `elide_end` and in a field's `at`, both of which are about drawing.
+/// used to build them at a fixed eighty columns, on the argument that the row
+/// COUNT and the row TARGETS do not depend on the width. That argument held
+/// while every note was CUT: an ellipsis changes what a row SAYS and never how
+/// many there are.
 ///
-/// That is an invariant, not an observation, so it is checked rather than
-/// trusted: `the_rows_are_the_same_things_at_every_width` walks several
-/// widths and compares the targets. Without it, the day one section drops a
-/// row on a narrow screen, the key acts on a different row from the one the
-/// footer drew — and nothing would say so.
+/// A note WRAPS now (`chrome::note_lines`), so one sentence is a row on a wide
+/// screen and three on a narrow one, and every row under it moves. A key
+/// deciding at eighty would act on a different row from the one the door drew
+/// — a control taken somewhere other than where it was drawn, arriving on the
+/// keyboard's axis. So the DOOR's width travels in, as it already did for the
+/// Bluetooth view, and what is left here is a width the tests agree on.
 #[cfg(test)]
 const DECIDING_WIDTH: u16 = 80;
 
@@ -2006,29 +2008,51 @@ impl Builder<'_> {
         self.sentence(text);
     }
 
+    /// # IT WRAPS, and it used to be cut
+    ///
+    /// One `Row` per line, through the one function the eight views of this
+    /// shape share — see [`crate::chrome::note_lines`]. These sentences are
+    /// about things nobody meets twice a year, which is the argument
+    /// [`Row::description`] already makes; cut at the room's edge, the half
+    /// that went was the end.
+    ///
+    /// # AND EVERY LINE IS THE SAME KIND OF ROW THE NOTE WAS
+    ///
+    /// The argument `power.rs::sentence` writes out in full: `RET` on an
+    /// informative row copies what it says, so a line of a note is a line
+    /// somebody can take, and a section whose only content is a note would
+    /// leave its heading with nothing under it.
+    ///
+    /// THE DESCRIPTION GOES ON EVERY LINE. It is the long form of the note
+    /// itself and it arrives by POINTING; pointing at the second line of a
+    /// sentence and being told nothing would be a hole in the middle of a
+    /// paragraph.
     fn sentence(&mut self, text: String) {
-        let focused = self.cursor == self.out.len();
-        self.out.push(Row {
-            fields: vec![Self::piece(
-                // A SENTENCE LINES UP WITH THE LABELS, not with the titles.
-                // The mark's indent is paid by every row of these views on
-                // purpose — an indent only some rows pay is a ragged edge —
-                // and a note that skipped it sat two cells left of everything
-                // around it.
-                self.left,
-                layout::elide_end(&text, self.room),
-                if focused {
-                    tokens::color::STATE_ACCENT
-                } else {
-                    tokens::color::TEXT_DIM
-                },
-            )],
-            focused,
-            heading: false,
-            target: Target::Nothing,
-            disabled: false,
-            description: self.said.take(),
-        });
+        let said = self.said.take();
+        for line in crate::chrome::note_lines(&text, self.room) {
+            let focused = self.cursor == self.out.len();
+            self.out.push(Row {
+                fields: vec![Self::piece(
+                    // A SENTENCE LINES UP WITH THE LABELS, not with the titles.
+                    // The mark's indent is paid by every row of these views on
+                    // purpose — an indent only some rows pay is a ragged edge —
+                    // and a note that skipped it sat two cells left of
+                    // everything around it.
+                    self.left,
+                    line,
+                    if focused {
+                        tokens::color::STATE_ACCENT
+                    } else {
+                        tokens::color::TEXT_DIM
+                    },
+                )],
+                focused,
+                heading: false,
+                target: Target::Nothing,
+                disabled: false,
+                description: said.clone(),
+            });
+        }
     }
 
     /// A label and a value, with nothing to do on `RET`.
@@ -2277,16 +2301,23 @@ mod tests {
         // invariant is asserted inside each layout, and the width is passed to
         // `key` for exactly this reason.
         //
-        // The FIELDS are allowed to differ — that is what eliding is.
+        // WHAT IS COMPARED IS WHAT CAN BE ACTED ON, and in what order. The row
+        // COUNT is allowed to differ: a note WRAPS (`chrome::note_lines`), so
+        // one sentence is a row on a wide screen and three on a narrow one. It
+        // used to be cut instead, which kept the count the same and took the
+        // end off every explanation this view has.
+        //
+        // The FIELDS are allowed to differ too — that is what eliding is.
         let t = texts();
         let scene = a_scene();
         for level in [View::fresh(), View::fresh_at("/d/1")] {
-            let want = |columns: u16| -> Vec<(bool, bool, Target)> {
+            let want = |columns: u16| -> Vec<(bool, Target)> {
                 level
                     .clone()
                     .rows(&scene, columns, &t)
                     .into_iter()
-                    .map(|r| (r.heading, r.disabled, r.target))
+                    .filter(|r| r.target != Target::Nothing)
+                    .map(|r| (r.disabled, r.target))
                     .collect()
             };
             // STACKED, and the deciding width is one of them.

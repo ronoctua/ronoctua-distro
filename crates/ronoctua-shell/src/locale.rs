@@ -1709,7 +1709,7 @@ impl Builder<'_> {
     fn sentence(&mut self, text: String) {
         let at = self.left + self.nest;
         let room = self.room.saturating_sub(self.nest);
-        for line in layout::wrap(&text, room, SENTENCE_LINES) {
+        for line in crate::chrome::note_lines(&text, room) {
             self.out.push(Row {
                 fields: vec![Self::piece(at, line, tokens::color::TEXT_DIM, room)],
                 focused: false,
@@ -1807,14 +1807,6 @@ impl Builder<'_> {
         });
     }
 }
-
-/// How many lines one note may wrap to.
-///
-/// A bound on WORK and not on prose: `layout::wrap` walks the whole string
-/// whatever happens, and this is what stops a sentence somebody pastes into a
-/// `.ftl` from becoming a page. Eight is more than any of these needs at the
-/// narrowest width the footer's region is ever drawn at.
-const SENTENCE_LINES: usize = 8;
 
 #[cfg(test)]
 mod tests {

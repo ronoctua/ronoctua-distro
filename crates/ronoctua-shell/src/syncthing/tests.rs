@@ -164,12 +164,12 @@ fn a_row_the_flake_owns_is_drawn_reachable_and_refuses() {
     v.cursor = at;
     v.moved = true;
     assert_eq!(
-        v.key(Press::Enter, Some(&snap), &texts()),
+        v.key(Press::Enter, Some(&snap), DECIDING_WIDTH, &texts()),
         Errand::Speak(ronoctua_i18n::key::ECHO_SYNCTHING_FLAKE_OWNS),
         "it refused in silence, which is the same as a key that is broken"
     );
     assert_eq!(
-        v.key(Press::More, Some(&snap), &texts()),
+        v.key(Press::More, Some(&snap), DECIDING_WIDTH, &texts()),
         Errand::Speak(ronoctua_i18n::key::ECHO_SYNCTHING_FLAKE_OWNS)
     );
 }
@@ -187,14 +187,17 @@ fn the_drawer_hides_eighty_odd_rows_until_it_is_opened() {
         .expect("there is a drawer");
     v.cursor = drawer;
     v.moved = true;
-    assert_eq!(v.key(Press::Enter, Some(&snap), &texts()), Errand::Nothing);
+    assert_eq!(
+        v.key(Press::Enter, Some(&snap), DECIDING_WIDTH, &texts()),
+        Errand::Nothing
+    );
     let open = v.rows(Some(&snap), 80, &texts()).len();
     assert!(
         open > shut + 20,
         "the drawer opened and almost nothing came out: {shut} -> {open}"
     );
     // AND IT SHUTS AGAIN, on the same key, with the cursor still on it.
-    v.key(Press::Enter, Some(&snap), &texts());
+    v.key(Press::Enter, Some(&snap), DECIDING_WIDTH, &texts());
     assert_eq!(v.rows(Some(&snap), 80, &texts()).len(), shut);
 }
 
@@ -233,18 +236,27 @@ fn escape_goes_up_one_level_and_only_then_out() {
         .expect("the folder is in the list");
     v.cursor = at;
     v.moved = true;
-    assert_eq!(v.key(Press::Enter, Some(&snap), &texts()), Errand::Nothing);
+    assert_eq!(
+        v.key(Press::Enter, Some(&snap), DECIDING_WIDTH, &texts()),
+        Errand::Nothing
+    );
     let sheet = labels(&v.rows(Some(&snap), 80, &texts())).join(" | ");
     assert!(
         sheet.contains("folder id"),
         "not the folder's sheet: {sheet}"
     );
 
-    assert_eq!(v.key(Press::Escape, Some(&snap), &texts()), Errand::Nothing);
+    assert_eq!(
+        v.key(Press::Escape, Some(&snap), DECIDING_WIDTH, &texts()),
+        Errand::Nothing
+    );
     let back = labels(&v.rows(Some(&snap), 80, &texts())).join(" | ");
     assert!(back.contains("the service"), "not back at the list: {back}");
 
-    assert_eq!(v.key(Press::Escape, Some(&snap), &texts()), Errand::Close);
+    assert_eq!(
+        v.key(Press::Escape, Some(&snap), DECIDING_WIDTH, &texts()),
+        Errand::Close
+    );
 }
 
 #[test]
@@ -258,7 +270,7 @@ fn a_sheet_about_something_that_went_away_goes_back_to_the_list() {
         folders: Vec::new(),
         ..snap
     };
-    v.settle_in(Some(&gone), &texts());
+    v.settle_in(Some(&gone), DECIDING_WIDTH, &texts());
     let back = labels(&v.rows(Some(&gone), 80, &texts())).join(" | ");
     assert!(back.contains("the service"), "still on the sheet: {back}");
 }
@@ -276,17 +288,17 @@ fn the_mark_turns_through_three_and_writes_the_file() {
     v.moved = true;
     assert_eq!(v.preferences().mark, Mark::WhenOff);
     assert_eq!(
-        v.key(Press::More, Some(&snap), &texts()),
+        v.key(Press::More, Some(&snap), DECIDING_WIDTH, &texts()),
         Errand::Keep(Preferences { mark: Mark::WhenOn })
     );
     assert_eq!(
-        v.key(Press::More, Some(&snap), &texts()),
+        v.key(Press::More, Some(&snap), DECIDING_WIDTH, &texts()),
         Errand::Keep(Preferences { mark: Mark::Never })
     );
     // AND IT COMES BACK ROUND, because every value of a ring is as good as the
     // next — unlike a range, which stops at its ends.
     assert_eq!(
-        v.key(Press::More, Some(&snap), &texts()),
+        v.key(Press::More, Some(&snap), DECIDING_WIDTH, &texts()),
         Errand::Keep(Preferences {
             mark: Mark::WhenOff
         })
@@ -310,7 +322,7 @@ fn a_typed_setting_asks_the_footer_rather_than_turning() {
     v.cursor = at;
     v.moved = true;
     assert_eq!(
-        v.key(Press::More, Some(&snap), &texts()),
+        v.key(Press::More, Some(&snap), DECIDING_WIDTH, &texts()),
         Errand::Ask(Ask::Setting("folder-path", Some("papers".to_owned())))
     );
     // AND EVERY QUESTION'S COMMAND IS ONE A KEY REACHES. The keymap's own
@@ -359,7 +371,7 @@ fn a_fact_copies_itself_and_a_machine_id_is_the_reason() {
         .expect("the sheet says which machine it is about");
     v.cursor = at;
     v.moved = true;
-    match v.key(Press::Enter, Some(&snap), &texts()) {
+    match v.key(Press::Enter, Some(&snap), DECIDING_WIDTH, &texts()) {
         Errand::Copy(text) => assert!(text.contains("THEM"), "{text}"),
         other => panic!("a 63-character id nobody can retype: {other:?}"),
     }
@@ -393,7 +405,7 @@ fn the_hint_teaches_only_what_works_where_the_cursor_is() {
     v.cursor = folder_at;
     v.moved = true;
     let on_a_folder: Vec<String> = v
-        .hint(Some(&snap), &texts())
+        .hint(Some(&snap), DECIDING_WIDTH, &texts())
         .iter()
         .map(|p| p.text.clone())
         .collect();
@@ -405,8 +417,8 @@ fn the_hint_teaches_only_what_works_where_the_cursor_is() {
     // ON A SETTING, `r` MEANS NOTHING and is not taught.
     v.level = Level::Global;
     v.cursor = 1;
-    v.settle_in(Some(&snap), &texts());
-    let on_a_setting = v.hint(Some(&snap), &texts()).len();
+    v.settle_in(Some(&snap), DECIDING_WIDTH, &texts());
+    let on_a_setting = v.hint(Some(&snap), DECIDING_WIDTH, &texts()).len();
     assert!(
         on_a_setting < on_a_folder.len(),
         "the same keys are taught everywhere: {on_a_setting} vs {}",
@@ -538,7 +550,7 @@ fn pausing_a_folder_and_pausing_a_machine_are_different_orders() {
         .unwrap();
     v.moved = true;
     assert_eq!(
-        v.key(Press::Pause, Some(&snap), &texts()),
+        v.key(Press::Pause, Some(&snap), DECIDING_WIDTH, &texts()),
         Errand::Order(Box::new(Order::PauseFolder("papers".to_owned())))
     );
 
@@ -548,7 +560,7 @@ fn pausing_a_folder_and_pausing_a_machine_are_different_orders() {
         .position(|r| r.spot == Spot::Device("THEM".to_owned()))
         .unwrap();
     assert_eq!(
-        v.key(Press::Pause, Some(&snap), &texts()),
+        v.key(Press::Pause, Some(&snap), DECIDING_WIDTH, &texts()),
         Errand::Order(Box::new(Order::Pause(Some("THEM".to_owned()))))
     );
 }

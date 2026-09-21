@@ -1,6 +1,6 @@
 //! What the regions' view draws, and what a key does to it.
 
-use super::{Errand, Press, Target, View};
+use super::{DECIDING_WIDTH, Errand, Press, Target, View};
 
 fn texts() -> ronoctua_i18n::Texts {
     ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the default language")
@@ -15,7 +15,7 @@ fn view(name: &str) -> (View, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("ronoctua-geo-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a scratch directory");
-    (View::at(dir.clone()), dir)
+    (View::at(dir.clone(), DECIDING_WIDTH), dir)
 }
 
 /// What the screen says, printed — the check no assertion replaces.
@@ -52,7 +52,7 @@ fn the_cursor_is_born_on_a_row_that_acts() {
 #[test]
 fn the_filter_is_asked_for_in_the_minibuffer() {
     let (mut v, dir) = view("filter");
-    assert_eq!(v.press(Press::Find, &texts()), Errand::Ask);
+    assert_eq!(v.press(Press::Find, DECIDING_WIDTH, &texts()), Errand::Ask);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -62,13 +62,13 @@ fn the_filter_is_asked_for_in_the_minibuffer() {
 fn what_was_typed_narrows_the_list() {
     let (mut v, dir) = view("narrow");
     let all = v.shown().len();
-    v.took_a_filter("zzzzzz-no-region-is-called-this");
+    v.took_a_filter("zzzzzz-no-region-is-called-this", DECIDING_WIDTH);
     assert_eq!(
         v.shown().len(),
         0,
         "a filter that matches nothing kept rows"
     );
-    v.took_a_filter("");
+    v.took_a_filter("", DECIDING_WIDTH);
     assert_eq!(v.shown().len(), all, "an empty filter did not come back");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -81,7 +81,7 @@ fn removing_needs_an_installed_region_under_the_cursor() {
     // Nothing is installed, so the cursor is on the filter or on a catalogue
     // row — never on a pack.
     assert_eq!(
-        v.press(Press::Remove, &texts()),
+        v.press(Press::Remove, DECIDING_WIDTH, &texts()),
         Errand::Speak(ronoctua_i18n::key::GEO_NOT_INSTALLED)
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -120,7 +120,7 @@ fn entering_a_catalogue_row_asks_the_queue_for_that_region() {
         .expect("the row that installs it");
     v.clicked(at, &rows);
     assert_eq!(
-        v.press(Press::Enter, &texts),
+        v.press(Press::Enter, DECIDING_WIDTH, &texts),
         Errand::Install {
             region: wanted.id,
             label: wanted.label,
@@ -142,10 +142,10 @@ fn the_question_opens_on_no() {
     // the arithmetic rather than the flow: row 1 is `no` and row 2 is `yes`,
     // and the cursor is put on 1.
     let texts = texts();
-    v.took_a_filter("");
+    v.took_a_filter("", DECIDING_WIDTH);
     let before = v.cursor();
     assert_eq!(
-        v.press(Press::Remove, &texts),
+        v.press(Press::Remove, DECIDING_WIDTH, &texts),
         Errand::Speak(ronoctua_i18n::key::GEO_NOT_INSTALLED),
         "nothing is installed, so there is nothing to ask about"
     );
@@ -157,7 +157,10 @@ fn the_question_opens_on_no() {
 #[test]
 fn escape_closes() {
     let (mut v, dir) = view("escape");
-    assert_eq!(v.press(Press::Escape, &texts()), Errand::Close);
+    assert_eq!(
+        v.press(Press::Escape, DECIDING_WIDTH, &texts()),
+        Errand::Close
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -190,7 +193,7 @@ fn a_region_with_no_shapefile_is_drawn_and_refuses() {
         .unwrap_or_else(|| panic!("`{}` is not a row of this list", whole.1));
     v.clicked(at, &rows);
     assert_eq!(
-        v.press(Press::Enter, &texts),
+        v.press(Press::Enter, DECIDING_WIDTH, &texts),
         Errand::Speak(ronoctua_i18n::key::GEO_ONLY_IN_PARTS),
         "pressing a region that is published in parts said nothing"
     );
@@ -210,7 +213,7 @@ fn a_country_s_parts_are_found_by_the_country_s_name() {
         let _ = std::fs::remove_dir_all(&dir);
         return;
     }
-    v.took_a_filter("brazil");
+    v.took_a_filter("brazil", DECIDING_WIDTH);
     let found: Vec<String> = v.shown().iter().map(|r| r.label.clone()).collect();
     assert!(
         found.len() > 1,

@@ -138,8 +138,23 @@ pub struct Row {
     pub target: Target,
 }
 
-/// The width `key()` builds rows at. `power.rs`'s constant, for its reason:
-/// the row COUNT and the row TARGETS do not depend on the width.
+/// The width the tests build rows at.
+///
+/// # Why production no longer has one
+///
+/// A key acts on the row under the cursor, so it has to know the rows — and it
+/// used to build them at a fixed eighty columns, on the argument that the row
+/// COUNT and the row TARGETS do not depend on the width. That argument held
+/// while every note was CUT: an ellipsis changes what a row SAYS and never how
+/// many there are.
+///
+/// A note WRAPS now (`chrome::note_lines`), so one sentence is a row on a wide
+/// screen and three on a narrow one, and every row under it moves. A key
+/// deciding at eighty would act on a different row from the one the door drew
+/// — a control taken somewhere other than where it was drawn, arriving on the
+/// keyboard's axis. So the DOOR's width travels in, as it already did for the
+/// Bluetooth view, and what is left here is a width the tests agree on.
+#[cfg(test)]
 const DECIDING_WIDTH: u16 = 120;
 
 /// The view.
@@ -161,16 +176,20 @@ pub struct View {
 impl View {
     /// Opens it on what this machine has.
     #[must_use]
-    pub fn fresh() -> Self {
+    pub fn fresh(columns: u16) -> Self {
         let root = ronoctua_xdg::data_dir()
             .map(|d| ronoctua_atlas_packs::root_of(&d))
             .unwrap_or_default();
-        Self::at(root)
+        Self::at(root, columns)
     }
 
     /// The same, against a given root.
+    ///
+    /// `columns` is the width the door will draw at: the cursor is an index
+    /// into the rows, and how many rows a note takes follows the width — see
+    /// `View::press`.
     #[must_use]
-    pub fn at(root: std::path::PathBuf) -> Self {
+    pub fn at(root: std::path::PathBuf, columns: u16) -> Self {
         let catalogue = crate::globe::world().map_or_else(Vec::new, |atlas| {
             let raw = atlas.catalogue();
             // THE NAME CARRIES THE COUNTRY, when the country is not the name.
@@ -229,14 +248,14 @@ impl View {
             asking: None,
             root,
         };
-        me.settle();
+        me.settle(columns);
         me
     }
 
     /// Reads the directory again — a download finished, or one was removed.
-    pub fn reread(&mut self) {
+    pub fn reread(&mut self, columns: u16) {
         self.installed = ronoctua_atlas_packs::installed(&self.root);
-        self.settle();
+        self.settle(columns);
     }
 
     /// Where the cursor is, for the door that draws a band.
@@ -259,10 +278,10 @@ impl View {
     }
 
     /// Takes what was typed in the minibuffer.
-    pub fn took_a_filter(&mut self, said: &str) {
+    pub fn took_a_filter(&mut self, said: &str, columns: u16) {
         self.filter = said.trim().to_owned();
         self.cursor = 0;
-        self.settle();
+        self.settle(columns);
     }
 
     /// The catalogue as it is being shown: everything, or what the filter keeps.
@@ -399,8 +418,17 @@ impl View {
     }
 
     /// What a key does.
-    pub fn press(&mut self, p: Press, texts: &ronoctua_i18n::Texts) -> Errand {
-        let rows = self.rows(DECIDING_WIDTH, texts);
+    ///
+    /// THE WIDTH IS THE DOOR'S. A key acts on the row under the cursor and the
+    /// cursor is an index into the rows that were DRAWN, so the two have to be
+    /// the same list — and since a note wraps (`chrome::note_lines`), how many
+    /// rows there are is a function of the width.
+    pub fn press(&mut self, p: Press, columns: u16, texts: &ronoctua_i18n::Texts) -> Errand {
+        let rows = self.rows(columns, texts);
+        // AND THE CURSOR IS PUT BACK ON A ROW THAT ACTS, against THESE rows.
+        // The ones `settle` looked at were built at whatever width the door
+        // had when the view opened, which is not always this one.
+        self.settle_on(&rows);
         match p {
             Press::Up => {
                 self.walk(&rows, false);
@@ -432,23 +460,23 @@ impl View {
             Press::Escape => {
                 if self.asking.take().is_some() {
                     self.cursor = 0;
-                    self.settle();
+                    self.settle_on(&rows);
                     return Errand::Nothing;
                 }
                 Errand::Close
             }
-            Press::Enter => self.act(rows.get(self.cursor).map(|r| r.target.clone())),
+            Press::Enter => self.act(rows.get(self.cursor).map(|r| r.target.clone()), columns),
         }
     }
 
     /// `RET`, and what a click becomes.
-    fn act(&mut self, target: Option<Target>) -> Errand {
+    fn act(&mut self, target: Option<Target>, columns: u16) -> Errand {
         match target {
             Some(Target::Find) => Errand::Ask,
             Some(Target::Answer(false)) | None | Some(Target::Nothing) => {
                 if self.asking.take().is_some() {
                     self.cursor = 0;
-                    self.settle();
+                    self.settle(columns);
                 }
                 Errand::Nothing
             }
@@ -459,7 +487,7 @@ impl View {
                 };
                 let outcome = ronoctua_atlas_packs::remove(&self.root, &id);
                 self.cursor = 0;
-                self.reread();
+                self.reread(columns);
                 match outcome {
                     Ok(()) => Errand::Nothing,
                     Err(e) => {
@@ -531,10 +559,18 @@ impl View {
     /// cursor on a title with nothing under it — a screen where no key does
     /// anything, which is what the locale view shipped once and the owner read
     /// off the screen.
-    fn settle(&mut self) {
+    fn settle(&mut self, columns: u16) {
         let texts = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT);
         let Some(texts) = texts else { return };
-        let rows = self.rows(DECIDING_WIDTH, &texts);
+        let rows = self.rows(columns, &texts);
+        self.settle_on(&rows);
+    }
+
+    /// The same, against rows somebody has already built.
+    ///
+    /// Split off so a key does not build the list twice, and so that what the
+    /// cursor is settled against is the list the key is about to act on.
+    fn settle_on(&mut self, rows: &[Row]) {
         if rows.get(self.cursor).is_some_and(|r| !r.heading) {
             return;
         }
@@ -606,17 +642,22 @@ impl Builder<'_> {
         self.sentence(text);
     }
 
+    /// IT WRAPS, and it used to be cut — one `Row` per line, through the one
+    /// function the eight views of this shape share. See
+    /// [`crate::chrome::note_lines`].
     fn sentence(&mut self, text: String) {
-        self.out.push(Row {
-            fields: vec![Self::piece(
-                self.left,
-                text,
-                tokens::color::TEXT_DIM,
-                self.room,
-            )],
-            heading: true,
-            target: Target::Nothing,
-        });
+        for line in crate::chrome::note_lines(&text, self.room) {
+            self.out.push(Row {
+                fields: vec![Self::piece(
+                    self.left,
+                    line,
+                    tokens::color::TEXT_DIM,
+                    self.room,
+                )],
+                heading: true,
+                target: Target::Nothing,
+            });
+        }
     }
 
     fn pair(&mut self, label: String, value: String, target: Target) {

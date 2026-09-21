@@ -210,12 +210,23 @@ pub fn extent(columns: u16) -> (u16, u16) {
     crate::power::extent(columns)
 }
 
-/// The width a key decides at.
+/// The width the tests build rows at.
 ///
-/// A key has to know the rows, and the two doors measure differently. What
-/// makes one number safe is that the row COUNT and the row TARGETS do not
-/// depend on the width — only the cutting does. The test at the end of this
-/// file is what holds that.
+/// # Why production no longer has one
+///
+/// A key acts on the row under the cursor, so it has to know the rows — and it
+/// used to build them at a fixed eighty columns, on the argument that the row
+/// COUNT and the row TARGETS do not depend on the width. That argument held
+/// while every note was CUT: an ellipsis changes what a row SAYS and never how
+/// many there are.
+///
+/// A note WRAPS now (`chrome::note_lines`), so one sentence is a row on a wide
+/// screen and three on a narrow one, and every row under it moves. A key
+/// deciding at eighty would act on a different row from the one the door drew
+/// — a control taken somewhere other than where it was drawn, arriving on the
+/// keyboard's axis. So the DOOR's width travels in, as it already did for the
+/// Bluetooth view, and what is left here is a width the tests agree on.
+#[cfg(test)]
 const DECIDING_WIDTH: u16 = 80;
 
 /// How many cells a bar gets.
@@ -316,9 +327,13 @@ impl View {
     pub fn hint(
         &self,
         snap: Option<&Snapshot>,
+        columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<crate::chrome::Piece> {
-        let rows = self.rows(snap, DECIDING_WIDTH, texts);
+        // THE WIDTH IS THE DOOR'S — see `View::key`: which keys this line
+        // teaches comes from the row under the cursor, and which row that is
+        // moves with the width now that a note wraps.
+        let rows = self.rows(snap, columns, texts);
         let target = rows.get(self.cursor).map_or(Target::Nothing, |r| r.target);
         let here: Vec<(&str, &str)> = OF_THE_VIEW
             .iter()
@@ -329,18 +344,23 @@ impl View {
     }
 
     /// Put the cursor on a row, if that row is one.
+    ///
+    /// `rows` is what the door DREW and `columns` is the width it drew them
+    /// at; the two travel together, because everything downstream rebuilds
+    /// the list to find the row again.
     pub fn clicked(
         &mut self,
         n: usize,
         rows: &[Row],
         snap: Option<&Snapshot>,
+        columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) {
         let Some(row) = rows.get(n).filter(|r| !r.heading) else {
             return;
         };
         self.moved = true;
-        self.aim_at(row.spot, snap, texts);
+        self.aim_at(row.spot, snap, columns, texts);
     }
 
     /// Put the cursor somewhere real, and the meter where the cursor is.
@@ -348,8 +368,13 @@ impl View {
     /// The doors call this rather than clamping an index themselves: clamping
     /// alone would leave the meter pointing at whatever row the cursor USED to
     /// be on, and the rows are a function of that.
-    pub fn settle_in(&mut self, snap: Option<&Snapshot>, texts: &ronoctua_i18n::Texts) {
-        let rows = self.rows(snap, DECIDING_WIDTH, texts);
+    pub fn settle_in(
+        &mut self,
+        snap: Option<&Snapshot>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) {
+        let rows = self.rows(snap, columns, texts);
         self.clamp(&rows);
         // AND IF IT LANDED SOMEWHERE INERT, walk on to the first row that
         // acts. This only ever fires on the way in — once a person has moved
@@ -362,7 +387,7 @@ impl View {
             self.cursor = i;
         }
         let want = rows.get(self.cursor).map_or(Spot::Nothing, |r| r.spot);
-        self.aim_at(want, snap, texts);
+        self.aim_at(want, snap, columns, texts);
     }
 
     /// Put the cursor on the row with this identity, and the meter with it.
@@ -376,7 +401,13 @@ impl View {
     /// below it would be one place out. That is the failure this whole
     /// arrangement exists to stop, and it went red exactly here before the
     /// order was fixed.
-    fn aim_at(&mut self, want: Spot, snap: Option<&Snapshot>, texts: &ronoctua_i18n::Texts) {
+    fn aim_at(
+        &mut self,
+        want: Spot,
+        snap: Option<&Snapshot>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) {
         self.listening = match want {
             Spot::Source(id) => Some(id),
             _ => None,
@@ -388,7 +419,7 @@ impl View {
             Spot::Level => self.listening,
             _ => self.on_a_node,
         };
-        let rows = self.rows(snap, DECIDING_WIDTH, texts);
+        let rows = self.rows(snap, columns, texts);
         if want != Spot::Nothing
             && let Some(i) = rows.iter().position(|r| r.spot == want)
         {
@@ -416,14 +447,20 @@ impl View {
     }
 
     /// A key.
+    ///
+    /// THE WIDTH IS THE DOOR'S. A key acts on the row under the cursor and the
+    /// cursor is an index into the rows that were DRAWN, so the two have to be
+    /// the same list — and since a note wraps (`chrome::note_lines`), how many
+    /// rows there are is a function of the width.
     pub fn key(
         &mut self,
         press: Press,
         snap: Option<&Snapshot>,
+        columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
-        self.settle_in(snap, texts);
-        let rows = self.rows(snap, DECIDING_WIDTH, texts);
+        self.settle_in(snap, columns, texts);
+        let rows = self.rows(snap, columns, texts);
         if rows.is_empty() {
             return match press {
                 Press::Escape => Errand::Close,
@@ -442,7 +479,7 @@ impl View {
                 // measured against are not the rows that will be drawn: moving
                 // onto or off a source adds or removes the level row, and
                 // everything below it shifts by one.
-                self.aim_at(rows[self.cursor].spot, snap, texts);
+                self.aim_at(rows[self.cursor].spot, snap, columns, texts);
                 return Errand::Nothing;
             }
             _ => {}
@@ -502,7 +539,7 @@ impl View {
                 Errand::Keep(self.prefs)
             }
             (Press::Enter, Target::Profile(_, _) | Target::Port(_, _)) => {
-                self.key(Press::More, snap, texts)
+                self.key(Press::More, snap, columns, texts)
             }
             // A stream has no "default": what a program plays through is the
             // program's business, and PipeWire has no key for it here.
@@ -919,19 +956,22 @@ impl Builder<'_> {
         self.said(text, tokens::color::TEXT_DIM);
     }
 
+    /// IT WRAPS, and it used to be cut.
+    ///
+    /// One `Row` per line, through the one function the eight views of this
+    /// shape share — see [`crate::chrome::note_lines`] for why an ellipsis
+    /// here takes exactly the half that matters.
     fn said(&mut self, text: String, colour: tokens::Color) {
-        self.out.push(Row {
-            fields: vec![Self::piece(
-                self.left,
-                layout::elide_end(&text, self.room),
-                colour,
-            )],
-            focused: false,
-            heading: true,
-            target: Target::Nothing,
-            spot: Spot::Nothing,
-            disabled: false,
-        });
+        for line in crate::chrome::note_lines(&text, self.room) {
+            self.out.push(Row {
+                fields: vec![Self::piece(self.left, line, colour)],
+                focused: false,
+                heading: true,
+                target: Target::Nothing,
+                spot: Spot::Nothing,
+                disabled: false,
+            });
+        }
     }
 
     /// The microphone's level, under the row it belongs to.
@@ -1077,7 +1117,7 @@ mod tests {
         let mut v = View::fresh(Preferences::default());
         let s = a_machine();
         let t = texts();
-        v.settle_in(Some(&s), &t);
+        v.settle_in(Some(&s), DECIDING_WIDTH, &t);
         v
     }
 
@@ -1090,7 +1130,7 @@ mod tests {
             if rows.get(v.cursor()).is_some_and(|r| r.spot == spot) {
                 return;
             }
-            v.key(Press::Down, Some(&s), &t);
+            v.key(Press::Down, Some(&s), DECIDING_WIDTH, &t);
         }
         panic!("never reached {spot:?}");
     }
@@ -1125,7 +1165,7 @@ mod tests {
         let t = texts();
         walk_to(&mut v, Spot::Sink(60));
         let sink = v.cursor();
-        v.settle_in(Some(&s), &t);
+        v.settle_in(Some(&s), DECIDING_WIDTH, &t);
         assert_eq!(v.cursor(), sink);
     }
 
@@ -1170,7 +1210,7 @@ mod tests {
 
         let t = texts();
         let mut v = View::fresh(Preferences::default());
-        v.settle_in(Some(&two), &t);
+        v.settle_in(Some(&two), DECIDING_WIDTH, &t);
 
         // THE PROFILE ROW IS THE UNAMBIGUOUS ONE: each card is in a different
         // profile, so the value says which card the section is about.
@@ -1187,7 +1227,7 @@ mod tests {
         assert_eq!(profile_of(&v).as_deref(), Some("HiFi"));
 
         // Move to the other card's sink, and the section moves with it.
-        v.key(Press::Down, Some(&two), &t);
+        v.key(Press::Down, Some(&two), DECIDING_WIDTH, &t);
         assert_eq!(
             v.rows(Some(&two), DECIDING_WIDTH, &t)[v.cursor()].spot,
             Spot::Sink(70)
@@ -1259,22 +1299,35 @@ mod tests {
     }
 
     #[test]
-    fn the_rows_are_the_same_things_at_every_width() {
-        // WHAT MAKES `DECIDING_WIDTH` SAFE. A key builds rows at one width
-        // and the two doors draw at others; the cutting may differ, the
-        // COUNT and the TARGETS may not.
+    fn the_things_a_key_can_act_on_are_the_same_at_every_width() {
+        // WHAT A KEY MAY NOT DEPEND ON.
+        //
+        // A key acts on the row under the cursor, and the cursor is an index
+        // into the rows that were DRAWN — so `View::key` is given the DOOR's
+        // width and decides against that same list. What this holds down is
+        // the half that no width may change: WHICH things can be acted on, and
+        // in what ORDER.
+        //
+        // The row COUNT is allowed to differ now, and that is not a weakening:
+        // a note WRAPS (`chrome::note_lines`), so one sentence is a row on a
+        // wide screen and three on a narrow one. It used to be cut instead,
+        // which kept the count the same and took the end off every explanation
+        // this view has. The FIELDS are allowed to differ too — that is what
+        // eliding is.
         let v = view();
         let s = a_machine();
         let t = texts();
-        let narrow = v.rows(Some(&s), 40, &t);
+        let want = |columns: u16| -> Vec<(Target, Spot)> {
+            v.rows(Some(&s), columns, &t)
+                .into_iter()
+                .filter(|r| !r.heading)
+                .map(|r| (r.target, r.spot))
+                .collect()
+        };
+        let narrow = want(40);
+        assert!(narrow.len() > 5, "only {} rows to stop on", narrow.len());
         for width in [DECIDING_WIDTH, 60, 100, 200] {
-            let here = v.rows(Some(&s), width, &t);
-            assert_eq!(here.len(), narrow.len(), "at {width}");
-            for (a, b) in here.iter().zip(&narrow) {
-                assert_eq!(a.target, b.target, "at {width}");
-                assert_eq!(a.spot, b.spot, "at {width}");
-                assert_eq!(a.heading, b.heading, "at {width}");
-            }
+            assert_eq!(want(width), narrow, "at {width}");
         }
     }
 
@@ -1316,7 +1369,7 @@ mod tests {
         // THE DEFECT THIS PINS: the level row shifts everything below it, so
         // a cursor moved by INDEX across the rebuild lands a row out. One
         // press down from the first microphone has to reach the SECOND.
-        v.key(Press::Down, Some(&s), &t);
+        v.key(Press::Down, Some(&s), DECIDING_WIDTH, &t);
         assert_eq!(v.listening(), Some(62));
         let rows = v.rows(Some(&s), DECIDING_WIDTH, &t);
         assert_eq!(rows[v.cursor()].spot, Spot::Source(62));
@@ -1335,7 +1388,7 @@ mod tests {
         walk_to(&mut v, Spot::Source(62));
         assert_eq!(v.listening(), Some(62));
         // Down from the last microphone leaves the section.
-        v.key(Press::Down, Some(&s), &t);
+        v.key(Press::Down, Some(&s), DECIDING_WIDTH, &t);
         assert_eq!(v.listening(), None, "nothing holds it open now");
         let rows = v.rows(Some(&s), DECIDING_WIDTH, &t);
         assert!(!rows.iter().any(|r| r.spot == Spot::Level));
@@ -1349,7 +1402,7 @@ mod tests {
         walk_to(&mut v, Spot::Sink(60));
 
         assert_eq!(
-            v.key(Press::More, Some(&s), &t),
+            v.key(Press::More, Some(&s), DECIDING_WIDTH, &t),
             Errand::Order(Order::Volume {
                 node: 60,
                 percent: 40
@@ -1357,7 +1410,7 @@ mod tests {
             "the step walks the grid from 38"
         );
         assert_eq!(
-            v.key(Press::Mute, Some(&s), &t),
+            v.key(Press::Mute, Some(&s), DECIDING_WIDTH, &t),
             Errand::Order(Order::Mute {
                 node: 60,
                 muted: true
@@ -1367,7 +1420,7 @@ mod tests {
         // `set-default` and `set-volume` both do, while `set-profile` takes
         // the card.
         assert_eq!(
-            v.key(Press::Enter, Some(&s), &t),
+            v.key(Press::Enter, Some(&s), DECIDING_WIDTH, &t),
             Errand::Order(Order::Default { node: 60 })
         );
     }
@@ -1380,7 +1433,7 @@ mod tests {
         walk_to(&mut v, Spot::Port(Direction::Output));
         // The ring holds both sockets; the headphone one reports `no`.
         assert_eq!(
-            v.key(Press::More, Some(&s), &t),
+            v.key(Press::More, Some(&s), DECIDING_WIDTH, &t),
             Errand::Speak(SOCKET_EMPTY),
             "it says why rather than doing nothing"
         );
@@ -1392,9 +1445,9 @@ mod tests {
         let s = a_machine();
         let t = texts();
         walk_to(&mut v, Spot::Sink(60));
-        let on_a_device = v.hint(Some(&s), &t).len();
+        let on_a_device = v.hint(Some(&s), DECIDING_WIDTH, &t).len();
         walk_to(&mut v, Spot::Knob(Knob::Step));
-        let on_a_setting = v.hint(Some(&s), &t).len();
+        let on_a_setting = v.hint(Some(&s), DECIDING_WIDTH, &t).len();
         assert!(
             on_a_setting < on_a_device,
             "a setting has no `m` and no `d`: {on_a_setting} against {on_a_device}"
@@ -1408,7 +1461,7 @@ mod tests {
         let t = texts();
         walk_to(&mut v, Spot::Knob(Knob::Flash));
         assert!(v.preferences().flash);
-        let errand = v.key(Press::Enter, Some(&s), &t);
+        let errand = v.key(Press::Enter, Some(&s), DECIDING_WIDTH, &t);
         assert_eq!(errand, Errand::Keep(v.preferences()));
         assert!(!v.preferences().flash, "and RET turned it");
     }

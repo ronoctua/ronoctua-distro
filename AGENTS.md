@@ -120,6 +120,13 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   buffer são a mesma coisa (inv. 4), e o rótulo dizia só metade. **O teclado tem UM
   lugar** (`nix/keyboard-xkb.nix`); o xkb **não recusa** layout inexistente — cai no `us` mudo, e
   quem impede é `keyboard-layout-exists`.
+  **E A LISTA DA LEADER RESPONDE O PONTEIRO EM TODAS AS COLUNAS** (`surface::page_length`): ela é
+  a ÚNICA lista do sistema desenhada em colunas, e o número contra o qual o `item_at` recusava um
+  índice era `grid.lines` — a altura de UMA coluna. Como um item da segunda coluna vale `coluna ×
+  linhas + linha`, o primeiro deles já é `lines`, então toda célula fora da primeira coluna
+  respondia `None`: sem faixa de hover e com o clique não fazendo nada, em dois terços da tela. O
+  corte agora é o mesmo que o DESENHO faz (`expansion_window(offset, grid.per_page())`), porque o
+  que o ponteiro alcança é o que foi desenhado.
 - **TODA dica se explica sob o ponteiro** (`chrome::hint_marks` → `hint_sentence`): uma linha
   ABAIXO dos atalhos, nas onze portas, viva só enquanto há hover (escolha do dono). A frase é
   `cmd-<id>` para comando do registro e `about-<id>` para tecla de vista, nunca as duas
@@ -910,6 +917,22 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   `text.here.read` muda pixel — asserção de foto ali passa dos dois jeitos.
   **Item de LISTA inverte os pesos** do fato: o nome da coisa é a metade forte. **Ar antes de todo
   título** (`chrome::AIR`, um `heading` sem campos), e o título recua para fora das linhas dele.
+  **E A NOTA QUEBRA, nas OITO** (`chrome::note_lines`, cobra o `a-note-is-wrapped-and-not-cut`):
+  cada uma tinha o seu `sentence` terminando em `elide_end`, que é uma linha com reticência onde a
+  sala acabou — e o que a reticência leva é sempre o FIM, que é onde está a consequência. Só a
+  `locale` quebrava; as outras seis (`audio`, `power`, `bluetooth`, `network`, `syncthing`, `geo`)
+  ficaram escritas como dívida, e a OITAVA — a das telas — não estava na lista de ninguém: ela
+  cortava justamente *"The compositor could not read its configuration…"*, que é a frase que aquela
+  tela existe para desenhar no pior dia. Todas são pagas por UMA função, para que nenhuma vista
+  quebre por uma regra e corte por outra. **E a `locale` quebra em linhas que o cursor PULA e as outras seis não**:
+  ali `RET` numa linha informativa COPIA o que ela diz (`chrome::information_of`), então uma linha
+  de nota é uma linha que alguém pega, e pular todas deixaria uma seção cujo único conteúdo é uma
+  nota com nada sob o título — o que o `a_heading_is_never_alone` existe para recusar.
+  **E POR ISSO `key()` RECEBE A LARGURA DA PORTA.** O cursor é um índice nas linhas DESENHADAS e
+  uma nota que quebra muda quantas existem, então decidir a `DECIDING_WIDTH` — oitenta colunas fixas
+  — passou a ser uma tecla agindo numa linha diferente da que a porta desenhou. É
+  `[[um-controle-e-pego-onde-e-desenhado]]` chegando pelo eixo do teclado; o bluetooth já recebia a
+  largura, e as outras seis passaram a receber. `DECIDING_WIDTH` sobrou como largura dos TESTES.
 - **Toda janela que rola desenha a barra dela** (`chrome::list_bar`, e o `on_the_list_bar` +
   `list_offset_at` que a fazem um CONTROLE): cinco janelas não desenhavam nenhuma — só o
   gerenciador — e a roda era o único caminho. Cobra o `every-list-window-has-a-bar`, que achou a
@@ -924,6 +947,20 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   porque quem o moveu foi a chegada. **O separador decimal é da LÍNGUA**
   (`Texts::decimal_mark`): estava escrito nos dois formatadores de tamanho, então uma tela inglesa
   dizia `44,2 GB`.
+- **O CABEÇALHO DE TODA JANELA ABRE** (`chrome::Hinted::head`, cobra o
+  `every-window-header-opens`): a linha 0 de uma janela ensina as teclas da vista, e ela é CORTADA
+  na largura que recebe — o `hint_spans` elide, não quebra. A tabela da rede tem 174 células em
+  inglês contra uma janela que o niri põe em metade de uma saída, então mais da metade do que
+  aquela linha ensinava era inalcançável, em DEZ portas ao mesmo tempo, com uma reticência onde
+  parava e nada para apertar. O rodapé tem a gaveta desde que o `crate::fold` foi escrito e o
+  gerenciador tem a dele; as outras dez não tinham nenhuma, e o dono achou na janela de idioma e
+  região. **Um chevron na borda direita, `RCtrl ↑↓` no teclado e `Esc` que fecha a gaveta antes de
+  fechar a janela** — a MESMA notação que a gaveta ensina dentro de si (`minibuffer-fold-keys`),
+  porque o gesto é um gesto onde quer que essa linha seja desenhada. O `Ctrl` DIREITO é rastreado
+  pelo keysym e não pelos modificadores, como o rodapé já faz: o xkb funde os dois num bit só.
+  **E o desenho, o alvo e a tecla saem de UM lugar** — eram dez cópias do mesmo `if let Some(text)
+  = message … else … hint_spans`, e a gaveta não estava em nenhuma. O gerenciador segue com a
+  própria (o controle dele está no anel do `Tab`), e o check PROVA essa exceção em vez de a isentar.
 - **Dois rótulos de UMA vista não dizem a mesma coisa** (`labels-of-a-view-are-distinct`): havia
   TRÊS `tailnet` e TRÊS `address`, cada um um fato diferente com a mesma palavra, numa lista onde a
   palavra é a única coisa que diz qual fato é. Verbo da dica e formato com `{ $ }` não contam.

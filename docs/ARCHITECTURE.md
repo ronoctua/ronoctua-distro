@@ -4612,6 +4612,29 @@ tecla, e nada acima dela se mexe um pixel. Uma região de UMA linha não oferece
 Nas dez janelas o mesmo desenho custa menos, e por isso elas compartilham um `chrome::Hinted`: uma
 janela não está ancorada no fundo da tela e simplesmente mostra uma linha a menos de lista.
 
+**E o cabeçalho de uma janela ABRE, como o minibuffer.** A linha de dicas é CORTADA na largura que
+recebe — `hint_spans` elide, não quebra —, e a tabela da vista de rede tem 174 células em inglês
+contra uma janela que o niri põe em metade de uma saída. Então mais da metade do que aquela linha
+ensinava era inalcançável em cada uma das dez portas: uma reticência onde parava, e nada para
+apertar. O rodapé abre a sua desde que o `crate::fold` foi escrito, e o gerenciador abre a dele; as
+dez nunca ganharam nenhuma, e o dono achou isso na janela de idioma e região — *"a linha do header
+com os atalhos não tem a feature com o ícone de chevron para expandir/recolher o header"*.
+
+O desenho é o do rodapé, inteiro: o chevron na borda direita quando a linha não cabe (e também
+enquanto está aberta, senão o gesto que fecha some no instante em que o conteúdo passa a caber),
+o resto quebrado sob ela até `space.modeline.foldLines`, uma barra quando ainda sobra, e as teclas
+que a percorrem ensinadas DENTRO dela. A tecla é o `Ctrl` DIREITO com `↑↓` — a única família de
+modificador livre em toda vista por construção, rastreada pelo keysym porque o xkb funde os dois
+`Ctrl` num bit só —, e `Esc` fecha a gaveta antes de fechar a janela.
+
+**O que muda em relação ao que havia é que nada disso é de nenhuma porta.** Eram dez cópias de
+`if let Some(text) = message … else … hint_spans(…)`, cada uma com a sua chance de responder
+diferente, e a gaveta não estava em nenhuma delas. `chrome::Hinted::head` é o desenho, e o mesmo
+`Hinted` responde o ponteiro (`pressed`, `dragged`, `turned`), o teclado (`took_a_key`) e a
+medição de altura (`settled`) — um controle é pego onde é desenhado, e aqui isso vale para onze
+portas de uma vez. O gerenciador segue com a `fold::Fold` própria porque o controle dele está no
+anel do `Tab`; o `every-window-header-opens` PROVA essa exceção em vez de a isentar.
+
 ### O nome que não cabe — três caminhos, e um deles anda
 
 Uma listagem é uma grade, e grade corta. O dono pediu o resto de um nome cortado por três caminhos,

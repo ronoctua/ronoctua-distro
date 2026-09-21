@@ -51,6 +51,36 @@
   # footer with nothing on it, so anything it opened would be the wrong
   # picture. `alone` says that out loud, because the check's rule is "a scene
   # opens a view or names whose it borrows" and this is neither.
+  #
+  # ITS TWO MEASUREMENTS ARE AIMED FROM THE FOOTER'S TOP, and in LINES.
+  #
+  #   - NOT FROM THE SCREEN'S BOTTOM, because the bottom line is not the
+  #     minibuffer: the brain's line is glued UNDER it, and in these machines
+  #     the brain is up at rest — the journal says `brain=1` and the surface is
+  #     three lines, not two. Aiming at the last one clicked the brain's row,
+  #     and the assertion failed saying the list had not opened when what had
+  #     happened is that nobody had asked for it. From the top the two lines
+  #     are where the module's own header puts them: the modeline, then the
+  #     minibuffer glued to it; the band and the glance are above both and are
+  #     zero at rest, which is what the shot before it is about.
+  # AND THE SHORTCUT LIST IS THE ONE LIST THIS SYSTEM DRAWS IN COLUMNS, which
+  # is why the pointer is measured in two of them here. `item_at` resolves a
+  # point to `column × lines + line` and the count it rejected an index against
+  # was `grid.lines` — the height of ONE column. So the first item of the
+  # second column was already out of range: every cell outside the first column
+  # answered `None`, with no hover band and a click that did nothing, over two
+  # thirds of the screen. The owner read it off the screen — *"o hover e
+  # suporte ao clique do mouse funciona apenas na primeira coluna de itens"* —
+  # and no test of state could see it, because the state was right and the
+  # arithmetic that turned a pixel into an item was not.
+  #
+  #   - IN LINES AND NOT IN PIXELS, because the claim — "this is a footer at
+  #     rest" — is about lines. It read `2 * LINE <= at_rest`, and `LINE` is
+  #     the line rounded UP: fifty-four against the fifty-three a two-line
+  #     footer actually is, so the condition could never hold for the state the
+  #     subtest is NAMED for. It passed while the brain's row was up and the
+  #     surface was three lines, which in a full battery it is not — the
+  #     brain's own scene comes nine scenes later.
   {
     id = "footer";
     alone = true;
@@ -69,16 +99,57 @@
   # window came up somewhere else, the filter found nothing, and the syntax
   # assertion read a panel of the wrong file — `#6CD586 covers 0 pixel(s)`,
   # which is this battery catching exactly what it is for.
+  # THE MANAGER'S WINDOW, and the preview that rides on it.
+  #
+  # ITS SIDEWAYS BAR IS MEASURED AS A COUNT, never by `-trim`. `C-]` moves the
+  # preview's line and the thumb has to follow it — where a bar is drawn is
+  # where it is grabbed, and a thumb that stood still while the text moved
+  # would be lying about where one is. The count is of the bar's own token on a
+  # four-pixel probe at the left edge, because `-trim` answers from the CORNER
+  # pixel and at column nought the corner IS the thumb: it reported nothing
+  # exactly when the thumb was where it should be, and the first version read
+  # that "nothing" as a position of minus one — after which `after > before`
+  # passed because 3 is more than −1 rather than because anything moved. A
+  # count cannot do that: with no bar it is nought at both ends and the
+  # assertion fails, and with a bar that does not move it is the same at both
+  # ends and the assertion fails.
   {
     id = "manager-window";
     needs = [ "manager" ];
   }
   # THE WINDOW DOOR IS WHERE BOTH OF THESE HAPPEN. Neither opens one: they walk
   # the directory the scene above left them in.
+  # THE DOCUMENT PREVIEW, in one sentence: the owner's folder had eleven
+  # documents and the preview opened one of them, the PDF. The other six of the
+  # office family are a ZIP OF XML — and this crate has had a zip reader since
+  # the day it learnt to draw a 3MF, so what was missing was the twenty lines
+  # that say which member holds the words.
+  #
+  # PHOTOGRAPHED and not only unit-tested, because the unit tests know
+  # `text::Read` and only this knows the PANEL: the answer comes back as the
+  # same type a `.rs` does, so the panel scrolls it, pages it and hangs a bar on
+  # it with no new code at all — and that claim is about a screen.
   {
     id = "document";
     needs = [ "manager-window" ];
   }
+  # THE MINIPLAYER, on a GIF and not a video, and that is not a compromise.
+  #
+  # The GIF path is the `image` crate, decoded in process — so the subtest
+  # needs none of the five external programs and runs on a machine with no
+  # media group at all. What it proves is the whole player: a frame reaching
+  # the panel, the box sized from the FRAME rather than from a still, the
+  # transport taking a line of its own, and the hold being real. What it
+  # cannot prove is the TIMELINE, which needs a duration, which needs a video,
+  # which needs `ffmpeg-full` inside this VM — a closure decision and not a
+  # test decision, so it is not taken.
+  #
+  # AND ITS FOUR COLOURS ARE ONES THIS INTERFACE DOES NOT CONTAIN, measured
+  # rather than assumed: the first version used four palette colours and the
+  # blue one matched the interface elsewhere within the fuzz — the picture's
+  # own box came back as 172x644, most of the panel, while the orange, which
+  # is near nothing, came back as 130x97 for exactly 12610 pixels. A
+  # measurement that catches its neighbours is not a measurement.
   {
     id = "miniplayer";
     needs = [ "manager-window" ];
@@ -157,6 +228,41 @@
   # `text.group`, at the same column. Neither is something a test that
   # compares state can see; both are a glance at a photograph.
   { id = "locale"; }
+  # AND THE HEADER OF A WINDOW, which had no drawer at all.
+  #
+  # The line that teaches a view's keys is CUT at the width it is given —
+  # `chrome::hint_spans` elides, it does not wrap — and the network view's
+  # table is 174 cells in English against a window that niri tiles into half
+  # of a 1600-pixel output. So more than half of what that line teaches was
+  # unreachable in every one of the ten windows, with an ellipsis where it
+  # stopped and nothing to press.
+  #
+  # The footer's minibuffer has opened into a drawer since `crate::fold` was
+  # written, and so has the file manager's window; the other ten never got
+  # one. The owner found it on the language and region window — *"a linha do
+  # header com os atalhos não tem a feature com o ícone de chevron para
+  # expandir/recolher o header"*.
+  #
+  # WHAT THE PHOTOGRAPH ANSWERS, and a test of state cannot:
+  #   - THE CHEVRON IS DRAWN, and on the line's own row, against the right
+  #     edge. Ink in the last cell of row 0 is the whole of that claim.
+  #   - PRESSING IT GROWS THE LINE. The prose of a hint is `text.subtle`, and
+  #     before the press it is on one row; after it, on several. A state test
+  #     would compare a `bool` and never look at the rows.
+  { id = "header"; }
   { id = "hints"; }
+  # THE LINE THAT OUTLIVES THE FOOTER, and the keyboard reaching its options.
+  #
+  # `Esc` and not `x`: the owner read the photograph and asked for the key that
+  # actually closes it. And the line is CLICKED once more first, on its own top
+  # row — `KeyboardInteractivity::OnDemand` is what a click buys, because at
+  # rest the surface takes the keyboard from nobody, which is what lets it
+  # appear over somebody's work, and the rescue console it has just opened is a
+  # window that takes it. Measured: with other windows on the workspace the
+  # `Esc` went to the console and the line stayed up; on an empty one it did
+  # not, which is the kind of difference a battery run finds and a single scene
+  # does not. The TOP row and not an option, because `Lifeline::at` answers
+  # `None` for any row but the last — so the click does nothing except what a
+  # person's would, put the keyboard back on the line they are reading.
   { id = "lifeline"; }
 ]

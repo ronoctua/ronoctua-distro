@@ -637,31 +637,8 @@ pkgs.testers.runNixOSTest {
 
             w_f, h_f, x_f, y_f = niri_geometry()
             at_rest = footer_height()
-            # AIMED FROM THE FOOTER'S TOP AND NOT FROM THE SCREEN'S BOTTOM.
-            #
-            # The bottom line is not the minibuffer: the brain's line is glued
-            # UNDER it, and in these machines the brain is up at rest — the
-            # journal says `brain=1` and the surface is three lines, not two.
-            # Aiming at the last one clicked the brain's row, and the first
-            # version of this assertion failed saying the list had not opened
-            # when what had happened is that nobody had asked for it.
-            #
-            # From the top the two lines are where the module's own header puts
-            # them: the modeline, then the minibuffer glued to it. The band and
-            # the glance are above both and are zero at rest, which is what the
-            # shot above this one is about.
-            # AND IT IS REALLY AT REST, which is this subtest's whole name: two
-            # lines, the glance and the brain's row at most. Twelve of them is
-            # a view still open, and the click below would rightly do nothing.
-            #
-            # IN LINES, AND NOT IN PIXELS, because the sentence above is about
-            # lines and the arithmetic has to say the same thing. It read
-            # `2 * LINE <= at_rest`, and `LINE` is the line rounded UP: fifty-four
-            # against the fifty-three a two-line footer actually is, so the
-            # condition could never hold for the state this subtest is NAMED
-            # for. It passed while the brain's row was up and the surface was
-            # three lines — which in a full battery it is not, because the
-            # brain's own scene comes nine scenes later.
+            # AIMED FROM THE FOOTER'S TOP, and in LINES — see
+            # `nix/shots-scenes.nix`.
             at_rest_lines = round(at_rest / LINE_EXACT)
             assert 2 <= at_rest_lines <= 4, (
                 f"the footer is {at_rest} px, {at_rest_lines} lines"
@@ -682,6 +659,45 @@ pkgs.testers.runNixOSTest {
                 "minibuffer — the shortcut list did not open"
             )
             shot("37-the-minibuffer-clicked", lines=2)
+
+            # AND THE POINTER REACHES EVERY COLUMN OF THAT LIST — see
+            # `nix/shots-scenes.nix`. The band is `surface.hover`, and where it
+            # is drawn is the only thing on screen that says which item a click
+            # would take.
+            # ON THE POINTER'S OWN ROW, and not the leftmost pixel of that
+            # colour anywhere on the screen: a stray one elsewhere answered for
+            # the band, and gave the same number for two different columns.
+            def band_x(name, at_y):
+                shot(name, lines=None)
+                xs = [
+                    x
+                    for x, y in pixels_of(
+                        f"/tmp/{name}.png", "#" + token_hex("surface.hover")
+                    )
+                    if abs(y - at_y) <= LINE
+                ]
+                return min(xs) if len(xs) > 20 else None
+
+            # THE SECOND ROW OF THE LIST, which is above the footer's top AT
+            # REST: the list is the surface having grown upwards.
+            row = y_f + h_f - opened + 2 * LINE
+            seen = []
+            for n, part in enumerate((8, 3, 2)):
+                machine.succeed(
+                    f"DISPLAY=:99 xdotool mousemove {x_f + w_f // part} {row}"
+                )
+                machine.sleep(1)
+                seen.append(band_x(f"39-the-list-across-{n}", row - y_f))
+            print(f"the band starts at {seen}")
+            assert None not in seen, (
+                f"the band was at {seen}: the pointer lit nothing in one of the "
+                "columns of the shortcut list"
+            )
+            assert seen[0] < seen[1] < seen[2], (
+                f"the band was at {seen} across the width of the list: it is not "
+                "following the pointer into the columns"
+            )
+
             # AND `Esc` PUTS IT BACK, which is what makes this a toggle and not
             # a trap: the scenes after this one all begin with nothing open.
             machine.succeed("DISPLAY=:99 xdotool key Escape")
@@ -1169,26 +1185,8 @@ pkgs.testers.runNixOSTest {
                 "only reach with the keyboard is half a view"
             )
 
-            # AND THE SIDEWAYS BAR MOVES, which is the whole of what the owner
-            # asked for: a thumb that is only there to look at is not a control.
-            #
-            # Measured as its own left edge before and after the key. `C-]` moves
-            # the line, and the thumb has to follow it — where a bar is drawn is
-            # where it is grabbed, and a thumb that stood still while the text
-            # moved would be lying about where one is.
-            # DID THE THUMB LEAVE THE LEFT EDGE? — asked of a four-pixel probe
-            # there, counting the pixels drawn in the bar's own token.
-            #
-            # NOT `-trim`, and the reason is the case that matters most: trim
-            # answers from the CORNER pixel, and at column nought the corner IS the
-            # thumb — so it reported nothing exactly when the thumb was where it
-            # should be. The first version read that "nothing" as a position of
-            # minus one, and then `after > before` passed because 3 is more than
-            # -1 rather than because anything moved.
-            #
-            # This count cannot do that. With no bar at all it is nought at both
-            # ends and the assertion fails; with a bar that does not move it is the
-            # same at both ends and the assertion fails.
+            # AND THE SIDEWAYS BAR MOVES, counted on a four-pixel probe at the
+            # left edge and never by `-trim` — see `nix/shots-scenes.nix`.
             def thumb_over_the_left(box):
                 probe = f"4x{LINE}+{box.split('+')[1]}+{box.split('+')[2]}"
                 return int(
@@ -1290,24 +1288,9 @@ pkgs.testers.runNixOSTest {
 
     if wanted("document"):
         with subtest("a document: a zip of XML reaching the panel as words"):
-            # THE DEFECT THE OWNER FOUND, in one sentence: his folder had eleven
-            # documents and the preview opened one of them, the PDF. The other six
-            # of the office family are a ZIP OF XML — and this crate has had a zip
-            # reader since the day it learnt to draw a 3MF, so what was missing was
-            # the twenty lines that say which member holds the words.
-            #
-            # PHOTOGRAPHED and not only unit-tested, because the unit tests know
-            # `text::Read` and this is the only thing that knows the panel: the
-            # answer comes back as the same type a `.rs` does, so the panel scrolls
-            # it, pages it and hangs a bar on it with no new code at all — and that
-            # claim is about a screen.
-            # THE WINDOW DOOR HAS TO BE OPEN, and this scene does not open one:
-            # it walks the directory `manager-window` left it in. Asked out of
-            # band, because the alternative is what actually happened — run on
-            # its own, this subtest photographed an EMPTY DESKTOP and PASSED,
-            # its `text.primary` answered by the white mouse pointer. The
-            # closure in `nix/shots-scenes.nix` is what brings the door along;
-            # this is what says so out loud if it ever stops.
+            # WHY, AND WHY IT IS A PHOTOGRAPH — see `nix/shots-scenes.nix`.
+            # THE WINDOW DOOR HAS TO BE OPEN, and this scene does not open one;
+            # the line below says so out loud if the closure ever stops.
             machine.succeed("pgrep -f '[b]in/ronoctua-shell files'")
             machine.succeed("mkdir -p /root/shots/papers")
             machine.succeed("cp ${sampleDocument} /root/shots/papers/sample.docx")
@@ -1347,26 +1330,8 @@ pkgs.testers.runNixOSTest {
 
     if wanted("miniplayer"):
         with subtest("the miniplayer: it moves, it holds, and it draws over nothing"):
-            # A GIF MADE HERE, and not a video, and that is not a compromise.
-            #
-            # The GIF path is the `image` crate, decoded in process — so this
-            # subtest needs none of the five external programs and runs on a machine
-            # with no media group at all. What it proves is the whole player: a
-            # frame reaching the panel, the box being sized from the FRAME rather
-            # than from a still, the transport taking a line of its own, and the
-            # hold being real.
-            #
-            # What it cannot prove is the TIMELINE, which needs a duration, which
-            # needs a video, which needs `ffmpeg-full` inside this VM. That is a
-            # closure decision and not a test decision, so it is not taken here.
-            #
-            # FOUR COLOURS THIS INTERFACE DOES NOT CONTAIN, and that is measured
-            # rather than assumed. The first version used four palette colours and
-            # the blue one matched the interface elsewhere within the fuzz: the
-            # picture's own box came back as 172x644 — most of the panel — while
-            # the orange, which is not near anything, came back as 130x97 for
-            # exactly 12610 pixels. A measurement that catches its neighbours is
-            # not a measurement.
+            # A GIF AND FOUR COLOURS NOTHING ELSE HERE WEARS — see
+            # `nix/shots-scenes.nix`.
             # THE SAME DOOR THIS SCENE RIDES ON, asked the same way.
             machine.succeed("pgrep -f '[b]in/ronoctua-shell files'")
             FILM = ["#FF00FF", "#00FFFF", "#FFFF00", "#FF6000"]
@@ -2580,6 +2545,77 @@ pkgs.testers.runNixOSTest {
             assert group.lower() != ("#" + token_hex("text.secondary")).lower()
             has_colour(group, at_least=10, of="/tmp/36-the-settings.png", fuzz=6)
 
+    if wanted("header"):
+        with subtest("a window's header opens, and the chevron is what opens it"):
+            # WHY: see `nix/shots-scenes.nix`.
+            for _ in range(8):
+                machine.succeed("DISPLAY=:99 xdotool key Escape")
+            machine.sleep(1)
+            control("network-window")
+            machine.wait_until_succeeds(
+                "journalctl -u footer --no-pager | tail -40"
+                " | grep -q 'br.ronoctua.network'",
+                timeout=60,
+            )
+            machine.sleep(2)
+            _, _, x_h, y_h = niri_geometry()
+            shot("37-the-header-shut", lines=None)
+
+            # THE WINDOW'S OWN EDGES, MEASURED. niri gives a single window a
+            # COLUMN and not the output, so the screen's right border is the
+            # desktop — and an assertion aimed there is answered by it. A
+            # window clears with `surface.chrome` (`gpu::Gpu::frame`), so its
+            # first row says where it starts and stops.
+            chrome = "#" + token_hex("surface.chrome")
+            row_0 = [x for x, y in pixels_of("/tmp/37-the-header-shut.png", chrome) if y < LINE]
+            assert row_0, "no window on the screen's first row"
+            left, right = min(row_0), max(row_0)
+            print(f"the window's first row runs {left}..{right}")
+
+            # THE CHEVRON IS DRAWN, against that edge. INK is "not the ground",
+            # because a glyph is antialiased and may carry no pixel of the
+            # token's exact colour.
+            ink = [
+                x
+                for x, y in pixels_of("/tmp/37-the-header-shut.png", chrome, match=False)
+                if y < LINE and left <= x <= right
+            ]
+            assert ink, "nothing at all is drawn on the header's row"
+            from_border = right - max(ink)
+            print(f"the header's last ink ends {from_border} px from the window's edge")
+            assert from_border <= 3 * CELL, (
+                f"the header's ink stops {from_border} px short of the edge: "
+                "there is no control against it"
+            )
+
+            # AND PRESSING IT GROWS THE LINE. Counted ABOVE the footer, whose
+            # own hint wears the same token.
+            prose = "#" + token_hex("text.subtle.default")
+
+            def teaching(path):
+                return {
+                    y // LINE
+                    for x, y in pixels_of(path, prose)
+                    if y < 8 * LINE and left <= x <= right
+                }
+
+            before = teaching("/tmp/37-the-header-shut.png")
+            print(f"the shut header teaches on {len(before)} row(s)")
+            assert len(before) == 1, "the shut header is already more than a line"
+            machine.succeed(
+                "DISPLAY=:99 xdotool mousemove "
+                f"{x_h + right - CELL // 2} {y_h + LINE // 2}"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 xdotool click 1")
+            machine.sleep(2)
+            shot("38-the-header-open", lines=None)
+            after = teaching("/tmp/38-the-header-open.png")
+            print(f"the opened header teaches on {len(after)} rows")
+            assert len(after) > len(before), (
+                "the chevron was pressed and the line did not open"
+            )
+
     if wanted("hints"):
         with subtest("the pointer on the hint line does not take the interface with it"):
             # THE ASSERTION THAT WOULD HAVE CAUGHT IT, and it is the second time.
@@ -2690,26 +2726,9 @@ pkgs.testers.runNixOSTest {
                 "pgrep -f '[b]in/ronoctua-shell rescue'", timeout=30
             )
 
-            # AND THE KEYBOARD REACHES THEM TOO, by the key the line now draws.
-            #
-            # `Esc` and not `x`: the owner read the photograph and asked for the key
-            # that actually closes it. The surface takes the keyboard ON DEMAND — at
-            # rest it takes it from nobody, which is what lets it appear over
-            # somebody's work — so the click above is also what handed it over.
-            #
-            # AND THE LINE IS CLICKED ONCE MORE FIRST, on its own top row.
-            #
-            # `KeyboardInteractivity::OnDemand` is what a click BUYS: at rest the
-            # surface takes the keyboard from nobody, which is what lets it appear
-            # over somebody's work, and the console it just opened is a window that
-            # takes it. Measured — with other windows on the workspace the `Esc`
-            # went to the console and the line stayed up; on an empty one it did
-            # not, which is exactly the kind of difference a battery run finds and
-            # a single scene does not.
-            #
-            # The top row and not an option: `Lifeline::at` answers `None` for any
-            # row but the last, so this click does nothing except what a person's
-            # would — put the keyboard back on the line they are reading.
+            # AND THE KEYBOARD REACHES THEM TOO, by the key the line draws —
+            # after one more click on its own TOP row, which is what buys the
+            # keyboard back. See `nix/shots-scenes.nix`.
             first_row = y_l + h_l - 2 * LINE + LINE // 2
             machine.succeed(
                 "DISPLAY=:99 xdotool mousemove "

@@ -200,20 +200,6 @@ de fora, e nenhuma está começada — não há meio código no caminho de ningu
   (`available_timezones`, do `zone1970.tab`). **Como saber que acabou:** digitar `Lis` e ver
   `Europe/Lisbon` oferecido.
 
-### 0.0000045. A frase explicativa quebra numa vista só · pequeno cada
-
-`LEADER s l` quebra as suas (`Builder::sentence` → `layout::wrap`, uma `Row` por linha), e o
-`a-note-is-wrapped-and-not-cut` o guarda. As outras **seis** vistas de rótulo+valor continuam
-cortando com reticência: `audio`, `power`, `bluetooth`, `network`, `syncthing` e `geo`.
-
-Não é a mesma mudança nas seis. Em `power`, `bluetooth` e `network` uma nota é uma linha em que o
-CURSOR PARA (`heading: false`), então quebrá-la em várias muda a aritmética do cursor daquelas
-telas — que é exatamente o que custou a `locale` um cursor contado sobre as linhas em que se pode
-parar. Nas outras três é a troca de cinco linhas que a `locale` levou.
-
-**Como saber que acabou:** abrir cada uma a 60 colunas e não achar nenhuma reticência numa frase;
-e o `a-note-is-wrapped-and-not-cut` passar a ler as sete.
-
 ### 0.000005. O que a exibição de escritas ainda não alcança · pequeno cada
 
 A cadeia de fallback existe, 37 escritas desenham e a régua da célula conhece a largura leste-

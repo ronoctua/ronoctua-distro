@@ -401,12 +401,23 @@ pub fn extent(columns: u16) -> (u16, u16) {
     crate::power::extent(columns)
 }
 
-/// The width a key decides at.
+/// The width the tests build rows at.
 ///
-/// A key has to know the rows, and the two doors measure differently. What
-/// makes one number safe is that the row COUNT and the row TARGETS do not
-/// depend on the width — only the cutting does. The test at the end of this
-/// file is what holds that.
+/// # Why production no longer has one
+///
+/// A key acts on the row under the cursor, so it has to know the rows — and it
+/// used to build them at a fixed eighty columns, on the argument that the row
+/// COUNT and the row TARGETS do not depend on the width. That argument held
+/// while every note was CUT: an ellipsis changes what a row SAYS and never how
+/// many there are.
+///
+/// A note WRAPS now (`chrome::note_lines`), so one sentence is a row on a wide
+/// screen and three on a narrow one, and every row under it moves. A key
+/// deciding at eighty would act on a different row from the one the door drew
+/// — a control taken somewhere other than where it was drawn, arriving on the
+/// keyboard's axis. So the DOOR's width travels in, as it already did for the
+/// Bluetooth view, and what is left here is a width the tests agree on.
+#[cfg(test)]
 const DECIDING_WIDTH: u16 = 80;
 
 /// How many cells a progress bar gets.
@@ -520,9 +531,10 @@ impl View {
     pub fn hint(
         &self,
         snap: Option<&Snapshot>,
+        columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<crate::chrome::Piece> {
-        let rows = self.rows(snap, DECIDING_WIDTH, texts);
+        let rows = self.rows(snap, columns, texts);
         let target = rows
             .get(self.cursor)
             .map_or(Target::Nothing, |r| r.target.clone());
@@ -535,22 +547,32 @@ impl View {
     }
 
     /// Put the cursor on a row, if that row is one.
+    ///
+    /// `rows` is what the door DREW and `columns` is the width it drew them
+    /// at; the two travel together, because everything downstream rebuilds
+    /// the list to find the row again.
     pub fn clicked(
         &mut self,
         n: usize,
         rows: &[Row],
         snap: Option<&Snapshot>,
+        columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) {
         let Some(row) = rows.get(n).filter(|r| !r.heading) else {
             return;
         };
         self.moved = true;
-        self.aim_at(&row.spot, snap, texts);
+        self.aim_at(&row.spot, snap, columns, texts);
     }
 
     /// Put the cursor somewhere real.
-    pub fn settle_in(&mut self, snap: Option<&Snapshot>, texts: &ronoctua_i18n::Texts) {
+    pub fn settle_in(
+        &mut self,
+        snap: Option<&Snapshot>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) {
         // A LEVEL ABOUT SOMETHING THAT IS GONE GOES BACK TO THE LIST. A folder
         // removed from another machine, or by the person on this one, would
         // otherwise leave a sheet of empty rows with no way to tell why.
@@ -566,7 +588,7 @@ impl View {
                 self.moved = false;
             }
         }
-        let rows = self.rows(snap, DECIDING_WIDTH, texts);
+        let rows = self.rows(snap, columns, texts);
         // AND `clamp` IS THE WHOLE OF IT. The sound view walks on to the first
         // row that ACTS, because its first rows are facts; here every row acts
         // — `RET` on a fact copies it — so the first row that is not a heading
@@ -578,12 +600,18 @@ impl View {
         let want = rows
             .get(self.cursor)
             .map_or(Spot::Nothing, |r| r.spot.clone());
-        self.aim_at(&want, snap, texts);
+        self.aim_at(&want, snap, columns, texts);
     }
 
     /// Put the cursor on the row with this identity.
-    fn aim_at(&mut self, want: &Spot, snap: Option<&Snapshot>, texts: &ronoctua_i18n::Texts) {
-        let rows = self.rows(snap, DECIDING_WIDTH, texts);
+    fn aim_at(
+        &mut self,
+        want: &Spot,
+        snap: Option<&Snapshot>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) {
+        let rows = self.rows(snap, columns, texts);
         if *want != Spot::Nothing
             && let Some(i) = rows.iter().position(|r| r.spot == *want)
         {
@@ -611,14 +639,20 @@ impl View {
     }
 
     /// A key.
+    ///
+    /// THE WIDTH IS THE DOOR'S. A key acts on the row under the cursor and the
+    /// cursor is an index into the rows that were DRAWN, so the two have to be
+    /// the same list — and since a note wraps (`chrome::note_lines`), how many
+    /// rows there are is a function of the width.
     pub fn key(
         &mut self,
         press: Press,
         snap: Option<&Snapshot>,
+        columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
-        self.settle_in(snap, texts);
-        let rows = self.rows(snap, DECIDING_WIDTH, texts);
+        self.settle_in(snap, columns, texts);
+        let rows = self.rows(snap, columns, texts);
         if rows.is_empty() {
             return match press {
                 Press::Escape => Errand::Close,
@@ -637,14 +671,14 @@ impl View {
                 self.level = Level::List;
                 self.cursor = 1;
                 self.moved = false;
-                self.settle_in(snap, texts);
+                self.settle_in(snap, columns, texts);
                 return Errand::Nothing;
             }
             Press::Up | Press::Down => {
                 self.moved = true;
                 self.walk(&rows, press == Press::Down);
                 let spot = rows[self.cursor].spot.clone();
-                self.aim_at(&spot, snap, texts);
+                self.aim_at(&spot, snap, columns, texts);
                 return Errand::Nothing;
             }
             // THE WEB INTERFACE IS A PAGE, and it stays one key away. It has
@@ -1599,20 +1633,32 @@ impl Builder<'_> {
         self.said(text, tokens::color::TEXT_DIM, Spot::Nothing);
     }
 
-    /// One line of prose, in a tone of its own.
+    /// Prose, in a tone of its own.
+    ///
+    /// IT WRAPS, and it used to be cut — one `Row` per line, through the one
+    /// function the eight views of this shape share. See
+    /// [`crate::chrome::note_lines`]: what an ellipsis takes off a sentence
+    /// like `SYNCTHING_INTERFACE_ABOUT` is the end, which is where the
+    /// consequence is. A daemon's complaint comes through here too, and those
+    /// are the longest strings this view ever draws.
+    ///
+    /// THE SPOT IS THE FIRST LINE'S. A spot is a row's identity, kept so the
+    /// cursor can find it again after a redraw; the same one on four rows
+    /// would name four things at once.
     fn said(&mut self, text: String, colour: tokens::Color, spot: Spot) {
-        self.out.push(Row {
-            fields: vec![Self::piece(
-                self.left,
-                layout::elide_end(&text, self.room),
-                colour,
-            )],
-            focused: false,
-            heading: true,
-            target: Target::Nothing,
-            spot,
-            disabled: false,
-        });
+        for (n, line) in crate::chrome::note_lines(&text, self.room)
+            .into_iter()
+            .enumerate()
+        {
+            self.out.push(Row {
+                fields: vec![Self::piece(self.left, line, colour)],
+                focused: false,
+                heading: true,
+                target: Target::Nothing,
+                spot: if n == 0 { spot.clone() } else { Spot::Nothing },
+                disabled: false,
+            });
+        }
     }
 
     /// The drawer's own line: a chevron, and the word.

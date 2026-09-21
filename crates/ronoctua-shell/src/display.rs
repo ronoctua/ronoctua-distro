@@ -479,11 +479,23 @@ pub fn extent(columns: u16) -> (u16, u16) {
     (left, end.saturating_sub(left))
 }
 
-/// The width `key` builds its rows at.
+/// The width the tests build rows at.
 ///
-/// A key must mean the same thing whatever the window's size, so the rows the
-/// keyboard walks are built at one width and never at the door's. It is
-/// `power.rs`'s rule and its test comes with it.
+/// # Why production no longer has one
+///
+/// A key acts on the row under the cursor, so it has to know the rows — and it
+/// used to build them at a fixed eighty columns, on the argument that a key
+/// means the same thing whatever the window's size. That argument held while
+/// every note was CUT: an ellipsis changes what a row SAYS and never how many
+/// there are.
+///
+/// A note WRAPS now (`chrome::note_lines`), so one sentence is a row on a wide
+/// screen and three on a narrow one, and every row under it moves. A key
+/// deciding at eighty would act on a different row from the one the door drew
+/// — a control taken somewhere other than where it was drawn, arriving on the
+/// keyboard's axis. So the DOOR's width travels in, and what is left here is a
+/// width the tests agree on.
+#[cfg(test)]
 const DECIDING_WIDTH: u16 = 80;
 
 struct Builder<'a> {
@@ -572,18 +584,22 @@ impl Builder<'_> {
     /// though somebody had chosen it, `↑` from the first screen came back to
     /// it, and `RET` copied it. The rule is the arrangement's instruction's:
     /// a sentence is never a row.
+    ///
+    /// AND IT WRAPS, and it used to be cut. One `Row` per line, through the
+    /// one function the eight views of this shape share — see
+    /// [`crate::chrome::note_lines`]. The sentence this view exists to draw on
+    /// the worst day is *"The compositor could not read its configuration…"*,
+    /// and an ellipsis took the half that says what to do about it.
     fn told(&mut self, text: String) {
-        self.out.push(Row {
-            fields: vec![Self::piece(
-                self.left,
-                layout::elide_end(&text, self.room),
-                tokens::color::TEXT_DIM,
-            )],
-            focused: false,
-            heading: true,
-            target: Target::Nothing,
-            disabled: false,
-        });
+        for line in crate::chrome::note_lines(&text, self.room) {
+            self.out.push(Row {
+                fields: vec![Self::piece(self.left, line, tokens::color::TEXT_DIM)],
+                focused: false,
+                heading: true,
+                target: Target::Nothing,
+                disabled: false,
+            });
+        }
     }
 
     /// [`Builder::told`], from a key.
@@ -721,20 +737,21 @@ impl View {
     /// `disabled` refuses, and `key` reads exactly those two fields before it
     /// acts. So `RET`, `↑` and `↓` are asked of the rows themselves.
     ///
-    /// AT `DECIDING_WIDTH`, like `key`, and for the reason written there: a
-    /// key means the same thing whatever the window's size, and
-    /// `the_rows_are_the_same_things_at_every_width` is what keeps that true.
-    /// The cost is one row set per frame beside the one being drawn; the doors
-    /// already build two.
+    /// AT THE DOOR'S OWN WIDTH, like `key`, and for the reason written
+    /// there: which keys this line teaches comes from the row under the
+    /// cursor, and which row that is moves with the width now that a note
+    /// wraps. The cost is one row set per frame beside the one being drawn;
+    /// the doors already build two.
     #[must_use]
     pub fn hint(
         &self,
         now: &Snapshot,
+        columns: u16,
         moment: Instant,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<crate::chrome::Piece> {
         let asking = self.asking.is_some();
-        let rows = self.rows(now, DECIDING_WIDTH, moment, texts);
+        let rows = self.rows(now, columns, moment, texts);
         // A LEVEL WITH NOTHING TO ACT ON TEACHES NOTHING TO ACT WITH. `RET` is
         // refused on a heading and on a `disabled` row, so a level whose every
         // row is one of those answers it nowhere — an orphan sheet and an
@@ -1063,14 +1080,20 @@ impl View {
     }
 
     /// A key.
+    ///
+    /// THE WIDTH IS THE DOOR'S. A key acts on the row under the cursor and the
+    /// cursor is an index into the rows that were DRAWN, so the two have to be
+    /// the same list — and since a note wraps (`chrome::note_lines`), how many
+    /// rows there are is a function of the width.
     pub fn key(
         &mut self,
         press: Press,
         now: &Snapshot,
+        columns: u16,
         moment: Instant,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
-        let rows = self.rows(now, DECIDING_WIDTH, moment, texts);
+        let rows = self.rows(now, columns, moment, texts);
         self.settle(now, &rows);
         let target = rows
             .get(self.cursor)
@@ -1145,7 +1168,7 @@ impl View {
         // picture one keypress behind: answering the question lit a row four
         // above the knob the hand had just turned, and it only jumped back
         // when something else was pressed.
-        let rows = self.rows(now, DECIDING_WIDTH, moment, texts);
+        let rows = self.rows(now, columns, moment, texts);
         self.settle(now, &rows);
         errand
     }
@@ -3107,7 +3130,7 @@ mod tests {
         let moment = Instant::now();
         for answer in [Press::Escape, Press::Enter, Press::Down] {
             let mut v = View::fresh();
-            v.key(Press::Enter, &now, moment, &texts());
+            v.key(Press::Enter, &now, DECIDING_WIDTH, moment, &texts());
             // WALKED TO, NOT COUNTED TO: how many rows come before the scale
             // depends on how much the monitor says about itself — one with no
             // physical size in its EDID has one fact fewer.
@@ -3116,20 +3139,20 @@ mod tests {
                 if rows[v.cursor].target == Target::Scale {
                     break;
                 }
-                v.key(Press::Down, &now, moment, &texts());
+                v.key(Press::Down, &now, DECIDING_WIDTH, moment, &texts());
             }
             let rows = v.rows(&now, DECIDING_WIDTH, moment, &texts());
             assert_eq!(rows[v.cursor].target, Target::Scale, "not on the scale");
 
-            v.key(Press::More, &now, moment, &texts());
+            v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts());
             assert!(v.asking.is_some(), "the scale did not put a question up");
             // `Down` walks off "put it back" onto "keep it", so the three
             // answers here are refuse, refuse and KEEP.
             if answer == Press::Down {
-                v.key(Press::Down, &now, moment, &texts());
-                v.key(Press::Enter, &now, moment, &texts());
+                v.key(Press::Down, &now, DECIDING_WIDTH, moment, &texts());
+                v.key(Press::Enter, &now, DECIDING_WIDTH, moment, &texts());
             } else {
-                v.key(answer, &now, moment, &texts());
+                v.key(answer, &now, DECIDING_WIDTH, moment, &texts());
             }
             assert!(v.asking.is_none(), "the question stayed up");
 
@@ -3146,13 +3169,13 @@ mod tests {
     fn on_the_row(now: &Snapshot, target: &Target) -> View {
         let moment = Instant::now();
         let mut v = View::fresh();
-        v.key(Press::Enter, now, moment, &texts());
+        v.key(Press::Enter, now, DECIDING_WIDTH, moment, &texts());
         for _ in 0..24 {
             let rows = v.rows(now, DECIDING_WIDTH, moment, &texts());
             if rows[v.cursor].target == *target {
                 return v;
             }
-            v.key(Press::Down, now, moment, &texts());
+            v.key(Press::Down, now, DECIDING_WIDTH, moment, &texts());
         }
         panic!("the sheet has no {target:?} to walk to");
     }
@@ -3198,7 +3221,7 @@ mod tests {
             "a step it cannot compute is offered"
         );
         assert_eq!(
-            v.key(Press::More, &now, moment, &texts()),
+            v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts()),
             Errand::Nothing,
             "a blind door stepped the size of the text",
         );
@@ -3211,7 +3234,7 @@ mod tests {
         seeing.settle(&now, &rows);
         assert!(!rows[seeing.cursor].disabled);
         assert!(matches!(
-            seeing.key(Press::More, &now, moment, &texts()),
+            seeing.key(Press::More, &now, DECIDING_WIDTH, moment, &texts()),
             Errand::Order(_)
         ));
     }
@@ -3230,8 +3253,8 @@ mod tests {
         v.settle(&now, &rows);
         assert_eq!(rows[v.cursor].target, Target::Text);
 
-        let first = asked_size(&v.key(Press::More, &now, moment, &texts()));
-        let second = asked_size(&v.key(Press::More, &now, moment, &texts()));
+        let first = asked_size(&v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts()));
+        let second = asked_size(&v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts()));
         assert!(
             second > first,
             "two presses asked for {first} and then {second}",
@@ -3279,7 +3302,7 @@ mod tests {
             rows[v.cursor].disabled,
             "the row this is about is not refused"
         );
-        let out = v.key(Press::Automatic, &now, moment, &texts());
+        let out = v.key(Press::Automatic, &now, DECIDING_WIDTH, moment, &texts());
         assert_eq!(asked_for(&out), Ask::Mode(None), "`a` was swallowed");
     }
 
@@ -3307,8 +3330,8 @@ mod tests {
                 .map(|p| p.x)
                 .expect("no place was written")
         };
-        let first = spot(&v.key(Press::More, &now, moment, &texts()));
-        let second = spot(&v.key(Press::More, &now, moment, &texts()));
+        let first = spot(&v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts()));
+        let second = spot(&v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts()));
         assert_eq!(
             second - first,
             NUDGE,
@@ -3335,7 +3358,7 @@ mod tests {
         // AND A REFUSAL LETS GO OF IT TOO, or the row would hold a place the
         // file does not have for the life of the view — but only the refusal
         // of THAT order. Every knob that writes straight down emits a `Keep`.
-        let out = v.key(Press::More, &now, moment, &texts());
+        let out = v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts());
         let asked = kept(&out);
         assert!(v.place_pending.is_some());
         v.place_never_landed("DP-1", &asked);
@@ -3371,7 +3394,7 @@ mod tests {
                 .is_some_and(|s| s.wanted.position.is_none())
         );
         assert_eq!(
-            v.key(Press::Automatic, &now, moment, &texts()),
+            v.key(Press::Automatic, &now, DECIDING_WIDTH, moment, &texts()),
             Errand::Nothing,
             "handing back a place nobody chose wrote the file",
         );
@@ -3382,7 +3405,7 @@ mod tests {
         screens[0].wanted.position = Some(ronoctua_display::fragment::Spot { x: 100, y: 0 });
         let placed = snapshot(screens);
         let mut v = on_the_row(&placed, &Target::Place("eDP-1".to_owned()));
-        let out = v.key(Press::Automatic, &placed, moment, &texts());
+        let out = v.key(Press::Automatic, &placed, DECIDING_WIDTH, moment, &texts());
         assert!(
             kept(&out).position.is_none(),
             "the place was not handed back: {out:?}",
@@ -3453,7 +3476,7 @@ mod tests {
 
         // AND THE ARROWS REACH IT, which is what makes the row worth drawing.
         let mut v = on_the_row(&open, &Target::Light);
-        let out = v.key(Press::More, &open, moment, &texts());
+        let out = v.key(Press::More, &open, DECIDING_WIDTH, moment, &texts());
         match out {
             Errand::Order(o) => match *o {
                 ronoctua_display::Order::Bright { by, .. } => assert!(by > 0),
@@ -3464,7 +3487,7 @@ mod tests {
         // AND ON THE ONE THAT REFUSES, NOTHING.
         let mut v = on_the_row(&shut, &Target::Light);
         assert_eq!(
-            v.key(Press::More, &shut, moment, &texts()),
+            v.key(Press::More, &shut, DECIDING_WIDTH, moment, &texts()),
             Errand::Nothing,
             "a panel that belongs to root took the key anyway",
         );
@@ -3492,11 +3515,11 @@ mod tests {
 
         // `→` IS YES, and this screen does not have it.
         assert_eq!(
-            v.key(Press::Less, &now, moment, &texts()),
+            v.key(Press::Less, &now, DECIDING_WIDTH, moment, &texts()),
             Errand::Nothing,
             "`less` on a screen that does not have it did something",
         );
-        let out = v.key(Press::More, &now, moment, &texts());
+        let out = v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts());
         let Errand::Orders(orders) = out else {
             panic!("not a batch of orders: {out:?}");
         };
@@ -3526,11 +3549,11 @@ mod tests {
         // yes. `→` on the screen that already has it writes nothing; `←` takes
         // it away, and takes it from nobody else.
         assert_eq!(
-            v.key(Press::More, &now, moment, &texts()),
+            v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts()),
             Errand::Nothing,
             "`more` on the screen the session already opens on did something",
         );
-        let out = v.key(Press::Less, &now, moment, &texts());
+        let out = v.key(Press::Less, &now, DECIDING_WIDTH, moment, &texts());
         let Errand::Order(o) = out else {
             panic!("turning the flag off should be one order: {out:?}");
         };
@@ -3556,7 +3579,7 @@ mod tests {
         let moment = Instant::now();
         let mut v = on_the_row(&now, &Target::Vary);
         assert_eq!(
-            v.key(Press::More, &now, moment, &texts()),
+            v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts()),
             Errand::Nothing,
             "the top of the knob wrote the file",
         );
@@ -3567,7 +3590,7 @@ mod tests {
         let bottom = snapshot(screens);
         let mut v = on_the_row(&bottom, &Target::Vary);
         assert_eq!(
-            v.key(Press::Less, &bottom, moment, &texts()),
+            v.key(Press::Less, &bottom, DECIDING_WIDTH, moment, &texts()),
             Errand::Nothing,
             "the bottom of the knob wrote the file",
         );
@@ -3605,7 +3628,7 @@ mod tests {
         let t = texts();
         let alone = snapshot(vec![screen("eDP-1", true)]);
         let said = |v: &View, now: &Snapshot| {
-            v.hint(now, Instant::now(), &t)
+            v.hint(now, DECIDING_WIDTH, Instant::now(), &t)
                 .iter()
                 .map(|p| p.text.clone())
                 .collect::<Vec<_>>()
@@ -3666,14 +3689,14 @@ mod tests {
         let now = snapshot(screens);
         let moment = Instant::now();
         let mut v = View::fresh();
-        v.key(Press::Enter, &now, moment, &texts());
+        v.key(Press::Enter, &now, DECIDING_WIDTH, moment, &texts());
         let rows = v.rows(&now, DECIDING_WIDTH, moment, &texts());
         let was = v.cursor;
         assert_eq!(rows[was].target, Target::Nothing, "not standing on a fact");
 
-        v.key(Press::Forget, &now, moment, &texts());
+        v.key(Press::Forget, &now, DECIDING_WIDTH, moment, &texts());
         assert!(v.asking.is_some(), "`d` raised no question from a fact");
-        v.key(Press::Escape, &now, moment, &texts());
+        v.key(Press::Escape, &now, DECIDING_WIDTH, moment, &texts());
         assert_eq!(v.cursor, was, "the cursor did not come back to the fact");
     }
 
@@ -3695,7 +3718,7 @@ mod tests {
         v.settle(&now, &rows);
         assert_eq!(rows[v.cursor].target, Target::Scale);
         assert_eq!(
-            v.key(Press::Automatic, &now, moment, &texts()),
+            v.key(Press::Automatic, &now, DECIDING_WIDTH, moment, &texts()),
             Errand::Nothing,
             "`a` threw a setting away on a screen nobody is looking at",
         );
@@ -3708,7 +3731,7 @@ mod tests {
         // rescue.
         let t = texts();
         let line = v
-            .hint(&now, Instant::now(), &t)
+            .hint(&now, DECIDING_WIDTH, Instant::now(), &t)
             .iter()
             .map(|p| p.text.clone())
             .collect::<Vec<_>>()
@@ -3726,7 +3749,7 @@ mod tests {
         chosen[0].wanted.scale = Some(1.5);
         let chosen = snapshot(chosen);
         let said = |v: &View, now: &Snapshot| {
-            v.hint(now, Instant::now(), &t)
+            v.hint(now, DECIDING_WIDTH, Instant::now(), &t)
                 .iter()
                 .map(|p| p.text.clone())
                 .collect::<Vec<_>>()
@@ -3755,7 +3778,7 @@ mod tests {
         let t = texts();
         let two = snapshot(vec![screen("eDP-1", true), screen("DP-1", true)]);
         let said = |v: &View, now: &Snapshot| {
-            v.hint(now, Instant::now(), &t)
+            v.hint(now, DECIDING_WIDTH, Instant::now(), &t)
                 .iter()
                 .map(|p| p.text.clone())
                 .collect::<Vec<_>>()
@@ -3817,7 +3840,7 @@ mod tests {
         pressing.at = Some(Target::First);
         assert!(
             !matches!(
-                pressing.key(Press::More, &lid, Instant::now(), &t),
+                pressing.key(Press::More, &lid, DECIDING_WIDTH, Instant::now(), &t),
                 Errand::Nothing
             ),
             "the row the hint promises does nothing",
@@ -3849,7 +3872,7 @@ mod tests {
             "this level is meant to have no row the cursor can stand on",
         );
         assert_eq!(
-            arranging.key(Press::Enter, &now, moment, &texts()),
+            arranging.key(Press::Enter, &now, DECIDING_WIDTH, moment, &texts()),
             Errand::Nothing,
             "`RET` copied the level's own title",
         );
@@ -3857,7 +3880,7 @@ mod tests {
         let mut orphan = View::fresh();
         orphan.go_to(Level::Monitor("HDMI-1".to_owned()));
         assert_eq!(
-            orphan.key(Press::Enter, &now, moment, &texts()),
+            orphan.key(Press::Enter, &now, DECIDING_WIDTH, moment, &texts()),
             Errand::Nothing,
             "`RET` copied the title of a sheet whose screen went away",
         );
@@ -3866,7 +3889,7 @@ mod tests {
         // refusals rather than a key that stopped working.
         let mut sheet = on_the_row(&now, &Target::Scale);
         assert!(matches!(
-            sheet.key(Press::Enter, &now, moment, &texts()),
+            sheet.key(Press::Enter, &now, DECIDING_WIDTH, moment, &texts()),
             Errand::Copy(_)
         ));
     }
@@ -3923,7 +3946,7 @@ mod tests {
         let moment = Instant::now();
         let one = snapshot(vec![screen("eDP-1", true)]);
         let said = |v: &View, now: &Snapshot| {
-            v.hint(now, moment, &t)
+            v.hint(now, DECIDING_WIDTH, moment, &t)
                 .iter()
                 .map(|p| p.text.clone())
                 .collect::<Vec<_>>()
@@ -4022,7 +4045,7 @@ mod tests {
         let t = texts();
         let now = snapshot(vec![screen("eDP-1", true), screen("DP-1", true)]);
         let said = |v: &View| {
-            v.hint(&now, Instant::now(), &t)
+            v.hint(&now, DECIDING_WIDTH, Instant::now(), &t)
                 .iter()
                 .map(|p| p.text.clone())
                 .collect::<Vec<_>>()
@@ -4061,7 +4084,7 @@ mod tests {
         let mut bare = snapshot(vec![]);
         bare.compositor = false;
         let line = View::fresh()
-            .hint(&bare, Instant::now(), &t)
+            .hint(&bare, DECIDING_WIDTH, Instant::now(), &t)
             .iter()
             .map(|p| p.text.clone())
             .collect::<Vec<_>>()
@@ -4080,7 +4103,7 @@ mod tests {
         let now = snapshot(vec![screen("eDP-1", true), screen("DP-1", true)]);
         let moment = Instant::now();
         let mut v = on_the_row(&now, &Target::Scale);
-        let sent = v.key(Press::More, &now, moment, &texts());
+        let sent = v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts());
         let asked = asked_for(&sent);
         let standing = v.asking.clone().expect("no question");
         assert_eq!(standing.at, "eDP-1");
@@ -4127,12 +4150,12 @@ mod tests {
         let now = snapshot(screens);
         let moment = Instant::now();
         let mut v = on_the_row(&now, &Target::Turn);
-        v.key(Press::More, &now, moment, &texts());
+        v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts());
         let armed = v.asking.clone().expect("the turn raised no question");
         assert!(armed.on_the_clock());
 
         for letter in [Press::Forget, Press::Automatic] {
-            v.key(letter, &now, moment, &texts());
+            v.key(letter, &now, DECIDING_WIDTH, moment, &texts());
             assert_eq!(
                 v.asking.as_ref().map(|a| a.deciding.clone()),
                 Some(armed.deciding.clone()),
@@ -4162,7 +4185,7 @@ mod tests {
             rows[v.cursor].disabled,
             "the row this is about is not refused"
         );
-        v.key(Press::Forget, &now, moment, &texts());
+        v.key(Press::Forget, &now, DECIDING_WIDTH, moment, &texts());
         assert!(
             matches!(
                 v.asking.as_ref().map(|a| &a.deciding),
@@ -4187,7 +4210,7 @@ mod tests {
 
         for target in [Target::Turn, Target::Scale] {
             let mut v = on_the_row(&now, &target);
-            let out = v.key(Press::More, &now, moment, &texts());
+            let out = v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts());
             assert_eq!(out, Errand::Nothing, "{target:?} asked for something");
             assert!(v.asking.is_none(), "{target:?} raised a question anyway");
         }
@@ -4202,7 +4225,7 @@ mod tests {
                 .screen("eDP-1")
                 .is_some_and(|s| s.wanted.scale.is_none())
         );
-        let out = v.key(Press::Automatic, &fresh, moment, &texts());
+        let out = v.key(Press::Automatic, &fresh, DECIDING_WIDTH, moment, &texts());
         assert_eq!(out, Errand::Nothing);
         assert!(v.asking.is_none(), "`a` raised a question about nothing");
     }
@@ -4219,13 +4242,13 @@ mod tests {
         // `Less`, BECAUSE THE FIXTURE OPENS ON THE LARGEST: the sizes are
         // listed largest first and `More` at the top now has nowhere to go,
         // which is the fix the test above pins.
-        let out = v.key(Press::Less, &now, moment, &texts());
+        let out = v.key(Press::Less, &now, DECIDING_WIDTH, moment, &texts());
         let Ask::Mode(Some(asked)) = asked_for(&out) else {
             panic!("the resolution did not ask for a mode");
         };
-        v.key(Press::Down, &now, moment, &texts());
+        v.key(Press::Down, &now, DECIDING_WIDTH, moment, &texts());
         // THE READING HAS NOT MOVED, which is the case this is about.
-        let out = v.key(Press::Enter, &now, moment, &texts());
+        let out = v.key(Press::Enter, &now, DECIDING_WIDTH, moment, &texts());
         let kept = kept(&out).mode.expect("no mode was kept");
         assert_eq!((kept.width, kept.height), (asked.width, asked.height));
         assert_eq!(kept.rate, asked.refresh);
@@ -4245,12 +4268,12 @@ mod tests {
         // PICTURE and did the same thing, so on a lit screen the key the line
         // calls "more" turned the screen off.
         assert_eq!(
-            v.key(Press::More, &now, moment, &texts()),
+            v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts()),
             Errand::Nothing,
             "`more` on a screen that is already lit did something",
         );
         assert!(v.asking.is_none());
-        let out = v.key(Press::Less, &now, moment, &texts());
+        let out = v.key(Press::Less, &now, DECIDING_WIDTH, moment, &texts());
         assert_eq!(asked_for(&out), Ask::Off, "a lit screen was asked to light");
         assert_eq!(
             v.asking.as_ref().map(|a| a.what),
@@ -4272,11 +4295,11 @@ mod tests {
         assert_eq!(rows[v.cursor].target, Target::Power);
         assert!(!rows[v.cursor].disabled, "the row this key is for refuses");
         assert_eq!(
-            v.key(Press::Less, &dark, moment, &texts()),
+            v.key(Press::Less, &dark, DECIDING_WIDTH, moment, &texts()),
             Errand::Nothing,
             "`less` on a screen that is already dark did something",
         );
-        let out = v.key(Press::More, &dark, moment, &texts());
+        let out = v.key(Press::More, &dark, DECIDING_WIDTH, moment, &texts());
         // AND A DARK SCREEN IS WRITTEN, NOT PREVIEWED. There is nothing on it
         // to compare a preview against, and lighting one cannot blind
         // anybody — so the countdown would be fifteen seconds of a sentence
@@ -4304,7 +4327,10 @@ mod tests {
             rows[v.cursor].fields.iter().any(|f| f.text == said),
             "the row refuses without saying why",
         );
-        assert_eq!(v.key(Press::More, &lid, moment, &texts()), Errand::Nothing);
+        assert_eq!(
+            v.key(Press::More, &lid, DECIDING_WIDTH, moment, &texts()),
+            Errand::Nothing
+        );
     }
 
     #[test]
@@ -4316,11 +4342,11 @@ mod tests {
         let now = snapshot(vec![screen("eDP-1", true)]);
         let moment = Instant::now();
         let mut v = on_the_row(&now, &Target::Scale);
-        v.key(Press::More, &now, moment, &texts());
+        v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts());
         assert!(v.asking.is_some());
         // The cursor is on "put it back"; one row down is "keep it".
-        v.key(Press::Down, &now, moment, &texts());
-        let out = v.key(Press::Enter, &now, moment, &texts());
+        v.key(Press::Down, &now, DECIDING_WIDTH, moment, &texts());
+        let out = v.key(Press::Enter, &now, DECIDING_WIDTH, moment, &texts());
         let w = kept(&out);
         assert!(
             w.scale.is_some(),
@@ -4342,13 +4368,13 @@ mod tests {
         let now = snapshot(vec![screen("eDP-1", true)]);
         let moment = Instant::now();
         let mut v = on_the_row(&now, &Target::Turn);
-        let out = v.key(Press::More, &now, moment, &texts());
+        let out = v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts());
         let Ask::Transform(asked) = asked_for(&out) else {
             panic!("the turn did not ask for a turn");
         };
         assert_ne!(asked, Transform::Normal);
-        v.key(Press::Down, &now, moment, &texts());
-        let out = v.key(Press::Enter, &now, moment, &texts());
+        v.key(Press::Down, &now, DECIDING_WIDTH, moment, &texts());
+        let out = v.key(Press::Enter, &now, DECIDING_WIDTH, moment, &texts());
         assert_eq!(kept(&out).transform, asked, "the turn was not kept");
     }
 
@@ -4362,10 +4388,10 @@ mod tests {
         let now = snapshot(screens);
         let moment = Instant::now();
         let mut v = on_the_row(&now, &Target::Scale);
-        let out = v.key(Press::Less, &now, moment, &texts());
+        let out = v.key(Press::Less, &now, DECIDING_WIDTH, moment, &texts());
         assert_eq!(asked_for(&out), Ask::Scale(None), "it did not hand it back");
-        v.key(Press::Down, &now, moment, &texts());
-        let out = v.key(Press::Enter, &now, moment, &texts());
+        v.key(Press::Down, &now, DECIDING_WIDTH, moment, &texts());
+        let out = v.key(Press::Enter, &now, DECIDING_WIDTH, moment, &texts());
         assert_eq!(kept(&out).scale, None, "it wrote a number down instead");
     }
 
@@ -4382,7 +4408,7 @@ mod tests {
         let now = snapshot(screens);
         let moment = Instant::now();
         let mut v = on_the_row(&now, &Target::Scale);
-        let out = v.key(Press::More, &now, moment, &texts());
+        let out = v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts());
         let Ask::Scale(Some(next)) = asked_for(&out) else {
             panic!("more did not ask for a scale");
         };
@@ -4547,7 +4573,7 @@ mod tests {
         let now = snapshot(vec![screen("eDP-1", true)]);
         let mut v = View::fresh();
         let moment = Instant::now();
-        v.key(Press::Enter, &now, moment, &texts());
+        v.key(Press::Enter, &now, DECIDING_WIDTH, moment, &texts());
         let rows = v.rows(&now, DECIDING_WIDTH, moment, &texts());
         let want: Vec<Target> = rows
             .iter()
@@ -4561,7 +4587,7 @@ mod tests {
 
         let mut walked = vec![rows[v.cursor].target.clone()];
         for _ in 1..want.len() {
-            v.key(Press::Down, &now, moment, &texts());
+            v.key(Press::Down, &now, DECIDING_WIDTH, moment, &texts());
             let rows = v.rows(&now, DECIDING_WIDTH, moment, &texts());
             walked.push(rows[v.cursor].target.clone());
         }
@@ -4570,7 +4596,7 @@ mod tests {
         // AND IT STOPS AT THE END rather than wrapping: the last `Down` on the
         // last row leaves the cursor where it is, which is what `walk` breaks
         // for.
-        v.key(Press::Down, &now, moment, &texts());
+        v.key(Press::Down, &now, DECIDING_WIDTH, moment, &texts());
         let rows = v.rows(&now, DECIDING_WIDTH, moment, &texts());
         assert_eq!(rows[v.cursor].target, *want.last().unwrap());
     }
@@ -4645,19 +4671,37 @@ mod tests {
             stood_at: 3,
             was: None,
         });
-        let out = v.key(Press::Escape, &now, Instant::now(), &texts());
+        let out = v.key(
+            Press::Escape,
+            &now,
+            DECIDING_WIDTH,
+            Instant::now(),
+            &texts(),
+        );
         assert!(matches!(&out, Errand::Order(o) if **o == ronoctua_display::Order::Undo));
         // AND IT STAYS ON THE SHEET. `Esc` answered the question; it did not
         // also walk out of the screen one was looking at.
         assert_eq!(v.level, Level::Monitor("eDP-1".to_owned()));
         // The next one leaves the level, and the one after closes.
         assert_eq!(
-            v.key(Press::Escape, &now, Instant::now(), &texts()),
+            v.key(
+                Press::Escape,
+                &now,
+                DECIDING_WIDTH,
+                Instant::now(),
+                &texts()
+            ),
             Errand::Nothing
         );
         assert_eq!(v.level, Level::List);
         assert_eq!(
-            v.key(Press::Escape, &now, Instant::now(), &texts()),
+            v.key(
+                Press::Escape,
+                &now,
+                DECIDING_WIDTH,
+                Instant::now(),
+                &texts()
+            ),
             Errand::Close
         );
     }
@@ -4790,7 +4834,7 @@ mod tests {
             .expect("the arrangement has no row for eDP-1");
         v.cursor = at;
         v.at = Some(Target::Place("eDP-1".to_owned()));
-        let _ = v.key(Press::Automatic, &two, moment, &t);
+        let _ = v.key(Press::Automatic, &two, DECIDING_WIDTH, moment, &t);
         assert_eq!(
             v.place_pending.as_ref().map(|(who, _, _)| who.as_str()),
             Some("DP-1"),
@@ -4805,7 +4849,7 @@ mod tests {
             .expect("the arrangement has no row for DP-1");
         v.cursor = at;
         v.at = Some(Target::Place("DP-1".to_owned()));
-        let _ = v.key(Press::Automatic, &two, moment, &t);
+        let _ = v.key(Press::Automatic, &two, DECIDING_WIDTH, moment, &t);
         assert_eq!(v.place_pending, None, "the screen's own nudge outlived `a`");
     }
 
@@ -4832,7 +4876,7 @@ mod tests {
             .expect("the sheet has no power row");
         v.cursor = at;
         v.at = Some(Target::Power);
-        let armed = v.key(Press::Less, &two, moment, &t);
+        let armed = v.key(Press::Less, &two, DECIDING_WIDTH, moment, &t);
         assert!(
             !matches!(armed, Errand::Nothing),
             "turning the screen off was refused while two were lit",
@@ -4852,7 +4896,7 @@ mod tests {
         // answers `Undo` whether or not the guard exists, and the test passed
         // over a missing guard.
         v.at = Some(Target::KeepIt);
-        let answered = v.key(Press::Enter, &alone, moment, &t);
+        let answered = v.key(Press::Enter, &alone, DECIDING_WIDTH, moment, &t);
         match answered {
             Errand::Order(o) => assert!(
                 matches!(*o, ronoctua_display::Order::Undo),

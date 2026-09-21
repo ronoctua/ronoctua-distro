@@ -1250,55 +1250,97 @@ pub fn hint_sentence(id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
     texts.has(&about).then(|| texts.t(&about))
 }
 
-/// A WINDOW'S HINT LINE, and the shortcut the pointer is resting on it.
+/// A WINDOW'S HEADER: the line that teaches its keys, the drawer that opens
+/// it, and the shortcut the pointer is resting on it.
 ///
 /// # Why the ten doors share a struct and the footer does not
 ///
-/// Because the ten are one shape — a hint on line 0 and a list under it — and
-/// the thing being kept is three lines of state each: what was drawn, what the
-/// pointer is on, and whether that costs the list a row. Ten copies of that is
-/// ten places for the answer to drift, which is what this whole module exists
-/// to stop.
+/// Because the ten are one shape — a header on line 0 and a list under it —
+/// and what is kept for it is the same four things each: where every shortcut
+/// landed, what the pointer is on, whether the line is open and how far down
+/// it is scrolled. Ten copies of that is ten places for the answer to drift,
+/// which is what this whole module exists to stop — and the drawer is the
+/// proof of it, because it was written for the footer, written again for the
+/// file manager's window, and written in none of the other ten.
 ///
-/// The footer keeps its own (`Footer::hint_placed`, `Footer::hint_said`)
-/// because there the row is not free: it comes out of the region and never off
-/// the footer's height, for a reason written in full on `Footer::explain_rows`.
-/// A window is not anchored to the bottom of the screen and simply shows one
-/// row fewer of its list.
-#[derive(Debug, Default, Clone)]
+/// The footer keeps its own (`Footer::hint_placed`, `Footer::hint_said`,
+/// `Footer::fold`) because there the row is not free: it comes out of the
+/// region and never off the footer's height, for a reason written in full on
+/// `Footer::explain_rows`. A window is not anchored to the bottom of the
+/// screen and simply shows one row fewer of its list.
+#[derive(Debug, Clone)]
 pub struct Hinted {
     /// The hint, as the LAST FRAME laid it out.
     placed: Vec<Mark>,
     /// The sentence about the shortcut under the pointer, while there is one.
     said: Option<String>,
+    /// Whether the line is OPEN, and how far down it is scrolled.
+    ///
+    /// # Why the ten windows have one at all
+    ///
+    /// Because the line is CUT, and what it carries is a table of shortcuts
+    /// that is routinely longer than the window. The footer's minibuffer has
+    /// opened into a drawer since `crate::fold` was written, and so has the
+    /// file manager's window; the other ten doors drew the same line with an
+    /// ellipsis at the end of it and no way to see the rest. The owner found
+    /// it on the language and region window — *"a linha do header com os
+    /// atalhos não tem a feature com o ícone de chevron para expandir/recolher
+    /// o header"* — and asked for every door to be checked.
+    ///
+    /// It is HERE and not in each door for the reason the marks are: ten
+    /// copies of a drawer is ten places for the answer to drift.
+    fold: crate::fold::Fold,
+    /// The cell the chevron was DRAWN at, or none while the line fits.
+    ///
+    /// Written down by the painter and read by the pointer — a control is
+    /// taken where it was drawn, never where a second sum says it should be.
+    control: Option<u16>,
+    /// The drawer's bar, from the wrap that was drawn.
+    scroll: ronoctua_design::Scroll,
+    /// How tall the line came to at this width, for [`Hinted::settled`].
+    ///
+    /// The height is asked for BEFORE the frame and the wrap is only known
+    /// inside it, so the drawing writes this down and the settling pass reads
+    /// it back — once. See `fold::Fold::held`.
+    wrapped: usize,
+    /// Is the drawer's bar being dragged?
+    dragging: bool,
+    /// Is the RIGHT `Ctrl` down?
+    ///
+    /// Tracked by its keysym, as the footer tracks it: xkb merges both Ctrls
+    /// into one bit and the modifier event does not say which key went down.
+    /// It is the one modifier family free in every view by construction — no
+    /// view sees it — and this line belongs to every view, which is why its
+    /// keys live on it. See `Hinted::took_a_key`.
+    right_ctrl: bool,
+}
+
+impl Default for Hinted {
+    fn default() -> Self {
+        Self {
+            placed: Vec::new(),
+            said: None,
+            fold: crate::fold::Fold::default(),
+            control: None,
+            scroll: ronoctua_design::Scroll {
+                total: 0,
+                lines: 0,
+                offset: 0,
+                top: 0,
+            },
+            wrapped: 0,
+            dragging: false,
+            right_ctrl: false,
+        }
+    }
 }
 
 impl Hinted {
-    /// Records where the hint's shortcuts were drawn.
-    ///
-    /// Called with the SAME arguments as [`hint_spans`], beside it, so the
-    /// marks and the ink are one placement — see [`hint_marks`].
-    pub fn drew(&mut self, pieces: &[Piece], column: u16, line: u16, room: u16) {
-        self.took(hint_marks(pieces, column, line, room));
-    }
-
     /// The same, for a door that draws the line over SEVERAL rows and so
     /// collects the marks itself — the file manager's window, whose hint line
     /// opens into a drawer.
     pub fn took(&mut self, marks: Vec<Mark>) {
         self.placed = marks;
-    }
-
-    /// The line is showing something else this frame, so there is no shortcut
-    /// on it to point at.
-    ///
-    /// This forgets WHERE, and not WHAT: the sentence is taken away by
-    /// whoever decided the line was not a hint, and it is taken away BEFORE
-    /// the list is measured. Cleared here instead, the row the explanation
-    /// costs would have been counted and then not drawn, and the list would
-    /// come up one row short for a frame.
-    pub fn drew_nothing(&mut self) {
-        self.placed.clear();
     }
 
     /// Which shortcut the pointer is resting on, at a window's own pixels.
@@ -1330,20 +1372,352 @@ impl Hinted {
         true
     }
 
-    /// How many lines it takes: one while a shortcut is under the pointer,
-    /// none otherwise.
+    /// How many lines the header costs UNDER line 0: the drawer, and the
+    /// sentence about the shortcut the pointer is on.
     ///
-    /// The owner chose this over a row that stands empty at rest — *"só existe
-    /// enquanto há hover"*.
+    /// The sentence is one row while a shortcut is under the pointer and none
+    /// otherwise — the owner chose that over a row that stands empty at rest,
+    /// *"só existe enquanto há hover"*.
     #[must_use]
     pub fn rows(&self) -> u16 {
-        u16::from(self.said.is_some())
+        self.folded_rows() + u16::from(self.said.is_some())
+    }
+
+    /// How many rows the OPENED line takes under itself. `0` while it is shut.
+    #[must_use]
+    pub fn folded_rows(&self) -> u16 {
+        crate::fold::rows(self.fold)
     }
 
     /// The sentence, when there is one.
     #[must_use]
     pub fn said(&self) -> Option<&str> {
         self.said.as_deref()
+    }
+
+    /// LINE 0 OF A WINDOW, and the drawer it opens into.
+    ///
+    /// # Why the painting is here and not in the ten doors
+    ///
+    /// Because it was in the ten doors, and they had ten chances to answer
+    /// differently. What this draws is: the line — the view's shortcuts, or
+    /// what the last order said — the chevron on its right edge when it does
+    /// not fit, the wrapped rest of it when the chevron has been pressed, and
+    /// the sentence about the shortcut the pointer is resting on. Every one of
+    /// those was written out in each window, and the drawer was written in
+    /// none of them.
+    ///
+    /// `hinting` says whether the runs are SHORTCUTS. When they are, each one
+    /// is recorded where it landed so the pointer can name it, and the keys
+    /// that walk the drawer are taught inside it (see `fold::teaching`); when
+    /// the line is carrying a message there is no shortcut on it to point at.
+    ///
+    /// ONE PAINTER for both, which is a correction this module has already
+    /// made for the footer: a message went through `elide_end` with a
+    /// hand-written token beside a hint that went through [`hint_spans`], and
+    /// the same sentence came out in two colours in two doors.
+    pub fn head(
+        &mut self,
+        pieces: &[Piece],
+        hinting: bool,
+        margin: u16,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<ronoctua_render::Span> {
+        let size = tokens::text::size();
+        let mut line: Vec<Piece> = pieces.to_vec();
+        // AND THE KEYS THAT WALK IT, once it is open. Only then: on a folded
+        // line they would name a gesture that does nothing.
+        if hinting && self.fold.open {
+            line.extend(crate::fold::teaching(texts));
+        }
+        let text: String = line.iter().map(|p| p.text.as_str()).collect();
+        // THE CONTROL TAKES ITS CELLS BEFORE THE TEXT IS MEASURED, exactly as
+        // the sidebar's eject glyph does: a control drawn over text that was
+        // measured without it is a control that covers a word.
+        //
+        // It is offered when the line would be CUT, and also whenever it is
+        // already open — otherwise the one gesture that closes it disappears
+        // the moment the content happens to fit.
+        let opens = self.fold.open
+            || crate::fold::wanted(&text, columns.saturating_sub(crate::fold::WIDTH));
+        let room = columns.saturating_sub(if opens { crate::fold::WIDTH } else { 0 });
+        self.wrapped = if opens {
+            crate::fold::wrap_pieces(&line, room).len()
+        } else {
+            0
+        };
+        let mut spans: Vec<ronoctua_render::Span> = Vec::new();
+        let mut marks: Vec<Mark> = Vec::new();
+        if self.fold.open {
+            // OPENED, the line is its own first row and the rest follow under
+            // it.
+            let (showing, scroll) = crate::fold::opened(&line, room, self.fold);
+            for (n, row) in showing.into_iter().enumerate() {
+                let at = u16::try_from(n).unwrap_or(0);
+                spans.extend(hint_spans(
+                    &row,
+                    ronoctua_render::Size::Px(size),
+                    margin,
+                    at,
+                    room,
+                ));
+                // EVERY ROW OF THE DRAWER ANSWERS THE POINTER, not just the
+                // first: opened, this line is where the whole table is
+                // legible, which is where somebody goes looking.
+                if hinting {
+                    marks.extend(hint_marks(&row, margin, at, room));
+                }
+            }
+            self.scroll = scroll;
+        } else {
+            spans.extend(hint_spans(
+                &line,
+                ronoctua_render::Size::Px(size),
+                margin,
+                0,
+                room,
+            ));
+            if hinting {
+                marks.extend(hint_marks(&line, margin, 0, room));
+            }
+        }
+        self.placed = marks;
+        // THE CONTROL THAT OPENS THE LINE, flush against the right edge. No
+        // box and no border (invariant 15): a glyph on the line that is
+        // already there.
+        self.control = opens.then(|| columns.saturating_sub(1) + margin);
+        if let Some(at) = self.control {
+            let chevron = if self.fold.open {
+                tokens::icon::COLLAPSE
+            } else {
+                tokens::icon::EXPAND
+            };
+            spans.push(ronoctua_render::Span {
+                size: ronoctua_render::Size::OnTheCell(crate::surface::chrome_size_of(chevron)),
+                text: chevron.to_string(),
+                column: at,
+                line: 0,
+                color: if self.fold.open {
+                    tokens::color::TEXT_SUBTLE_STRONG
+                } else {
+                    tokens::color::TEXT_SUBTLE_DEFAULT
+                },
+                edge: false,
+                foot: false,
+            });
+        }
+        // AND THE SHORTCUT UNDER THE POINTER, SPELT OUT, on the line below the
+        // header: the line the owner asked for. It costs the list one row for
+        // as long as the pointer is on a key, and nothing above it moves.
+        if let Some(said) = &self.said {
+            spans.push(ronoctua_render::Span {
+                size: ronoctua_render::Size::Px(size),
+                text: ronoctua_render::layout::elide_end(said, columns),
+                column: margin,
+                line: 1 + self.folded_rows(),
+                color: Register::Explain.color(),
+                edge: false,
+                foot: false,
+            });
+        }
+        spans
+    }
+
+    /// The opened drawer's bar, when the wrap ran past it.
+    ///
+    /// One rectangle, from `Scroll` — the same call every other bar in this
+    /// system makes.
+    #[must_use]
+    pub fn bar(&self, f: Frame) -> Option<ronoctua_render::quad::Quad> {
+        if !self.fold.open || !self.scroll.cut() {
+            return None;
+        }
+        let top = f.y_of(0);
+        let bottom =
+            top + f.line() * f32::from(u16::try_from(self.scroll.lines).unwrap_or(u16::MAX));
+        let (x, y, width, height) = self.scroll.bar(f.width, top, bottom, f.cell(), f.line())?;
+        Some(ronoctua_render::quad::Quad {
+            x,
+            y,
+            width,
+            height,
+            color: tokens::color::RULE_STRONG,
+        })
+    }
+
+    /// Measures the opened drawer ONCE, after the frame that drew it.
+    ///
+    /// `true` when the height changed and the door owes another frame. It
+    /// answers once and then never again — see `fold::settle`.
+    pub fn settled(&mut self) -> bool {
+        crate::fold::settle(&mut self.fold, self.wrapped)
+    }
+
+    /// Is the pointer on the control that opens the line?
+    ///
+    /// It asks the cell that was DRAWN rather than working the position out
+    /// again: what the pointer hits has to be what the eye saw.
+    #[must_use]
+    pub fn on_the_control(&self, f: Frame, x: f64, y: f64) -> bool {
+        let Some(at) = self.control else {
+            return false;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        if f.line_at(y as f32) != Some(0) {
+            return false;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let cell = f.column_at(x as f32);
+        // THE AIR BESIDE THE GLYPH IS PART OF THE TARGET: a chevron does not
+        // fill its cell, and a target the size of the ink is one to aim at.
+        cell + 1 >= at
+    }
+
+    /// Is the pointer inside the drawer — its own line and the rows under it?
+    #[must_use]
+    pub fn on_the_drawer(&self, f: Frame, y: f64) -> bool {
+        #[allow(clippy::cast_possible_truncation)]
+        let Some(line) = f.line_at(y as f32) else {
+            return false;
+        };
+        self.fold.open && line <= self.folded_rows()
+    }
+
+    /// The drawer's bar as a rectangle to PRESS.
+    ///
+    /// The whole TRACK and not the drawn handle, which is the rule every bar
+    /// in this system follows: `Scroll::offset_at` maps any point of it, so
+    /// nobody has to aim at the thumb.
+    fn track(&self, f: Frame) -> Option<(f32, f32)> {
+        if !self.fold.open || !self.scroll.cut() {
+            return None;
+        }
+        Some((f.y_of(0), f.line() * f32::from(self.folded_rows())))
+    }
+
+    /// A press on the line's own controls: the chevron, or its bar.
+    ///
+    /// `true` when it was taken, and then the door does nothing else with it.
+    pub fn pressed(&mut self, f: Frame, x: f64, y: f64) -> bool {
+        if self.on_the_control(f, x, y) {
+            self.fold.toggle();
+            return true;
+        }
+        let Some((top, tall)) = self.track(f) else {
+            return false;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let (px, py) = (x as f32, y as f32);
+        if px < f.width - f.cell() || py < top || py >= top + tall {
+            return false;
+        }
+        self.dragging = true;
+        self.drag_to(f, y);
+        true
+    }
+
+    /// A motion while the drawer's bar is held. `true` when it was taken.
+    pub fn dragged(&mut self, f: Frame, y: f64) -> bool {
+        if !self.dragging {
+            return false;
+        }
+        self.drag_to(f, y);
+        true
+    }
+
+    /// The button came up, or the pointer left the surface.
+    ///
+    /// A drag left standing makes the next ENTER, with no button held, jump
+    /// the drawer to wherever the pointer came in.
+    pub const fn let_go(&mut self) {
+        self.dragging = false;
+    }
+
+    /// A wheel over the drawer. `true` when it was taken.
+    pub fn turned(&mut self, f: Frame, y: f64, by: i64) -> bool {
+        if !self.on_the_drawer(f, y) {
+            return false;
+        }
+        self.walk(i32::try_from(by).unwrap_or(0));
+        true
+    }
+
+    /// THE KEYS OF THIS LINE, on the right `Ctrl` — and `Esc`, which shuts it.
+    ///
+    /// `true` when the key belonged to the line and nothing else should see
+    /// it. `down` is false on release, which is how the modifier is let go.
+    ///
+    /// One pair, and it reads as one gesture: down opens it and then walks
+    /// down it; up walks back and, at the top, shuts it. It is the footer's
+    /// own pair, the same notation (`minibuffer-fold-keys`) taught inside the
+    /// drawer, so the gesture is one gesture wherever this line is drawn.
+    pub fn took_a_key(
+        &mut self,
+        sym: smithay_client_toolkit::seat::keyboard::Keysym,
+        down: bool,
+    ) -> bool {
+        use smithay_client_toolkit::seat::keyboard::Keysym;
+        if sym == Keysym::Control_R {
+            self.right_ctrl = down;
+            return true;
+        }
+        if !down {
+            return false;
+        }
+        // `Esc` SHUTS THE DRAWER BEFORE IT CLOSES THE WINDOW, which is what
+        // the file manager's window already does with its own.
+        if sym == Keysym::Escape {
+            return self.fold.close();
+        }
+        if !self.right_ctrl {
+            return false;
+        }
+        match sym {
+            Keysym::Down => {
+                if self.fold.open {
+                    self.walk(1);
+                } else {
+                    self.fold.toggle();
+                }
+                true
+            }
+            Keysym::Up if self.fold.open => {
+                if self.fold.offset == 0 {
+                    self.fold.close();
+                } else {
+                    self.walk(-1);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The pointer left, or the keyboard did: nothing is held any more.
+    pub const fn let_everything_go(&mut self) {
+        self.dragging = false;
+        self.right_ctrl = false;
+    }
+
+    /// Walks the opened line by `by` wrapped lines, stopping at its end.
+    ///
+    /// The stop comes from the `Scroll` that was DRAWN, which is the only
+    /// thing that knows how many lines the text wrapped to at this width.
+    fn walk(&mut self, by: i32) {
+        let last = self.scroll.total.saturating_sub(self.scroll.lines);
+        let next = i64::try_from(self.fold.offset).unwrap_or(0) + i64::from(by);
+        self.fold.offset = usize::try_from(next.max(0)).unwrap_or(0).min(last);
+    }
+
+    /// Puts the drawer where a point of its track says.
+    fn drag_to(&mut self, f: Frame, y: f64) {
+        let Some((top, tall)) = self.track(f) else {
+            return;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let at = y as f32 - top;
+        self.fold.offset = self.scroll.offset_at(at, tall, f.line());
     }
 }
 
@@ -1843,6 +2217,47 @@ pub fn copied(text: &str, texts: &ronoctua_i18n::Texts) -> String {
             texts.t(key::ECHO_COPY_FAILED)
         }
     }
+}
+
+/// HOW MANY LINES ONE NOTE MAY WRAP TO.
+///
+/// A bound on WORK and not on prose: [`ronoctua_render::layout::wrap`] walks
+/// the whole string whatever happens, and this is what stops a sentence
+/// somebody pastes into a `.ftl` from becoming a page. Eight is more than any
+/// of these needs at the narrowest width a footer's region is ever drawn at.
+pub const SENTENCE_LINES: usize = 8;
+
+/// A NOTE, BROKEN INTO THE LINES IT TAKES.
+///
+/// # Why it is one function and not eight
+///
+/// Because it was eight, and seven of them cut. Every label-and-value view in
+/// this system writes an explanation under a heading — what a setting does,
+/// why a section is empty, where the value really comes from — and each had
+/// its own `sentence` builder ending in `layout::elide_end`, which is one row
+/// with an ellipsis where the room ran out.
+///
+/// Half of one of these is worse than none: the half an ellipsis takes is
+/// always the END, which is where the consequence is. `LEADER s l` was
+/// changed first, alone, and six more were written down as owed — the eighth,
+/// the screens' view, was on nobody's list, and the sentence it cut is the one
+/// that screen exists to draw on the worst day: *"The compositor could not
+/// read its configuration…"*. This is the function that pays them, so that no
+/// view can wrap by one rule and cut by another.
+///
+/// # And it never answers with nothing
+///
+/// `wrap` walks `text.lines()`, and an empty string has none — so it would
+/// give back an empty list and the caller would push no row at all. These
+/// views index their cursor by a row's PLACE in the list, and a row that is
+/// sometimes not there is a cursor that sometimes lands on its neighbour.
+#[must_use]
+pub fn note_lines(text: &str, room: u16) -> Vec<String> {
+    let mut out = ronoctua_render::layout::wrap(text, room, SENTENCE_LINES);
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
 }
 
 /// Where a value begins, in the ROW's own cells.

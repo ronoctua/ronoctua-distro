@@ -570,6 +570,13 @@ impl HistoryWindow {
     fn settle(&mut self) {
         if std::mem::take(&mut self.owed) {
             self.paint();
+            // AND ONCE MORE IF THE HEADER'S DRAWER JUST OPENED: the list's
+            // first line is asked for before the frame and the wrap is only
+            // known inside it. It answers once and then never again, so
+            // nothing loops — see `fold::Fold::held`.
+            if self.hinted.settled() {
+                self.paint();
+            }
         }
     }
 
@@ -606,47 +613,22 @@ impl HistoryWindow {
         // minibuffer, through the other door. `columns` is already net of both
         // margins (`recount`), so the whole of it is the room.
         let room = self.columns;
-        if let Some(text) = self.message.clone() {
-            spans.push(ronoctua_render::Span {
-                size: ronoctua_render::Size::Px(size),
-                text: ronoctua_render::layout::elide_end(&text, room),
-                column: margin,
-                line: 0,
-                color: tokens::color::TEXT_SUBTLE_STRONG,
-                edge: false,
-                foot: false,
-            });
-            self.hinted.drew_nothing();
-        } else {
-            let pieces = self.view.hint(&self.texts);
-            spans.extend(crate::chrome::hint_spans(
-                &pieces,
-                ronoctua_render::Size::Px(size),
-                margin,
-                0,
-                room,
-            ));
-            // WHERE EACH SHORTCUT LANDED, for the pointer: the same
-            // placement the ink came out of — see `chrome::hint_marks`.
-            self.hinted.drew(&pieces, margin, 0, room);
-        }
-
-        // AND THE SHORTCUT UNDER THE POINTER, SPELT OUT.
+        // LINE 0 AND THE DRAWER IT OPENS INTO: the view's shortcuts or what
+        // the last order said, the chevron on the right edge when the line
+        // does not fit, the wrapped rest of it once that has been pressed,
+        // and the sentence about the shortcut the pointer is resting on.
         //
-        // The line the owner asked for under the hints. It exists only
-        // while the pointer is on a key, and the list below starts one
-        // row lower for as long as it does — see `chrome::Hinted`.
-        if let Some(said) = self.hinted.said() {
-            spans.push(ronoctua_render::Span {
-                size: ronoctua_render::Size::Px(size),
-                text: ronoctua_render::layout::elide_end(said, room),
-                column: margin,
-                line: FIRST_OF_LIST,
-                color: crate::chrome::Register::Explain.color(),
-                edge: false,
-                foot: false,
-            });
-        }
+        // ONE PAINTER for every door of this shape — see `chrome::Hinted`:
+        // this was written out in each of the ten windows, and the drawer was
+        // written in none of them.
+        let (pieces, hinting) = self.message.clone().map_or_else(
+            || (self.view.hint(&self.texts), true),
+            |text| (vec![crate::chrome::Piece::said(text)], false),
+        );
+        spans.extend(
+            self.hinted
+                .head(&pieces, hinting, margin, room, &self.texts),
+        );
 
         // THE FOCUS IS A COLOUR, NOT A BAND — the same mark the footer's door
         // draws for these rows.
@@ -668,12 +650,22 @@ impl HistoryWindow {
         // THE BAR, from the same `Scroll` every other bar in this system uses.
         let scroll = crate::chrome::list_scroll(rows.len(), self.room(), self.offset);
         #[allow(clippy::cast_precision_loss)]
-        let bar = crate::chrome::list_bar(
+        let mut bar: Vec<ronoctua_render::quad::Quad> = crate::chrome::list_bar(
             scroll,
             self.first_of_list(),
             self.width as f32,
             self.height as f32,
-        );
+        )
+        .into_iter()
+        .collect();
+        // AND THE HEADER'S OWN, when its drawer is open and the wrap ran past
+        // it. Two bars, two lists, and neither is the other's.
+        #[allow(clippy::cast_precision_loss)]
+        bar.extend(self.hinted.bar(crate::chrome::Frame::of(
+            self.width as f32,
+            self.height as f32,
+            0,
+        )));
 
         // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
         // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes,
@@ -900,6 +892,9 @@ impl KeyboardHandler for HistoryWindow {
         _: &wl_surface::WlSurface,
         _: u32,
     ) {
+        // A MODIFIER HELD WHEN THE FOCUS WENT IS A MODIFIER NOBODY WILL SEE
+        // COME UP — the release goes to whoever has the keyboard now.
+        self.hinted.let_everything_go();
     }
 
     fn press_key(
@@ -910,6 +905,13 @@ impl KeyboardHandler for HistoryWindow {
         _: u32,
         event: KeyEvent,
     ) {
+        // THE HEADER'S OWN KEYS FIRST — the right `Ctrl` and its pair, and the
+        // `Esc` that shuts an open drawer before it closes the window. See
+        // `chrome::Hinted::took_a_key`.
+        if self.hinted.took_a_key(event.keysym, true) {
+            self.ask_paint();
+            return;
+        }
         self.typed(event);
     }
 
@@ -930,8 +932,12 @@ impl KeyboardHandler for HistoryWindow {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        // THE MODIFIER IS LET GO HERE, and it has to be: xkb merges both
+        // Ctrls into one bit, so the modifier event cannot say which of them
+        // came up.
+        self.hinted.took_a_key(event.keysym, false);
     }
 
     fn update_modifiers(
@@ -977,6 +983,17 @@ impl PointerHandler for HistoryWindow {
         };
         #[allow(clippy::cast_precision_loss)]
         let (bar_w, bar_h) = (self.width as f32, self.height as f32);
+        // THE HEADER'S OWN SURFACE, for its chevron and its bar. Line 0 is
+        // where its drawer begins, which is what the `0` says.
+        let head = crate::chrome::Frame::of(bar_w, bar_h, 0);
+        // WHETHER THE HEADER TOOK THE GESTURE. Asked before the list's own
+        // bar and before a click on a row, so each control keeps the meaning
+        // it has.
+        let mut header = false;
+        // WHERE THE WHEEL WAS, so the drawer can answer for a gesture over
+        // itself. The turn is accumulated and spent after the loop, and by
+        // then the position is gone.
+        let mut wheel_at: Option<f64> = None;
         let mut dragged: Option<usize> = None;
         // WHETHER THE LINE UNDER THE HINT CHANGED, which is the one thing
         // the pointer does draw in this door.
@@ -984,6 +1001,12 @@ impl PointerHandler for HistoryWindow {
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    // THE HEADER'S BAR IS BEING DRAGGED, and then nothing
+                    // else on this surface is.
+                    if self.hinted.dragged(head, e.position.1) {
+                        header = true;
+                        continue;
+                    }
                     // WHICH SHORTCUT OF THE HINT LINE the pointer is resting
                     // on, read off what the last frame DREW — see
                     // `chrome::Hinted`.
@@ -1006,6 +1029,9 @@ impl PointerHandler for HistoryWindow {
                     }
                 }
                 PointerEventKind::Leave { .. } => {
+                    // AND THE HEADER'S DRAG ENDS WITH THE POINTER, for the
+                    // reason the list's does.
+                    self.hinted.let_go();
                     // THE SENTENCE GOES WITH THE POINTER. A pointer that
                     // leaves sends no motion on the way out.
                     explained |= self.hinted.say(None);
@@ -1018,9 +1044,16 @@ impl PointerHandler for HistoryWindow {
                     self.row_under_pointer = None;
                 }
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
+                    self.hinted.let_go();
                     self.dragging = false;
                 }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
+                    // THE HEADER'S CONTROLS FIRST: the chevron that opens the
+                    // line, and the bar that walks it once it is open.
+                    if self.hinted.pressed(head, e.position.0, e.position.1) {
+                        header = true;
+                        continue;
+                    }
                     #[allow(clippy::cast_possible_truncation)]
                     if crate::chrome::on_the_list_bar(
                         scroll,
@@ -1053,10 +1086,15 @@ impl PointerHandler for HistoryWindow {
                     // moved nothing for a slow gesture and three lines for the
                     // next one: a list that jumps.
                     crate::surface::wheel_arrived(&mut self.lines_owed, &vertical, &horizontal);
+                    wheel_at = Some(e.position.1);
                     turned = true;
                 }
                 _ => {}
             }
+        }
+        if header {
+            self.ask_paint();
+            return;
         }
         if let Some(offset) = dragged {
             self.offset = offset;
@@ -1091,6 +1129,12 @@ impl PointerHandler for HistoryWindow {
         }
         if turned {
             let by = crate::surface::wheel_lines(&mut self.lines_owed);
+            // A WHEEL OVER THE OPEN DRAWER WALKS THE DRAWER, and not the list
+            // under it: the gesture belongs to what is under the pointer.
+            if by != 0 && wheel_at.is_some_and(|y| self.hinted.turned(head, y, by)) {
+                self.ask_paint();
+                return;
+            }
             if by == 0 {
                 // WHAT IS LEFT OVER STAYS. A gesture too small to be a line
                 // yet is not a gesture that did nothing — it is one that has

@@ -26,7 +26,6 @@
 
 use ronoctua_power::sysfs::Preset;
 use ronoctua_power::{Action, Can, Keep, Order, Profile, Snapshot, State};
-use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 
 use crate::files::{Field, Hit as FilesHit, Ink};
@@ -146,20 +145,23 @@ pub fn extent(columns: u16) -> (u16, u16) {
 /// Five-cell step for the arrows on a threshold: nobody tunes 61 against 62.
 const STEP: u8 = 5;
 
-/// The width `key()` builds rows at, and why a constant is honest here.
+/// The width the tests build rows at.
+///
+/// # Why production no longer has one
 ///
 /// A key acts on the row under the cursor, so it has to know the rows — and it
-/// does not know how wide the screen is: the two doors measure differently and
-/// the footer's region is not the window's. It builds them at a fixed width
-/// instead, which is only correct while the row COUNT and the row TARGETS do
-/// not depend on the width. They do not: `rows()` reaches the width in
-/// `elide_end` and in a field's `at`, both of which are about drawing.
+/// used to build them at a fixed eighty columns, on the argument that the row
+/// COUNT and the row TARGETS do not depend on the width. That argument held
+/// while every note was CUT: an ellipsis changes what a row SAYS and never how
+/// many there are.
 ///
-/// That is an invariant, not an observation, so it is checked rather than
-/// trusted: `the_rows_are_the_same_things_at_every_width` walks several
-/// widths and compares the targets. Without it, the day one section drops a
-/// row on a narrow screen, the key acts on a different row from the one the
-/// footer drew — and nothing would say so.
+/// A note WRAPS now (`chrome::note_lines`), so one sentence is a row on a wide
+/// screen and three on a narrow one, and every row under it moves. A key
+/// deciding at eighty would act on a different row from the one the door drew
+/// — a control taken somewhere other than where it was drawn, arriving on the
+/// keyboard's axis. So the DOOR's width travels in, as it already did for the
+/// Bluetooth view, and what is left here is a width the tests agree on.
+#[cfg(test)]
 const DECIDING_WIDTH: u16 = 80;
 
 /// How long the battery has, in words — or nothing, when there is nothing to
@@ -336,15 +338,22 @@ impl View {
     }
 
     /// Acts on a key.
+    ///
+    /// THE WIDTH IS THE DOOR'S. A key acts on the row under the cursor and the
+    /// cursor is an index into the rows that were DRAWN, so the two have to be
+    /// the same list — and since a note wraps (`chrome::note_lines`), how many
+    /// rows there are is a function of the width. Deciding at a constant was
+    /// honest while every note was cut; it is not now.
     #[must_use]
     pub fn key(
         &mut self,
         press: Press,
         snap: Option<&Snapshot>,
         wanted: Profile,
+        columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
-        let rows = self.rows(snap, wanted, DECIDING_WIDTH, texts);
+        let rows = self.rows(snap, wanted, columns, texts);
         self.settle(&rows);
         let target = rows.get(self.cursor).map_or(Target::Nothing, |r| r.target);
         let disabled = rows.get(self.cursor).is_some_and(|r| r.disabled);
@@ -993,28 +1002,51 @@ impl Builder<'_> {
         self.sentence(text);
     }
 
+    /// # IT WRAPS, and it used to be cut
+    ///
+    /// One `Row` per line, through the one function the eight views of this
+    /// shape share — see [`crate::chrome::note_lines`]. What an ellipsis took
+    /// off `the thresholds are read-only for you — the udev rule has not run`
+    /// was the END, which is where the consequence is.
+    ///
+    /// # AND EVERY LINE IS THE SAME KIND OF ROW THE NOTE WAS
+    ///
+    /// `locale.rs` wraps its notes into rows the cursor SKIPS, on the argument
+    /// that a sentence is not a thing to stand on. That argument does not
+    /// reach here, and the difference is `RET`: on an informative row it
+    /// copies what the row says (`chrome::information_of`), so a line of a
+    /// note is a line somebody can take. Skipping them would have taken the
+    /// copy away, and it would have left a section whose only content is a
+    /// note with nothing under its heading — which `a_heading_is_never_alone`
+    /// exists to refuse.
+    ///
+    /// So a note that used to be one cut row is several whole ones, and
+    /// nothing else about it moves: same stop, same accent on the line the
+    /// cursor is on, same `RET`.
     fn sentence(&mut self, text: String) {
-        let focused = self.cursor == self.out.len();
-        self.out.push(Row {
-            fields: vec![Self::piece(
-                // A SENTENCE LINES UP WITH THE LABELS, not with the titles.
-                // The mark's indent is paid by every row of these views on
-                // purpose — an indent only some rows pay is a ragged edge —
-                // and a note that skipped it sat two cells left of everything
-                // around it.
-                self.left,
-                layout::elide_end(&text, self.room),
-                if focused {
-                    tokens::color::STATE_ACCENT
-                } else {
-                    tokens::color::TEXT_DIM
-                },
-            )],
-            focused,
-            heading: false,
-            target: Target::Nothing,
-            disabled: false,
-        });
+        for line in crate::chrome::note_lines(&text, self.room) {
+            let focused = self.cursor == self.out.len();
+            self.out.push(Row {
+                fields: vec![Self::piece(
+                    // A SENTENCE LINES UP WITH THE LABELS, not with the titles.
+                    // The mark's indent is paid by every row of these views on
+                    // purpose — an indent only some rows pay is a ragged edge —
+                    // and a note that skipped it sat two cells left of
+                    // everything around it.
+                    self.left,
+                    line,
+                    if focused {
+                        tokens::color::STATE_ACCENT
+                    } else {
+                        tokens::color::TEXT_DIM
+                    },
+                )],
+                focused,
+                heading: false,
+                target: Target::Nothing,
+                disabled: false,
+            });
+        }
     }
 
     /// A label and a value, with nothing to do on `RET`.
@@ -1126,6 +1158,7 @@ impl Builder<'_> {
 mod tests {
     use super::*;
     use ronoctua_power::{Battery, Profiles, Sleep};
+    use ronoctua_render::layout;
 
     fn texts() -> ronoctua_i18n::Texts {
         ronoctua_i18n::Texts::fresh("en-GB").unwrap()
@@ -1157,7 +1190,7 @@ mod tests {
                 let mut here = v.clone();
                 here.clicked(row, &rows);
                 let was = here.cursor();
-                let did = here.key(press, Some(&snap), Profile::Performance, &t);
+                let did = here.key(press, Some(&snap), Profile::Performance, DECIDING_WIDTH, &t);
                 worked |= did != Errand::Nothing || here.cursor() != was;
             }
             assert!(
@@ -1168,25 +1201,33 @@ mod tests {
     }
 
     #[test]
-    fn the_rows_are_the_same_things_at_every_width() {
-        // `View::key` builds its rows at `DECIDING_WIDTH` because it does not
-        // know how wide the screen is — and that is only honest while the row
-        // COUNT and the row TARGETS do not depend on the width. The day one
-        // section drops a row on a narrow screen, a key would act on a
-        // different row from the one the footer drew, and nothing on screen
-        // would say so.
+    fn the_things_a_key_can_act_on_are_the_same_at_every_width() {
+        // WHAT A KEY MAY NOT DEPEND ON.
         //
-        // The FIELDS are allowed to differ — that is what eliding is.
+        // A key acts on the row under the cursor, and the cursor is an index
+        // into the rows that were DRAWN — so `View::key` is given the DOOR's
+        // width and decides against that same list. What this holds down is
+        // the half that no width may change: WHICH things can be acted on, and
+        // in what ORDER.
+        //
+        // The row COUNT is allowed to differ now, and that is not a weakening:
+        // a note WRAPS (`chrome::note_lines`), so one sentence is a row on a
+        // wide screen and three on a narrow one. It used to be cut instead,
+        // which kept the count the same and took the end off every explanation
+        // this view has. The FIELDS are allowed to differ too — that is what
+        // eliding is.
         let t = texts();
         let snap = laptop();
-        let want = |columns: u16| -> Vec<(bool, bool, Target)> {
+        let want = |columns: u16| -> Vec<(bool, Target)> {
             View::fresh()
                 .rows(Some(&snap), Profile::Performance, columns, &t)
                 .into_iter()
-                .map(|r| (r.heading, r.disabled, r.target))
+                .filter(|r| r.target != Target::Nothing)
+                .map(|r| (r.disabled, r.target))
                 .collect()
         };
         let at_eighty = want(DECIDING_WIDTH);
+        assert!(at_eighty.len() > 5, "only {} acting rows", at_eighty.len());
         for columns in [40_u16, 60, 100, 160, 240] {
             assert_eq!(want(columns), at_eighty, "the rows differ at {columns}");
         }
@@ -1357,7 +1398,13 @@ mod tests {
         assert!(rows[0].heading);
         // The cursor starts on the first real row, and Down walks on from it
         // without ever landing on a heading.
-        let _ = v.key(Press::Down, Some(&snap), Profile::Performance, &t);
+        let _ = v.key(
+            Press::Down,
+            Some(&snap),
+            Profile::Performance,
+            DECIDING_WIDTH,
+            &t,
+        );
         assert!(!rows[v.cursor()].heading);
         // Walk to "suspend" and arm it.
         let suspend = rows
@@ -1365,28 +1412,64 @@ mod tests {
             .position(|r| r.target == Target::Action(Action::Suspend, Can::Yes))
             .unwrap();
         while v.cursor() < suspend {
-            let _ = v.key(Press::Down, Some(&snap), Profile::Performance, &t);
+            let _ = v.key(
+                Press::Down,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t,
+            );
         }
         assert_eq!(v.cursor(), suspend, "a heading was not skipped");
         assert_eq!(
-            v.key(Press::Enter, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Enter,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Nothing
         );
         assert_eq!(v.armed(), Some(Action::Suspend));
         // Esc disarms, and only the next Esc closes.
         assert_eq!(
-            v.key(Press::Escape, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Escape,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Nothing
         );
         assert_eq!(v.armed(), None);
         assert_eq!(
-            v.key(Press::Escape, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Escape,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Close
         );
         // The second RET on an armed action DOES it.
-        let _ = v.key(Press::Enter, Some(&snap), Profile::Performance, &t);
+        let _ = v.key(
+            Press::Enter,
+            Some(&snap),
+            Profile::Performance,
+            DECIDING_WIDTH,
+            &t,
+        );
         assert_eq!(
-            v.key(Press::Enter, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Enter,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Order(Order::Do(Action::Suspend))
         );
     }
@@ -1404,7 +1487,13 @@ mod tests {
         v.clicked(hibernate, &rows);
         assert_eq!(v.cursor(), hibernate);
         assert_eq!(
-            v.key(Press::Enter, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Enter,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Nothing
         );
         assert_eq!(v.armed(), None, "an unavailable action never arms");
@@ -1423,10 +1512,28 @@ mod tests {
             .position(|r| r.target == Target::Threshold(Which::End))
             .unwrap();
         v.clicked(end, &rows);
-        let _ = v.key(Press::Right, Some(&snap), Profile::Performance, &t);
-        let _ = v.key(Press::Right, Some(&snap), Profile::Performance, &t);
+        let _ = v.key(
+            Press::Right,
+            Some(&snap),
+            Profile::Performance,
+            DECIDING_WIDTH,
+            &t,
+        );
+        let _ = v.key(
+            Press::Right,
+            Some(&snap),
+            Profile::Performance,
+            DECIDING_WIDTH,
+            &t,
+        );
         assert_eq!(
-            v.key(Press::Enter, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Enter,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Order(Order::Thresholds {
                 start: Some(40),
                 end: 90
@@ -1439,7 +1546,13 @@ mod tests {
             .unwrap();
         v.clicked(preset, &rows);
         assert_eq!(
-            v.key(Press::Enter, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Enter,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Order(Order::Thresholds {
                 start: Some(60),
                 end: 80
@@ -1447,13 +1560,31 @@ mod tests {
         );
         // Esc drops a pending pair before it closes anything.
         v.clicked(end, &rows);
-        let _ = v.key(Press::Left, Some(&snap), Profile::Performance, &t);
+        let _ = v.key(
+            Press::Left,
+            Some(&snap),
+            Profile::Performance,
+            DECIDING_WIDTH,
+            &t,
+        );
         assert_eq!(
-            v.key(Press::Escape, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Escape,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Nothing
         );
         assert_eq!(
-            v.key(Press::Escape, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Escape,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Close
         );
     }
@@ -1491,11 +1622,23 @@ mod tests {
             .unwrap();
         v.clicked(row, &rows);
         assert_eq!(
-            v.key(Press::Right, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Right,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Choose(offered[(i + 1) % offered.len()])
         );
         assert_eq!(
-            v.key(Press::Left, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Left,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Choose(offered[(i + offered.len() - 1) % offered.len()])
         );
     }
@@ -1519,7 +1662,13 @@ mod tests {
         v.clicked(row, &rows);
         assert_eq!(v.cursor(), row, "a disabled row cannot take the cursor");
         assert_eq!(
-            v.key(Press::Enter, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Enter,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Nothing,
             "RET on an un-offered profile sent an order"
         );
@@ -1533,7 +1682,13 @@ mod tests {
         );
         v.clicked(preset, &rows);
         assert_eq!(
-            v.key(Press::Enter, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Enter,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Nothing,
             "RET on a read-only preset sent an order"
         );
@@ -1543,7 +1698,13 @@ mod tests {
             .unwrap();
         v.clicked(end, &rows);
         assert_eq!(
-            v.key(Press::Left, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Left,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Nothing
         );
         assert!(v.pending.is_none(), "an arrow moved a read-only threshold");
@@ -1566,7 +1727,13 @@ mod tests {
             .unwrap();
         v.clicked(end, &rows);
         assert_eq!(
-            v.key(Press::Left, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Left,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Nothing
         );
         let (_, moved) = v.pending.unwrap();
@@ -1578,7 +1745,13 @@ mod tests {
         v.clicked(start, &rows);
         v.forget_pending();
         assert_eq!(
-            v.key(Press::Right, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Right,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Nothing
         );
         let (moved, _) = v.pending.unwrap();
@@ -1597,7 +1770,13 @@ mod tests {
             .unwrap();
         v.clicked(row, &rows);
         assert_eq!(
-            v.key(Press::Enter, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Enter,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Nothing,
             "the first RET should arm, not act"
         );
@@ -1648,14 +1827,26 @@ mod tests {
         v.clicked(end, &rows);
         for _ in 0..20 {
             assert_eq!(
-                v.key(Press::Left, Some(&snap), Profile::Performance, &t),
+                v.key(
+                    Press::Left,
+                    Some(&snap),
+                    Profile::Performance,
+                    DECIDING_WIDTH,
+                    &t
+                ),
                 Errand::Nothing
             );
         }
         assert_eq!(v.pending, Some((Some(40), 45)), "the end met the start");
         for _ in 0..20 {
             assert_eq!(
-                v.key(Press::Right, Some(&snap), Profile::Performance, &t),
+                v.key(
+                    Press::Right,
+                    Some(&snap),
+                    Profile::Performance,
+                    DECIDING_WIDTH,
+                    &t
+                ),
                 Errand::Nothing
             );
         }
@@ -1677,7 +1868,13 @@ mod tests {
         v.clicked(saver, &rows);
         // A CHOICE, not a bare order: the doors send it AND write the file.
         assert_eq!(
-            v.key(Press::Enter, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Enter,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Choose(Profile::PowerSaver)
         );
         let aware = rows
@@ -1686,7 +1883,13 @@ mod tests {
             .unwrap();
         v.clicked(aware, &rows);
         assert_eq!(
-            v.key(Press::Enter, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Enter,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Order(Order::BatteryAware(false))
         );
         let keep = rows
@@ -1695,7 +1898,13 @@ mod tests {
             .unwrap();
         v.clicked(keep, &rows);
         assert_eq!(
-            v.key(Press::Enter, Some(&snap), Profile::Performance, &t),
+            v.key(
+                Press::Enter,
+                Some(&snap),
+                Profile::Performance,
+                DECIDING_WIDTH,
+                &t
+            ),
             Errand::Order(Order::KeepAwake(Keep::Sleep, true))
         );
     }
@@ -1806,6 +2015,7 @@ pub const fn profile_glyph(p: Profile) -> char {
 mod segment_tests {
     use super::*;
     use ronoctua_power::{Mark, Rung};
+    use ronoctua_render::layout;
 
     #[test]
     fn the_segment_is_one_glyph_and_the_number_only_when_low() {

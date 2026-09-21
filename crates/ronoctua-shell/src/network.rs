@@ -61,20 +61,23 @@ pub const OPEN: &str = match option_env!("RONOCTUA_XDG_OPEN") {
 /// The keys this view answers to, and the hint line is generated from it —
 /// see `chrome::hint_of`. Bare letters are free here (nothing is typed), and
 /// the order is the order they are taught in.
-/// The width `key()` builds rows at, and why a constant is honest here.
+/// The width the tests build rows at.
+///
+/// # Why production no longer has one
 ///
 /// A key acts on the row under the cursor, so it has to know the rows — and it
-/// does not know how wide the screen is: the two doors measure differently and
-/// the footer's region is not the window's. It builds them at a fixed width
-/// instead, which is only correct while the row COUNT and the row TARGETS do
-/// not depend on the width. They do not: `rows()` reaches the width in
-/// `elide_end` and in a field's `at`, both of which are about drawing.
+/// used to build them at a fixed eighty columns, on the argument that the row
+/// COUNT and the row TARGETS do not depend on the width. That argument held
+/// while every note was CUT: an ellipsis changes what a row SAYS and never how
+/// many there are.
 ///
-/// That is an invariant, not an observation, so it is checked rather than
-/// trusted: `the_rows_are_the_same_things_at_every_width` walks several
-/// widths and compares the targets. Without it, the day one section drops a
-/// row on a narrow screen, the key acts on a different row from the one the
-/// footer drew — and nothing would say so.
+/// A note WRAPS now (`chrome::note_lines`), so one sentence is a row on a wide
+/// screen and three on a narrow one, and every row under it moves. A key
+/// deciding at eighty would act on a different row from the one the door drew
+/// — a control taken somewhere other than where it was drawn, arriving on the
+/// keyboard's axis. So the DOOR's width travels in, as it already did for the
+/// Bluetooth view, and what is left here is a width the tests agree on.
+#[cfg(test)]
 const DECIDING_WIDTH: u16 = 80;
 
 /// What NetworkManager calls a Wi-Fi profile.
@@ -792,9 +795,14 @@ impl View {
     /// A fresh view with the cursor on the first row of a kind — how a click
     /// on the aeroplane mark lands on the aeroplane row.
     #[must_use]
-    pub fn fresh_at(facts: &Facts<'_>, want: &Target, texts: &ronoctua_i18n::Texts) -> Self {
+    pub fn fresh_at(
+        facts: &Facts<'_>,
+        want: &Target,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Self {
         let mut v = Self::fresh();
-        let rows = v.rows(facts, DECIDING_WIDTH, texts);
+        let rows = v.rows(facts, columns, texts);
         if let Some(i) = rows.iter().position(|r| &r.target == want) {
             v.cursor = i;
             // AND THE SECTION'S TITLE GOES TO THE TOP. The owner asked for it
@@ -944,9 +952,10 @@ impl View {
     pub fn focused_network(
         &self,
         facts: &Facts<'_>,
+        columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Option<Network> {
-        match self.rows(facts, DECIDING_WIDTH, texts).get(self.cursor)? {
+        match self.rows(facts, columns, texts).get(self.cursor)? {
             Row {
                 target: Target::Wireless(n),
                 ..
@@ -1090,10 +1099,21 @@ impl View {
     }
 
     /// Acts on a key.
+    ///
+    /// THE WIDTH IS THE DOOR'S. A key acts on the row under the cursor and the
+    /// cursor is an index into the rows that were DRAWN, so the two have to be
+    /// the same list — and since a note wraps (`chrome::note_lines`), how many
+    /// rows there are is a function of the width.
     #[must_use]
-    pub fn key(&mut self, press: Press, facts: &Facts<'_>, texts: &ronoctua_i18n::Texts) -> Errand {
+    pub fn key(
+        &mut self,
+        press: Press,
+        facts: &Facts<'_>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
         let net = facts.net;
-        let rows = self.rows(facts, DECIDING_WIDTH, texts);
+        let rows = self.rows(facts, columns, texts);
         self.settle(&rows);
         let target = rows
             .get(self.cursor)
@@ -2747,50 +2767,53 @@ impl Builder<'_> {
 
     /// The same, for a sentence that carries a number.
     fn sentence(&mut self, text: String) {
-        let focused = self.cursor == self.out.len();
-        self.out.push(Row {
-            fields: vec![Self::piece(
-                // A SENTENCE LINES UP WITH THE LABELS, which since the mark
-                // went is where the titles are too — a section's title and its
-                // rows share one left edge now.
-                self.left,
-                layout::elide_end(&text, self.room),
-                if focused {
-                    tokens::color::STATE_ACCENT
-                } else {
-                    tokens::color::TEXT_DIM
-                },
-            )],
-            focused,
-            heading: false,
-            target: Target::Nothing,
-            disabled: false,
-            shelf: self.shelf.map(|which| (which, 0)),
-        });
+        self.sentence_coloured(text, tokens::color::TEXT_DIM);
     }
 
     /// A sentence in a colour of its own — a warning that is not a row.
+    ///
+    /// # IT WRAPS, and it used to be cut
+    ///
+    /// One `Row` per line, through the one function the eight views of this
+    /// shape share — see [`crate::chrome::note_lines`]. This view has the
+    /// longest of these sentences in the system: what a VPN file's
+    /// `AllowedIPs` and `DNS` lines will do to the machine is read BEFORE the
+    /// `RET`, and an ellipsis took the half that says what happens.
+    ///
+    /// # AND EVERY LINE IS THE SAME KIND OF ROW THE NOTE WAS
+    ///
+    /// The argument `power.rs::sentence` writes out in full: `RET` on an
+    /// informative row copies what it says, so a line of a note is a line
+    /// somebody can take, and a section whose only content is a note would
+    /// leave its heading with nothing under it.
+    ///
+    /// It is also what keeps a note inside a SHELF whole. `Builder::shelf`
+    /// paints the accent on whichever row sits at the cursor's number, so the
+    /// line the cursor is on is the line that lights — where rows the cursor
+    /// skipped would have left half a sentence accent and half of it dim.
     fn sentence_coloured(&mut self, text: String, colour: tokens::Color) {
-        let focused = self.cursor == self.out.len();
-        self.out.push(Row {
-            fields: vec![Self::piece(
-                // A SENTENCE LINES UP WITH THE LABELS, which since the mark
-                // went is where the titles are too — a section's title and its
-                // rows share one left edge now.
-                self.left,
-                layout::elide_end(&text, self.room),
-                if focused {
-                    tokens::color::STATE_ACCENT
-                } else {
-                    colour
-                },
-            )],
-            focused,
-            heading: false,
-            target: Target::Nothing,
-            disabled: false,
-            shelf: self.shelf.map(|which| (which, 0)),
-        });
+        for line in crate::chrome::note_lines(&text, self.room) {
+            let focused = self.cursor == self.out.len();
+            self.out.push(Row {
+                fields: vec![Self::piece(
+                    // A SENTENCE LINES UP WITH THE LABELS, which since the
+                    // mark went is where the titles are too — a section's
+                    // title and its rows share one left edge now.
+                    self.left,
+                    line,
+                    if focused {
+                        tokens::color::STATE_ACCENT
+                    } else {
+                        colour
+                    },
+                )],
+                focused,
+                heading: false,
+                target: Target::Nothing,
+                disabled: false,
+                shelf: self.shelf.map(|which| (which, 0)),
+            });
+        }
     }
 
     /// A label and a value, with nothing to do on `RET`.
@@ -3001,7 +3024,7 @@ mod tests {
                     let mut here = v.clone();
                     here.clicked(row, &rows);
                     let was = here.cursor();
-                    let did = here.key(press, &facts, &t);
+                    let did = here.key(press, &facts, DECIDING_WIDTH, &t);
                     worked |= did != Errand::Nothing || here.cursor() != was || here.level != level;
                 }
             }
@@ -3013,26 +3036,34 @@ mod tests {
     }
 
     #[test]
-    fn the_rows_are_the_same_things_at_every_width() {
-        // `View::key` builds its rows at `DECIDING_WIDTH` because it does not
-        // know how wide the screen is — and that is only honest while the row
-        // COUNT and the row TARGETS do not depend on the width. The day one
-        // section drops a row on a narrow screen, a key would act on a
-        // different row from the one the footer drew, and nothing on screen
-        // would say so.
+    fn the_things_a_key_can_act_on_are_the_same_at_every_width() {
+        // WHAT A KEY MAY NOT DEPEND ON.
         //
-        // The FIELDS are allowed to differ — that is what eliding is.
+        // A key acts on the row under the cursor, and the cursor is an index
+        // into the rows that were DRAWN — so `View::key` is given the DOOR's
+        // width and decides against that same list. What this holds down is
+        // the half that no width may change: WHICH things can be acted on, and
+        // in what ORDER.
+        //
+        // The row COUNT is allowed to differ now, and that is not a weakening:
+        // a note WRAPS (`chrome::note_lines`), so one sentence is a row on a
+        // wide screen and three on a narrow one. It used to be cut instead,
+        // which kept the count the same and took the end off every explanation
+        // this view has. The FIELDS are allowed to differ too — that is what
+        // eliding is.
         let t = texts();
-        let snap = Snapshot::default();
+        let snap = machine();
         let facts = facts(&snap, &[]);
-        let want = |columns: u16| -> Vec<(bool, Target)> {
+        let want = |columns: u16| -> Vec<Target> {
             View::fresh()
                 .rows(&facts, columns, &t)
                 .into_iter()
-                .map(|r| (r.heading, r.target))
+                .map(|r| r.target)
+                .filter(|t| *t != Target::Nothing)
                 .collect()
         };
         let at_eighty = want(DECIDING_WIDTH);
+        assert!(at_eighty.len() >= 5, "only {} acting rows", at_eighty.len());
         for columns in [40_u16, 60, 100, 160, 240] {
             assert_eq!(want(columns), at_eighty, "the rows differ at {columns}");
         }
@@ -3428,7 +3459,10 @@ mod tests {
             .unwrap();
         assert!(rows[i].disabled);
         v.clicked(i, &rows);
-        assert_eq!(v.key(Press::Enter, &facts(&snap, &[]), &t), Errand::Nothing);
+        assert_eq!(
+            v.key(Press::Enter, &facts(&snap, &[]), DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
     }
 
     #[test]
@@ -3449,7 +3483,7 @@ mod tests {
 
         // ON A FACT, NOTHING. `f` over the way out has nothing to forget.
         assert_eq!(
-            v.key(Press::Forget, &facts(&snap, &seen), &t),
+            v.key(Press::Forget, &facts(&snap, &seen), DECIDING_WIDTH, &t),
             Errand::Nothing
         );
 
@@ -3459,7 +3493,7 @@ mod tests {
             .unwrap();
         v.clicked(saved_row, &rows);
         assert_eq!(
-            v.key(Press::Forget, &facts(&snap, &seen), &t),
+            v.key(Press::Forget, &facts(&snap, &seen), DECIDING_WIDTH, &t),
             Errand::Forget("a house".to_owned())
         );
 
@@ -3471,7 +3505,7 @@ mod tests {
             .unwrap();
         v.clicked(stranger, &rows);
         assert_eq!(
-            v.key(Press::Forget, &facts(&snap, &seen), &t),
+            v.key(Press::Forget, &facts(&snap, &seen), DECIDING_WIDTH, &t),
             Errand::Nothing
         );
 
@@ -3483,7 +3517,7 @@ mod tests {
             .unwrap();
         v.clicked(stored, &rows);
         assert_eq!(
-            v.key(Press::Forget, &facts(&snap, &seen), &t),
+            v.key(Press::Forget, &facts(&snap, &seen), DECIDING_WIDTH, &t),
             Errand::Delete("/s/1".to_owned())
         );
     }
@@ -3498,14 +3532,17 @@ mod tests {
         assert!(!rows[v.cursor()].heading, "it started on a heading");
         for _ in 0..rows.len() * 2 {
             assert_eq!(
-                v.key(Press::Down, &facts(&snap, &seen), &t),
+                v.key(Press::Down, &facts(&snap, &seen), DECIDING_WIDTH, &t),
                 Errand::Nothing
             );
             assert!(!rows[v.cursor()].heading, "it stopped on a heading");
         }
         assert_eq!(v.cursor(), rows.len() - 1, "it did not reach the end");
         for _ in 0..rows.len() * 2 {
-            assert_eq!(v.key(Press::Up, &facts(&snap, &seen), &t), Errand::Nothing);
+            assert_eq!(
+                v.key(Press::Up, &facts(&snap, &seen), DECIDING_WIDTH, &t),
+                Errand::Nothing
+            );
         }
         assert!(!rows[v.cursor()].heading);
         assert!(v.cursor() < rows.len());
@@ -3535,26 +3572,35 @@ mod tests {
         let t = texts();
         let mut snap = machine();
         let mut v = View::fresh();
-        assert_eq!(v.key(Press::Escape, &facts(&snap, &[]), &t), Errand::Close);
         assert_eq!(
-            v.key(Press::Radio, &facts(&snap, &[]), &t),
+            v.key(Press::Escape, &facts(&snap, &[]), DECIDING_WIDTH, &t),
+            Errand::Close
+        );
+        assert_eq!(
+            v.key(Press::Radio, &facts(&snap, &[]), DECIDING_WIDTH, &t),
             Errand::Radio(false)
         );
         snap.radio = false;
         assert_eq!(
-            v.key(Press::Radio, &facts(&snap, &[]), &t),
+            v.key(Press::Radio, &facts(&snap, &[]), DECIDING_WIDTH, &t),
             Errand::Radio(true)
         );
         assert_eq!(
-            v.key(Press::Airplane, &facts(&snap, &[]), &t),
+            v.key(Press::Airplane, &facts(&snap, &[]), DECIDING_WIDTH, &t),
             Errand::Airplane(true)
         );
         assert_eq!(
-            v.key(Press::Disconnect, &facts(&snap, &[]), &t),
+            v.key(Press::Disconnect, &facts(&snap, &[]), DECIDING_WIDTH, &t),
             Errand::Disconnect(Medium::Wired)
         );
-        assert_eq!(v.key(Press::Scan, &facts(&snap, &[]), &t), Errand::Scan);
-        assert_eq!(v.key(Press::Facts, &facts(&snap, &[]), &t), Errand::Facts);
+        assert_eq!(
+            v.key(Press::Scan, &facts(&snap, &[]), DECIDING_WIDTH, &t),
+            Errand::Scan
+        );
+        assert_eq!(
+            v.key(Press::Facts, &facts(&snap, &[]), DECIDING_WIDTH, &t),
+            Errand::Facts
+        );
     }
 
     #[test]
@@ -3570,11 +3616,12 @@ mod tests {
             .unwrap();
         v.clicked(second, &rows);
         assert_eq!(
-            v.focused_network(&facts(&snap, &seen), &t).map(|n| n.ssid),
+            v.focused_network(&facts(&snap, &seen), DECIDING_WIDTH, &t)
+                .map(|n| n.ssid),
             Some("a café".to_owned())
         );
         assert_eq!(
-            v.key(Press::Enter, &facts(&snap, &seen), &t),
+            v.key(Press::Enter, &facts(&snap, &seen), DECIDING_WIDTH, &t),
             Errand::Connect(Box::new(seen[1].clone()))
         );
     }
@@ -3623,7 +3670,7 @@ mod tests {
                 "step {step}: the cursor is at {} and the accent is on {lit:?}",
                 v.cursor()
             );
-            let _ = v.key(Press::Down, &f, &t);
+            let _ = v.key(Press::Down, &f, DECIDING_WIDTH, &t);
         }
     }
 
@@ -3742,7 +3789,7 @@ mod tests {
         let mut v = View::fresh();
         v.clicked(i, &rows);
         assert_eq!(
-            v.key(Press::Enter, &facts(&snap, &[]), &t),
+            v.key(Press::Enter, &facts(&snap, &[]), DECIDING_WIDTH, &t),
             Errand::Copy(value.clone()),
             "`RET` on an informative row did not ask for the copy"
         );
@@ -3772,7 +3819,10 @@ mod tests {
         let mut v = View::fresh();
         v.clicked(door, &rows);
         assert!(
-            !matches!(v.key(Press::Enter, &facts(&snap, &[]), &t), Errand::Copy(_)),
+            !matches!(
+                v.key(Press::Enter, &facts(&snap, &[]), DECIDING_WIDTH, &t),
+                Errand::Copy(_)
+            ),
             "`RET` on a door copied instead of acting"
         );
     }
@@ -3917,7 +3967,7 @@ mod tests {
             if let Some(Target::Wireless(n)) = rows.get(v.cursor()).map(|r| r.target.clone()) {
                 names.insert(n.ssid.clone());
             }
-            let _ = v.key(Press::Down, &f, &t);
+            let _ = v.key(Press::Down, &f, DECIDING_WIDTH, &t);
         }
         assert_eq!(
             names.len(),
@@ -3995,7 +4045,10 @@ mod tests {
 
         let mut seen = Vec::new();
         for _ in 0..titles.len() {
-            assert_eq!(v.key(Press::Section, &f, &t), Errand::Nothing);
+            assert_eq!(
+                v.key(Press::Section, &f, DECIDING_WIDTH, &t),
+                Errand::Nothing
+            );
             let top = v.take_anchor().expect("TAB did not ask for a title");
             assert!(titles.contains(&top), "{top} is not a section's title");
             assert!(
@@ -4009,11 +4062,17 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), titles.len(), "the ring skipped a section");
-        assert_eq!(v.key(Press::Section, &f, &t), Errand::Nothing);
+        assert_eq!(
+            v.key(Press::Section, &f, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
         assert_eq!(v.take_anchor(), Some(seen[0]), "the ring did not close");
 
         // AND BACKWARDS IS THE OTHER WAY ROUND.
-        assert_eq!(v.key(Press::SectionBack, &f, &t), Errand::Nothing);
+        assert_eq!(
+            v.key(Press::SectionBack, &f, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
         assert_eq!(v.take_anchor(), Some(*seen.last().unwrap()));
     }
 
@@ -4025,10 +4084,10 @@ mod tests {
         let snap = machine();
         let f = facts(&snap, &[]);
         let mut v = View::fresh();
-        let _ = v.key(Press::Section, &f, &t);
+        let _ = v.key(Press::Section, &f, DECIDING_WIDTH, &t);
         assert!(v.take_anchor().is_some());
         assert!(v.take_anchor().is_none(), "the anchor answered twice");
-        let _ = v.key(Press::Down, &f, &t);
+        let _ = v.key(Press::Down, &f, DECIDING_WIDTH, &t);
         assert!(v.take_anchor().is_none(), "an arrow asked for a title");
     }
 
@@ -4038,7 +4097,7 @@ mod tests {
         let mut snap = machine();
         snap.active = vec![tunnel("an office", "/a/1")];
         let want = Target::Tunnel("/a/1".to_owned());
-        let v = View::fresh_at(&facts(&snap, &[]), &want, &t);
+        let v = View::fresh_at(&facts(&snap, &[]), &want, DECIDING_WIDTH, &t);
         assert_eq!(v.rows(&facts(&snap, &[]), 80, &t)[v.cursor()].target, want);
     }
 
@@ -4177,7 +4236,7 @@ mod tests {
         let at = target(&Target::ExitNode("n3".to_owned())).unwrap();
         v.clicked(at, &rows);
         assert_eq!(
-            v.key(Press::Enter, &facts, &t),
+            v.key(Press::Enter, &facts, DECIDING_WIDTH, &t),
             Errand::Tunnel(ronoctua_tunnel::Order::ExitNode(Some("n3".to_owned())))
         );
 
@@ -4190,14 +4249,17 @@ mod tests {
         let stop = target(&Target::Tunnels(Switch::Tor, false)).unwrap();
         v.clicked(stop, &rows);
         assert_eq!(
-            v.key(Press::Enter, &facts, &t),
+            v.key(Press::Enter, &facts, DECIDING_WIDTH, &t),
             Errand::Tunnel(ronoctua_tunnel::Order::Tor(false))
         );
         // AND THE IDENTITY IS REFUSED while there is no circuit.
         let identity = target(&Target::Tunnels(Switch::Identity, true)).unwrap();
         assert!(rows[identity].disabled, "a new identity with no circuit");
         v.clicked(identity, &rows);
-        assert_eq!(v.key(Press::Enter, &facts, &t), Errand::Nothing);
+        assert_eq!(
+            v.key(Press::Enter, &facts, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
 
         // AND THE BOOTSTRAP IS ON SCREEN while it is not ready.
         assert!(
@@ -4243,7 +4305,7 @@ mod tests {
             .unwrap();
         v.clicked(at, &rows);
         assert_eq!(
-            v.key(Press::Enter, &facts, &t),
+            v.key(Press::Enter, &facts, DECIDING_WIDTH, &t),
             Errand::Tunnel(ronoctua_tunnel::Order::ExitNode(None)),
             "a second press on the node in use takes it off"
         );
@@ -4472,7 +4534,7 @@ mod tests {
         let bring = rows.iter().position(|r| r.target == Target::Bring).unwrap();
         v.clicked(bring, &rows);
         assert_eq!(
-            v.key(Press::Enter, &facts(&snap, &[]), &t),
+            v.key(Press::Enter, &facts(&snap, &[]), DECIDING_WIDTH, &t),
             Errand::Bring(
                 "/tmp/an-office.conf".to_owned(),
                 ronoctua_network::vpn::Kind::WireGuard
@@ -4495,11 +4557,14 @@ mod tests {
         let mut v = View::fresh();
         v.looked_at("/tmp/a-house.conf".to_owned(), preview);
         assert_eq!(
-            v.key(Press::Escape, &facts(&snap, &[]), &t),
+            v.key(Press::Escape, &facts(&snap, &[]), DECIDING_WIDTH, &t),
             Errand::Nothing
         );
         assert!(!v.bringing());
-        assert_eq!(v.key(Press::Escape, &facts(&snap, &[]), &t), Errand::Close);
+        assert_eq!(
+            v.key(Press::Escape, &facts(&snap, &[]), DECIDING_WIDTH, &t),
+            Errand::Close
+        );
     }
 
     #[test]

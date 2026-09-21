@@ -375,15 +375,22 @@ let
         return text[opened:]
 
     def without_tests(text):
-        # The file with its `#[cfg(test)]` module cut off.
+        # The file with its `#[cfg(test)]` MODULE cut off.
         #
         # Because a test USES what it is testing: the keyboard buffer's own
         # tests send `Input::Click`, so a check asking whether the buffer
         # answers one found the arm in the test after it had been deleted from
         # the product. It is the vacuous pass with a new face — the needle was
         # there, and not in the code that runs on somebody's screen.
-        at = text.find("#[cfg(test)]")
-        return text if at < 0 else text[:at]
+        #
+        # BY THE MODULE AND NOT BY THE ATTRIBUTE, and that is a correction. It
+        # cut at the first `#[cfg(test)]` of any kind, and six views carry a
+        # `#[cfg(test)] const DECIDING_WIDTH` near the top — so the whole file
+        # after it was thrown away, and a check reading one of them went
+        # looking in nothing. What saves such a check is its `floor`; what
+        # stops it needing one is this.
+        m = _re.search(r"#\[cfg\(test\)\]\s*(?:pub\s+)?mod\b", text)
+        return text if m is None else text[: m.start()]
 
     def whose(text, at):
         # Which function a hit at `at` is inside — the `walls` idiom.
@@ -8405,6 +8412,97 @@ let
     END
   '';
 
+  # EVERY WINDOW'S HEADER OPENS.
+  #
+  # # What it catches
+  #
+  # A window that teaches its keys on line 0 and CUTS that line, with nothing
+  # to press for the rest of it. The network view's table is 174 cells in
+  # English against a window niri tiles into half an output — so more than half
+  # of what the line taught was unreachable, in ten doors at once, with an
+  # ellipsis where it stopped.
+  #
+  # The footer's minibuffer has opened into a drawer since `crate::fold` was
+  # written and the file manager's window has its own; the other ten had none,
+  # and the owner found it on the language and region window. `chrome::Hinted`
+  # is where the drawer lives now, so what this asks is that each door goes
+  # through it — the painting, the chevron, the key and the settling pass.
+  #
+  # The minimal edit that breaks the promise and would still pass a weaker
+  # check: delete the `pressed` call from one door's pointer. The line still
+  # draws its chevron and the keyboard still opens it; the glyph simply does
+  # nothing when it is clicked, which is invariant 19 with a picture of a
+  # control on top of it.
+  every-window-header-opens = mkCheck "every-window-header-opens" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a door paints from one place, answers the pointer in another
+    # and the keyboard in a third, and the question is whether each call is in
+    # the file at all.
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    # THE MANAGER'S WINDOW IS THE EXCEPTION, and it is the one that already had
+    # a drawer: its control is in the `Tab` ring, so it keeps a `fold::Fold` of
+    # its own and collects the marks itself. The exception is PROVED below
+    # rather than asserted — a window that quietly lost its drawer would
+    # otherwise be excused by being named here.
+    EXCEPT = "files_window.rs"
+    wrong, windows = [], 0
+
+    for f in sorted(shell.rglob("*_window.rs")):
+        # WHITESPACE SQUASHED, because the formatter decides where these calls
+        # break: `self.hinted.head(…)` comes out on two lines in some doors and
+        # one in others, and a check that grepped the literal would be
+        # answered by `nix fmt` rather than by the code.
+        body = _re.sub(r"\s+", "", code_of(f.read_text()))
+        # A WINDOW WITH A HEADER IS ONE THAT DRAWS A HINT. `update_window` has
+        # no line of keys at all and is not one.
+        if "chrome::Hinted" not in body and "hinted" not in body:
+            continue
+        windows += 1
+        if f.name == EXCEPT:
+            for what, why in (
+                ("crate::fold::Fold", "keeps no drawer of its own"),
+                ("crate::fold::opened(", "does not draw the opened line"),
+                ("fold_control", "does not write down where its chevron went"),
+            ):
+                if what not in body:
+                    wrong.append(f"{f.name}: {why} (`{what}` is not there)")
+            continue
+        for what, why in (
+            ("hinted.head(", "does not draw its header through `chrome::Hinted`"),
+            ("hinted.bar(", "draws an opened header with no bar"),
+            ("hinted.settled(", "never measures the drawer it opened"),
+            ("hinted.pressed(", "has a chevron the pointer cannot press"),
+            ("hinted.dragged(", "has a drawer bar that cannot be dragged"),
+            ("hinted.turned(", "has a drawer the wheel does not reach"),
+            ("hinted.took_a_key(", "has a drawer no key opens"),
+        ):
+            if what not in body:
+                wrong.append(f"{f.name}: {why} (`{what}` is not there)")
+
+    # ELEVEN, and it is a FLOOR rather than the count: a twelfth is checked
+    # like the rest, and a window that loses its header takes the sweep below
+    # the number and says so.
+    floor(windows, 11, "windows with a header")
+
+    if wrong:
+        print("ERROR: a header nobody can open.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       The line that teaches a view's keys is cut at the width it", file=sys.stderr)
+        print("       is given. `chrome::Hinted` is the drawer that opens it, and", file=sys.stderr)
+        print("       every door of that shape goes through the same one.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print(f"OK: {windows} windows, and every header opens")
+    END
+  '';
+
   # EVERY SHORTCUT OF EVERY HINT LINE CAN EXPLAIN ITSELF.
   #
   # The hint teaches forty keys in three words each, which is all a line holds.
@@ -12045,29 +12143,55 @@ let
     import pathlib, sys
     exec(open("${pyPrelude}").read())
 
-    text = without_tests(pathlib.Path("${../crates/ronoctua-shell/src}/locale.rs").read_text())
-    # `code_of` ON EACH BODY, and never the raw file: this file's own comments
-    # discuss `elide_end` at length, and a check that searched them would be
-    # answered by the paragraph explaining why it is gone.
-    body = code_of(body_of(text, "sentence") or "")
-    floor(len(body), 60, "characters of the note builder")
+    root = pathlib.Path("${../crates/ronoctua-shell/src}")
     wrong = []
 
-    if "layout::wrap(" not in body:
-        wrong.append("the note builder does not wrap")
-    if "elide_end" in body:
-        wrong.append("the note builder still cuts with an ellipsis")
-    # AND EVERY NOTE GOES THROUGH IT. `note` and `note_with` are the two doors
-    # onto it, and a row pushed beside them would be a second way to draw a
-    # sentence — which is how one of them comes to be cut again.
-    for name in ("note", "note_with"):
-        one = code_of(body_of(text, name) or "")
-        floor(len(one), 20, f"characters of `{name}`")
-        if "self.sentence(" not in one:
-            wrong.append(f"`{name}` does not go through the note builder")
+    # THE ONE FUNCTION THE SEVEN VIEWS SHARE. A ceiling and a wrap, and the
+    # answer is never empty — see `chrome::note_lines`.
+    chrome = code_of(body_of(without_tests((root / "chrome.rs").read_text()), "note_lines") or "")
+    floor(len(chrome), 60, "characters of the note wrapper")
+    if "layout::wrap(" not in chrome:
+        wrong.append("chrome::note_lines does not wrap")
+
+    # EVERY LABEL-AND-VALUE VIEW, and the door or doors onto its note builder.
+    # The file, the builder, and the names that must reach it. `display.rs` was
+    # the eighth and was not on the list of six that this was written for: it
+    # cuts the sentence the screen exists to draw on the worst day, *"The
+    # compositor could not read its configuration…"*.
+    views = {
+        "locale.rs": ("sentence", ["note", "note_with"]),
+        "audio.rs": ("said", ["note", "aside"]),
+        "power.rs": ("sentence", ["note"]),
+        "bluetooth.rs": ("sentence", ["note"]),
+        "network.rs": ("sentence_coloured", ["note", "sentence"]),
+        "syncthing.rs": ("said", ["note"]),
+        "geo.rs": ("sentence", ["note"]),
+        "display.rs": ("told", ["note"]),
+    }
+    for name, (builder, doors) in views.items():
+        # `code_of` ON EACH BODY, and never the raw file: these files discuss
+        # `elide_end` at length, and a check that searched their comments would
+        # be answered by the paragraph explaining why it is gone.
+        text = without_tests((root / name).read_text())
+        body = code_of(body_of(text, builder) or "")
+        floor(len(body), 60, f"characters of {name}'s note builder")
+        if "note_lines(" not in body:
+            wrong.append(f"{name}: `{builder}` does not go through chrome::note_lines")
+        if "elide_end" in body:
+            wrong.append(f"{name}: `{builder}` still cuts with an ellipsis")
+        # AND EVERY NOTE GOES THROUGH IT. A row pushed beside the builder is a
+        # second way to draw a sentence — which is how one of them comes to be
+        # cut again.
+        for door in doors:
+            one = code_of(body_of(text, door) or "")
+            floor(len(one), 20, f"characters of {name}'s `{door}`")
+            if f"self.{builder}(" not in one and not any(
+                f"self.{other}(" in one for other in [builder] + doors
+            ):
+                wrong.append(f"{name}: `{door}` does not go through the note builder")
 
     if wrong:
-        print("ERROR: an explanation on LEADER s l is cut rather than wrapped.", file=sys.stderr)
+        print("ERROR: an explanation is cut rather than wrapped.", file=sys.stderr)
         print("", file=sys.stderr)
         for w in wrong:
             print("       " + w, file=sys.stderr)
@@ -12076,7 +12200,7 @@ let
         print("       is the end, which is where the consequence is.", file=sys.stderr)
         raise SystemExit(1)
 
-    print("OK: the notes wrap, and both doors of that screen get it")
+    print(f"OK: {len(views)} label-and-value views wrap their notes, in both doors")
     END
   '';
 
@@ -20617,28 +20741,38 @@ let
         # line, and what bounds the question is the 900 characters after the
         # call that produced it — a window, not a function.
 
-        # THE SENTENCE UNDER THE HINT LINE IS DRAWN IN TWELVE PLACES, and it has to
-        # read the same in all of them.
+        # THE SENTENCE UNDER THE HINT LINE HAD TWELVE PAINTERS, and it has three.
         #
-        # It was `Register::Prose` — the hint's OWN words — in every one, and the
-        # owner read it off the screen: *"a cor do texto está igual à dos textos dos
-        # outros atalhos, assim não criando uma boa distinção visual"*. A dozen doors
-        # writing the same line by hand is exactly the shape of `the-cursor-is-a-
-        # colour`, which found a third view nobody had looked at.
+        # It was `Register::Prose` — the hint's OWN words — in every one of the
+        # twelve, and the owner read it off the screen: *"a cor do texto está igual
+        # à dos textos dos outros atalhos, assim não criando uma boa distinção
+        # visual"*. A dozen doors writing the same line by hand is exactly the shape
+        # of `the-cursor-is-a-colour`, which found a third view nobody had looked at.
         #
-        # THE COUNT IS EXACT ON PURPOSE, and the twelfth door proved it works from
-        # both sides: `geo_window.rs` was written by copying one of these — which is
-        # what the sentence above predicted — and this check is what made the new
-        # door announce itself instead of arriving unread. A floor would have let a
-        # door STOP explaining; the number moves when a door is added, once.
+        # THE TEN WINDOWS DRAW IT THROUGH ONE PAINTER NOW (`chrome::Hinted::head`),
+        # which is what this check family exists to produce rather than to police.
+        # What is left to sweep is the three that still lay the line out: the shared
+        # painter, the footer — whose row comes out of the REGION and never off its
+        # own height — and the file manager's window, whose drawer is its own.
+        # `every-window-header-opens` is what says the ten still go through it.
+        #
+        # THE COUNT IS EXACT ON PURPOSE. A floor would let a door STOP explaining;
+        # an exact number makes a FOURTH painter — a door that writes the line by
+        # hand instead of asking `Hinted` — announce itself, which is how the
+        # twelfth door announced itself when it was written by copying one of
+        # these.
         src = pathlib.Path("${../crates/ronoctua-shell/src}")
         bad = []
         doors = []
         for f in sorted(src.rglob("*.rs")):
             body = code_of(f.read_text())
-            # WHERE THE SENTENCE IS TAKEN OUT, in either of its two spellings: the
-            # windows ask `Hinted::said`, the footer keeps its own field.
-            for m in re.finditer(r"(hinted\.said\(\)|self\.hint_said\.as_ref\(\))", body):
+            # WHERE THE SENTENCE IS TAKEN OUT, in its three spellings: the shared
+            # painter reads its own field, the file manager's window asks
+            # `Hinted::said`, and the footer keeps a field of its own.
+            for m in re.finditer(
+                r"(hinted\.said\(\)|self\.hint_said\.as_ref\(\)|Some\(said\) = &self\.said)",
+                body,
+            ):
                 after = body[m.end() : m.end() + 900]
                 if "ronoctua_render::Span" not in after:
                     continue
@@ -20649,17 +20783,18 @@ let
                         "`Register::Explain` — it reads as one more shortcut on the "
                         "row above it"
                     )
-        if len(doors) != 12:
+        if len(doors) != 3:
             bad.append(
-                f"{len(doors)} doors draw the sentence, and there are twelve; the "
-                "sweep is reading the wrong thing or a door has stopped explaining"
+                f"{len(doors)} places draw the sentence, and there are three; the "
+                "sweep is reading the wrong thing, or a door has stopped asking "
+                "`chrome::Hinted` and started laying the line out again"
             )
 
         # AND THE REGISTER RESOLVES TO A TOKEN NOBODY ELSE ON THOSE LINES WEARS.
         # The tone itself is the theme generator's to hold — `text.subtle.explain`
         # is gated against both registers of the hint and all three steps of the
         # content ramp — and this is the half that says the shell ASKS for it.
-        floor(len(doors), 12, "doors drawing the pointer's sentence")
+        floor(len(doors), 3, "places drawing the pointer's sentence")
         chrome = code_of((src / "chrome.rs").read_text())
         floor(len(chrome), 20000, "characters of chrome.rs")
         if "Self::Explain => tokens::color::TEXT_SUBTLE_EXPLAIN," not in chrome:
@@ -20671,7 +20806,7 @@ let
             for b in bad:
                 print("       " + b, file=sys.stderr)
             raise SystemExit(1)
-        print(f"OK: {len(doors)} doors draw the pointer's sentence, every one in its own register")
+        print(f"OK: {len(doors)} painters draw the pointer's sentence, every one in its own register")
         END
       '';
 
@@ -21009,6 +21144,7 @@ let
       every-window-repeats
       every-window-knows-its-scale
       every-list-window-has-a-bar
+      every-window-header-opens
       every-modal-view-has-a-hint
       the-footer-does-not-ask-itself
       a-dead-footer-is-not-a-dead-desktop
@@ -21087,6 +21223,7 @@ let
       every-window-repeats
       every-window-knows-its-scale
       every-list-window-has-a-bar
+      every-window-header-opens
       every-modal-view-has-a-hint
       the-footer-does-not-ask-itself
       a-dead-footer-is-not-a-dead-desktop

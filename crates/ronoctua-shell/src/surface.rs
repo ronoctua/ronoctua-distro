@@ -6338,7 +6338,7 @@ impl Footer {
                     return;
                 }
                 if self.geo.is_none() {
-                    self.geo = Some(crate::geo::View::fresh());
+                    self.geo = Some(crate::geo::View::fresh(self.screen_columns()));
                 }
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -6351,10 +6351,11 @@ impl Footer {
                     _ => crate::geo::Press::Enter,
                 };
                 let texts = std::rc::Rc::clone(&self.texts);
+                let columns = self.screen_columns();
                 let errand = self
                     .geo
                     .as_mut()
-                    .map(|v| v.press(press, &texts))
+                    .map(|v| v.press(press, columns, &texts))
                     .unwrap_or(crate::geo::Errand::Nothing);
                 self.geo_errand(errand);
             }
@@ -6363,8 +6364,9 @@ impl Footer {
             // to open the question and once with what was typed.
             "geo-find" => {
                 if let Some(said) = argument {
+                    let columns = self.screen_columns();
                     if let Some(v) = self.geo.as_mut() {
-                        v.took_a_filter(said);
+                        v.took_a_filter(said, columns);
                     }
                     self.draw_and_paint();
                 } else {
@@ -7445,6 +7447,8 @@ impl Footer {
 
     /// The same, with the cursor already on the row a mark was about.
     fn open_network_at(&mut self, want: &crate::network::Target) {
+        // THE WIDTH THE REGION DRAWS AT — see `network::View::key`.
+        let columns = self.screen_columns();
         self.watch_scans();
         self.network_wired();
         if let Some(w) = self.network_wire.as_mut() {
@@ -7460,7 +7464,7 @@ impl Footer {
             watch: &self.network_watch,
             tunnels: &self.tunnels,
         };
-        let view = crate::network::View::fresh_at(&facts, want, &self.texts);
+        let view = crate::network::View::fresh_at(&facts, want, columns, &self.texts);
         self.network_wire = wire;
         self.open_network_with(view);
     }
@@ -7524,6 +7528,8 @@ impl Footer {
     /// for them; the ones that DO need a row (`RET`, `f`) find nothing under
     /// the cursor of a view nobody opened, and do nothing.
     fn network_press(&mut self, press: crate::network::Press) {
+        // THE WIDTH THE REGION DRAWS AT — see `network::View::key`.
+        let columns = self.screen_columns();
         self.network_wired();
         let open = self.network.is_some();
         let mut view = self
@@ -7539,7 +7545,7 @@ impl Footer {
             watch: &self.network_watch,
             tunnels: &self.tunnels,
         };
-        let errand = view.key(press, &facts, &self.texts);
+        let errand = view.key(press, &facts, columns, &self.texts);
         self.network_wire = wire;
         if open {
             self.network = Some(view);
@@ -7951,6 +7957,8 @@ impl Footer {
     /// Joins the focused network, with the password when one was typed.
     fn network_join(&mut self, password: Option<String>) {
         use ronoctua_i18n::key;
+        // THE WIDTH THE REGION DRAWS AT — see `network::View::key`.
+        let columns = self.screen_columns();
         let wire = self.network_wire.take();
         let target = {
             let seen: &[ronoctua_network::Network] =
@@ -7963,7 +7971,7 @@ impl Footer {
             };
             self.network
                 .as_ref()
-                .and_then(|v| v.focused_network(&facts, &self.texts))
+                .and_then(|v| v.focused_network(&facts, columns, &self.texts))
         };
         self.network_wire = wire;
         let (Some(target), Some(wire)) = (target, self.network_wire.as_mut()) else {
@@ -8912,10 +8920,11 @@ impl Footer {
             };
             if let Some(press) = press {
                 let texts = std::rc::Rc::clone(&self.texts);
+                let columns = self.screen_columns();
                 let errand = self
                     .geo
                     .as_mut()
-                    .map(|v| v.press(press, &texts))
+                    .map(|v| v.press(press, columns, &texts))
                     .unwrap_or(crate::geo::Errand::Nothing);
                 self.geo_errand(errand);
             }
@@ -12586,11 +12595,7 @@ impl Footer {
         // cursor". Extending the grid is right because the manager's grid is a
         // SINGLE column: `item_at` then walks straight down.
         let strip = self.files_strip();
-        let how_many = self
-            .expansion_len()
-            .saturating_sub(self.current_offset())
-            .min(grid.lines)
-            + strip;
+        let how_many = page_length(self.expansion_len(), self.current_offset(), grid, strip);
         grid.lines += strip;
         item_at(
             x,
@@ -13295,7 +13300,7 @@ impl Footer {
                 let errand = self.geo.as_mut().map(|v| {
                     let rows = v.rows(width, &texts);
                     v.clicked(n, &rows);
-                    v.press(crate::geo::Press::Enter, &texts)
+                    v.press(crate::geo::Press::Enter, width, &texts)
                 });
                 if let Some(errand) = errand {
                     self.geo_errand(errand);
@@ -13306,7 +13311,7 @@ impl Footer {
                 let snapshot = self.syncthing_snapshot.take();
                 if let Some(v) = self.syncthing.as_mut() {
                     let rows = v.rows(snapshot.as_ref(), width, &self.texts);
-                    v.clicked(n, &rows, snapshot.as_ref(), &self.texts);
+                    v.clicked(n, &rows, snapshot.as_ref(), width, &self.texts);
                 }
                 self.syncthing_snapshot = snapshot;
                 self.draw_and_paint();
@@ -13319,7 +13324,7 @@ impl Footer {
                 let snapshot = self.audio_snapshot.take();
                 if let Some(v) = self.audio.as_mut() {
                     let rows = v.rows(snapshot.as_ref(), width, &self.texts);
-                    v.clicked(n, &rows, snapshot.as_ref(), &self.texts);
+                    v.clicked(n, &rows, snapshot.as_ref(), width, &self.texts);
                 }
                 self.audio_snapshot = snapshot;
                 self.follow_the_microphone();
@@ -14164,6 +14169,10 @@ impl Footer {
         // and the line above it taught another's keys. A pairing question
         // arriving over the power view was enough.
         let showing = self.view();
+        // THE WIDTH THE HINT'S VIEWS DECIDE AT, taken with the rest before the
+        // closure borrows: which keys a line teaches comes from the row under
+        // the cursor, and which row that is follows the width.
+        let hint_columns = self.screen_columns();
         let hint = move || {
             match showing {
                 // THE FILE MANAGER teaches its own keys, and only while it is
@@ -14198,8 +14207,10 @@ impl Footer {
                 ViewState::Power => power.as_ref().map(|v| v.hint(texts)),
                 // SOUND: the keys it teaches depend on the row, so a cursor
                 // on a setting is not told about `m`.
-                ViewState::Audio => audio.as_ref().map(|v| v.hint(sound, texts)),
-                ViewState::Syncthing => syncthing.as_ref().map(|v| v.hint(syncthing_state, texts)),
+                ViewState::Audio => audio.as_ref().map(|v| v.hint(sound, hint_columns, texts)),
+                ViewState::Syncthing => syncthing
+                    .as_ref()
+                    .map(|v| v.hint(syncthing_state, hint_columns, texts)),
                 // THE LANGUAGE AND REGION VIEW: `RET` chooses and nothing on
                 // a row says so, which is the same reason every view above
                 // has a line here.
@@ -14210,7 +14221,7 @@ impl Footer {
                 ViewState::Geo => geo.as_ref().map(|v| v.hint(texts)),
                 ViewState::Display => display
                     .as_ref()
-                    .map(|v| v.hint(screens, std::time::Instant::now(), texts)),
+                    .map(|v| v.hint(screens, hint_columns, std::time::Instant::now(), texts)),
                 // THE RADIO AND THE NETWORK, whose tables are bare letters:
                 // without the line there is nothing on screen that says `c`
                 // connects or `f` forgets.
@@ -16390,6 +16401,34 @@ fn row_at_height(y: f64, line_height: f64, first: u16, how_many: usize) -> Optio
 /// With the columns side by side, the row alone does not identify the item:
 /// row 2 exists in every column. Ignoring the `x` would make the cursor
 /// describe — and the click run — the first column's item, always.
+/// HOW MANY ITEMS THE PAGE UNDER THE POINTER HOLDS.
+///
+/// # Why it is `per_page` and not `lines`
+///
+/// Because a page is COLUMNS of lines, and this is the bound [`item_at`]
+/// rejects an index against: it resolves a point to `column × lines + line`,
+/// so the first item of the second column is already `lines`. Capped at
+/// `lines`, every cell outside the FIRST column answered `None` — no hover
+/// band, and a click that did nothing — on the one list in this system that is
+/// drawn in columns. The owner read it off the screen: *"o hover e suporte ao
+/// clique do mouse funciona apenas na primeira coluna de itens"*.
+///
+/// It is the same cut the DRAWING makes: `expansion_window(offset,
+/// grid.per_page())` is the page that is built, and what the pointer may reach
+/// is what was drawn.
+///
+/// The strip is not part of the page — it does not scroll and is pinned under
+/// the last line — so it is added after the cut, never inside it.
+const fn page_length(total: usize, offset: usize, grid: Grid, strip: usize) -> usize {
+    let left = total.saturating_sub(offset);
+    let page = grid.per_page();
+    if left < page {
+        left + strip
+    } else {
+        page + strip
+    }
+}
+
 fn item_at(
     x: f64,
     y: f64,
@@ -17395,10 +17434,13 @@ impl Footer {
 
     /// A key in the sound view.
     fn audio_press(&mut self, press: crate::audio::Press) {
+        // THE WIDTH THE REGION DRAWS AT, taken before the view is borrowed —
+        // see `audio::View::key`.
+        let columns = self.screen_columns();
         let Some(v) = self.audio.as_mut() else {
             return;
         };
-        let errand = v.key(press, self.audio_snapshot.as_ref(), &self.texts);
+        let errand = v.key(press, self.audio_snapshot.as_ref(), columns, &self.texts);
         // THE SURFACE FIRST, THEN THE CURSOR — the order every view of this
         // shape keeps.
         self.region_resized();
@@ -17687,10 +17729,18 @@ impl Footer {
 
     /// A key in the Syncthing view.
     fn syncthing_press(&mut self, press: crate::syncthing::Press) {
+        // THE WIDTH THE REGION DRAWS AT, taken before the view is borrowed —
+        // see `syncthing::View::key`.
+        let columns = self.screen_columns();
         let Some(v) = self.syncthing.as_mut() else {
             return;
         };
-        let errand = v.key(press, self.syncthing_snapshot.as_ref(), &self.texts);
+        let errand = v.key(
+            press,
+            self.syncthing_snapshot.as_ref(),
+            columns,
+            &self.texts,
+        );
         // THE SURFACE FIRST, THEN THE CURSOR — the order every view of this
         // shape keeps.
         self.region_resized();
@@ -17765,9 +17815,10 @@ impl Footer {
 
     /// Put the cursor somewhere real in the Syncthing view.
     fn settle_the_syncthing_view(&mut self) {
+        let columns = self.screen_columns();
         let snapshot = self.syncthing_snapshot.take();
         if let Some(v) = self.syncthing.as_mut() {
-            v.settle_in(snapshot.as_ref(), &self.texts);
+            v.settle_in(snapshot.as_ref(), columns, &self.texts);
         }
         self.syncthing_snapshot = snapshot;
     }
@@ -17962,9 +18013,10 @@ impl Footer {
 
     /// Put the cursor somewhere real, and move the meter with it.
     fn settle_the_sound_view(&mut self) {
+        let columns = self.screen_columns();
         let snapshot = self.audio_snapshot.take();
         if let Some(v) = self.audio.as_mut() {
-            v.settle_in(snapshot.as_ref(), &self.texts);
+            v.settle_in(snapshot.as_ref(), columns, &self.texts);
         }
         self.audio_snapshot = snapshot;
         self.follow_the_microphone();
@@ -18669,12 +18721,16 @@ impl Footer {
 
     /// A key the screens' view answers to.
     fn display_press(&mut self, press: crate::display::Press) {
+        // THE WIDTH THE REGION DRAWS AT, taken before the view is borrowed —
+        // see `display::View::key`.
+        let columns = self.screen_columns();
         let Some(v) = self.display.as_mut() else {
             return;
         };
         let errand = v.key(
             press,
             &self.display_snapshot,
+            columns,
             std::time::Instant::now(),
             &self.texts,
         );
@@ -18997,6 +19053,9 @@ impl Footer {
 
     /// One press, for the power view.
     fn power_press(&mut self, press: crate::power::Press) {
+        // THE WIDTH THE REGION DRAWS AT, taken before the view is borrowed —
+        // see `power::View::key`.
+        let columns = self.screen_columns();
         let Some(v) = self.power.as_mut() else {
             return;
         };
@@ -19004,6 +19063,7 @@ impl Footer {
             press,
             self.power_snapshot.as_ref(),
             self.power_wanted,
+            columns,
             &self.texts,
         );
         // THE SURFACE FIRST, THEN THE CURSOR — see `region_resized`.
@@ -19389,7 +19449,7 @@ mod tests {
     use super::{
         BAND_CEILING, FOOTER_LINES, Footer, Grid, Inheritance, LINES_PER_DETENT, Measure,
         axis_detents, axis_lines, expansion_ceiling, grid_for, item_at, last_offset,
-        navigation_step, row_at_height, runs_of, screen_difference, scrolling, tokens,
+        navigation_step, page_length, row_at_height, runs_of, screen_difference, scrolling, tokens,
         usable_actions, wheel_arrived, wheel_lines,
     };
 
@@ -19974,6 +20034,49 @@ mod tests {
             item_at(40.0 * c, y0 + 3.0 * h, h, c, FOOTER_LINES, g, 5),
             None
         );
+    }
+
+    #[test]
+    fn the_pointer_reaches_every_column_of_the_page() {
+        // THE COUNT WAS THE GRID'S LINES, and an index in the second column is
+        // at least that — so `item_at` refused every cell outside the first
+        // one. The hover band never lit there and a click did nothing, on the
+        // only list this system draws in columns.
+        let g = Grid {
+            columns: 3,
+            lines: 4,
+            width: 20,
+            colon: 5,
+            icon: 0,
+        };
+        assert_eq!(
+            page_length(36, 0, g, 0),
+            12,
+            "a full page is every column of it, not one"
+        );
+        let (h, c) = (26.0, 10.0);
+        let y0 = f64::from(FOOTER_LINES) * h;
+        let how = page_length(36, 0, g, 0);
+        // The second column's first row is the fifth item: inside the count,
+        // or nothing on that side of the screen answers the pointer.
+        assert_eq!(item_at(20.0 * c, y0, h, c, FOOTER_LINES, g, how), Some(4));
+        // The third column's last row is the twelfth.
+        assert_eq!(
+            item_at(40.0 * c, y0 + 3.0 * h, h, c, FOOTER_LINES, g, how),
+            Some(11)
+        );
+        // A SHORT LAST PAGE still stops where the list does.
+        assert_eq!(page_length(14, 12, g, 0), 2);
+        // AND THE MANAGER'S STRIP IS PINNED UNDER THE PAGE, never inside it:
+        // one column, so the page is its lines and the strip comes after.
+        let one = Grid {
+            columns: 1,
+            lines: 8,
+            width: 80,
+            colon: 0,
+            icon: 0,
+        };
+        assert_eq!(page_length(100, 0, one, 4), 12);
     }
 
     #[test]
