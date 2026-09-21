@@ -2414,6 +2414,35 @@ pub fn lit_field(fields: &[Field], cell: u16) -> Option<usize> {
     fields.iter().rposition(|f| f.covers(cell))
 }
 
+/// WHETHER THIS FIELD LIGHTS with the one the pointer is on.
+///
+/// # Why a field is not always alone
+///
+/// [`lit_field`] says which field the pointer is ON, walking from the right so
+/// that two packed fields do not both claim the cell between them. This says
+/// which OTHER fields are part of the same THING and light with it.
+///
+/// In a list that is only ever the field itself: each of a row's fields carries
+/// its own `Hit`, and the type glyph is the MARK's rather than the name's. In a
+/// GRID a name is up to two runs on two lines of ONE cell (`layout::wrap` breaks
+/// it by cluster), and lighting only the run the hand happens to be over lights
+/// half a name — the owner read it on screen, `sample-` quiet above an accented
+/// `aud.ogg`. It is the law the SENTENCE already follows one field along: one
+/// name, said once.
+///
+/// TWO THINGS ARE LEFT OUT, and each is load-bearing:
+///
+///   - the glyph that FILLS the picture's room, because its colour is a fact
+///     about the file — `glyph_colour_of` paints the executable bit there — and
+///     a highlight over it would hide the one thing that glyph says;
+///   - `Hit::Nothing`, which is not an identity: the permission column's kind
+///     character carries it on every row, so matching by it would light a
+///     column of the whole listing at once.
+#[must_use]
+pub fn lit_with(field: &Field, hit: &Hit) -> bool {
+    !matches!(hit, Hit::Nothing) && field.hit == *hit && !matches!(field.ink, Ink::Fills(_))
+}
+
 /// ONE COLUMN OF THE MANAGER, and everything that is true about it.
 ///
 /// # Why this type exists
@@ -6175,7 +6204,7 @@ impl View {
         room: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<Field> {
-        let mut out = self.preview_content(n, rows, at, room, texts);
+        let out = self.preview_content(n, rows, at, room, texts);
         // AND THE EXPAND BUTTON, IN THE CORNER — the two cases without a
         // player.
         //
@@ -6195,15 +6224,10 @@ impl View {
         // the FILE and not the emptiness of the line: a short sentence leaves
         // the last line empty too, and that is exactly the case the button is
         // always drawn in.
-        if self.focused().is_some()
-            && !self.plays_here()
-            && rows > 0
-            && n + 1 == rows
-            && room > 0
-            && (!self.theatre_covers(rows) || self.pointing_at_preview())
-        {
-            out.push(self.theatre_field(at.saturating_add(room).saturating_sub(1), Panel::Preview));
-        }
+        // THE BUTTON IS NOT PUSHED HERE. It goes on the panel's LAST line,
+        // which this loop cannot see — the transport and the sideways bar are
+        // added after it. See `View::sections_of`.
+        let _ = (n, rows);
         out
     }
 
@@ -6666,14 +6690,8 @@ impl View {
         // PUSHED LAST so that `lit_field` — an `rposition` — hands the cell to
         // it rather than to the value underneath: what the eye sees lit is by
         // construction what the click takes.
-        if rows > 0
-            && n + 1 == rows
-            && room > 0
-            && self.focused().is_some()
-            && self.pointing_at_info()
-        {
-            out.push(self.theatre_field(at.saturating_add(room).saturating_sub(1), Panel::Info));
-        }
+        // AND NOT HERE EITHER — see `View::sections_of`, which knows which
+        // line is the last one.
         out
     }
 
@@ -10966,6 +10984,18 @@ impl View {
         // modal `Panes::default()`, so the blocks below would build nothing
         // anyway.
         if !self.plain() {
+            // AND NO GRID WAS DRAWN. `drawn_grid` is what the layout LAID OUT,
+            // and a menu is a plain list — one row to a line, the whole width
+            // of the column. Left holding the directory's shelves, every reader
+            // of it answered for a grid that is not on the screen: the owner
+            // photographed a menu whose cursor band and hover band were FOUR
+            // lines deep, because `View::band_lines` asks this and a shelf is
+            // four lines deep. The wheel, the arrows' step and `listing_room`
+            // read the same field and were wrong in the same way.
+            //
+            // Set BEFORE the early return, so a door asking about a panel while
+            // a menu is up does not leave the stale answer standing.
+            self.drawn_grid.set(None);
             if only.is_some_and(|o| o != Pane::Listing) {
                 return out;
             }
@@ -11069,7 +11099,39 @@ impl View {
         //
         // Asking for the region is the whole point of the key, so there is
         // nothing to clamp against.
-        let take = if panes.whole { take } else { take.min(most) };
+        // THE HEIGHT IS THE DOOR'S, AND IT IS ALREADY SETTLED.
+        //
+        // This used to clamp to `most` — the tallest thing any one column has
+        // to SAY — and that was a SECOND answer to a question nobody was still
+        // asking. A door settles its height before a single section is built:
+        // the compositor hands one to the window, and the footer grows to
+        // `View::region_len`. Clamping again lets one column's CONTENT decide
+        // where another column ends, and the lines between the two answers
+        // belong to nobody — the panels' expand buttons, which are drawn on the
+        // panel's last line, sat up there with them. The owner photographed
+        // that three times, in both doors, and named the cause before it was
+        // found: *"todas as seções e colunas deveriam ser totalmente isoladas
+        // umas das outras … o que ocorre em um local que deveria estar isolado
+        // … acaba afetando outros locais"*.
+        //
+        // THE TWO ANSWERS DIFFER MOST WHERE THE MANAGER IS MOST USED, and that
+        // is not a coincidence: `region_len` counts ENTRIES, one to a line,
+        // while side by side the columns are laid out in SHELVES. Eleven
+        // folders are two shelves and twelve lines of region, so four lines
+        // were nobody's.
+        //
+        // WHAT THE GIVING-BACK REALLY IS, and it is untouched: a footer shrinks
+        // because `View::row_count` and `View::region_len` say how tall to be,
+        // and neither of them asks this function — so nothing here can feed
+        // back into a height, which is the loop `Fold::held` describes. A door
+        // that wants fewer lines asks for fewer.
+        //
+        // `usize::MAX` IS NOT A HEIGHT. `View::rows` passes it meaning "all of
+        // them", and under the old reading this loop materialised empty rows
+        // until the allocator gave up at four gibibytes — six killed sessions,
+        // and the only unbounded number that ever reaches here. What it means
+        // is what EXISTS, which is exactly `most`.
+        let take = if take == usize::MAX { most } else { take };
 
         let wanted = |p: Pane| only.is_none_or(|o| o == p);
         if panes.sidebar > 0 && wanted(Pane::Sidebar) {
@@ -11362,6 +11424,45 @@ impl View {
                         foot: true,
                         focused: false,
                     });
+                }
+                // AND THE EXPAND BUTTON, ON THE PANEL'S LAST LINE — the one
+                // the eye calls the bottom-right corner.
+                //
+                // IT USED TO BE PUSHED BY THE ROW BUILDER, at `content_lines -
+                // 1`, and `content_lines` is the panel MINUS the rows added
+                // after it: the film's transport, and the bar that scrolls a
+                // long value sideways. So on any panel that had one the button
+                // sat a line or two ABOVE the floor while the column's rule ran
+                // past it — the owner photographed both corners floating and
+                // said so twice. The builders' own comment already promised
+                // this line, *"over whatever that line holds"*; what it could
+                // not see from inside a per-row loop was which line that was.
+                //
+                // Pushed LAST for the reason it always was: `lit_field` is an
+                // `rposition`, so the cell goes to the button rather than to
+                // whatever is underneath it, and what the eye sees lit is by
+                // construction what the click takes.
+                //
+                // NOT WITH A PLAYER: there it rides the transport's row beside
+                // the clock, which is where the owner put it.
+                let corner = match which {
+                    Panel::Preview => {
+                        !self.plays_here()
+                            && (!self.theatre_covers(content_lines) || self.pointing_at_preview())
+                    }
+                    Panel::Info => self.pointing_at_info(),
+                };
+                if corner
+                    && content_room > 0
+                    && self.focused().is_some()
+                    && let Some(last) = content.last_mut()
+                {
+                    last.fields.push(
+                        self.theatre_field(
+                            at.saturating_add(content_room).saturating_sub(1),
+                            which,
+                        ),
+                    );
                 }
                 out.push(Section {
                     pane,
@@ -11702,14 +11803,33 @@ impl View {
         out
     }
 
-    /// HOW MANY LINES A BAND COVERS.
+    /// HOW MANY LINES A BAND COVERS, in the COLUMN it is drawn in.
     ///
     /// One, until a thumbnail wanted several. Both doors ask; neither works it
     /// out, because a band that is one line where the cell is five is a
     /// highlight that lights a fifth of what the click would take.
+    ///
+    /// # And the answer is the SECTION's, never the view's
+    ///
+    /// It asked `View::grid_now` — one answer for the whole screen — and a
+    /// shelf is four lines deep, so with the entries side by side EVERY band
+    /// became four lines: the owner photographed a row of the SIDEBAR lit four
+    /// deep and a fact of the INFO panel lit four deep, neither of which is a
+    /// grid and neither of which had changed. The grid belongs to the listing;
+    /// a column that does not have one is one row to a line, and that is what
+    /// its own `Section::grid` says.
+    ///
+    /// This is the isolation the manager is built on, arriving at the last
+    /// place that did not have it: a section says where it is, what it holds
+    /// and how much of it there is, and nothing else decides for it.
     #[must_use]
-    pub fn band_lines(&self) -> usize {
-        self.grid_now().map_or(1, |g| usize::from(g.down.max(1)))
+    pub fn band_lines(&self, width: u16, room: usize, pane: Pane) -> usize {
+        let chrome = self.chrome_rows(width, &self.texts);
+        self.sections_of(&chrome, room, width, &self.texts, Some(pane))
+            .into_iter()
+            .find(|s| s.pane == pane)
+            .and_then(|s| s.grid)
+            .map_or(1, |g| usize::from(g.down.max(1)))
     }
 
     /// WHICH CELLS the band under a point covers, or `None` for the section's
@@ -11737,6 +11857,17 @@ impl View {
         sec.cells_of(sec.row_at(inside, cell)?)
     }
 
+    /// How many lines the band under a POINT covers — the other half of
+    /// [`View::band_cells_at`], and asked of the same section.
+    ///
+    /// The two are one rectangle, so they are read as a pair: the cells and the
+    /// depth cannot come from different columns.
+    #[must_use]
+    pub fn band_lines_at(&self, width: u16, room: usize, line: usize, cell: u16) -> usize {
+        self.band_row(width, room, line, cell)
+            .map_or(1, |(pane, _)| self.band_lines(width, room, pane))
+    }
+
     /// The same, for the row the KEYBOARD is on. See [`View::band_cells_at`].
     #[must_use]
     pub fn band_cells_of(
@@ -11762,6 +11893,24 @@ impl View {
     pub fn focus_cells(&self, width: u16, room: usize) -> Option<(u16, u16)> {
         let (pane, row) = self.focused_here()?;
         self.band_cells_of(width, room, pane, row)
+    }
+
+    /// How many lines the FOCUS band covers, in the column it is drawn in.
+    ///
+    /// The pane comes from `focused_here`, which is what [`View::focus_cells`]
+    /// already asks — so the band's height and the band's cells cannot name two
+    /// different columns.
+    #[must_use]
+    pub fn focus_lines(&self, width: u16, room: usize) -> usize {
+        self.focused_here()
+            .map_or(1, |(pane, _)| self.band_lines(width, room, pane))
+    }
+
+    /// How many lines the RESTING band covers. Always the listing's cursor,
+    /// which is what [`View::resting_line`] draws.
+    #[must_use]
+    pub fn resting_lines(&self, width: u16, room: usize) -> usize {
+        self.band_lines(width, room, Pane::Listing)
     }
 
     /// The cells the RESTING band covers. Always the listing's cursor, which
@@ -21631,6 +21780,9 @@ mod tests {
     /// How tall the region has to be for several shelves to fit.
     const TALL: usize = 40;
 
+    /// Wide enough for the sidebar, the listing and both panels at once.
+    const WIDE: u16 = 240;
+
     /// Presses, drags and lets go — the three calls a door makes.
     fn sweep(v: &mut View, b: &ronoctua_i18n::Texts, from: (usize, u16), to: (usize, u16)) {
         assert!(
@@ -21834,6 +21986,205 @@ mod tests {
                 assert_eq!(into, root.join("in"), "the drop landed elsewhere");
             }
             other => panic!("a drop on a folder's own line gave {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_column_is_as_tall_as_the_region_and_never_as_tall_as_its_neighbour() {
+        // THE OWNER PHOTOGRAPHED THE CORNER BUTTONS FLOATING, three times and
+        // in both doors. They are drawn on a panel's LAST line, and the panel
+        // had been handed the number the LISTING asked for: side by side the
+        // entries want whole shelves, so a directory of eleven folders ended
+        // the columns four lines above the region's floor and took both panels'
+        // bottom edge up with them.
+        //
+        // The height is the DOOR's and it is settled before a section exists —
+        // the compositor hands one to the window, `View::region_len` is what
+        // the footer grows to. What `sections_of` used to do on top of that was
+        // a second answer, and this is the assertion that there is only one.
+        let root = scratch("one-height");
+        std::fs::create_dir(root.join("a")).unwrap();
+        for n in 0..40 {
+            std::fs::write(root.join(format!("b{n:02}.txt")), b"x").unwrap();
+        }
+        let b = bundle();
+        let lines_of = |grid: bool| {
+            let mut v = view_at(&root);
+            v.reread();
+            if grid {
+                v.key(of_view("C-g"));
+            }
+            v.key(of_view("<down>"));
+            if !v.panes(WIDE).preview {
+                v.key(of_view("C-v"));
+            }
+            if !v.panes(WIDE).info {
+                v.key(of_view("C-i"));
+            }
+            let chrome = v.chrome_rows(WIDE, &b);
+            let secs = v.sections(&chrome, TALL, WIDE, &b);
+            let of = |p: Pane| secs.iter().find(|s| s.pane == p).map_or(0, |s| s.lines);
+            (of(Pane::Listing), of(Pane::Preview), of(Pane::Info))
+        };
+
+        // ONE ENTRY TO A LINE, and every column has the region.
+        assert_eq!(
+            lines_of(false),
+            (TALL, TALL, TALL),
+            "a column was given something other than the region it was asked for"
+        );
+        // AND SIDE BY SIDE, where the listing wants far fewer lines than it is
+        // given, every column still has it.
+        assert_eq!(
+            lines_of(true),
+            (TALL, TALL, TALL),
+            "the listing's shelves decided how tall the other columns are"
+        );
+    }
+
+    #[test]
+    fn only_the_listing_has_a_deep_band() {
+        // THE OWNER PHOTOGRAPHED IT TWICE: with the entries side by side, a row
+        // of the SIDEBAR lit four lines deep and a fact of the INFO panel lit
+        // four lines deep. Neither is a grid and neither had changed — the
+        // depth came from `View::grid_now`, one answer for the whole screen.
+        // *"Todas as seções e colunas deveriam ser totalmente isoladas umas das
+        // outras"*, and this was the last place that was not.
+        let root = scratch("deep-band");
+        std::fs::create_dir(root.join("a")).unwrap();
+        for n in 0..40 {
+            std::fs::write(root.join(format!("b{n:02}.txt")), b"x").unwrap();
+        }
+        let mut v = view_at(&root);
+        let b = bundle();
+        v.reread();
+        v.key(of_view("C-g"));
+        assert!(v.grid_shown(), "`C-g` did not turn the entries over");
+        v.key(of_view("<down>"));
+        if !v.panes(WIDE).preview {
+            v.key(of_view("C-v"));
+        }
+        if !v.panes(WIDE).info {
+            v.key(of_view("C-i"));
+        }
+
+        // LAID OUT FIRST, and on purpose: the answer this used to give came
+        // from `drawn_grid`, which only a layout fills. Without this the old
+        // reading is `None` on the first call and the measurement below would
+        // pass over a screen that was never drawn.
+        let _ = {
+            let chrome = v.chrome_rows(WIDE, &b);
+            v.sections(&chrome, TALL, WIDE, &b)
+        };
+        // THE LISTING IS DEEP, which is what makes the rest of this a measure.
+        let deep = v.band_lines(WIDE, TALL, Pane::Listing);
+        assert!(
+            deep > 1,
+            "the listing is not a grid here, so this proves nothing"
+        );
+        // AND EVERY OTHER COLUMN IS ONE ROW TO A LINE.
+        for pane in [Pane::Sidebar, Pane::Preview, Pane::Info] {
+            assert_eq!(
+                v.band_lines(WIDE, TALL, pane),
+                1,
+                "{pane:?} lights {} lines because the LISTING is a grid",
+                v.band_lines(WIDE, TALL, pane)
+            );
+        }
+    }
+
+    #[test]
+    fn a_menu_over_a_grid_is_not_a_grid() {
+        // THE OWNER PHOTOGRAPHED IT: the second button on a thumbnail opened a
+        // menu whose cursor band covered FOUR rows and whose hover band covered
+        // four more. A menu is a plain list — one row to a line — and the band
+        // was four deep because `View::band_lines` reads `drawn_grid`, which the
+        // modal branch of `sections_of` left holding the directory's shelves.
+        let root = scratch("menu-grid");
+        for n in 0..8 {
+            std::fs::write(root.join(format!("f{n}.txt")), b"x").unwrap();
+        }
+        let mut v = view_at(&root);
+        let b = bundle();
+        v.reread();
+        v.key(of_view("C-g"));
+        assert!(v.grid_shown(), "`C-g` did not turn the entries over");
+        let _ = the_shelves(&v, TALL, 120, &b);
+        assert!(
+            v.band_lines(120, TALL, Pane::Listing) > 1,
+            "the grid is not on, so this measures nothing"
+        );
+
+        // THE MENU, and a band that is one line deep again.
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let at = sec.line_of(1).expect("the entry is drawn");
+        let on = v.hit(120, TALL, at, sec.from, &b);
+        v.menu_at(on.as_ref());
+        assert!(!v.plain(), "the menu did not open");
+        let _ = the_shelves(&v, TALL, 120, &b);
+        assert_eq!(
+            v.band_lines(120, TALL, Pane::Listing),
+            1,
+            "a menu's band is as deep as a shelf: it lights four rows to say the cursor is on one"
+        );
+    }
+
+    #[test]
+    fn a_name_of_two_lines_lights_whole() {
+        // AND THE OWNER PHOTOGRAPHED THIS ONE TOO: `sample-aud.ogg` under a
+        // thumbnail wraps to `sample-` and `aud.ogg`, and the hover lit only the
+        // half the hand was over. One name, one highlight — the law the sentence
+        // one field along already follows.
+        let root = scratch("lit-name");
+        // LONG ENOUGH TO WRAP AT EVERY STEP: the owner's screen wrapped
+        // `sample-aud.ogg` because its footer's cells are narrow, and a test
+        // that depends on which size the grid settled on measures the layout
+        // instead of the lighting.
+        let name = "sample-audio-that-will-not-fit-on-one-line.ogg";
+        std::fs::write(root.join(name), b"x").unwrap();
+        let mut v = view_at(&root);
+        let b = bundle();
+        v.reread();
+        v.key(of_view("C-g"));
+        assert!(v.grid_shown(), "`C-g` did not turn the entries over");
+        let rows = the_shelves(&v, TALL, 120, &b).content;
+
+        // THE RUNS OF ONE NAME: the cell's fields that are not the glyph
+        // filling the picture's room. `..` is the first rank, so the file is
+        // not row nought — asked rather than counted.
+        let which = (0..v.amount())
+            .find(|n| v.name_of(*n).as_deref() == Some(name))
+            .expect("the file is in the listing");
+        let runs: Vec<&Field> = rows
+            .iter()
+            .flat_map(|r| r.fields.iter())
+            .filter(|f| f.hit == Hit::Name(which) && !matches!(f.ink, Ink::Fills(_)))
+            .collect();
+        assert_eq!(
+            runs.len(),
+            2,
+            "this name was not drawn on two lines, so it proves nothing"
+        );
+        let hit = runs[0].hit.clone();
+        assert_eq!(runs[1].hit, hit, "the two runs of one name are two things");
+        for (k, f) in runs.iter().enumerate() {
+            assert!(
+                lit_with(f, &hit),
+                "run {k} of the name does not light with the other"
+            );
+        }
+
+        // AND THE TYPE GLYPH DOES NOT, because its colour is a fact about the
+        // file and a highlight over it would hide what it says.
+        let glyph = rows
+            .iter()
+            .flat_map(|r| r.fields.iter())
+            .find(|f| matches!(f.ink, Ink::Fills(_)));
+        if let Some(g) = glyph {
+            assert!(
+                !lit_with(g, &hit),
+                "the glyph that fills the picture lights with the name"
+            );
         }
     }
 
@@ -22267,8 +22618,20 @@ mod tests {
         }
         let most = usize::from(ronoctua_tokens::space::FILES_THUMBMOST);
         let mut stepped = 0;
-        for width in [120_u16, 400, 900, 2000] {
-            let sec = the_shelves(&v, 400, width, &b);
+        // A DOOR'S HEIGHT, and not four hundred lines. The subject here is the
+        // WIDTH — how big a cell a wide screen may ask for — and the region is
+        // no longer clamped to what the columns hold, so a number nothing could
+        // be is a grid nothing draws.
+        //
+        // AND THE WIDTHS STOP WHERE SCREENS DO. 4K at this font is about 350
+        // columns; the last one below is twice that and reaches the branch
+        // `thumb_item` documents as the one that takes a screen nobody has —
+        // there the largest step is drawn anyway, because a grid that refused
+        // would be a mode that turns itself off. Asserting the ceiling there
+        // was asserting that the branch is unreachable, and it only looked
+        // unreachable while the region was clamped to what four files hold.
+        for width in [120_u16, 400, 700] {
+            let sec = the_shelves(&v, TALL, width, &b);
             let g = sec.grid.expect("a grid");
             assert!(
                 g.fit() <= most,
@@ -22279,6 +22642,13 @@ mod tests {
                 stepped += 1;
             }
         }
+        // AND PAST EVERY SCREEN, THE LAST STEP IS WHAT IS DRAWN.
+        let huge = the_shelves(&v, TALL, 2000, &b).grid.expect("a grid");
+        assert_eq!(
+            huge.step.saturating_sub(ronoctua_design::GAP),
+            THUMB_CELLS[THUMB_CELLS.len() - 1],
+            "past every screen the grid did not fall back to its largest step"
+        );
         assert!(
             stepped > 0,
             "no width was wide enough to make the size step up; this proves nothing"
@@ -23267,7 +23637,16 @@ mod tests {
         let b = bundle();
         let cell = v.split(120) + RULE + GUTTER + 1;
         let t = v.hit(120, 12, 4, cell, &b);
-        assert!(t.is_none(), "an empty listing answered a field");
+        // NO FIELD — and the AIR is not one. A blank line of the listing
+        // answers `Hit::Air`, which is "there is no row here" said out loud so
+        // that a press puts the marks down; `View::menu_at` filters it for the
+        // same reason this line does. Before the region stopped being clamped
+        // to what the columns hold, line four was past every section and the
+        // answer was `None`; it says the same thing either way.
+        assert!(
+            t.as_ref().is_none_or(|t| matches!(t.hit, Hit::Air)),
+            "an empty listing answered a field"
+        );
         v.menu_at(t.as_ref());
         assert!(v.menu_open(), "the empty directory got no menu");
     }
@@ -23396,8 +23775,16 @@ mod tests {
         v.reread();
         let b = bundle();
 
-        assert_eq!(v.row_count(120), Some(6));
-        let rows = v.drawn_at(&[], 0, 12, 120, &b);
+        // AND THE HEIGHT IS THE ONE A DOOR WOULD ASK FOR.
+        //
+        // It used to ask for twelve and assert six, which was a test of the
+        // CLAMP that `sections_of` no longer has: a region is as tall as the
+        // door settled on, and `row_count` is where that is settled. Asking for
+        // twelve now means twelve, six of which carry the bar — which is what a
+        // door with more room than content has always drawn.
+        let asked = v.row_count(120).expect("a listing counts");
+        assert_eq!(asked, 6);
+        let rows = v.drawn_at(&[], 0, asked, 120, &b);
         assert_eq!(rows.len(), 6);
         // The rows past the listing's end carry the sidebar and NOTHING else —
         // no empty listing fields pretending to be entries.
@@ -23427,8 +23814,9 @@ mod tests {
         // The count is the SIDEBAR's, not one. Before this the footer answered
         // `1` from `expansion_len` and the window door drew nothing at all and
         // said nothing either.
-        assert_eq!(v.row_count(120), Some(3));
-        let rows = v.drawn_at(&[], 0, 12, 120, &b);
+        let asked = v.row_count(120).expect("a sidebar counts");
+        assert_eq!(asked, 3);
+        let rows = v.drawn_at(&[], 0, asked, 120, &b);
         assert_eq!(rows.len(), 3);
         assert!(rows[0].fields.iter().any(|f| f.hit == Hit::Sidebar(0)));
     }
@@ -25009,8 +25397,19 @@ mod tests {
             v.row_count(200).expect("a listing counts"),
             "the lines drawn are not the ones counted"
         );
-        // AND ASKING FOR MORE THAN EXISTS ANSWERS WITH WHAT EXISTS.
-        assert_eq!(v.drawn_at(&[], 0, 10_000, 200, &b).len(), all.len());
+        // AND A REAL HEIGHT IS HONOURED, which is the other side of the same
+        // rule: the SENTINEL is the only unbounded number that reaches this
+        // function, and everything else is a height a door settled on. A
+        // region asked for in lines is that many lines, whatever the columns
+        // happen to hold — see `View::sections_of`, and the four lines that
+        // belonged to nobody while it was otherwise.
+        for asked in [1usize, 3, 8, 40] {
+            assert_eq!(
+                v.drawn_at(&[], 0, asked, 200, &b).len(),
+                asked,
+                "a door asked for {asked} lines and the region answered with another number"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

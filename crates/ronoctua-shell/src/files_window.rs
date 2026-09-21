@@ -2319,7 +2319,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             |c| crate::files::band_px(c, margin, cell),
         );
         #[allow(clippy::cast_precision_loss)]
-        let tall = line_px * s.view.band_lines() as f32;
+        let tall = line_px * s.view.focus_lines(s.geo.columns, s.geo.room()) as f32;
         quads.push(ronoctua_render::quad::Quad {
             x: at,
             y: f32::from(y) * line_px,
@@ -2353,7 +2353,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
                 |c| crate::files::band_px(c, margin, cell),
             );
         #[allow(clippy::cast_precision_loss)]
-        let tall = line_px * s.view.band_lines() as f32;
+        let tall = line_px * s.view.resting_lines(s.geo.columns, s.geo.room()) as f32;
         quads.push(ronoctua_render::quad::Quad {
             x: at,
             y: f32::from(y) * line_px,
@@ -2441,7 +2441,13 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             })
             .map_or((at, wide), |c| crate::files::band_px(c, margin, cell));
         #[allow(clippy::cast_precision_loss)]
-        let tall = line_px * s.view.band_lines() as f32;
+        let tall = line_px
+            * s.view.band_lines_at(
+                s.geo.columns,
+                s.geo.room(),
+                s.line_under_pointer.unwrap_or(0),
+                s.cell_under_pointer.unwrap_or(0),
+            ) as f32;
         quads.push(ronoctua_render::quad::Quad {
             x: at,
             y: f32::from(y) * line_px,
@@ -2452,6 +2458,17 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             color: tokens::color::SURFACE_HOVER,
         });
     }
+    // WHAT THE POINTER LIT, found ONCE and before the lines.
+    //
+    // A thumbnail's name is up to two runs on two LINES of one cell, so the run
+    // that lights WITH the one under the hand is not on the line being drawn —
+    // it cannot be found from inside this loop. See `files::lit_with`.
+    let lit_hit = hover_at.and_then(|(pane, at)| {
+        let sec = sections.iter().find(|s| s.pane == pane)?;
+        let line = sec.content.get(at.checked_sub(sec.top)?)?;
+        let k = s.cell_under_pointer.and_then(|c| line.field_index_at(c))?;
+        line.fields.get(k).map(|f| f.hit.clone())
+    });
     for sec in &sections {
         for (i, line) in sec.content.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
@@ -2472,7 +2489,10 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
                 // THE FIELD UNDER THE POINTER LIGHTS UP, so the sentence on
                 // the line above has a visible subject. A colour and not a
                 // box — invariant 15.
-                let under = alight == Some(which);
+                let under = alight == Some(which)
+                    || lit_hit
+                        .as_ref()
+                        .is_some_and(|h| crate::files::lit_with(f, h));
                 spans.push(ronoctua_render::Span {
                     // THE ROW'S OWN SIZE, through the one function that turns
                     // lines into one — see `files::run_size`. Nought is the

@@ -12987,7 +12987,7 @@ impl Footer {
                 }
             }
         }
-        self.files = Some(crate::files::View::at(
+        let view = crate::files::View::at(
             &start,
             self.roster.clone(),
             self.zone.clone(),
@@ -12995,7 +12995,8 @@ impl Footer {
             self.catalogue.clone(),
             self.texts.clone(),
             side,
-        ));
+        );
+        self.files = Some(view);
         // THE DISKS ARE WATCHED LAZILY, and only once. Raising the thread at
         // startup would open a bus connection for a view nobody has asked for;
         // raising it per open would leave one running per open. The same shape
@@ -15446,6 +15447,19 @@ impl Footer {
             // There used to be three loops, each with its own starting-line
             // arithmetic, and the height came from a fourth one; the chance of the
             // four agreeing was what kept the whole footer standing.
+            // WHAT THE POINTER LIT, found ONCE and before the lines.
+            //
+            // A thumbnail's name is up to two runs on two LINES of one cell, so
+            // the run that lights WITH the one under the hand is not on the line
+            // being drawn — it cannot be found from inside this loop. See
+            // `files::lit_with`.
+            let lit_hit = self
+                .row_under_pointer
+                .and_then(|r| visible.get(r))
+                .zip(self.cell_under_pointer)
+                .and_then(|(line, c)| {
+                    crate::files::lit_field(&line.fields, c).map(|k| line.fields[k].hit.clone())
+                });
             for (i, line) in visible.iter().enumerate() {
                 // THE GRID decides where: column and row come out of it, and not from
                 // arithmetic here. On scrolling it has a single column, and this becomes
@@ -15482,7 +15496,11 @@ impl Footer {
                         })
                         .flatten();
                     for (which, f) in line.fields.iter().enumerate() {
-                        let under = alight == Some(which);
+                        // AND THE OTHER RUNS OF THE SAME THING LIGHT WITH IT.
+                        let under = alight == Some(which)
+                            || lit_hit
+                                .as_ref()
+                                .is_some_and(|h| crate::files::lit_with(f, h));
                         spans.push(ronoctua_render::Span {
                             // THE ROW'S OWN SIZE, through the one function that
                             // turns lines into one — see `files::run_size`.
@@ -16120,7 +16138,8 @@ impl Footer {
                     * self
                         .files
                         .as_ref()
-                        .map_or(1, crate::files::View::band_lines) as f32;
+                        .map_or(1, |v| v.focus_lines(columns, grid.lines))
+                        as f32;
                 backgrounds.push(ronoctua_render::quad::Quad {
                     x: band_at,
                     y: f32::from(first_of_expansion + grid_y) * line_height,
@@ -16158,7 +16177,8 @@ impl Footer {
                     * self
                         .files
                         .as_ref()
-                        .map_or(1, crate::files::View::band_lines) as f32;
+                        .map_or(1, |v| v.resting_lines(columns, grid.lines))
+                        as f32;
                 backgrounds.push(ronoctua_render::quad::Quad {
                     x: band_at,
                     y: f32::from(first_of_expansion + grid_y) * line_height,
@@ -16228,10 +16248,14 @@ impl Footer {
                     .unwrap_or((band_at, band_wide));
                 #[allow(clippy::cast_precision_loss)]
                 let tall = line_height
-                    * self
-                        .files
-                        .as_ref()
-                        .map_or(1, crate::files::View::band_lines) as f32;
+                    * self.files.as_ref().map_or(1, |v| {
+                        v.band_lines_at(
+                            columns,
+                            grid.lines,
+                            self.row_under_pointer.unwrap_or(0),
+                            self.cell_under_pointer.unwrap_or(0),
+                        )
+                    }) as f32;
                 backgrounds.push(ronoctua_render::quad::Quad {
                     x: band_at,
                     y: f32::from(first_of_expansion + grid_y) * line_height,

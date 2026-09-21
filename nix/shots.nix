@@ -94,20 +94,7 @@ let
   # `token_hex` turns `0xRRGGBBAA` into the `RRGGBB` ImageMagick wants; the
   # alpha is always opaque where it is used.
   palette = "${themed}/${defaultTheme}.json";
-  # AND THE SECOND THEME'S, for the chooser's shots: a preview has to show a
-  # colour the default does not have, and the assertion reads it from the
-  # generator rather than from a number typed here.
-  # With one theme declared the chooser's shots have nothing to prove and the
-  # driver skips them (`THEMES > 1`); the path still has to exist.
-  #
-  # THE ONE A SINGLE `<down>` REACHES, which is the row below the DEFAULT and
-  # not the second in the list. Those were the same number while the first
-  # declared theme was also the default; they stopped being when the owner
-  # asked for the chooser's order and the system's default to be two
-  # declarations (`assets/themes/themes.nix`). It wraps at the end, exactly as
-  # the cursor does not — so if the default is ever last, this takes the first
-  # and the driver's `<down>` would not reach it. That is why the assertion
-  # below reads the FILE rather than assuming.
+  # AND THE SECOND THEME'S — see `nix/shots-scenes.nix`.
   defaultAt = lib.lists.findFirstIndex (t: t == defaultTheme) 0 themes;
   second =
     if builtins.length themes > 1 then
@@ -545,26 +532,7 @@ pkgs.testers.runNixOSTest {
     if wanted("tor"):
         with subtest("Tor: the section exists with the daemon STOPPED"):
             # -----------------------------------------------------------------
-            # THE OTHER HALF OF WHAT THE OWNER REPORTED: he could not find a way
-            # to turn Tor on. The section lived behind `if let Some(scene)`, and
-            # the control socket only answers when Tor is already running — so a
-            # stopped Tor drew no heading, no row and no key.
-            #
-            # This machine does not run Tor, which is exactly the case being
-            # photographed: the heading has to be there anyway, with a row that
-            # says what the UNIT is doing.
-            #
-            # `network-tor-open` AND NOT A COUNT OF `TAB`s. The first version of
-            # this pressed `TAB` nine times and the picture came out on the Wi-Fi
-            # section — the ring's length depends on what hardware the machine
-            # has, and this VM has neither radio nor cable. A guess that produces
-            # a picture is worse than no picture.
-            # -----------------------------------------------------------------
-            # THE LIST FIRST, so the sheet can be told from it. This subtest had
-            # NO ASSERTION, and that is how it passed twice on a picture of the
-            # wrong screen: first the nine `TAB`s that landed on Wi-Fi, then
-            # `fresh_at` looking for a row that a machine without Tor does not
-            # draw. Two pictures that are equal prove the door opened nothing.
+            # THE OTHER HALF OF WHAT THE OWNER REPORTED: he could not find a way — see `nix/shots-scenes.nix`.
             control("network-open")
             machine.sleep(1)
             shot("31a-network-list", lines=12)
@@ -1517,20 +1485,7 @@ pkgs.testers.runNixOSTest {
             )
             held_w, held_h = film_box("/tmp/held-0.png", FILM[held[0]])
 
-            # MEASURED AGAINST THE PANEL, and NOT against the same picture with the
-            # controls up.
-            #
-            # That was the first shape of this and it is self-contradicting: the
-            # band is half-transparent, so it DARKENS the film it covers, and the
-            # film's own colour stops matching there. The picture then measures
-            # shorter exactly BECAUSE the band works — and the assertion two blocks
-            # down checks that the film still shows through it. One of the two had
-            # to be wrong, and it was this one.
-            #
-            # What says the controls cost the film nothing is the film filling the
-            # panel's own height: four to three in a panel twice as wide as it is
-            # tall is bounded by the height, so it reaches the box's edge. A line
-            # reserved for the controls would leave it a whole line short.
+            # MEASURED AGAINST THE PANEL — see `nix/shots-scenes.nix`.
             panel_tall = STRIP * LINE - 2 * AIR
             assert held_h > panel_tall - LINE, (
                 f"the film is {held_w} by {held_h} in a panel {panel_tall} tall — "

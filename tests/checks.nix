@@ -8412,6 +8412,100 @@ let
     END
   '';
 
+  # THERE IS ONE ANSWER ABOUT HOW TALL A REGION IS.
+  #
+  # # What it catches
+  #
+  # A second one growing back. `sections_of` used to clamp the region to `most`
+  # — the tallest thing any ONE column has to say — on top of the height the
+  # door had already settled: the compositor hands one to the window, and the
+  # footer grows to `View::region_len`. Where the two answers differed, the
+  # lines between them belonged to nobody, and the panels' expand buttons,
+  # which are drawn on a panel's last line, sat up there with them. The owner
+  # photographed it three times, in both doors.
+  #
+  # They differ most where the manager is most used, and that is not a
+  # coincidence: `region_len` counts ENTRIES, one to a line, while side by side
+  # the columns are laid out in SHELVES — eleven folders are two shelves and
+  # twelve lines of region, so four lines were nobody's.
+  #
+  # WHAT MUST SURVIVE is the sentinel. `View::rows` passes `usize::MAX` meaning
+  # "all of them", and under the old reading this loop materialised empty rows
+  # until the allocator gave up at four gibibytes — six killed sessions, and the
+  # only unbounded number that reaches here. It resolves to what EXISTS.
+  #
+  # The minimal edit that breaks the promise and still compiles: put a
+  # `.min(most)` back on a real height. Every test would still pass — they ask
+  # for the height a door settled on, which is what the clamp then agrees with
+  # — and the four lines would come back.
+  one-answer-about-how-tall = mkCheck "one-answer-about-how-tall" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+
+    exec(open("${pyPrelude}").read())
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    view = code_of(without_tests((shell / "files.rs").read_text()))
+    floor(len(view), 10000, "characters of files.rs")
+    body = must(body_of(view, "sections_of"), "files.rs's `sections_of`")
+    wrong = []
+
+    # THE SENTINEL IS RESOLVED, and it is the only thing that is.
+    if "usize::MAX" not in body:
+        wrong.append(
+            "`sections_of` no longer resolves the `usize::MAX` that `View::rows` "
+            "passes: that is four gibibytes of empty rows, and it has been paid "
+            "for once"
+        )
+    # AND NOTHING CLAMPS A REAL HEIGHT AGAINST WHAT THE COLUMNS HOLD, which is
+    # what `most` is and the only thing this forbids.
+    for banned in (".min(most)", "most.min(", "min(most)"):
+        if banned in body:
+            wrong.append(
+                f"`sections_of` clamps the region again (`{banned}`): the height "
+                "is the door's and it was settled before a section existed"
+            )
+    # A MENU IS STILL EXACTLY AS TALL AS ITS OWN LIST, and that is not the same
+    # thing: it is a modal settling ITS height, not a column deciding another's
+    # — and `View::hit`'s second lock on the listing's air rests on there being
+    # no blank line inside it.
+    if "take.min(all.len()" not in body:
+        wrong.append(
+            "a modal is no longer as tall as its own list; `View::hit` says in "
+            "writing that the air's second lock depends on it"
+        )
+    # AND THE TWO PLACES THAT DO SETTLE ONE ARE STILL THERE, because it is them
+    # giving back the lines a short listing does not use — not this function.
+    for owed in ("pub fn row_count", "pub fn region_len"):
+        if owed not in view:
+            wrong.append(f"`{owed}` is gone; a door has nothing to settle a height with")
+    # AND NEITHER OF THEM ASKS THIS FUNCTION, which is the loop `Fold::held`
+    # describes arriving one file along.
+    for who in ("row_count", "region_len"):
+        asked = must(body_of(view, who), f"files.rs's `{who}`")
+        for banned in ("sections_of(", "sections(", "drawn_at("):
+            if banned in asked:
+                wrong.append(
+                    f"`{who}` asks `{banned[:-1]}`: a height worked out from the "
+                    "rows is a height that depends on itself"
+                )
+
+    if wrong:
+        print("ERROR: two answers about how tall a region is.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A door settles its height and the columns are laid out", file=sys.stderr)
+        print("       inside it. A second answer lets one column's content", file=sys.stderr)
+        print("       decide where another column ends, and the lines between", file=sys.stderr)
+        print("       the two belong to nobody.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print("OK: the door settles the height, and the columns fill it")
+    END
+  '';
+
   # THE POINTER'S CLAIM IS TAKEN WHERE IT IS DRAWN.
   #
   # # What it catches
@@ -21316,6 +21410,7 @@ let
       every-list-window-has-a-bar
       every-window-header-opens
       a-claim-is-taken-where-it-is-drawn
+      one-answer-about-how-tall
       the-claim-is-drawn-over-the-pictures
       every-modal-view-has-a-hint
       the-footer-does-not-ask-itself
@@ -21397,6 +21492,7 @@ let
       every-list-window-has-a-bar
       every-window-header-opens
       a-claim-is-taken-where-it-is-drawn
+      one-answer-about-how-tall
       the-claim-is-drawn-over-the-pictures
       every-modal-view-has-a-hint
       the-footer-does-not-ask-itself
