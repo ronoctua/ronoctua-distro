@@ -2041,8 +2041,9 @@ pkgs.testers.runNixOSTest {
             # THE COLOUR IS CHOSEN TO BE UNANSWERABLE BY TEXT. Every assertion
             # below counts pixels of it, and `AGENTS.md` records what happens
             # when that colour is near a token's: the glyphs answer. Magenta is
-            # in none of the ten themes — greys, greens, cyans, a navy, a red
-            # and now a white one, whose nearest tone measures 0.19 away — and
+            # in none of the eleven themes — greys, greens, cyans, a navy, a
+            # red, a white one and a cream, and the nearest tone of the two
+            # light ones measures 0.19 away — and
             # a filled rectangle of it at four per cent fuzz is
             # a question no antialiased letter can answer.
             machine.succeed("mkdir -p /root/thumbs")

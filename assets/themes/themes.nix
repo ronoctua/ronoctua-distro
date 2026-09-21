@@ -49,6 +49,9 @@
     # zero; and the screenshot battery photographs the theme after the default.
     # Three things read a position here, and none of them wants this one first.
     "flashbang"
+    # The second light one: the same ladder, a warm sheet instead of a white
+    # screen. Same reasons as above for being at the end.
+    "papyrus"
   ];
 
   # What a machine shows before anyone has chosen. Must be one of `order`;

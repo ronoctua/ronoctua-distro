@@ -497,7 +497,7 @@
       # keys that are always there.
       #
       # THE ALTERNATE'S HUE AT HALF ITS COLOUR, and not a family of its own: a
-      # new family is a seed in all ten themes plus the frozen reference, and
+      # new family is a seed in all eleven themes plus the frozen reference, and
       # what this has to say is a DEGREE, not another kind of thing. The
       # alternate is already the register for "this key is not what it looks
       # like"; a guest is that, quieter.
@@ -521,7 +521,7 @@
       # the third seat — the only one left that is not another family.
       #
       # `chroma = 0.0` AND NOT A FAMILY OF ITS OWN, for the reason
-      # `contextual` above gives: a family is a seed in all ten themes plus
+      # `contextual` above gives: a family is a seed in all eleven themes plus
       # the frozen reference, and what this has to say is the ABSENCE of a
       # degree rather than another kind of thing.
       #
