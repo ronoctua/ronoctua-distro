@@ -681,7 +681,12 @@ pub const BRAIN_PROCEED_KEYS: &str = "m p";
 ///
 /// It is a LIST OF NAMES and not a prefix on purpose: `brain-` as a prefix
 /// would exempt the next brain command somebody forgets to bind.
-pub const BY_NAME_ONLY: &[&str] = &["brain-abort", "brain-proceed", "brain-start-emacs"];
+pub const BY_NAME_ONLY: &[&str] = &[
+    "brain-abort",
+    "brain-proceed",
+    "brain-start-emacs",
+    "brain-clock-automatic",
+];
 
 /// And for the button a standing notice offers.
 ///
@@ -894,6 +899,14 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "brain-start-emacs",
             label: key::CMD_BRAIN_START_EMACS,
+        },
+        // AND WHAT THE CLOCK'S WATCH OFFERS. It turns the machine's network
+        // time client back on, which is the one thing that watch does on its
+        // own — the button is there for somebody who switched the watch off
+        // and wants the clock kept anyway.
+        Command {
+            id: "brain-clock-automatic",
+            label: key::CMD_BRAIN_CLOCK_AUTOMATIC,
         },
         // THE SCREENS — `LEADER s d`, and the gestures of the view itself,
         // which are commands like any other so the manual and the locator can

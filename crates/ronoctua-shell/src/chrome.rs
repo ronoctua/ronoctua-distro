@@ -1713,6 +1713,55 @@ pub fn on_the_band(
     x >= right - f.cell() && x < right && y >= top && y < bottom
 }
 
+/// Where a run anchored to the surface's RIGHT EDGE begins, in cells.
+///
+/// # Why anything is anchored there at all
+///
+/// Because the grid does not reach the border. `columns` is
+/// `floor(width / cell)`, so between the last cell and the surface's edge
+/// there is a remainder of nought to one cell — and it changes with the
+/// window. [`ronoctua_render::Span::edge`] is what places such a run in pixels
+/// from the border instead, and the remainder then falls where nobody is
+/// looking, on the inside.
+///
+/// # And why the column is a function rather than a subtraction
+///
+/// Because a run placed this way is placed TWICE: once in ink, by whoever
+/// pushes the `Span`, and once in the pointer, by [`at_the_edge`]. The two
+/// have to be one answer, and the way this repository makes that true is a
+/// function both of them read — `hint_spans`/`hint_marks` are the precedent,
+/// and the scrollbar's `paint::bar_box` is the last thing that had to be
+/// rebuilt for want of it.
+#[must_use]
+pub const fn from_the_edge(columns: u16, cells: u16) -> u16 {
+    columns
+        .saturating_sub(tokens::space::MODELINE_EDGERIGHT)
+        .saturating_sub(cells)
+}
+
+/// Which cell the pointer is over, COUNTED FROM THE BORDER — the reading that
+/// answers for a run placed by [`from_the_edge`].
+///
+/// The column it returns is still counted from the LEFT, so it compares
+/// against a piece's `at` directly; what differs is where the remainder falls.
+/// Asking the ordinary `floor(x / cell)` about an edge-anchored run is off by
+/// one cell for every width whose remainder is more than half a cell — which
+/// is the defect `[[um-controle-e-pego-onde-e-desenhado]]` records, arriving
+/// by the other axis.
+///
+/// `None` when the pointer is outside the surface or before any cell exists.
+#[must_use]
+pub fn at_the_edge(x: f64, width_px: f64, columns: u16) -> Option<u16> {
+    let cell = f64::from(cell_width());
+    if cell <= 0.0 || width_px <= 0.0 || x < 0.0 || x > width_px || columns == 0 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let from_border = ((width_px - x) / cell) as u16;
+    // ZERO IS THE RIGHTMOST CELL, so the column is the last one less that.
+    columns.checked_sub(1)?.checked_sub(from_border)
+}
+
 /// The blank line that goes BEFORE a section's title, as a row.
 ///
 /// # Why a row and not a door's decision
@@ -2068,11 +2117,11 @@ mod meter_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        BAR_CELLS, FIELDS_LEAD, Frame, INSET, Piece, Register, SHELF_PAD, SHELF_ROOM, cell_width,
-        clock_exact, clock_text, content_left_px, date_long, field_pair, hint_marks, hint_of,
-        hint_sentence, hint_spans, key_text, list_bar, list_offset_at, list_scroll, on_the_band,
-        on_the_list_bar, sentence, shelf_bar, shelf_box, shelf_ground, split_at_the_modifier,
-        value_column,
+        BAR_CELLS, FIELDS_LEAD, Frame, INSET, Piece, Register, SHELF_PAD, SHELF_ROOM, at_the_edge,
+        cell_width, clock_exact, clock_text, content_left_px, date_long, field_pair, from_the_edge,
+        hint_marks, hint_of, hint_sentence, hint_spans, key_text, list_bar, list_offset_at,
+        list_scroll, on_the_band, on_the_list_bar, sentence, shelf_bar, shelf_box, shelf_ground,
+        split_at_the_modifier, value_column,
     };
     use ronoctua_tokens as tokens;
 
@@ -2089,6 +2138,57 @@ mod tests {
     ///
     /// And the marks are read off the SAME walk the spans are, so a mark can
     /// only be wrong where the drawing is wrong too.
+    /// THE TWO READINGS OF ONE PLACEMENT AGREE, at every remainder.
+    ///
+    /// THE DEFECT THIS CATCHES: the pointer asked the left-counted grid about
+    /// a run anchored to the border. `columns` is `floor(width / cell)`, so
+    /// between the last cell and the border there is a remainder of nought to
+    /// one cell — and where that remainder is more than half a cell, the two
+    /// readings name different cells. A control found that way answers one
+    /// cell from where it was drawn, which is the whole subject of
+    /// `paint::bar_box` and of the memory beside it.
+    #[test]
+    fn a_cell_placed_at_the_edge_is_read_back_at_the_edge() {
+        let cell = f64::from(cell_width());
+        assert!(cell > 1.0, "no cell to measure with");
+        let mut remainders = 0;
+        // WIDTHS WITH DIFFERENT REMAINDERS, which is the only thing that makes
+        // this a test rather than an identity: at a width that is an exact
+        // number of cells the two readings cannot disagree.
+        for width_px in [800.0_f64, 1000.0, 1366.0, 1920.0, 2560.0, 3440.0] {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let columns = (width_px / cell) as u16;
+            if (width_px - f64::from(columns) * cell) > cell / 2.0 {
+                remainders += 1;
+            }
+            for cells in 1..=3u16 {
+                let at = from_the_edge(columns, cells);
+                // WHERE THE INK ACTUALLY LANDS, by `Span::edge`'s own sum.
+                let left = width_px - f64::from(columns - at) * cell;
+                for step in 0..cells {
+                    let middle = left + f64::from(step).mul_add(cell, cell / 2.0);
+                    assert_eq!(
+                        at_the_edge(middle, width_px, columns),
+                        Some(at + step),
+                        "at {width_px} px, {cells} cell(s) from the edge"
+                    );
+                }
+                // AND THE CELL BEFORE IT IS NOT IT.
+                assert_eq!(
+                    at_the_edge(left - cell / 2.0, width_px, columns),
+                    at.checked_sub(1)
+                );
+            }
+        }
+        assert!(
+            remainders > 0,
+            "no width left a remainder over half a cell, so this proves nothing"
+        );
+        // Outside the surface is nowhere.
+        assert_eq!(at_the_edge(-1.0, 1920.0, 100), None);
+        assert_eq!(at_the_edge(1921.0, 1920.0, 100), None);
+    }
+
     #[test]
     fn a_mark_covers_the_key_and_the_words_that_say_what_it_does() {
         let texts = ronoctua_i18n::Texts::fresh("en-GB").unwrap();

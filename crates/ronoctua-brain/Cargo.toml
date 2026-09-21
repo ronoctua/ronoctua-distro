@@ -34,6 +34,11 @@ ronoctua-protocol = { path = "../ronoctua-protocol" }
 # crate is used, and `moment::Offset` is the seam, so a test drives a zone that
 # jumps without a fixture.
 ronoctua-files = { path = "../ronoctua-files" }
+# THE MACHINE'S OWN CLOCK, in the one crate that talks to `timedated`. The
+# `clock-sync` watch reads three properties and, when nothing is keeping the
+# clock, turns the network time client on. A second reader of `timedatectl`
+# would be a second answer about one clock.
+ronoctua-clock = { path = "../ronoctua-clock" }
 anyhow.workspace = true
 tracing.workspace = true
 # The wire, and the two files. One JSON object per line on the socket, for the

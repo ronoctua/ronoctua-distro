@@ -1,0 +1,26 @@
+[package]
+name = "ronoctua-clock"
+description = "The one boundary with systemd-timedated: the machine's own clock, its time zone, and whether something keeps them right."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# NO `[[bin]]`: nothing here is a daemon. The view asks it on a key and the
+# brain's watch asks it on a schedule, the same way `ronoctua-power` is asked.
+#
+# zbus only enters `timedate.rs`. The RULES — what may be changed given what
+# the daemon says, and what a person is told about it — live in `lib.rs` and do
+# not import it, which is what makes them testable against portraits copied off
+# a real machine with no bus and no root.
+
+[dependencies]
+zbus.workspace = true
+anyhow.workspace = true
+# The watch runs unattended, and when timedated is absent there is nobody to
+# return an error to — so it says so to the log.
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -7587,6 +7587,45 @@ fazer alguma coisa consigo mesma, e a linha que diz isso não pode se ler como u
 de ideia. O branco dela também é o único quase-branco neutro do arquivo, e não sai desta linha: o
 corpo do texto é quente de propósito, e sobre um fundo azulado um branco quente se lê como sujo.
 
+### O relógio da máquina — `ronoctua-clock`, e por que o automático é o padrão
+
+A tela de idioma e região mudava o relógio, a data e o fuso da INTERFACE e nada do computador. O
+dono chamou isso de configurações incompletas, e tinha razão: o que alguém quer dizer com "o fuso
+horário" é o da máquina.
+
+**Um crate fala com o `timedate1`**, molde do `ronoctua-disks` e do `ronoctua-power`: `Standing` sai
+de uma chamada de propriedades, três ordens saem por método, e as REGRAS — o que é editável dado o
+que o daemon respondeu — ficam num `lib.rs` sem zbus, testáveis contra retratos copiados de uma
+máquina de verdade. O `timesync1` é lido no mesmo crate e só para saber QUEM está sendo perguntado;
+nada escreve nele, porque o interruptor que a pessoa quer dizer é o `SetNTP` do `timedate1`.
+
+**O automático é o padrão porque já existe um cliente.** O `systemd-timesyncd` disciplina o relógio
+continuamente, corrige deriva em vez de dar saltos e sabe até onde confiar numa resposta. A tarefa
+`clock-sync` do brain é a VIGIA e o INTERRUPTOR: ela confere, religa o automático quando o encontra
+desligado, e diz quando o relógio está à deriva. Uma tarefa que buscasse a hora por HTTPS a cada
+seis horas seria um segundo acertando este relógio, menos exato que o primeiro e discordando dele —
+e o sintoma de dois donos de um relógio é um carimbo que anda para trás.
+
+**O que o automático mantém não se digita.** O daemon recusa `SetTime` enquanto o NTP está ligado, e
+a razão é boa: a próxima checagem poria de volta. As duas linhas continuam DESENHADAS e recusam com
+uma frase, em vez de sumirem — uma linha que não é desenhada e uma que não pode ser usada são a
+mesma coisa vista de uma cadeira, e só uma delas se explica.
+
+**O fuso passou a ser da pessoa, e isso é uma decisão sobre o invariante 6.** `time.timeZone = null`
+não é uma brecha: é o NixOS declarando que o `/etc/localtime` é do `timedated`, e é a forma que
+`ronoctua.power.profile` (um piso que um arquivo vence) já tem. Preenchendo `ronoctua.time.zone`, o
+flake retoma o fuso, o NixOS põe `NIXOS_STATIC_TIMEZONE=1`, e a linha é desenhada RECUSANDO — que é
+o que as catorze linhas fixas do Syncthing já fazem. O instalador continua PERGUNTANDO o fuso; o que
+mudou é que ele semeia `/etc/localtime` no alvo em vez de escrever uma linha no `host.nix`.
+
+**Custa uma regra polkit, e ela é a oitava.** Três ações (`set-ntp`, `set-time`, `set-timezone`), um
+usuário, `YES`. A quarta que o upstream declara — `set-local-rtc` — fica de fora porque nada nesta
+árvore a chama, e uma ação concedida que ninguém chama é uma porta aberta para ninguém. O
+`timedate-polkit-is-narrow` lê a regra instalada e a constante `ronoctua_clock::timedate::ACTIONS`
+nos DOIS sentidos.
+
+---
+
 ### Energia — `LEADER s p`, `LEADER q`, e um glifo que só aparece quando diz alguma coisa
 
 Quatro daemons contam a história da energia — UPower (bateria, carregador, periféricos), o
@@ -8082,6 +8121,9 @@ Duas adições ao grafo original, cada uma por um problema real:
 - **`ronoctua-cmd`.** Toda funcionalidade tem de ser um comando nomeado. `keymap` resolve a árvore de
   teclas; o **registro de comandos** é outra coisa, e sem crate próprio os ids nascem espalhados
   dentro do `shell`.
+- **`ronoctua-clock`.** Uma fronteira, um crate — a regra que o `ronoctua-disks` e o
+  `ronoctua-power` já seguem. Dois chamadores querem o `timedate1`: a vista `LEADER s l` e a vigia
+  do brain. Um segundo leitor de `timedatectl` seria uma segunda resposta sobre um relógio só.
 
 ---
 

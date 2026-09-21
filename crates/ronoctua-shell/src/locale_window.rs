@@ -393,6 +393,24 @@ impl LocaleWindow {
                 }
                 self.view.reread();
             }
+            // THE MACHINE'S CLOCK. Unlike the questions above, these need no
+            // minibuffer: they are a switch, and a switch is a thing a window
+            // can flip. The bus is on this side of the view for the reason
+            // every other errand is — a view drawn by two doors holds neither
+            // a connection nor a socket.
+            Errand::Automatic(on) => {
+                if let Err(e) = ronoctua_clock::set_automatic(on) {
+                    tracing::warn!(error = %e, "the machine's clock-keeping could not be changed");
+                    self.message = Some(self.texts.t(ronoctua_i18n::key::LOCALE_CLOCK_REFUSED));
+                }
+                self.view.reread();
+            }
+            Errand::Watch(on) => {
+                if !crate::locale::watch_the_clock(on) {
+                    self.message = Some(self.texts.t(ronoctua_i18n::key::LOCALE_WATCHED_UNKNOWN));
+                }
+                self.view.reread();
+            }
         }
         self.ask_paint();
     }
@@ -1006,12 +1024,20 @@ impl PointerHandler for LocaleWindow {
             self.ask_paint();
             return;
         }
-        // THE MOUSE AIMS, THE KEYS ACT — a click puts the cursor on the row,
-        // and `RET` is what applies, arms and confirms.
+        // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19. This
+        // door only ever aimed: every setting on this screen was unreachable
+        // with a mouse, which is the rule's plainest failure.
         if let Some(row) = clicked {
             let rows = self.rows();
-            self.view.clicked(row, &rows);
+            let again = self.view.clicked(row, &rows);
             self.follow(rows.len());
+            if again {
+                let errand = self
+                    .view
+                    .press(crate::locale::Press::Enter, &self.zone, &self.texts);
+                self.apply(errand);
+                return;
+            }
             self.ask_paint();
             return;
         }

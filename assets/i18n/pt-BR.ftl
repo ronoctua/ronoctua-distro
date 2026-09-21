@@ -269,6 +269,7 @@ inst-step-host-nix = Gravar a descrição desta máquina
 inst-step-facter = Detectar o hardware
 inst-step-password = Gravar o hash da senha em /persist
 inst-step-install = Construir e instalar o sistema
+inst-step-zone = Definir o fuso horário desta máquina
 inst-step-tpm = Selar a chave do disco no TPM
 
 ## Installer — the interface
@@ -2397,6 +2398,15 @@ emacs-no-daemon = O daemon do Emacs não está rodando. Cada janela do editor va
 emacs-not-the-client = Este Emacs não está ligado ao daemon: ele carregou uma cópia própria da configuração, e os buffers são só dele. Feche e abra de novo com `e`, ou pelo gerenciador de arquivos.
 cmd-brain-start-emacs = Iniciar
 
+# A VIGIA DO RELÓGIO. Ela não busca a hora — quem busca é o `systemd-timesyncd`,
+# e fazer isso duas vezes seriam duas coisas acertando um relógio só. O que ela
+# faz é manter ligado o acerto automático da máquina e dizer quando ele não está.
+brain-task-clock-sync = Vigiar o relógio
+brain-task-clock-sync-does = Confere, algumas vezes por dia, se alguma coisa está mantendo certo o relógio desta máquina pela internet — e liga de volta quando não há nada. Ela não pergunta a hora a ninguém: quem faz isso continuamente é o cliente de horário do sistema, e um segundo seriam dois relógios discordando. Desligue isto para acertar o relógio à mão.
+clock-not-automatic = Nada está mantendo certo o relógio desta máquina. Ele vai se atrasar, e todo carimbo de hora daqui se atrasa junto.
+clock-not-synchronised = O relógio está sendo cuidado, mas ainda não conseguiu falar com nenhum servidor de horário.
+cmd-brain-clock-automatic = Manter certo
+
 # AS LINHAS DA AGENDA. Cada uma é o NOME de um campo, então cada uma é um
 # substantivo — e o valor ao lado é a resposta, nunca a metade de uma frase
 # que começou no rótulo.
@@ -2508,6 +2518,8 @@ echo-brain-idle = Não há nada para acontecer
 echo-brain-unreachable = O cérebro não está respondendo
 echo-emacs-starting = Iniciando o daemon do Emacs
 echo-emacs-unreachable = Não deu para iniciar o daemon do Emacs; veja: journalctl --user -u emacs
+echo-clock-kept = O relógio desta máquina voltou a ser mantido certo
+echo-clock-refused = Não deu para entregar o relógio; veja: journalctl -u systemd-timedated
 
 # A ATUALIZAÇÃO OLHADA DE PERTO — a marca na modeline e a janela que ela abre.
 #
@@ -3551,7 +3563,9 @@ locale-date-long-ymd = { $y }, { $d } de { $month }
 locale-date-long-dmy = { $d } de { $month } de { $y }
 locale-date-long-mdy = { $month } { $d }, { $y }
 locale-heading-machine = Decidido pelo sistema
-locale-zone = Fuso horário
+# AS PALAVRAS DO PRÓPRIO COMANDO, desenhadas na linha de dicas: o `z` pede o
+# fuso em que ESTA INTERFACE lê um carimbo, que não é o da máquina.
+locale-zone = O fuso desta interface
 locale-zone-unknown = desconhecido
 locale-zone-is-declared = O fuso é declarado na configuração do sistema; mudá-lo é um rebuild.
 locale-decimal = Separador decimal
@@ -3619,7 +3633,47 @@ world-place-america-sao-paulo = Brasília
 world-temperature = { $degrees } °C
 world-rate = 1 { $from } = { $much } { $to }
 cmd-world-glance = Um relance: a hora, o tempo e o câmbio
-locale-heading-places = Os lugares do relance
+# PARA QUE SERVE CADA SEÇÃO. Toda uma delas abre com uma frase dizendo o que
+# muda e ONDE isso aparece, porque uma tela de ajustes que só os nomeia deixa a
+# pessoa adivinhar qual metade da máquina eles alcançam.
+locale-interface-does = O idioma que esta interface fala. Muda na hora, no rodapé e em toda janela; o idioma da máquina é definido na configuração do sistema.
+locale-time-does = Como esta interface escreve toda data e toda hora que ela desenha — o relógio do rodapé, as datas do gerenciador de arquivos, o relance. Não mexe no relógio da máquina; isso é a seção abaixo.
+locale-numbers-does = Como os números são escritos e em que unidade sai a temperatura. Alcançam toda tela daqui, o relance inclusive.
+locale-heading-machine-clock = O relógio desta máquina
+locale-machine-does = O relógio, o fuso e a data do computador — o que todo programa desta máquina lê, e não só esta interface.
+locale-automatic = Mantido certo automaticamente
+locale-automatic-on = ligado
+locale-automatic-off = desligado
+locale-automatic-does = O sistema pergunta a hora a um servidor pela internet e mantém o relógio em dia com ele. É assim que a distro roda; desligar entrega o relógio a você.
+locale-automatic-server = Perguntando a { $server }.
+locale-automatic-synchronised = O relógio está em dia.
+locale-automatic-adrift = Ele ainda não conseguiu falar com nenhum servidor de horário.
+locale-automatic-cannot = Não há cliente de horário instalado nesta máquina.
+locale-watched = Vigiado pelo brain
+locale-watched-does = A vigia do relógio do brain olha algumas vezes por dia e religa o acerto automático se o encontrar desligado. É o mesmo interruptor da página daquela tarefa.
+locale-watched-unknown = O brain não está rodando, então isto não dá para ler nem mudar daqui.
+locale-machine-kept = Enquanto o relógio é mantido automaticamente, estes não podem ser acertados à mão: a próxima checagem os colocaria de volta.
+locale-machine-unreachable = Não deu para perguntar nada sobre o relógio desta máquina; nada aqui pode ser mudado.
+# AS DUAS DA MÁQUINA DIZEM O QUE APERTÁ-LAS FAZ. `Data` e `Hora` são as
+# linhas da INTERFACE uma seção acima — elas escolhem um FORMATO e mostram
+# uma amostra viva dele —, e duas linhas de uma lista com a mesma palavra são
+# dois fatos que ninguém distingue.
+locale-machine-date = Acertar a data
+locale-machine-time = Acertar a hora
+locale-machine-zone = Fuso horário
+locale-shows-times-in = Mostrar as horas em
+# O FORMATO É ESCRITO POR EXTENSO e não é a ordem escolhida pela pessoa: aqui
+# se DIGITA um valor, e um pedido que seguisse a preferência de exibição
+# pediria `09/21/2026` numa máquina e `21/09/2026` na seguinte.
+locale-ask-system-date = A data da máquina, como 2026-09-21:
+locale-ask-system-time = A hora da máquina, como 14:32 ou 14:32:05:
+locale-ask-system-zone = O fuso horário da máquina:
+locale-not-a-date = Isso não é uma data nesse formato.
+locale-not-a-time = Isso não é uma hora nesse formato.
+locale-clock-refused = A máquina recusou a mudança; veja: journalctl -u systemd-timedated
+locale-heading-glance = A linha do relance
+locale-glance-does = A linha que { $keys } abre acima da modeline. Cada lugar abaixo desenha a hora de lá, e a data, a temperatura e o câmbio que você ligar para ele.
+locale-add-place-where = Um fuso, como Europe/Lisbon. Ele nasce mostrando o relógio e nada mais.
 locale-no-places = Nenhum lugar é observado; o { $keys } não mostraria nada.
 locale-shows-clock = Hora
 locale-shows-date = Data
@@ -3630,7 +3684,15 @@ locale-off = escondido
 locale-heading-sources = Quem é perguntado
 locale-asked = perguntado
 locale-not-asked = não perguntado
-locale-sources-are-asked = Cada busca conta a esse host o endereço desta máquina e quais lugares ela observa.
+locale-sources-are-asked = Cada busca conta a esse host o endereço desta máquina e quais lugares ela observa. Nada aqui precisa de conta nem de chave.
+locale-source-weather = O tempo
+locale-source-rate = Câmbio
+# Os hosts que uma fonte pergunta, na ordem em que ela pergunta: o segundo só
+# é perguntado quando o primeiro não responde.
+locale-source-hosts = Pergunta { $hosts }, nessa ordem.
+locale-source-answered = Última resposta { $when }, de { $host }.
+locale-source-never = Ninguém respondeu ainda.
+locale-source-trouble = A última tentativa falhou — { $said }
 locale-title = Idioma e região
 locale-up = cima
 locale-down = baixo

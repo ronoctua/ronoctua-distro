@@ -868,10 +868,11 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   socket — IPC, não systemd, então a regra não cresceu uma linha. O `%include` sai no TOPO do torrc
   (o Nix ordena chaves e `%` vem antes das letras), logo **o que o flake declara vence**, e essas
   linhas são desenhadas RECUSANDO. O `SOCKSPort` vem de `nix/tor.nix`, lido pelos dois lados: era
-  literal no crate contra um módulo que não o declarava, e os dois casavam por sorte. **SETE módulos
+  literal no crate contra um módulo que não o declarava, e os dois casavam por sorte. **OITO módulos
   nossos escrevem uma regra**, e o censo assinado é o `polkit-rules-are-the-ones-we-know`; cada uma
   ganha além dele um check próprio sobre QUAL unidade e QUAIS verbos (`tor-polkit-is-narrow`,
-  `syncthing-polkit-is-narrow`, que leem a regra instalada e a constante do crate nos DOIS sentidos).
+  `syncthing-polkit-is-narrow`, `timedate-polkit-is-narrow`, que leem a regra instalada e a
+  constante do crate nos DOIS sentidos).
 - **`ronoctua-memory::net` é a fronteira do `/proc/net`** (sockets, ARP) e o `ronoctua-lan` faz a
   varredura ICMP **sem privilégio nenhum** (`SOCK_DGRAM`+`IPPROTO_ICMP`, `ping_group_range`). Duas
   medições viraram desenho: o endereço em `/proc/net/tcp` é LITTLE-ENDIAN (lido ao contrário,
@@ -1254,6 +1255,14 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   unidade de USUÁRIO, sem polkit e sem perguntar); o Emacs autônomo **não ganha nenhum**, porque o
   que está aberto é o trabalho de alguém. E uma máquina sem Emacs nenhum não é uma máquina com
   problema — `worth_saying` responde isso antes de qualquer frase.
+- **E O RELÓGIO TEM OUTRA, que é a segunda que só olha** (`tasks/clock.rs`, id `clock-sync`).
+  Ela **não busca a hora**: o `systemd-timesyncd` já é um cliente NTP, disciplina o relógio de
+  forma contínua e sabe até onde confiar numa resposta — uma tarefa que perguntasse a hora a um
+  servidor web a cada seis horas seria um SEGUNDO acertando este relógio, menos exato que o
+  primeiro e discordando dele. Ela confere, RELIGA o automático quando o encontra desligado (o
+  único lugar daqui que escreve, e a ensaio ela não escreve) e diz quando o relógio está à deriva.
+  Cadência em MINUTOS pela razão da vigia do Emacs, e a mesma asserção de compilação contra uma
+  vigia que afogue o log de atividade.
 - **A atualização é declarada, e o brain só escolhe a hora** — `assets/updates.nix` gera a tabela
   Rust, as chaves que os dois idiomas devem, os dois roteiros e a recusa. O brain LÊ essa tabela
   (`build.rs`); ele já declarou os passos por conta e os ids saíram **disjuntos** dos da sequência.
@@ -1337,6 +1346,19 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   para sempre. O `LEADER s l` tem os quatro interruptores POR LUGAR e **nomeia os dois hosts**
   (`api.open-meteo.com`, `api.frankfurter.dev`), cada um com o seu — desligar uma fonte é decisão
   sobre uma PARTE, não sobre uma abstração, e com os dois desligados nenhuma thread sobe.
+  **UMA FONTE É UMA LISTA DE PROVEDORES** (`assets/world.nix`, `sources.<qual>.from`): eles são
+  perguntados EM ORDEM e só até um responder, então o segundo não custa nada numa máquina em que o
+  primeiro está de pé. Cada um leva um `id`, porque um fallback não é troca de host — a resposta do
+  met.no é uma previsão de cem passos e a do Open-Meteo é um número —, e o `id` escolhe o LEITOR em
+  Rust; um declarado sem leitor é um teste que cai, nunca uma surpresa em execução. **A cadência é
+  por FONTE** (era o `min` das duas, o que perguntava o câmbio doze vezes mais do que o arquivo
+  declara) e **uma falha é retentada em MINUTOS** e não na cadência: a falha mais provável é a
+  PRIMEIRA passada, porque a thread nasce com o rodapé e o rodapé nasce antes da rede — meia hora
+  sem temperatura e nada na tela dizendo por quê é exatamente "o weather não funciona".
+  **E O QUE ACONTECEU FICA ESCRITO** (`Cache::sources`, um `Attempt` por fonte: quem respondeu,
+  quando, e o que a última tentativa disse). O relance NÃO desenha isso — uma linha lida de relance
+  não é lugar de erro —; quem desenha é a seção "Who is asked" do `LEADER s l`, que é onde a
+  ausência de um número deixa de ser muda.
   Lugar que não mostra nada não é desenhado e **não é recusado**: recusar a quarta tecla de
   quatro é uma tela que briga. Lugar do dono não tem chave de texto e desenha a ZONA —
   `[world-place-…]` leria como defeito, e pedir tradução de uma cidade que a pessoa acabou de
@@ -1355,6 +1377,18 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   o segundo dois degraus abaixo (`glance.ground` e `.ground-alternate`, com portão de ΔE): com
   vários lugares lado a lado, um separador deixa o olho com uma fileira de palavras e nada que as
   agrupe, e mudar o chão é o único recurso que o invariante 15 deixa.
+  **E o fundo tem o MESMO AR dos dois lados** (`Stripe::round`, `space.glance.air`, cobra o
+  `a-glance-stripe-has-equal-air`): ele começava onde a primeira letra começava e corria até onde
+  o próximo lugar começava — nada à esquerda, duas células à direita, e o último tomava o resto da
+  barra. Um número gasto duas vezes é o que faz "o mesmo ar dos dois lados" não poder divergir.
+  **E A PIZZA É ANCORADA À BORDA** (`chrome::from_the_edge`): `columns` é `floor(largura/célula)`,
+  então uma run contada da ESQUERDA fica a uma célula MAIS o resto da grade da borda — de 0 a 1
+  célula, mudando com a largura —, enquanto toda marca da modeline fica a uma célula exata dela. É
+  o `Span::edge`, e ele vale para os três aglomerados de direita das linhas que cercam a modeline:
+  a faixa, o relance e a do brain. **A METADE DO PONTEIRO VAI JUNTO** (`chrome::at_the_edge`,
+  `Piece::edge`, e o `at` de cada linha compara pela leitura que a COLOCOU): mover a tinta sem
+  mover o alvo é `[[um-controle-e-pego-onde-e-desenhado]]` chegando pelo outro eixo, e o envelope
+  da faixa é um controle. Cobra o `a-mark-at-the-edge-is-drawn-at-the-edge`.
 - **`LEADER s l` é IDIOMA E REGIÃO** (`locale.rs`, uma `View` e DUAS portas — `s l l` no rodapé,
   `s l w` em janela): cinco seções, e a
   divisão delas É o desenho. **O idioma é NOSSO** e troca AO VIVO — `language.json`, na forma de
@@ -1365,11 +1399,33 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   **O relógio (12/24 h) e a ORDEM da data também são nossos** (`locale.json`), e alcançam TODA
   data do sistema porque `chrome::when_text` os lê de um valor do PROCESSO
   (`locale::prefs::current`) — a mesma forma do tema, e não um parâmetro em cinco assinaturas.
-  A chave `files-when` virou `{ $date } { $time }`. **O fuso, as medidas e o separador decimal
+  A chave `files-when` virou `{ $date } { $time }`. **As medidas e o separador decimal
   a vista só DIZ**, cada um apontando quem decide: uma tela que oferecesse os quatro e honrasse
   dois seria pior que uma que oferece dois. Trocar de idioma também move a locale do RENDERER
   (`Text::set_locale`) — é ela que decide, entre as quatro faces Han unificadas, se o ideograma
   sai japonês ou chinês.
+  **E O RELÓGIO DA MÁQUINA É UMA SEÇÃO, que não existia** (`ronoctua-clock`, a única fronteira com
+  o `timedate1`): a tela mudava o relógio, a data e o fuso da INTERFACE e nada do computador, e o
+  dono chamou isso de configurações incompletas. Agora há `Kept right automatically` (o `SetNTP`
+  do systemd, e o cliente é o `systemd-timesyncd`), a data e a hora da máquina, e o fuso DELA. **O
+  automático é o padrão, e o que ele mantém não se digita**: o daemon recusa enquanto o NTP está
+  ligado — a próxima checagem poria de volta —, então as duas linhas são DESENHADAS recusando e
+  dizem por quê, em vez de sumirem. **O fuso passou a ser da pessoa**: `ronoctua.time.zone` nasce
+  `null`, o que deixa `time.timeZone = null` e o `/etc/localtime` para o timedated; preenchida, o
+  flake FIXA, o NixOS põe `NIXOS_STATIC_TIMEZONE=1`, a linha é desenhada RECUSANDO e o módulo diz
+  isso à tela por `RONOCTUA_TIME_ZONE`. O instalador deixou de escrever `time.timeZone` e SEMEIA o
+  `/etc/localtime` no alvo. Custa uma regra polkit de TRÊS ações e um usuário
+  (`timedate-polkit-is-narrow`; `set-local-rtc` fica de fora porque nada aqui a chama).
+  **E A VIGIA É UMA TAREFA DO BRAIN** (`clock-sync`, a segunda que só olha): ela não busca a hora —
+  quem busca é o timesyncd, e dois clientes seriam dois relógios discordando —, ela CONFERE, religa
+  o automático quando o encontra desligado e diz quando o relógio está à deriva. **Um interruptor,
+  duas portas**: o `enabled` da tarefa é a verdade, o daemon é quem escreve, e esta tela o lê por
+  `Ask::Look` e o muda por `Ask::Tune` — a página da tarefa mexe no mesmo campo.
+  **E AS FRASES QUEBRAM** (`Builder::sentence` → `layout::wrap`, uma `Row` por linha, cobra o
+  `a-note-is-wrapped-and-not-cut`): elas dizem o que um ajuste faz e ONDE ele aparece, e o que a
+  reticência levava era sempre o FIM, que é onde está a consequência. Por isso o cursor conta as
+  linhas em que se PODE PARAR e não as desenhadas — uma nota quebrada é mais linhas numa tela
+  estreita, e um cursor sobre as desenhadas nomearia um ajuste diferente a cada largura.
 - **UMA LINHA POR AJUSTE, e o valor é um ANEL** — `S-<setas>` o giram, `RET` o gira para a frente
   (porque `RET` é o que um CLIQUE vira, e uma linha só alcançável por seta com shift seria linha
   que o mouse não usa). Era uma linha por VALOR — `24-hour` acima de `12-hour`, três para a data,
@@ -1377,9 +1433,19 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   ajuste e suas alternativas**. **E o cursor NASCE numa linha que age**: ele nascia em zero, que é
   o primeiro TÍTULO — toda seção abre com um —, então nada ficava aceso e o `RET` caía em
   `Target::Nothing`. De fora isso é uma tela onde tecla nenhuma faz nada, que foi exatamente o
-  relato. **O fuso, o separador decimal e as medidas deixaram de ser FATOS**: o fuso é o que ESTA
-  interface lê um carimbo em (o `time.timeZone` continua sendo do sistema e a linha diz isso), o
-  separador pode vencer o idioma, e a unidade alcança o °C/°F do relance.
+  relato. **O fuso, o separador decimal e as medidas deixaram de ser FATOS**: o fuso desta
+  interface é o que ELA lê um carimbo em (e a linha se chama `Show times in`, porque o fuso que
+  alguém quer dizer com "fuso" é o da MÁQUINA, uma seção abaixo), o separador pode vencer o idioma,
+  e a unidade alcança o °C/°F do relance.
+  **E A HIERARQUIA SÃO TRÊS NÍVEIS, por COR e AR** (invariante 15: nunca tamanho, nunca régua): a
+  seção em `text.group` na margem, o sub-título de um lugar em `text.secondary` recuado de
+  `space.view.nestCells` com o fuso entre parênteses em `text.dim`, e as linhas dele recuadas
+  junto. Os dois primeiros eram a MESMA tinta na MESMA coluna, e o dono leu que o título principal
+  era idêntico a todos os de baixo e que o bloco não se lia como uma seção. **Toda seção abre com
+  uma frase** dizendo o que muda e onde aparece. **E AÇÃO NÃO TEM VALOR**: `Remove this place`
+  levava o fuso do lugar e `Add a place` levava uma instrução, as duas lidas como a RESPOSTA da
+  linha — o que aquela coluna é em todo o resto da tela. **E o clique SELECIONA, o segundo é que
+  age** (inv. 19): o rodapé agia no PRIMEIRO e a janela não agia nunca.
 - **`LEADER s k` são os TECLADOS** (`ronoctua-keyboards` + `buffers/keyboard`), e é o único ajuste
   POR DISPOSITIVO que existe: o niri tem **um** `input { keyboard { … } }` para todos e não expõe
   dispositivo nenhum por IPC, então layout, acentos e repetição são globais **por construção** — a

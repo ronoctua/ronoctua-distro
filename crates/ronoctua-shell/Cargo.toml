@@ -89,6 +89,12 @@ ronoctua-disks = { path = "../ronoctua-disks" }
 # THE POWER BORDER — UPower, power-profiles-daemon, logind — for the modeline's
 # battery and profile marks, the power view and the three battery alarms.
 ronoctua-power = { path = "../ronoctua-power" }
+# THE MACHINE'S OWN CLOCK — `systemd-timedated`. `LEADER s l` is where somebody
+# looks for the time zone and for whether anything is keeping the clock right,
+# and for a whole release that screen could change only what the interface
+# draws. One crate, because the brain's `clock-sync` watch asks the same
+# daemon and two readers would be two answers about one clock.
+ronoctua-clock = { path = "../ronoctua-clock" }
 # The screens: what they can do, how bright they are, and how big the text is.
 ronoctua-display = { path = "../ronoctua-display" }
 # THE ONE BOUNDARY WITH PIPEWIRE. The modeline draws two marks off it at

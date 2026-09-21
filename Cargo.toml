@@ -42,6 +42,7 @@ members = [
   "crates/ronoctua-disks",
   "crates/ronoctua-memory",
   "crates/ronoctua-power",
+  "crates/ronoctua-clock",
   "crates/ronoctua-display",
   "crates/ronoctua-audio",
   "crates/ronoctua-bluetooth",

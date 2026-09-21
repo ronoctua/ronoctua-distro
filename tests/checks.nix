@@ -1252,34 +1252,59 @@ let
     echo "OK: the console question is oneshot, by path, in multi-user"
   '';
 
-  locale-exists = mkCheck "locale-exists" [ ] ''
-    supported=${pkgs.glibcLocales}/share/i18n/SUPPORTED
-    tab=${pkgs.tzdata}/share/zoneinfo/zone1970.tab
-    locale=${self.nixosConfigurations.vm.config.i18n.defaultLocale}
-    zone=${self.nixosConfigurations.vm.config.time.timeZone}
+  locale-exists =
+    let
+      # `null` IS THE ANSWER, not a missing attribute, so `or ""` does not
+      # reach it: `ronoctua.time.zone` is declared and defaults to null.
+      declaredZone =
+        let
+          zone = self.nixosConfigurations.vm.config.ronoctua.time.zone;
+        in
+        if zone == null then "" else zone;
+    in
+    mkCheck "locale-exists" [ ] ''
+      supported=${pkgs.glibcLocales}/share/i18n/SUPPORTED
+      tab=${pkgs.tzdata}/share/zoneinfo/zone1970.tab
+      locale=${self.nixosConfigurations.vm.config.i18n.defaultLocale}
+      # THE ZONE IS THE PERSON'S UNLESS THE FLAKE CLAIMS IT, so it is a string
+      # or it is nothing — `ronoctua.time.zone` is `null` by default, which is
+      # what leaves `/etc/localtime` to `systemd-timedated` and lets `LEADER s l`
+      # change the machine's zone. This read used to be unconditional and the
+      # whole battery stopped evaluating at `cannot coerce null to a string`.
+      zone=${declaredZone}
 
-    grep -qE "^$locale/UTF-8" "$supported" || {
-      echo "ERROR: the locale \`$locale\` is not in glibc's SUPPORTED." >&2
-      echo "      system_path would fall through to \`C\`: dates in American order, with no" >&2
-      echo "      no accent in the sorting, and nothing saying why." >&2
-      exit 1; }
+      grep -qE "^$locale/UTF-8" "$supported" || {
+        echo "ERROR: the locale \`$locale\` is not in glibc's SUPPORTED." >&2
+        echo "      system_path would fall through to \`C\`: dates in American order, with no" >&2
+        echo "      no accent in the sorting, and nothing saying why." >&2
+        exit 1; }
 
-    # The measurement key is the one that must NOT follow the language: it is
-    # what keeps the machine metric when someone installs in American English.
-    measurement=${self.nixosConfigurations.vm.config.i18n.extraLocaleSettings.LC_MEASUREMENT or ""}
-    case "$measurement" in
-      en_US*|en_PH*|""|C|C.UTF-8|POSIX)
-      echo "ERROR: LC_MEASUREMENT = \`$measurement\` is not metric." >&2
-      echo "      Choosing American English chooses a language, never an inch." >&2
-        exit 1 ;;
-    esac
+      # The measurement key is the one that must NOT follow the language: it is
+      # what keeps the machine metric when someone installs in American English.
+      measurement=${self.nixosConfigurations.vm.config.i18n.extraLocaleSettings.LC_MEASUREMENT or ""}
+      case "$measurement" in
+        en_US*|en_PH*|""|C|C.UTF-8|POSIX)
+        echo "ERROR: LC_MEASUREMENT = \`$measurement\` is not metric." >&2
+        echo "      Choosing American English chooses a language, never an inch." >&2
+          exit 1 ;;
+      esac
 
-    awk -F'\t' '!/^#/ { print $3 }' "$tab" | grep -qx "$zone" || {
-      echo "ERROR: the zone \`$zone\` does not exist in the tzdb." >&2
-      exit 1; }
+      # AND IT IS ONLY CHECKED WHEN THERE IS ONE. A zone the flake does not
+      # declare is not a zone that is missing: it is the machine's own, seeded
+      # by the installer and rewritten by `timedatectl`, and no build-time file
+      # can say what it will be. What still has to hold is that a zone somebody
+      # DID pin exists — a typo there is a clock an hour out with nothing on
+      # screen able to say so.
+      if [ -n "$zone" ]; then
+        awk -F'\t' '!/^#/ { print $3 }' "$tab" | grep -qx "$zone" || {
+          echo "ERROR: the zone \`$zone\` does not exist in the tzdb." >&2
+          exit 1; }
+      else
+        zone="the machine's own"
+      fi
 
-    echo "OK: locale \`$locale\`, metric measurements, zone \`$zone\`"
-  '';
+      echo "OK: locale \`$locale\`, metric measurements, zone \`$zone\`"
+    '';
 
   keyboard-layout-exists = mkCheck "keyboard-layout-exists" [ ] ''
     lst=${pkgs.xkeyboard_config}/share/X11/xkb/rules/base.lst
@@ -10320,6 +10345,15 @@ let
           # Each has a check of its own about which unit and which verbs.
           "org.freedesktop.systemd1.manage-units":
               "ours: files, rescue, keyboard, memory, update, tor, syncthing",
+          # nix/modules/base.nix — the machine's own clock. THREE actions and
+          # not four: `set-local-rtc` decides whether the hardware clock runs
+          # in local time, nothing in this tree asks for it, and a fourth
+          # would be a door held open for nobody. `timedate-polkit-is-narrow`
+          # reads this rule and `ronoctua_clock::timedate::ACTIONS` in both
+          # directions.
+          "org.freedesktop.timedate1.set-ntp": "ours: base",
+          "org.freedesktop.timedate1.set-time": "ours: base",
+          "org.freedesktop.timedate1.set-timezone": "ours: base",
           # nix/modules/rescue.nix — the rescue console's way out, and the
           # `-multiple-sessions` twins that logind asks separately about.
           "org.freedesktop.login1.power-off": "ours: rescue",
@@ -11812,6 +11846,400 @@ let
     print(f"OK: {len(owed)} option keys, in every declared language")
     END
   '';
+
+  # THE MACHINE'S CLOCK, and the three things this person may do to it.
+  #
+  # # What it catches
+  #
+  # A door widened past what `ronoctua-clock` actually calls. Upstream's
+  # `org.freedesktop.timedate1.policy` answers `auth_admin_keep` to FOUR
+  # actions and this system grants three of them; the fourth — `set-local-rtc`
+  # — decides whether the hardware clock runs in local time, nothing in this
+  # tree asks for it, and adding it would be a door held open for nobody.
+  #
+  # It reads BOTH SIDES and compares them: the rule the system installs, and
+  # the `ACTIONS` constant the crate calls through. An action granted and never
+  # called is as much a finding as one called and never granted — the first is
+  # width nobody uses, the second is a key that comes back refused.
+  # A MARK ANCHORED TO THE BORDER IS DRAWN AT THE BORDER, and found there.
+  #
+  # # What it catches
+  #
+  # The grid does not reach the surface's edge: `columns` is
+  # `floor(width / cell)`, so between the last cell and the border there is a
+  # remainder of nought to one cell, and it changes with the window. A run
+  # placed by counting cells from the LEFT therefore sits `cell + remainder`
+  # from the border while every mark on the modeline sits an exact cell from
+  # it — which is what the owner read beside the glance's countdown, and what
+  # `ronoctua_render::Span::edge` exists to end.
+  #
+  # Both halves are checked, because only both together are the promise: the
+  # INK has to carry `edge: true`, and the POINTER has to be asked through
+  # `chrome::at_the_edge`. Half of it is worse than neither — the ink moves by
+  # the remainder and the hit test does not follow, which is a control that
+  # answers a cell away from where it is drawn.
+  a-mark-at-the-edge-is-drawn-at-the-edge =
+    mkCheck "a-mark-at-the-edge-is-drawn-at-the-edge" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
+
+        shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+        wrong = []
+
+        # THE PLACEMENT IS ONE FUNCTION, and the pointer's reading is its twin.
+        chrome = code_of((shell / "chrome.rs").read_text())
+        for name in ("pub const fn from_the_edge", "pub fn at_the_edge"):
+            if name not in chrome:
+                wrong.append(f"`{name}` is gone from chrome.rs; the placement has no single answer")
+
+        # AND EVERY PIECE PLACED BY IT SAYS SO.
+        #
+        # The four lines that live above or below the modeline lay their
+        # right-hand cluster out from the border. In `world` and `sound` the
+        # column IS `from_the_edge(...)`; in `band` and `brain` it travels in a
+        # `right`/`start` variable that only ever comes from it. Either way the
+        # literal has to carry `edge: true` — and one that does not is a mark that
+        # inherits the grid's remainder as a margin.
+        EDGE_AT = ("crate::chrome::from_the_edge(", "right,", "start,", "start +")
+        seen, anchored = 0, 0
+        for name in ("band.rs", "brain.rs", "world.rs", "sound.rs"):
+            text = without_tests((shell / name).read_text())
+            for m in re.finditer(r"Piece \{", text):
+                deep, i = 0, text.index("{", m.start())
+                j = i
+                while j < len(text):
+                    if text[j] == "{":
+                        deep += 1
+                    elif text[j] == "}":
+                        deep -= 1
+                        if deep == 0:
+                            break
+                    j += 1
+                body = code_of(text[i : j + 1])
+                at = re.search(r"at:\s*([^\n]*)", body)
+                if not at:
+                    continue
+                seen += 1
+                from_the_edge = any(w in at.group(1) for w in EDGE_AT)
+                says = "edge: true" in body
+                if from_the_edge and not says:
+                    wrong.append(
+                        f"{name}: a piece placed at `{at.group(1).strip()}` does not carry "
+                        "`edge: true`, so its ink sits the grid's remainder from the border"
+                    )
+                if from_the_edge:
+                    anchored += 1
+                if not from_the_edge and says:
+                    wrong.append(
+                        f"{name}: a piece placed at `{at.group(1).strip()}` claims `edge: true`, "
+                        "which would draw it from the border it was not measured against"
+                    )
+        floor(seen, 12, "Piece literals read out of the four lines")
+        floor(anchored, 4, "pieces anchored to the border")
+
+        # AND THE POINTER IS ASKED THE SAME WAY. `band::at` and `brain::at` are
+        # the two that answer a CONTROL, and each has to branch on the piece's own
+        # anchoring rather than comparing everything against one reading.
+        for name in ("band.rs", "brain.rs"):
+            body = body_of(without_tests((shell / name).read_text()), "at") or ""
+            floor(len(body), 60, f"characters of {name}'s hit test")
+            if "p.edge" not in body:
+                wrong.append(f"{name}: `at` does not read the piece's own anchoring")
+            if "from_the_edge" not in body:
+                wrong.append(f"{name}: `at` is not given the cell counted from the border")
+
+        # AND THE DOOR HANDS BOTH READINGS OVER.
+        surface = code_of((shell / "surface.rs").read_text())
+        if "at_the_edge(" not in surface:
+            wrong.append("surface.rs: the pointer is never resolved from the border")
+        if surface.count("piece.edge") < 3:
+            wrong.append("surface.rs: a line paints its pieces without their own anchoring")
+
+        if wrong:
+            print("ERROR: a mark anchored to the border is not drawn or not found there.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for w in wrong:
+                print("       " + w, file=sys.stderr)
+            print("", file=sys.stderr)
+            print("       `columns` is floor(width / cell), so the last cell does not", file=sys.stderr)
+            print("       touch the border. One function says where a run anchored", file=sys.stderr)
+            print("       there begins and its twin reads the pointer the same way;", file=sys.stderr)
+            print("       both doors have to read the same answer.", file=sys.stderr)
+            raise SystemExit(1)
+
+        print(f"OK: {anchored} of {seen} pieces anchored to the border, and found there")
+        END
+      '';
+
+  # A PLACE'S GROUND IS BUILT IN ONE PLACE, and it is where the air is spent.
+  #
+  # # What it catches
+  #
+  # A second `Stripe` built by hand. The ground used to begin exactly where
+  # the first letter began and run on to wherever the next place started — so
+  # every place had nothing on the left and two cells on the right, and the
+  # LAST one had the whole rest of the bar. The owner measured it.
+  #
+  # The arithmetic itself is held by `a_grounds_air_is_the_same_on_both_sides`,
+  # which reads what `line` actually produced. What this holds is that there is
+  # only ONE arithmetic to be right about: a literal written beside the call is
+  # a second answer, and it is exactly how the first one got there.
+  a-glance-stripe-has-equal-air = mkCheck "a-glance-stripe-has-equal-air" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    text = without_tests(pathlib.Path("${../crates/ronoctua-shell/src}/world.rs").read_text())
+    code = code_of(text)
+    wrong = []
+
+    # ONE CONSTRUCTOR, and the air is inside it.
+    round_of = body_of(text, "round") or ""
+    floor(len(round_of), 60, "characters of the ground's constructor")
+    if "GLANCE_AIR" not in round_of:
+        wrong.append("`Stripe::round` no longer spends `space.glance.air`")
+    if code.count("GLANCE_AIR") != round_of.count("GLANCE_AIR"):
+        wrong.append("the air is spent somewhere other than `Stripe::round`")
+
+    # AND NOBODY BUILDS ONE BY HAND. The constructor writes `Self { … }`, so
+    # a `Stripe { … }` anywhere in this file is a ground built beside it —
+    # which is a second arithmetic, and is exactly how the first one came to
+    # have no air on the left at all.
+    # NOT the declaration and not the `impl`: what is looked for is a
+    # CONSTRUCTION, which is the name with no `struct` or `impl` in front.
+    literals = len(re.findall(r"(?<!struct )(?<!impl )\bStripe\s*\{", code))
+    if literals:
+        wrong.append(
+            f"{literals} `Stripe` literal(s) are built outside `Stripe::round`, "
+            "so their air is a second arithmetic"
+        )
+    floor(len(re.findall(r"\bSelf\s*\{", code_of(round_of))), 1, "grounds built by the constructor")
+    if "Stripe::round(" not in code:
+        wrong.append("`line` no longer builds its grounds through `Stripe::round`")
+
+    if wrong:
+        print("ERROR: the glance's grounds do not all come from one arithmetic.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        raise SystemExit(1)
+
+    print("OK: one constructor, and the air is spent inside it")
+    END
+  '';
+
+  # AN EXPLANATION WRAPS; IT IS NOT CUT.
+  #
+  # # What it catches
+  #
+  # `elide_end` in the note builder of `LEADER s l`. These sentences are the
+  # part of that screen that says what a setting does and WHERE it takes
+  # effect, and the half an ellipsis takes is always the end — which is where
+  # the consequence is. The owner asked for them to break instead, in both
+  # doors, and both doors get it for nothing because a wrapped note is simply
+  # more rows.
+  a-note-is-wrapped-and-not-cut = mkCheck "a-note-is-wrapped-and-not-cut" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+    exec(open("${pyPrelude}").read())
+
+    text = without_tests(pathlib.Path("${../crates/ronoctua-shell/src}/locale.rs").read_text())
+    # `code_of` ON EACH BODY, and never the raw file: this file's own comments
+    # discuss `elide_end` at length, and a check that searched them would be
+    # answered by the paragraph explaining why it is gone.
+    body = code_of(body_of(text, "sentence") or "")
+    floor(len(body), 60, "characters of the note builder")
+    wrong = []
+
+    if "layout::wrap(" not in body:
+        wrong.append("the note builder does not wrap")
+    if "elide_end" in body:
+        wrong.append("the note builder still cuts with an ellipsis")
+    # AND EVERY NOTE GOES THROUGH IT. `note` and `note_with` are the two doors
+    # onto it, and a row pushed beside them would be a second way to draw a
+    # sentence — which is how one of them comes to be cut again.
+    for name in ("note", "note_with"):
+        one = code_of(body_of(text, name) or "")
+        floor(len(one), 20, f"characters of `{name}`")
+        if "self.sentence(" not in one:
+            wrong.append(f"`{name}` does not go through the note builder")
+
+    if wrong:
+        print("ERROR: an explanation on LEADER s l is cut rather than wrapped.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       Half a sentence is worse than none: what the ellipsis takes", file=sys.stderr)
+        print("       is the end, which is where the consequence is.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print("OK: the notes wrap, and both doors of that screen get it")
+    END
+  '';
+
+  # THE PHOTO BATTERY'S SCRIPT FITS IN ONE KERNEL ARGUMENT.
+  #
+  # # What it catches, and it is MUTE without this
+  #
+  # The whole of `nix/shots.nix`'s Python reaches the builder as ONE
+  # environment variable, and `execve` caps a single argument or variable at
+  # `MAX_ARG_STRLEN` — 128 KiB, a constant of the kernel and not of Nix. Past
+  # it the build dies with
+  #
+  #     error: executing '…/bash': Argument list too long
+  #
+  # which names neither the file, nor the variable, nor the size. It was met
+  # while adding the glance's scene: 131 779 bytes against 131 072, over by
+  # seven hundred, after a delivery that had nothing to do with any of it.
+  #
+  # # What to do when it trips
+  #
+  # MOVE THE PROSE, not the assertions. Half that script is comments, and they
+  # are the repository's reasons — but a scene's reasons belong beside its id
+  # in `nix/shots-scenes.nix`, which is Nix and never reaches the kernel. That
+  # move bought three kilobytes the day this check was written.
+  #
+  # The margin is ONE KILOBYTE because that is what is left. It is about a
+  # paragraph, which is the right unit of warning: the next paragraph is the
+  # one that would have broken it.
+  the-shots-script-fits-in-an-argument =
+    let
+      script = self.packages.${pkgs.stdenv.hostPlatform.system}.shots.driver.testScript;
+    in
+    mkCheck "the-shots-script-fits-in-an-argument" [ pkgs.python3 ] ''
+      cat > script.py <<'SCRIPT'
+      ${script}
+      SCRIPT
+      python3 - <<'END'
+      import pathlib, sys
+
+      # THE HEREDOC ABOVE IS INDENTED BY NIX, so the size is measured on the
+      # eval'd string and not on this copy: what matters is the byte count of
+      # what goes into the environment.
+      size = len(pathlib.Path("script.py").read_bytes())
+
+      # `MAX_ARG_STRLEN` — 32 pages, and a page is 4 KiB on every platform this
+      # builds for. Written out because the kernel does not export it and
+      # nothing in the failure says it.
+      WALL = 32 * 4096
+      MARGIN = 1024
+
+      if size > WALL - MARGIN:
+          print(
+              f"ERROR: the photo battery's script is {size} bytes, and one kernel "
+              f"argument holds {WALL}.",
+              file=sys.stderr,
+          )
+          print("", file=sys.stderr)
+          print("       Past that the build dies with `Argument list too long`,", file=sys.stderr)
+          print("       naming neither the file nor the variable nor the size.", file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       Half that script is comments. A scene's reasons belong", file=sys.stderr)
+          print("       beside its id in nix/shots-scenes.nix, which is Nix and", file=sys.stderr)
+          print("       never reaches the kernel; move them there.", file=sys.stderr)
+          raise SystemExit(1)
+
+      print(f"OK: {size} bytes of script, {WALL - size} under one kernel argument")
+      END
+    '';
+
+  timedate-polkit-is-narrow =
+    let
+      rules = self.nixosConfigurations.vm.config.security.polkit.extraConfig;
+    in
+    mkCheck "timedate-polkit-is-narrow" [ pkgs.python3 ] ''
+      export RONOCTUA_USER=${self.nixosConfigurations.vm.config.ronoctua.user}
+      cat > rules.js <<'RULES'
+      ${rules}
+      RULES
+      python3 - <<'END'
+      import os, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      user = os.environ["RONOCTUA_USER"]
+      # FILE-WIDE: the merged rules of the whole system are one JavaScript
+      # file with no function of ours to narrow to; each rule is taken out
+      # below by splitting at `polkit.addRule`.
+      text = pathlib.Path("rules.js").read_text()
+      floor(len(text), 500, "characters of the merged polkit rules")
+      wrong = []
+
+      # FILE-WIDE: the proxy module is one `pub const ACTIONS` and a trait;
+      # what is looked for is every action id it names, which is the whole of
+      # what it may reach through the rule.
+      # WHAT THE CRATE CALLS. `uncommented` and never `code_of`: these are
+      # STRING literals, and emptying them would leave a check comparing two
+      # empty sets and calling them agreed.
+      crate = uncommented(pathlib.Path("${../crates/ronoctua-clock/src}/timedate.rs").read_text())
+      called = set(re.findall(r'"(org\.freedesktop\.timedate1\.[a-z-]+)"', crate))
+      floor(len(called), 3, "actions named by the crate")
+
+      # AND WHAT THE SYSTEM GRANTS. Every rule of the whole configuration,
+      # split at `polkit.addRule`; the ones that mention timedated are ours.
+      rules = re.split(r"polkit\.addRule", text)[1:]
+      ours = [r for r in rules if "timedate1" in r]
+      if len(ours) != 1:
+          wrong.append(f"{len(ours)} rules mention timedated; there may be one")
+
+      for rule in ours:
+          # 1. THE RESULT. With no polkit agent in this session, `AUTH_*` is a
+          #    refusal that looks like a bug; `YES` is the only answer that
+          #    works, and it is the one that has to be narrow.
+          results = set(re.findall(r"polkit\.Result\.(\w+)", rule))
+          if results != {"YES"}:
+              wrong.append(f"the rule answers {sorted(results)}, and may only answer YES")
+
+          # 2. THE ACTIONS, against what the crate calls — both directions.
+          granted = set(re.findall(r'action\.id\s*==\s*"([^"]+)"', rule))
+          for extra in sorted(granted - called):
+              wrong.append(f"granted and never called: {extra}")
+          for missing in sorted(called - granted):
+              wrong.append(f"called and never granted: {missing}")
+          if "org.freedesktop.timedate1.set-local-rtc" in granted:
+              wrong.append("set-local-rtc is granted, and nothing in this tree asks for it")
+
+          # 3. THE USER — one, and ours.
+          users = set(re.findall(r'subject\.user\s*==\s*"([^"]+)"', rule))
+          if users != {user}:
+              wrong.append(f"the rule is for {sorted(users)}, and may be for {user}")
+
+          # 4. AND THE CONDITION IS NOTHING BUT THOSE TWO TESTS.
+          #
+          #    The sets above say WHICH literals appear; this says nothing ELSE
+          #    does — a `subject.local`, an `isInGroup`, a second action family.
+          #    Every recognised comparison is struck out and what is left has
+          #    to be punctuation.
+          body = re.search(r"if\s*\((.*?)\)\s*\{", rule, re.S)
+          if not body:
+              wrong.append("the rule has no condition at all")
+          else:
+              left = body.group(1)
+              for known in (
+                  r'action\.id\s*==\s*"[^"]+"',
+                  r'subject\.user\s*==\s*"[^"]+"',
+              ):
+                  left = re.sub(known, "", left)
+              leftover = re.sub(r"[\s()&|]", "", left)
+              if leftover:
+                  wrong.append(f"the condition tests something else as well: {leftover!r}")
+
+      if wrong:
+          print("ERROR: the clock's polkit rule is not narrow.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       There is no polkit agent in this session, so the rule answers", file=sys.stderr)
+          print("       YES and never asks. What buys that width back is that the door", file=sys.stderr)
+          print("       is exactly as wide as ronoctua-clock reaches through it.", file=sys.stderr)
+          raise SystemExit(1)
+
+      print(f"OK: one rule, {len(called)} actions, {user}, and YES")
+      END
+    '';
 
   tor-polkit-is-narrow =
     let
@@ -20572,7 +21000,12 @@ let
       screenshots-land-in-a-declared-directory
       files-polkit-is-narrow
       tor-polkit-is-narrow
+      timedate-polkit-is-narrow
       syncthing-polkit-is-narrow
+      a-mark-at-the-edge-is-drawn-at-the-edge
+      a-glance-stripe-has-equal-air
+      a-note-is-wrapped-and-not-cut
+      the-shots-script-fits-in-an-argument
       every-window-repeats
       every-window-knows-its-scale
       every-list-window-has-a-bar
@@ -20646,6 +21079,11 @@ let
       motion-photo-is-found-by-bytes
       files-polkit-is-narrow
       tor-polkit-is-narrow
+      timedate-polkit-is-narrow
+      a-mark-at-the-edge-is-drawn-at-the-edge
+      a-glance-stripe-has-equal-air
+      a-note-is-wrapped-and-not-cut
+      the-shots-script-fits-in-an-argument
       every-window-repeats
       every-window-knows-its-scale
       every-list-window-has-a-bar

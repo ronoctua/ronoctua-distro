@@ -48,6 +48,39 @@ pub struct Known {
     pub rate: Option<f64>,
 }
 
+/// How the last pass at ONE SOURCE went.
+///
+/// # Why a failure is written down at all
+///
+/// Because it was not, and the whole of it was one `debug!` line: a host that
+/// was down cost the temperature, and the bar simply did not have it. From the
+/// outside that is indistinguishable from a feature that does not work, which
+/// is what the owner read. `AGENTS.md` already names the rule — a refusal is a
+/// VALUE and not an absence, because an empty panel and a refused one look the
+/// same on screen and only one of them has a sentence. This is the sentence.
+///
+/// # And why it is per SOURCE and not per place
+///
+/// Because who is asked and whether they answered is about the HOST. Five
+/// places watched with one weather host that is down is one thing that
+/// happened, not five.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Attempt {
+    /// Which host answered, or was tried last. Empty before the first pass.
+    pub host: String,
+    /// When something last ARRIVED, in epoch seconds. `None` while nothing
+    /// ever has — which is not the same as a fetch that has just failed.
+    pub at: Option<i64>,
+    /// What went wrong on the last pass, in the fetcher's own words. Empty
+    /// when the last pass went right.
+    ///
+    /// NOT a text key: it carries a host's own words and a status number, and
+    /// nothing here can translate those. The screen draws it as the machine's
+    /// answer, which is the same thing `Job::trouble` does.
+    pub trouble: String,
+}
+
 /// Everything the fetcher has found, by zone.
 ///
 /// Keyed by ZONE and not by index, because the places are a build-time table
@@ -58,6 +91,8 @@ pub struct Known {
 pub struct Cache {
     /// zone -> what is known about it.
     pub places: std::collections::BTreeMap<String, Known>,
+    /// source id -> how the last pass at it went.
+    pub sources: std::collections::BTreeMap<String, Attempt>,
 }
 
 impl Cache {
@@ -66,6 +101,91 @@ impl Cache {
     #[must_use]
     pub fn of(&self, zone: &str) -> Known {
         self.places.get(zone).copied().unwrap_or_default()
+    }
+
+    /// How the last pass at a source went. Never fails: a source nobody has
+    /// asked yet is an empty record, not a missing key.
+    #[must_use]
+    pub fn about(&self, source: Source) -> Attempt {
+        self.sources.get(source.id()).cloned().unwrap_or_default()
+    }
+}
+
+/// One of the two things the glance asks somebody else for.
+///
+/// # Why this lives here and not in the screen that draws it
+///
+/// Because it was in the screen, as a second enum with the same two arms and a
+/// `host()` that read the generated table — and the day a source grew a list
+/// of hosts, the copy would have had to grow one too. What a source IS belongs
+/// beside the table that declares it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// The temperature.
+    Weather,
+    /// One unit of a currency in another.
+    Rate,
+}
+
+impl Source {
+    /// Both, in the order they are declared.
+    pub const ALL: [Self; 2] = [Self::Weather, Self::Rate];
+
+    /// The id, which is the key it is written down under and the tail of its
+    /// text keys.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Weather => "weather",
+            Self::Rate => "rate",
+        }
+    }
+
+    /// Who is asked, in order. The first that answers wins.
+    #[must_use]
+    pub const fn from(self) -> &'static [Provider] {
+        match self {
+            Self::Weather => WEATHER_FROM,
+            Self::Rate => RATE_FROM,
+        }
+    }
+
+    /// How often, in minutes — the declared cadence of THIS source.
+    ///
+    /// It used to be the smaller of the two for both, which asked the exchange
+    /// host twelve times as often as `assets/world.nix` says to.
+    #[must_use]
+    pub const fn every_minutes(self) -> u64 {
+        match self {
+            Self::Weather => WEATHER_EVERY_MINUTES,
+            Self::Rate => RATE_EVERY_MINUTES,
+        }
+    }
+
+    /// Is this machine asking it at all?
+    #[must_use]
+    pub const fn asked(self, prefs: &prefs::Preferences) -> bool {
+        match self {
+            Self::Weather => prefs.ask_weather,
+            Self::Rate => prefs.ask_rate,
+        }
+    }
+
+    /// Turns it off, or on again.
+    pub const fn flip(self, prefs: &mut prefs::Preferences) {
+        match self {
+            Self::Weather => prefs.ask_weather = !prefs.ask_weather,
+            Self::Rate => prefs.ask_rate = !prefs.ask_rate,
+        }
+    }
+
+    /// Does this place want it?
+    #[must_use]
+    pub const fn wanted_by(self, place: &prefs::Wanted) -> bool {
+        match self {
+            Self::Weather => place.weather,
+            Self::Rate => place.rate,
+        }
     }
 }
 

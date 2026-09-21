@@ -340,6 +340,32 @@ pkgs.testers.runNixOSTest {
         )
 
 
+    def pixels_of(path, hex_value, match=True):
+        """Every (x, y) of `path` that is that colour — or that is NOT, with
+        `match=False`.
+
+        Exact, never a fuzz: this answers WHERE a drawing is, and a fuzz
+        wide enough for a glyph's edge answers with the letter beside it.
+
+        `match=False` is how INK is found on a known ground: a glyph is
+        antialiased and may have no pixel of the exact colour at all.
+        """
+        machine.succeed(f"magick {path} -depth 8 txt:- > /tmp/pixels.txt")
+        want = hex_value.lower()[:7]
+        found = []
+        for pixel in machine.succeed("cat /tmp/pixels.txt").splitlines()[1:]:
+            head, _, colour = pixel.partition(": ")
+            said = colour.split()
+            # NOT A PIXEL, or a colour spelt with fewer fields than usual:
+            # reading `[1]` of one was an IndexError six minutes into a run.
+            if "," not in head or len(said) < 2:
+                continue
+            if (said[1].lower()[:7] == want) == match:
+                x, y = head.split(",")
+                found.append((int(x), int(y)))
+        return found
+
+
     def has_colour(hex_value, at_least=1, of="/tmp/panel-before.png", fuzz=12):
         """How many pixels of `of` are that colour.
 
@@ -2475,6 +2501,85 @@ pkgs.testers.runNixOSTest {
                 machine.sleep(2)
                 machine.succeed("grep -q '\"backdrop\":\"black\"' /root/.config/ronoctua/theme.json")
                 machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
+    if wanted("glance"):
+        with subtest("the glance line: the grounds' air, and the countdown at the border"):
+            # WHY: `nix/shots-scenes.nix`, beside the id.
+            for _ in range(8):
+                machine.succeed("DISPLAY=:99 xdotool key Escape")
+            machine.sleep(1)
+            control("world-glance")
+            w_g, h_g, x_g, y_g = niri_geometry()
+            # THE POINTER HOLDS THE CLOCK — `world::Showing::hold`.
+            machine.succeed(
+                f"DISPLAY=:99 xdotool mousemove {x_g + w_g // 2} {y_g + h_g - 2 * LINE - 8}"
+            )
+            machine.sleep(1)
+            # FOUR LINES AND NOT THREE: the nested output's bottom is a row
+            # below the footer's. The row is FOUND below, not counted.
+            shot("35-the-glance", lines=4)
+
+            # THE MODELINE SAYS WHERE THE ROW IS — see the scene list.
+            bar = pixels_of("/tmp/35-the-glance.png", "#" + token_hex("modeline.background"))
+            assert bar, "the modeline is not in the picture"
+            top = min(y for _, y in bar)
+            assert top > 2, "there is no row above the modeline; the glance is not up"
+            band = (max(0, top - LINE + 2), top - 2)
+
+            alternate = "#" + token_hex("glance.ground-alternate")
+            ground = [(x, y) for x, y in pixels_of("/tmp/35-the-glance.png", alternate)
+                      if band[0] <= y <= band[1]]
+            assert ground, "the alternate ground drew no pixel; no second place was drawn"
+            xs = [x for x, _ in ground]
+
+            # THE INK IS WHAT IS NOT THE GROUND, inside it.
+            other = pixels_of("/tmp/35-the-glance.png", alternate, match=False)
+            inside = [x for x, y in other
+                      if band[0] <= y <= band[1] and min(xs) < x < max(xs)]
+            assert inside, "the alternate ground holds no text"
+            left = min(inside) - min(xs)
+            right = max(xs) - max(inside)
+            print(f"the alternate ground: {left} px before the text, {right} px after")
+            # WITHIN TWO PIXELS: a side bearing is not the ground's air.
+            assert abs(left - right) <= 2, (
+                f"the ground's air differs: {left} px left, {right} px right"
+            )
+            assert max(xs) < w_g - LINE, "the last ground ran to the edge of the line"
+
+            # THE COUNTDOWN IS THE RIGHTMOST INK past the last ground.
+            page = "#" + token_hex("glance.ground")
+            drawn = pixels_of("/tmp/35-the-glance.png", page, match=False)
+            marks = [x for x, y in drawn
+                     if band[0] <= y <= band[1] and x > max(xs)]
+            assert marks, "nothing is drawn to the right of the last place"
+            from_border = w_g - max(marks)
+            print(f"the countdown ends {from_border} px from the border")
+            assert from_border <= LINE, (
+                f"the countdown sits {from_border} px from the border, more than "
+                "the one cell the edge reserves"
+            )
+
+    if wanted("locale"):
+        with subtest("the settings screen: sections, and an explanation that wraps"):
+            # WHY: see `nix/shots-scenes.nix`.
+            for _ in range(8):
+                machine.succeed("DISPLAY=:99 xdotool key Escape")
+            machine.sleep(1)
+            control("locale-open")
+            machine.sleep(1)
+            shot("36-the-settings", lines=2 + 15)
+
+            # MORE THAN ONE ROW OF PROSE says it wrapped, not that it was cut.
+            prose = pixels_of("/tmp/36-the-settings.png", "#" + token_hex("text.dim"))
+            rows_of_prose = {y // LINE for _, y in prose}
+            print(f"the prose covers {len(rows_of_prose)} rows")
+            assert len(rows_of_prose) >= 2, "the explanation fits on one row"
+
+            # AND THE LEVELS RESOLVE IN DIFFERENT TONES: they were one colour,
+            # which is what made the block unreadable as a section.
+            group = "#" + token_hex("text.group")
+            assert group.lower() != ("#" + token_hex("text.secondary")).lower()
+            has_colour(group, at_least=10, of="/tmp/36-the-settings.png", fuzz=6)
+
     if wanted("hints"):
         with subtest("the pointer on the hint line does not take the interface with it"):
             # THE ASSERTION THAT WOULD HAVE CAUGHT IT, and it is the second time.

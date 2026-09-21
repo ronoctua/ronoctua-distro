@@ -118,6 +118,45 @@
   }
   { id = "update"; }
   { id = "theme"; }
+  # THE LINE `LEADER d` OPENS, and it had no picture at all — which is why
+  # every defect the owner found in it went unseen: `nix run .#png` reaches a
+  # buffer, and this is a footer line.
+  #
+  # The subtest measures TWO things, both in pixels off the screen. ONE: a
+  # place's ground has the SAME AIR on both sides of its text — it used to
+  # begin where the first letter began and run on to where the next place
+  # started, which is nothing on the left and two cells on the right, and the
+  # whole rest of the bar for the last one. TWO: the countdown sits an exact
+  # cell from the BORDER — `columns` is floor(width / cell), so a run counted
+  # from the left sits a cell PLUS the grid's remainder from it, and that
+  # remainder changes with the window. It is what put the countdown out of
+  # line with every mark on the modeline below it.
+  #
+  # AND TWO THINGS THE FIRST RUNS OF IT TAUGHT, both of which look like the
+  # feature being broken and are not:
+  #
+  #   - THE POINTER HAS TO HOLD THE LINE. It lives six seconds and `xwd` plus
+  #     `magick` take longer than that on a software-rendered VM, so the first
+  #     runs photographed a footer the glance had already left — and measured
+  #     the DESKTOP, which wears the same `neutral.chrome` as the alternate
+  #     ground. `world::Showing::hold` is what stops the clock, and resting
+  #     the pointer on the row is the gesture that does it.
+  #   - THE MODELINE SAYS WHERE THE ROW IS. Its ground is drawn on one line
+  #     and nothing else wears it, so the rows above it are the glance's —
+  #     which needs no arithmetic about the footer's height, and `LINE` is the
+  #     cell ROUNDED UP, so arithmetic would be off by a pixel per row.
+  #
+  # THE REASONS LIVE HERE AND NOT IN THE SCRIPT, and that is not a preference:
+  # the whole test script is ONE argument to the kernel, and a kernel argument
+  # is capped at 128 KiB. Half of it is already comments; these would be the
+  # bytes that broke it. `the-shots-script-fits-in-an-argument` measures it.
+  { id = "glance"; }
+  # AND THE SETTINGS SCREEN, which had no picture either. What was wrong with
+  # it was a sentence cut in half where the room ran out, and a hierarchy
+  # drawn in one tone — the section's title and every place under it in
+  # `text.group`, at the same column. Neither is something a test that
+  # compares state can see; both are a glance at a photograph.
+  { id = "locale"; }
   { id = "hints"; }
   { id = "lifeline"; }
 ]

@@ -13,6 +13,7 @@
 //! at construction, so a mistake is a daemon that does not start rather than a
 //! bracketed key on somebody's screen.
 
+pub mod clock;
 pub mod emacs;
 pub mod sweep;
 pub mod trash;
@@ -39,8 +40,9 @@ pub fn tasks(zone: Arc<dyn Offset>) -> Vec<Box<dyn Task>> {
         Box::new(update::SystemUpdate::with(Arc::clone(&zone))),
         Box::new(sweep::CacheSweep::with(Arc::clone(&zone))),
         Box::new(trash::EmptyTrash::with(zone)),
-        // THE ONE THAT ONLY LOOKS. It takes no zone: its cadence is in
-        // minutes, so there is no calendar for it to be in.
+        // THE TWO THAT ONLY LOOK. Neither takes a zone: a cadence in minutes
+        // short-circuits the calendar before a zone is reached.
         Box::new(emacs::EmacsDaemon::new()),
+        Box::new(clock::ClockSync::new()),
     ]
 }

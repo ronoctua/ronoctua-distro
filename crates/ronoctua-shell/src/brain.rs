@@ -89,6 +89,13 @@ pub struct Piece {
     /// Already translated, for the reason [`crate::band::Piece::explain`] gives:
     /// the alternative is the drawing carrying keys and arguments around.
     pub explain: Option<String>,
+    /// Was it placed counting cells from the surface's RIGHT EDGE?
+    ///
+    /// See [`crate::band::Piece::edge`], which says the whole of it: the grid
+    /// does not reach the border, so the two controls and the pie on this
+    /// line are placed by `chrome::from_the_edge` and found by
+    /// `chrome::at_the_edge`.
+    pub edge: bool,
 }
 
 /// The line, laid out.
@@ -209,6 +216,7 @@ pub fn lines(
         color: tokens::color::BRAIN_TEXT,
         hit: None,
         explain: None,
+        edge: false,
     });
     let at = left + 2;
 
@@ -217,8 +225,11 @@ pub fn lines(
     // controls do not fit is how a line comes to spill — `band.rs` records it,
     // and the answer is the same here.
     //
-    // From the edge inwards: proceed, abort, the pie.
-    let mut right = columns.saturating_sub(tokens::space::MODELINE_EDGERIGHT);
+    // From the edge inwards: proceed, abort, the pie. Each of them is placed
+    // by `chrome::from_the_edge` and carries `edge: true`, so that the ink
+    // sits an exact cell from the border and `at` below asks the pointer the
+    // same way — see `crate::band::Piece::edge`.
+    let mut right = crate::chrome::from_the_edge(columns, 0);
 
     right = control(
         &mut line,
@@ -250,6 +261,7 @@ pub fn lines(
         color: tokens::color::BRAIN_COUNTDOWN,
         hit: None,
         explain: Some(words.texts.t(ronoctua_i18n::key::HINT_BRAIN_COUNTDOWN)),
+        edge: true,
     });
 
     // AND THE SENTENCE, in whatever is left.
@@ -274,6 +286,7 @@ pub fn lines(
         color: tokens::color::BRAIN_TEXT,
         hit: None,
         explain: None,
+        edge: false,
     });
 
     Some(line)
@@ -300,9 +313,11 @@ fn notice_line(n: &ronoctua_brain::Notice, columns: u16, words: &Words<'_>) -> L
         color: tokens::color::BRAIN_TEXT,
         hit: None,
         explain: None,
+        edge: false,
     });
     let at = left + 2;
-    let mut right = columns.saturating_sub(tokens::space::MODELINE_EDGERIGHT);
+    // FROM THE EDGE, like the countdown's cluster — see `crate::band::Piece::edge`.
+    let mut right = crate::chrome::from_the_edge(columns, 0);
     // THE BUTTON, WHEN THERE IS ONE — and there is not always one. A notice
     // about a second copy of Emacs offers nothing, because what is open is
     // somebody's work and nothing here knows whether it is saved.
@@ -325,6 +340,7 @@ fn notice_line(n: &ronoctua_brain::Notice, columns: u16, words: &Words<'_>) -> L
         color: tokens::color::BRAIN_TEXT,
         hit: None,
         explain: None,
+        edge: false,
     });
     line
 }
@@ -346,6 +362,7 @@ fn control(line: &mut Line, right: u16, keys: &str, label: &str, hit: Hit, expla
         color: tokens::color::BRAIN_DIM,
         hit: Some(hit),
         explain: Some(explain.clone()),
+        edge: true,
     });
     line.pieces.push(Piece {
         at: start + layout::width(&bracketed) + 1,
@@ -353,6 +370,7 @@ fn control(line: &mut Line, right: u16, keys: &str, label: &str, hit: Hit, expla
         color: tokens::color::BRAIN_TEXT,
         hit: Some(hit),
         explain: Some(explain),
+        edge: true,
     });
     start
 }
@@ -365,11 +383,15 @@ fn control(line: &mut Line, right: u16, keys: &str, label: &str, hit: Hit, expla
 /// movement, and two calculations of one position are two chances to point at
 /// the wrong thing.
 #[must_use]
-pub fn at(line: Option<&Line>, column: u16) -> Option<&Piece> {
-    line?
-        .pieces
-        .iter()
-        .find(|p| column >= p.at && column < p.at + layout::width(&p.text))
+pub fn at(line: Option<&Line>, column: u16, from_the_edge: Option<u16>) -> Option<&Piece> {
+    line?.pieces.iter().find(|p| {
+        // THE READING THAT PLACED IT — see `crate::band::at`, which says the
+        // whole of it: the grid's remainder sits between the two readings and
+        // can be most of a cell, so a control compared against the wrong one
+        // answers a cell away from where it was drawn.
+        let at = if p.edge { from_the_edge } else { Some(column) };
+        at.is_some_and(|c| c >= p.at && c < p.at + layout::width(&p.text))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -685,14 +707,22 @@ mod tests {
             .iter()
             .find(|p| p.hit == Some(Hit::Proceed))
             .expect("no proceed control");
+        // ANCHORED TO THE BORDER, so it is found by the border's reading and
+        // not by the left-counted one — see `crate::band::at`, and the test
+        // beside it that says why the two are not interchangeable.
+        assert!(proceed.edge, "the control is not anchored to the border");
         assert_eq!(
-            at(Some(&line), proceed.at).and_then(|p| p.hit),
+            at(Some(&line), 0, Some(proceed.at)).and_then(|p| p.hit),
             Some(Hit::Proceed)
+        );
+        assert!(
+            at(Some(&line), proceed.at, None).is_none(),
+            "an edge-anchored control answered the left-counted cell"
         );
         // A cell with nothing in it is nothing, and not the nearest thing.
         let gap = tokens::space::MODELINE_EDGELEFT + 1;
-        assert!(at(Some(&line), gap).is_none());
-        assert!(at(None, 0).is_none());
+        assert!(at(Some(&line), gap, None).is_none());
+        assert!(at(None, 0, None).is_none());
     }
 
     #[test]
@@ -724,7 +754,8 @@ mod tests {
         // BY ITS COLUMN, and not by "the longest piece": the mark in the margin
         // is one character and four bytes, and a test that went looking for a
         // long `String` found the glyph.
-        let sentence = at(Some(&line), tokens::space::MODELINE_EDGELEFT + 2).expect("no phrase");
+        let sentence =
+            at(Some(&line), tokens::space::MODELINE_EDGELEFT + 2, None).expect("no phrase");
         assert!(sentence.text.contains("42"), "{}", sentence.text);
         assert!(
             !sentence.text.starts_with('['),

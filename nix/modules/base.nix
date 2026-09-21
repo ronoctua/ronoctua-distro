@@ -164,6 +164,50 @@ in
       '';
     };
 
+    # THE MACHINE'S TIME ZONE, and who owns it.
+    #
+    # # Why the default is `null`, which is to say "the person's"
+    #
+    # Because `LEADER s l` is where somebody looks for it, and for a whole
+    # release that screen could change what the INTERFACE draws and nothing
+    # about the computer. The owner said so in those words: the settings were
+    # incomplete because only the interface's clock, date and zone could be
+    # changed.
+    #
+    # With this `null`, `time.timeZone` is `null` too, NixOS leaves
+    # `/etc/localtime` alone, and `systemd-timedated` owns it — which is the
+    # escape hatch upstream documents, not a hole. The view then sets the zone
+    # of the machine, through the narrow polkit rule below.
+    #
+    # # And why the option exists at all
+    #
+    # Because somebody may want it DECLARED — a machine rebuilt from the flake
+    # and coming up in one zone whatever anybody typed. Set it, and NixOS
+    # starts timedated with `NIXOS_STATIC_TIMEZONE=1`; the daemon then refuses
+    # `SetTimezone`, and the row in `LEADER s l` is drawn REFUSING and says
+    # where the value comes from. That is the shape the Syncthing view's
+    # fourteen flake-owned rows already have, and the Tor view's.
+    #
+    # It is `time.timeZone` by another name, and it is a second name on purpose:
+    # `time.timeZone = null` is the shape of an absence, and an absence cannot
+    # carry the reason for itself.
+    time.zone = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "Europe/London";
+      description = ''
+        The machine's time zone, as an IANA name.
+
+        `null` — the default — leaves it to the machine: `systemd-timedated`
+        owns `/etc/localtime` and `LEADER s l` can change it, which is where
+        somebody looks for it.
+
+        Setting it here pins it in the flake instead. The zone then takes a
+        rebuild to change, and the row in `LEADER s l` is drawn refusing and
+        says so.
+      '';
+    };
+
     # THE THEME THE MACHINE COMES UP IN — the distro's default; the person's
     # own choice (`LEADER s t`) lives in `$XDG_CONFIG_HOME/ronoctua/theme.json`
     # and wins over it. The enum is the list in `assets/themes/themes.nix`,
@@ -267,7 +311,38 @@ in
       };
     };
 
-    time.timeZone = lib.mkDefault "America/Sao_Paulo";
+    # THE ZONE IS THE PERSON'S UNLESS THE FLAKE CLAIMS IT — see
+    # `ronoctua.time.zone` above, which carries the whole argument.
+    #
+    # `null` is what makes `timedatectl set-timezone` work: NixOS only puts
+    # `/etc/localtime` in the store when this is a string, and it starts
+    # timedated with `NIXOS_STATIC_TIMEZONE=1` when it does. The installer
+    # seeds the answer it asked for by writing the symlink on the target, the
+    # same way it seeds `~/.shellrc.local` — a file that is born ON the
+    # machine, not one the repository carries (invariant 13).
+    time.timeZone = cfg.time.zone;
+
+    # AND THE SCREEN IS TOLD, when the flake claims it.
+    #
+    # `LEADER s l` draws the zone row REFUSING while this is set, and says
+    # where the value comes from — the shape the Syncthing view's flake-owned
+    # rows have. Without it the row would be offered, the key would reach
+    # `timedated`, and the refusal would come back from the bus with the one
+    # thing worth saying left out.
+    #
+    # BOTH PLACES, for `media.nix`'s reason: `sessionVariables` reaches a login
+    # shell, and the footer is a systemd USER UNIT, which inherits the
+    # manager's environment rather than the shell's.
+    # `lib.optionalString` and not `mkIf`: the two attributes below are also
+    # set for `playerctl` further down, and a `mkIf` here would be a second
+    # definition of the whole set. An EMPTY string is the absence — which is
+    # what `locale::zone_is_declared` tests for.
+    environment.sessionVariables.RONOCTUA_TIME_ZONE = lib.optionalString (
+      cfg.time.zone != null
+    ) cfg.time.zone;
+    systemd.user.services.ronoctua-footer.environment.RONOCTUA_TIME_ZONE = lib.optionalString (
+      cfg.time.zone != null
+    ) cfg.time.zone;
 
     # -----------------------------------------------------------------
     # Nix — section 7.1: everything through flakes, nothing imperative.
@@ -315,6 +390,41 @@ in
     documentation.nixos.enable = false;
 
     security.polkit.enable = true;
+
+    # THE MACHINE'S CLOCK, AND THE THREE THINGS THIS PERSON MAY DO TO IT.
+    #
+    # # Why a rule is needed at all
+    #
+    # Because upstream's `org.freedesktop.timedate1.policy` answers
+    # `auth_admin_keep` to all four of its actions, and there is no polkit
+    # agent in this session — that is the owner's decision and the reason is
+    # in `nix/modules/disks.nix`: a fingerprint prompt nobody sees becomes a
+    # refusal in a report about something nobody watched. Without this, every
+    # call from `LEADER s l` comes back refused, silently, and the screen is
+    # drawing switches that cannot move.
+    #
+    # # And why it is exactly this wide
+    #
+    # ONE USER, THREE ACTIONS, and the fourth is left where upstream put it.
+    # `set-local-rtc` decides whether the hardware clock runs in local time —
+    # nothing in this tree asks for it, so granting it would be a door held
+    # open for nobody. `ronoctua_clock::timedate::ACTIONS` is the other half
+    # of the same list, and `timedate-polkit-is-narrow` reads both and refuses
+    # a difference in either direction.
+    #
+    # `YES` and not `AUTH_SELF_KEEP`, by the rule the update and keyboard
+    # rules already follow: nothing this system does on its own may ask.
+    security.polkit.extraConfig = ''
+      polkit.addRule(function (action, subject) {
+        if ((action.id == "org.freedesktop.timedate1.set-ntp" ||
+             action.id == "org.freedesktop.timedate1.set-time" ||
+             action.id == "org.freedesktop.timedate1.set-timezone") &&
+            subject.user == "${cfg.user}") {
+          return polkit.Result.YES;
+        }
+      });
+    '';
+
     security.rtkit.enable = true;
     services.pipewire = {
       enable = true;

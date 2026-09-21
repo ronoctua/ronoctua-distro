@@ -2737,6 +2737,7 @@ name = "ronoctua-brain"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ronoctua-clock",
  "ronoctua-files",
  "ronoctua-memory",
  "ronoctua-protocol",
@@ -2778,6 +2779,15 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "ronoctua-clock"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tracing",
+ "zbus",
 ]
 
 [[package]]
@@ -3033,6 +3043,7 @@ dependencies = [
  "ronoctua-brain",
  "ronoctua-clipboard",
  "ronoctua-clipcascade",
+ "ronoctua-clock",
  "ronoctua-cmd",
  "ronoctua-design",
  "ronoctua-disks",

@@ -42,6 +42,15 @@ pub struct Piece {
     pub text: String,
     /// Which token colours it.
     pub color: tokens::Color,
+    /// Was it placed counting cells from the surface's RIGHT EDGE?
+    ///
+    /// Only the countdown is, and that is the whole reason the field exists:
+    /// it sat two cells from the left-counted edge while every mark on the
+    /// modeline below it sat an exact cell from the BORDER, and the grid's
+    /// remainder — nought to one cell, changing with the width — was the
+    /// difference. The owner read the two side by side. See
+    /// [`crate::band::Piece::edge`] and `chrome::from_the_edge`.
+    pub edge: bool,
 }
 
 /// A place's stripe: where its ground starts, how wide it is, and its tone.
@@ -57,6 +66,41 @@ pub struct Stripe {
     pub cells: u16,
     /// Which ground token.
     pub color: tokens::Color,
+}
+
+impl Stripe {
+    /// The ground under a place whose text starts at `column` and is `cells`
+    /// wide — THE ONE PLACE THE AIR IS SPENT.
+    ///
+    /// # Why the air is a function and not two additions
+    ///
+    /// Because it was two, and they disagreed. The ground began exactly where
+    /// the first letter began and ran on to wherever the next place started,
+    /// so the text was glued to the left of its own rectangle and had two
+    /// cells of air on the right — and the last place's ground ran all the way
+    /// to the end of the bar. The owner measured it and asked for the two
+    /// sides to be the same: *"os textos não podem estar colados no início de
+    /// seus backgrounds"*.
+    ///
+    /// Spending `space.glance.air` twice out of one constant is what keeps
+    /// that true whatever else moves. It is also exact against
+    /// `modeline.segmentGap`, which is two: one cell of air on each side of
+    /// the gap means one place's ground ENDS where the next one's BEGINS, so
+    /// the alternation reads as a band changing tone rather than as two boxes.
+    #[must_use]
+    pub const fn round(column: u16, cells: u16, color: tokens::Color) -> Self {
+        let air = tokens::space::GLANCE_AIR;
+        // THE AIR IT ACTUALLY GOT on the left, which at column 0 is less than
+        // it asked for: a ground cannot start before the surface does, and
+        // widening it rightwards to make up the difference would put the text
+        // off centre in its own rectangle.
+        let left = if column < air { column } else { air };
+        Self {
+            at: column - left,
+            cells: cells + air + left,
+            color,
+        }
+    }
 }
 
 /// The line, as it is drawn: the stripes under it and the text on it.
@@ -321,19 +365,20 @@ pub fn line(
         // band's own — a first place that changed colour would read as one
         // more rung of the ladder above rather than as a stripe.
         //
-        // The stripe covers the gap AFTER the place as well, up to where the
-        // next one starts: a ground that stopped at the last letter would
-        // leave a seam of the wrong tone between every pair.
-        let until = placed.get(n + 1).map_or(budget, |next| next.column);
-        drawn.stripes.push(Stripe {
-            at: one.column,
-            cells: until.saturating_sub(one.column).max(cells),
-            color: if n % 2 == 0 {
+        // EACH ONE IS JUST ITS OWN TEXT PLUS THE SAME AIR ON BOTH SIDES, and
+        // that is [`Stripe::round`]'s whole subject. It used to run on to
+        // wherever the next place began — and, for the last one, to the end of
+        // the bar — which gave every place nothing on the left and two cells
+        // or the rest of the line on the right.
+        drawn.stripes.push(Stripe::round(
+            one.column,
+            cells,
+            if n % 2 == 0 {
                 tokens::color::GLANCE_GROUND
             } else {
                 tokens::color::GLANCE_GROUND_ALTERNATE
             },
-        });
+        ));
         drawn.pieces.push(Piece {
             at: one.column,
             text: one.text.clone(),
@@ -344,6 +389,7 @@ pub fn line(
             } else {
                 tokens::color::TEXT_SECONDARY
             },
+            edge: false,
         });
     }
 
@@ -359,9 +405,15 @@ pub fn line(
             ))
         };
         drawn.pieces.push(Piece {
-            at: columns.saturating_sub(PIE_CELLS),
+            // FROM THE BORDER, and not from the left — `chrome::from_the_edge`.
+            // Counted from the left it sat a cell PLUS the grid's remainder
+            // from the edge, while every mark on the modeline under it sat an
+            // exact cell from it; the remainder is nought to one cell and
+            // changes with the width, which is why the two never lined up.
+            at: crate::chrome::from_the_edge(columns, PIE_GLYPH_CELLS),
             text: glyph.to_string(),
             color: tokens::color::NOTIFICATION_COUNTDOWN,
+            edge: true,
         });
     }
     drawn
@@ -372,6 +424,13 @@ pub fn line(
 /// `pub(crate)` because the sound line is the second tenant of this row and
 /// reserves the same two cells for the same glyph — see `sound.rs`.
 pub(crate) const PIE_CELLS: u16 = 2;
+
+/// And how much of that is INK, which is what the placement counts.
+///
+/// The other cell is the air, and the two are separate numbers because they
+/// answer different questions: one is what comes off the budget before the
+/// places are resolved, the other is how far from the border the glyph sits.
+pub(crate) const PIE_GLYPH_CELLS: u16 = 1;
 
 /// The zone of every place, read once.
 ///
@@ -503,6 +562,41 @@ mod tests {
                 pair[1].at
             );
         }
+    }
+
+    /// EVERY GROUND HAS THE SAME AIR ON BOTH SIDES OF ITS TEXT.
+    ///
+    /// THE DEFECT THIS CATCHES, and the owner measured it: the ground began
+    /// exactly where the first letter began — nothing on the left — and ran on
+    /// to wherever the next place started, which is two cells, or, for the
+    /// last one, the whole rest of the bar. *"os textos não podem estar
+    /// colados no início de seus backgrounds"*, and the air on the two sides
+    /// has to be the same.
+    #[test]
+    fn a_grounds_air_is_the_same_on_both_sides() {
+        let (t, z) = (texts(), zones());
+        let cache = ronoctua_world::Cache::default();
+        let air = tokens::space::GLANCE_AIR;
+        assert!(air > 0, "a ground with no air is a ground text is glued to");
+        let mut measured = 0;
+        for columns in [60u16, 90, 140, 200] {
+            let drawn = line(&places(), &cache, columns, 0, None, &z, &t);
+            assert_eq!(drawn.stripes.len(), drawn.pieces.len());
+            for (stripe, piece) in drawn.stripes.iter().zip(&drawn.pieces) {
+                let cells = layout::width(&piece.text);
+                assert_eq!(piece.at - stripe.at, air, "at {columns}: the left air");
+                assert_eq!(
+                    (stripe.at + stripe.cells) - (piece.at + cells),
+                    air,
+                    "at {columns}: the right air"
+                );
+                // AND IT NEVER RUNS TO THE END OF THE BAR, which is what the
+                // last one used to do.
+                assert!(stripe.at + stripe.cells < columns, "at {columns}");
+                measured += 1;
+            }
+        }
+        assert!(measured >= 4, "only {measured} grounds were measured");
     }
 
     /// The pie is drawn, and it BECOMES A PAUSE while a hand is on the line.

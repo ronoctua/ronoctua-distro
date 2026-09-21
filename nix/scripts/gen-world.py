@@ -47,6 +47,15 @@ CURRENCY = re.compile(r"^[A-Z]{3}$")
 # An IANA zone name, as `zone1970.tab` writes it.
 ZONE = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)+$")
 
+# A source's id: kebab-case, like every other id in this repository, because it
+# becomes the arm of a `match` in Rust and a name somebody reads in a log.
+PROVIDER = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+
+# And a host name. Not a URL: this fetcher speaks to a HOST over TLS on 443 and
+# builds the path itself, so anything with a scheme or a slash in it is a
+# declaration that does not mean what it looks like.
+HOST = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+
 
 def zones_of(tab: pathlib.Path) -> set[str]:
     """Every zone `zone1970.tab` names, from its third column."""
@@ -133,6 +142,27 @@ def main() -> int:
     if world.get("life") not in LIVES:
         gaps.append(f"life: `{world.get('life')}` is not one of {LIVES}")
 
+    # A SOURCE WITH NOBODY TO ASK is a feature that ships switched off, and a
+    # repeated id is two declarations reaching one reader — the second would be
+    # asked with the first one's path. Both are refused here, where the table
+    # is written, rather than found on somebody's bar.
+    ids: list[str] = []
+    for what, source in sorted(world.get("sources", {}).items()):
+        who = source.get("from", [])
+        if not who:
+            gaps.append(f"sources.{what}: nobody is asked, so it can never answer")
+        for n, one in enumerate(who):
+            where = f"sources.{what}.from[{n}]"
+            if not PROVIDER.match(str(one.get("id", ""))):
+                gaps.append(f"{where}: `{one.get('id')}` is not a kebab-case id")
+            if not HOST.match(str(one.get("host", ""))):
+                gaps.append(f"{where}: `{one.get('host')}` is not shaped like a host name")
+            ids.append(str(one.get("id", "")))
+        if not isinstance(source.get("every-minutes"), int) or source["every-minutes"] < 1:
+            gaps.append(f"sources.{what}: `every-minutes` is not a positive whole number")
+    if len(set(ids)) != len(ids):
+        gaps.append(f"the same source id is declared twice: {sorted(ids)}")
+
     seen = [p.get("zone") for p in places]
     if len(set(seen)) != len(seen):
         gaps.append(f"the same zone is named twice: {seen}")
@@ -189,9 +219,30 @@ def main() -> int:
     w("/// How long the line stays, by the name the notifications use.")
     w(f"pub const LIFE: &str = \"{world['life']}\";")
     w("")
+    w("/// One host a source may be asked of.")
+    w("///")
+    w("/// The `id` is what chooses the READER in Rust: each of these has its own")
+    w("/// path and its own JSON, so a declaration can only hold who is asked.")
+    w("/// `ronoctua_world::fetch` refuses an id it has no reader for, and a test")
+    w("/// walks this table to prove none is left without one.")
+    w("#[derive(Debug, Clone, Copy, PartialEq, Eq)]")
+    w("pub struct Provider {")
+    w("    /// Which reader answers for it.")
+    w("    pub id: &'static str,")
+    w("    /// The host, drawn on screen so that turning a source off is a")
+    w("    /// decision about a named party rather than about an abstraction.")
+    w("    pub host: &'static str,")
+    w("}")
+    w("")
     for what, source in sorted(world["sources"].items()):
-        w(f"/// The host asked for the {what}.")
-        w(f"pub const {what.upper()}_HOST: &str = \"{source['host']}\";")
+        w(f"/// Who is asked for the {what}, IN ORDER — the first that answers wins.")
+        w(f"pub const {what.upper()}_FROM: &[Provider] = &[")
+        for one in source["from"]:
+            w("    Provider {")
+            w(f"        id: \"{one['id']}\",")
+            w(f"        host: \"{one['host']}\",")
+            w("    },")
+        w("];")
         w(f"/// How often the {what} is asked for, in minutes.")
         w(f"pub const {what.upper()}_EVERY_MINUTES: u64 = {int(source['every-minutes'])};")
         w("")

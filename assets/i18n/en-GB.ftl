@@ -282,6 +282,7 @@ inst-step-host-nix = Write this machine's description
 inst-step-facter = Detect the hardware
 inst-step-password = Write the password hash to /persist
 inst-step-install = Build and install the system
+inst-step-zone = Set this machine's time zone
 inst-step-tpm = Seal the disk key into the TPM
 
 ## Installer — the interface
@@ -2404,6 +2405,15 @@ emacs-no-daemon = The Emacs daemon is not running. Every editor window will load
 emacs-not-the-client = This Emacs is not connected to the daemon: it loaded its own copy of the configuration, and its buffers belong to it alone. Close it and open it again with `e`, or from the file manager.
 cmd-brain-start-emacs = Start it
 
+# THE CLOCK WATCH. It does not fetch the time — `systemd-timesyncd` does, and
+# doing it twice would be two things setting one clock. What this does is keep
+# the machine's automatic time-keeping switched on and say when it is not.
+brain-task-clock-sync = Watch the clock
+brain-task-clock-sync-does = Checks, a few times a day, that something is keeping this machine's clock right over the internet — and turns it back on when nothing is. It does not ask anybody for the time itself: the system's own time client does that continuously, and a second one would be two clocks disagreeing. Switch this off to keep the clock by hand.
+clock-not-automatic = Nothing is keeping this machine's clock right. It will drift, and every timestamp on this machine drifts with it.
+clock-not-synchronised = The clock is being looked after, but it has not been able to reach a time server yet.
+cmd-brain-clock-automatic = Keep it right
+
 # THE SCHEDULE'S ROWS. Each is a field's NAME, so each is a noun phrase — and
 # the value beside it is the answer, never half of a sentence that started in
 # the label.
@@ -2517,6 +2527,8 @@ echo-brain-idle = There is nothing about to happen
 echo-brain-unreachable = The brain is not answering
 echo-emacs-starting = Starting the Emacs daemon
 echo-emacs-unreachable = The Emacs daemon could not be started; see: journalctl --user -u emacs
+echo-clock-kept = This machine's clock is being kept right again
+echo-clock-refused = The clock could not be handed over; see: journalctl -u systemd-timedated
 
 # THE UPDATE, WATCHED — the modeline's mark and the window it opens.
 #
@@ -3557,7 +3569,9 @@ locale-date-long-ymd = { $y }, { $month } { $d }
 locale-date-long-dmy = { $d } { $month } { $y }
 locale-date-long-mdy = { $month } { $d }, { $y }
 locale-heading-machine = Decided by the system
-locale-zone = Time zone
+# THE COMMAND'S OWN WORDS, drawn on the hint line: `z` asks for the zone
+# THIS INTERFACE reads a timestamp in, which is not the machine's.
+locale-zone = This interface's zone
 locale-zone-unknown = not known
 locale-zone-is-declared = The zone is declared in the system configuration; changing it is a rebuild.
 locale-decimal = Decimal separator
@@ -3626,7 +3640,47 @@ world-place-america-sao-paulo = Brasília
 world-temperature = { $degrees } °C
 world-rate = 1 { $from } = { $much } { $to }
 cmd-world-glance = A glance: the time, the weather and the money
-locale-heading-places = The glance's places
+# WHAT EACH SECTION IS FOR. Every one of them opens with a sentence saying
+# what it changes and WHERE that shows, because a screen of settings that only
+# names them leaves the person to guess which half of the machine they reach.
+locale-interface-does = What this interface speaks. It changes at once, in the footer and in every window; the machine's own language is set in the system configuration.
+locale-time-does = How this interface writes every date and every time it draws — the footer's clock, the file manager's dates, the glance. It does not move the machine's clock; that is the section below.
+locale-numbers-does = How numbers are written and what units the temperature comes in. They reach every screen here, including the glance line.
+locale-heading-machine-clock = This machine's clock
+locale-machine-does = The computer's own clock, zone and date — what every program on this machine reads, not just this interface.
+locale-automatic = Kept right automatically
+locale-automatic-on = on
+locale-automatic-off = off
+locale-automatic-does = The system asks a time server over the internet and keeps the clock in step with it. This is how the distro runs; turning it off hands the clock to you.
+locale-automatic-server = Asking { $server }.
+locale-automatic-synchronised = The clock is in step.
+locale-automatic-adrift = It has not been able to reach a time server yet.
+locale-automatic-cannot = There is no time client installed on this machine.
+locale-watched = Watched by the brain
+locale-watched-does = The brain's clock watch looks a few times a day and turns the automatic keeping back on if it finds it off. It is the same switch as on that task's own page.
+locale-watched-unknown = The brain is not running, so this cannot be read or changed from here.
+locale-machine-kept = While the clock is kept automatically these cannot be set by hand: the next check would put them back.
+locale-machine-unreachable = This machine's clock could not be asked about; nothing here can be changed.
+# THE MACHINE'S TWO SAY WHAT PRESSING THEM DOES. `Date` and `Time` are the
+# INTERFACE's rows one section above — they choose a SHAPE and show a live
+# sample of it — and two rows of one list carrying one word are two facts a
+# person cannot tell apart.
+locale-machine-date = Set the date
+locale-machine-time = Set the time
+locale-machine-zone = Time zone
+locale-shows-times-in = Show times in
+# THE SHAPE IS SPELT OUT and is not the person's chosen order: this is a
+# value being TYPED, and a prompt that followed the display preference would
+# ask for `09/21/2026` on one machine and `21/09/2026` on the next.
+locale-ask-system-date = The machine's date, as 2026-09-21:
+locale-ask-system-time = The machine's time, as 14:32 or 14:32:05:
+locale-ask-system-zone = The machine's time zone:
+locale-not-a-date = That is not a date in that shape.
+locale-not-a-time = That is not a time in that shape.
+locale-clock-refused = The machine refused the change; see: journalctl -u systemd-timedated
+locale-heading-glance = The glance line
+locale-glance-does = The line { $keys } opens above the modeline. Each place below draws the time there, and the date, temperature and exchange rate you switch on for it.
+locale-add-place-where = A zone, such as Europe/Lisbon. It starts out showing its clock and nothing else.
 locale-no-places = No place is watched; { $keys } would show nothing.
 locale-shows-clock = Time
 locale-shows-date = Date
@@ -3637,7 +3691,15 @@ locale-off = hidden
 locale-heading-sources = Who is asked
 locale-asked = asked
 locale-not-asked = not asked
-locale-sources-are-asked = Each request tells that host this machine's address and which places it watches.
+locale-sources-are-asked = Each request tells that host this machine's address and which places it watches. Nothing here needs an account or a key.
+locale-source-weather = The weather
+locale-source-rate = Exchange rates
+# The hosts a source asks, in the order it asks them: the second is only asked
+# when the first does not answer.
+locale-source-hosts = Asks { $hosts }, in that order.
+locale-source-answered = Last answer { $when }, from { $host }.
+locale-source-never = Nothing has answered yet.
+locale-source-trouble = The last attempt failed — { $said }
 locale-title = Language and region
 locale-up = up
 locale-down = down

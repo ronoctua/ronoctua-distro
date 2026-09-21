@@ -139,6 +139,7 @@ pub fn line(
             } else {
                 tokens::color::TEXT_PRIMARY
             },
+            edge: false,
         });
     }
 
@@ -154,9 +155,12 @@ pub fn line(
             ))
         };
         drawn.pieces.push(crate::world::Piece {
-            at: columns.saturating_sub(crate::world::PIE_CELLS),
+            // FROM THE BORDER — the glance's own placement, by the same
+            // function, so the two tenants of this row cannot drift apart.
+            at: crate::chrome::from_the_edge(columns, crate::world::PIE_GLYPH_CELLS),
             text: glyph.to_string(),
             color: tokens::color::NOTIFICATION_COUNTDOWN,
+            edge: true,
         });
     }
     drawn

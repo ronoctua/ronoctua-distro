@@ -51,6 +51,20 @@ pub const HOST_NIX_WORK_PATH: &str = "/tmp/ronoctua-flake/host.nix";
 /// prints the command without running it.
 pub const FLAKE_ORIGIN: &str = "/etc/nixos";
 
+/// Where the machine's chosen zone is seeded, on the target.
+///
+/// THE FILE `systemd-timedated` ITSELF OWNS. NixOS only puts `/etc/localtime`
+/// in the store when `time.timeZone` is a string — and the distro leaves it
+/// `null` so that `LEADER s l` can change the zone (see `ronoctua.time.zone`).
+/// What the installer asked for therefore has to be written as this symlink,
+/// exactly as `timedatectl set-timezone` writes it.
+pub const LOCALTIME_PATH: &str = "/mnt/etc/localtime";
+
+/// And what it points at, which is `/etc/zoneinfo` on the target — NixOS
+/// declares that one unconditionally, so the link is valid at the first boot
+/// and stays valid across a rebuild.
+pub const ZONEINFO_ON_TARGET: &str = "/etc/zoneinfo";
+
 /// Where the passphrase is left for `disko` to read.
 ///
 /// `nix/disko/default.nix` expects exactly this path in
@@ -195,7 +209,21 @@ pub fn host_nix(r: &Answers) -> String {
     // THE LOCALE IS ITS OWN LINE, and not derived from the language: the two
     // answer different questions, and the module stopped tying them.
     let _ = writeln!(s, "  ronoctua.locale = \"{}\";", r.system_locale);
-    let _ = writeln!(s, "  time.timeZone = \"{}\";", r.timezone);
+    // THE TIME ZONE IS NOT WRITTEN HERE ANY MORE, and that is the point.
+    //
+    // It was `time.timeZone = "…"`, which pins it in the flake — and NixOS
+    // then starts `systemd-timedated` with `NIXOS_STATIC_TIMEZONE=1`, so
+    // `LEADER s l` could never change the machine's zone on any machine this
+    // installer had touched. The owner read exactly that: the settings changed
+    // what the interface draws and nothing about the computer.
+    //
+    // `ronoctua.time.zone` stays `null` (its default), and the answer is
+    // SEEDED on the target as `/etc/localtime` — the file timedated itself
+    // owns and rewrites. A value born ON the machine, like `host.nix` and
+    // `~/.shellrc.local`, rather than one the flake carries.
+    //
+    // Somebody who wants it declared writes the option by hand; the row in
+    // `LEADER s l` then says where it comes from.
     // THE LAYOUT, overriding `nix/keyboard-xkb.nix`'s default. Without this line
     // the machine comes up on the layout of the computer this was written on.
     let _ = writeln!(s, "  ronoctua.keyboard.layout = \"{}\";", r.keyboard);
@@ -428,6 +456,24 @@ pub fn steps(r: &Answers, flake: &str) -> Vec<Step> {
             destructive: true,
         },
         Step {
+            // THE ZONE THAT WAS ASKED FOR, seeded as the file timedated owns.
+            //
+            // AFTER `nixos-install`, because that is what creates `/mnt/etc`;
+            // before it the link would have nowhere to be written. And a
+            // SYMLINK and not a copy, because that is what `timedatectl
+            // set-timezone` writes and what the daemon reads back to answer
+            // `Timezone` — a copied file would say the right time and the
+            // wrong name.
+            label: key::INST_STEP_ZONE,
+            command: vec![
+                "ln".into(),
+                "-sfn".into(),
+                format!("{ZONEINFO_ON_TARGET}/{}", r.timezone),
+                LOCALTIME_PATH.into(),
+            ],
+            destructive: true,
+        },
+        Step {
             label: key::INST_STEP_TPM,
             // After `nixos-install`: the sealing measures what is already on the
             // disk, and enrolling before would seal a state that is going to change.
@@ -645,6 +691,51 @@ mod tests {
         assert_eq!(luks_partition("/dev/mmcblk0"), "/dev/mmcblk0p2");
         assert_eq!(luks_partition("/dev/sda"), "/dev/sda2");
         assert_eq!(luks_partition("/dev/vda"), "/dev/vda2");
+    }
+
+    /// THE ZONE IS SEEDED ON THE MACHINE, and never written into the flake.
+    ///
+    /// THE DEFECT THIS CATCHES, and it shipped: `time.timeZone = "…"` in
+    /// `host.nix` makes NixOS start timedated with `NIXOS_STATIC_TIMEZONE=1`,
+    /// so `LEADER s l` could not change the machine's zone on any machine this
+    /// installer had ever touched — it could only change what the interface
+    /// draws. The owner read exactly that and called the settings incomplete.
+    ///
+    /// It is also a CONFLICT now: `nix/modules/base.nix` defines
+    /// `time.timeZone` from `ronoctua.time.zone`, and a second definition in
+    /// `host.nix` would fail the evaluation.
+    #[test]
+    fn the_zone_is_seeded_on_the_machine_and_not_pinned_in_the_flake() {
+        let r = answers();
+        let written = host_nix(&r);
+        assert!(
+            !written.contains("time.timeZone"),
+            "the zone was pinned in the flake:\n{written}"
+        );
+        let p = steps(&r, "/mnt/etc/nixos");
+        let seeding = p
+            .iter()
+            .position(|s| s.command.first().is_some_and(|c| c == "ln"))
+            .expect("nothing seeds /etc/localtime");
+        assert_eq!(p[seeding].label, key::INST_STEP_ZONE);
+        assert!(p[seeding].command.contains(&LOCALTIME_PATH.to_owned()));
+        assert!(
+            p[seeding]
+                .command
+                .iter()
+                .any(|a| a == &format!("{ZONEINFO_ON_TARGET}/{}", r.timezone)),
+            "{:?}",
+            p[seeding].command
+        );
+        // AFTER `nixos-install`, which is what creates `/mnt/etc`.
+        let install = p
+            .iter()
+            .position(|s| s.label == key::INST_STEP_INSTALL)
+            .expect("nothing installs the system");
+        assert!(
+            seeding > install,
+            "the link is written before there is an /etc to write it in"
+        );
     }
 
     #[test]

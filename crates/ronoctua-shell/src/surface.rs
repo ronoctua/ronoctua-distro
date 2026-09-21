@@ -3493,7 +3493,20 @@ impl Footer {
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let column = (x / cell) as u16;
-        crate::band::at(&self.band_placed, row, column)
+        // AND THE SECOND READING, for the pieces anchored to the border. Both
+        // are handed over and the piece is matched against the one that
+        // placed it — `band::at` says why, and `chrome::at_the_edge` is the
+        // twin of the `chrome::from_the_edge` that drew them.
+        crate::band::at(&self.band_placed, row, column, self.column_at_the_edge(x))
+    }
+
+    /// Which cell the pointer is over, counted from the surface's BORDER.
+    ///
+    /// `None` when no screen has been configured yet, which is the same answer
+    /// the rest of this door gives before its first `configure`.
+    fn column_at_the_edge(&self, x: f64) -> Option<u16> {
+        let screen = self.screens.iter().find(|t| t.configured && t.width > 0)?;
+        crate::chrome::at_the_edge(x, f64::from(screen.width), self.screen_columns())
     }
 
     /// Which LINE of the band the pointer is on, piece or no piece.
@@ -3576,7 +3589,11 @@ impl Footer {
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let column = (x / cell) as u16;
-        crate::brain::at(self.brain_placed.as_ref(), column)
+        crate::brain::at(
+            self.brain_placed.as_ref(),
+            column,
+            self.column_at_the_edge(x),
+        )
     }
 
     /// A click on the brain's line: the two controls, and nothing else.
@@ -6601,6 +6618,11 @@ impl Footer {
             // offer a button at all: nothing this machine does by itself may
             // put a question in front of somebody who is not there.
             "brain-start-emacs" => self.start_the_emacs_daemon(),
+            // WHAT THE CLOCK WATCH OFFERS. It goes through the narrow polkit
+            // rule in `nix/modules/base.nix`, which answers `YES` — nothing
+            // this machine does by itself may put a question in front of
+            // somebody who is not there.
+            "brain-clock-automatic" => self.keep_the_clock_right(),
             // `LEADER s u` — the whole sequence, now, outside any schedule.
             "system-update" => self.start_the_update(),
             // `LEADER s w` — the window that watches it, and the door the
@@ -6798,6 +6820,28 @@ impl Footer {
             // SOMETHING HAS TO BE TYPED, and typing happens in the minibuffer
             // — the network view's arrangement, and for its reason: one place
             // to type is one thing that can be got right.
+            // THE MACHINE'S OWN CLOCK. The bus and the polkit rule are on
+            // this side of the view, which is drawn by two doors and holds
+            // neither — the same split every other errand here makes.
+            crate::locale::Errand::Automatic(on) => {
+                if let Err(e) = ronoctua_clock::set_automatic(on) {
+                    tracing::warn!(error = %e, "the machine's clock-keeping could not be changed");
+                    self.echo_message(self.texts.t(ronoctua_i18n::key::LOCALE_CLOCK_REFUSED));
+                }
+                if let Some(v) = self.locale.as_mut() {
+                    v.reread();
+                }
+                self.draw_and_paint();
+            }
+            crate::locale::Errand::Watch(on) => {
+                if !crate::locale::watch_the_clock(on) {
+                    self.echo_message(self.texts.t(ronoctua_i18n::key::LOCALE_WATCHED_UNKNOWN));
+                }
+                if let Some(v) = self.locale.as_mut() {
+                    v.reread();
+                }
+                self.draw_and_paint();
+            }
             crate::locale::Errand::Ask(asking) => {
                 self.locale_asking = Some(asking);
                 self.mx.request(
@@ -6805,6 +6849,9 @@ impl Footer {
                         crate::locale::Asking::Zone => "locale-zone",
                         crate::locale::Asking::Place => "locale-place",
                         crate::locale::Asking::Where(_) => "locale-where",
+                        crate::locale::Asking::MachineDate => "locale-system-date",
+                        crate::locale::Asking::MachineTime => "locale-system-time",
+                        crate::locale::Asking::MachineZone => "locale-system-zone",
                     },
                     false,
                 );
@@ -6859,6 +6906,9 @@ impl Footer {
             crate::locale::Asking::Zone => crate::locale::took_a_zone(&said),
             crate::locale::Asking::Place => crate::locale::took_a_place(&said),
             crate::locale::Asking::Where(n) => crate::locale::took_a_coordinate(n, &said),
+            crate::locale::Asking::MachineDate => crate::locale::took_a_system_date(&said),
+            crate::locale::Asking::MachineTime => crate::locale::took_a_system_time(&said),
+            crate::locale::Asking::MachineZone => crate::locale::took_a_system_zone(&said),
         };
         match outcome {
             Ok(()) => {
@@ -10286,6 +10336,28 @@ impl Footer {
         }
     }
 
+    /// Turns the machine's network time client back on.
+    ///
+    /// # Why the shell does it and not the daemon that asked
+    ///
+    /// Because a notice names a COMMAND ID and carries nothing to do — that is
+    /// what makes its button reachable by `LEADER :`, by the buffer's `m n`
+    /// and by a click on the line, all through one door. The brain's own watch
+    /// does the same thing on its schedule; this is the press.
+    fn keep_the_clock_right(&mut self) {
+        match ronoctua_clock::set_automatic(true) {
+            Ok(()) => {
+                let m = self.texts.t(ronoctua_i18n::key::ECHO_CLOCK_KEPT);
+                self.echo_message(m);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "automatic time could not be turned on");
+                let m = self.texts.t(ronoctua_i18n::key::ECHO_CLOCK_REFUSED);
+                self.echo_message(m);
+            }
+        }
+    }
+
     /// What the brain has announced, when it has announced anything.
     fn announced(&self) -> Option<&ronoctua_brain::Announcement> {
         self.brain.as_ref()?.announcement.as_ref()
@@ -13191,10 +13263,12 @@ impl Footer {
                 self.draw_and_paint();
             }
             Some(Click::Locale(n)) => {
-                // THE CLICK IS THE `RET` OF THE ROW IT LANDS ON, which is the
-                // rule these views follow: aim, then act, in one gesture.
-                // Nothing here empties the screen — the worst a row does is
-                // change the language, which the next row changes back.
+                // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19,
+                // and neither door kept it: this one ran `RET` on the FIRST
+                // click and the window never ran it at all. A screen where one
+                // click changes the language is a screen you cannot read with
+                // a mouse in your hand.
+                //
                 // THE PAIR IS TAKEN INSIDE THE BORROW AND ACTED ON OUTSIDE
                 // IT: `v` holds `self`, and writing a file is the footer's
                 // own business. It is the shape the theme chooser's arrows
@@ -13204,8 +13278,11 @@ impl Footer {
                 let texts = std::rc::Rc::clone(&self.texts);
                 let errand = self.locale.as_mut().map(|v| {
                     let rows = v.rows(width, &zone, &texts);
-                    v.clicked(n, &rows);
-                    v.press(crate::locale::Press::Enter, &zone, &texts)
+                    if v.clicked(n, &rows) {
+                        v.press(crate::locale::Press::Enter, &zone, &texts)
+                    } else {
+                        crate::locale::Errand::Nothing
+                    }
                 });
                 self.zone = zone;
                 if let Some(errand) = errand {
@@ -13516,7 +13593,15 @@ impl Footer {
             // wrong line.
             ViewState::Clipboard => Some(self.clip_view.cursor()),
             ViewState::History => self.history.as_ref().map(crate::history::View::cursor),
-            ViewState::Locale => self.locale.as_ref().map(crate::locale::View::cursor),
+            // THE DRAWN ROW, and not the cursor: this view's cursor counts the
+            // rows one can STAND on, and between them sit the titles, the
+            // blank rows and the notes — and a note is as many rows as the
+            // width allows. What the region scrolls to is a line on the
+            // screen. See `locale::View::drawn_row`.
+            ViewState::Locale => self
+                .locale
+                .as_ref()
+                .map(|v| v.drawn_row(&v.rows(self.screen_columns(), &self.zone, &self.texts))),
             ViewState::Geo => self.geo.as_ref().map(crate::geo::View::cursor),
             ViewState::Display => self.display.as_ref().map(crate::display::View::cursor),
             ViewState::Bluetooth => self.bluetooth.as_ref().map(crate::bluetooth::View::cursor),
@@ -14575,8 +14660,11 @@ impl Footer {
                         piece.at,
                         u16::try_from(row).unwrap_or(0),
                         piece.color,
-                        // The band's pieces are laid out from the LEFT.
-                        false,
+                        // EACH PIECE SAYS WHICH WAY IT WAS PLACED. The
+                        // sentence and the glyph come from the left; the
+                        // control, the pie and the counter are anchored to
+                        // the border — see `band::Piece::edge`.
+                        piece.edge,
                     ));
                 }
             }
@@ -14616,7 +14704,9 @@ impl Footer {
                         piece.at,
                         self.above_line_at(),
                         piece.color,
-                        false,
+                        // The places come from the left; the countdown is
+                        // anchored to the border — see `world::Piece::edge`.
+                        piece.edge,
                     ));
                 }
             } else {
@@ -14651,7 +14741,9 @@ impl Footer {
                         piece.at,
                         brain_line,
                         piece.color,
-                        false,
+                        // The two controls and the pie are anchored to the
+                        // border — see `brain::Piece::edge`.
+                        piece.edge,
                     ));
                 }
             }

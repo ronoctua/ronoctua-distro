@@ -577,6 +577,28 @@
     # Below this the container would cut, on a screen with room to spare, the
     # very line somebody opened it to read.
     valueCells = 40;
+    # HOW FAR A SUB-SECTION IS SET IN, in cells.
+    #
+    # # Why a list of settings ever needs a second level
+    #
+    # Because one of them has repeating parts. The glance's section is a list
+    # of PLACES, each with four switches and a way to remove it — and drawn
+    # flat, with the section's title and every place's name in the same tone at
+    # the same column, there is nothing on the screen saying which rows belong
+    # to which place, or that the whole block is one section. The owner read
+    # exactly that: the main title was identical to every sub-title under it,
+    # and the content below could not be made out as a section at all.
+    #
+    # # And why the device is air and colour
+    #
+    # Because those are the two this system has. A title is the size of the
+    # body text — hierarchy is never size and never a rule — so what is left is
+    # WHERE a row starts and WHAT TONE it is in. Both are already how every
+    # other list here says the same thing.
+    #
+    # TWO CELLS: one is not read as an indent at all next to a label column of
+    # twenty-eight, and three starts to look like a column of its own.
+    nestCells = 2;
   };
 
   # A LIST WITH A CEILING OF ITS OWN, inside the network view's one list.
@@ -629,6 +651,34 @@
     # `files.gutter` gives: ink against a border reads as ink that was CUT, not
     # as ink that ended.
     pad = 1;
+  };
+
+  # THE GLANCE'S LINE — `LEADER d`, one row above the modeline.
+  #
+  # # The air inside a place's ground
+  #
+  # The places sit side by side on one row and every other one is drawn on a
+  # ground of its own, because a separator alone left the eye a row of words
+  # with nothing to group them by (see `colors.nix`, `glance`). That ground is
+  # a RECTANGLE, and a rectangle that starts where the first letter starts is
+  # a rectangle the text is glued to — the same fault `shelf.pad` names one
+  # block above and `files.gutter` names further up: ink against an edge reads
+  # as ink that was CUT.
+  #
+  # ONE NUMBER FOR BOTH SIDES, and that is the whole point of it being one:
+  # the owner measured the two and they differed — nothing to the left of the
+  # text and two cells to the right, because the ground ran on to where the
+  # next place began. Spending it twice out of one constant is what makes
+  # "the same air on both sides" a thing that cannot drift.
+  #
+  # AND ONE CELL, not two, for the reason `modeline.edgeRight` gives about
+  # itself: this is a status line and two would start to look like a margin.
+  # It also makes the arithmetic exact against `modeline.segmentGap`, which is
+  # two: a place's ground ends exactly where the next one's begins, so the
+  # alternation reads as a band changing tone rather than as two boxes with a
+  # gap between them.
+  glance = {
+    air = 1;
   };
 
   # HOW FAR THE EXPANSION MAY GROW — the which-key list, the `M-x`

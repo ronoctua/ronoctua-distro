@@ -77,23 +77,61 @@
   # here for the same reason there is none there.
   life = "normal";
 
-  # WHERE THE TWO ANSWERS COME FROM, and both are named so that the screen can
-  # say who is being asked. Neither needs an account or a key.
+  # WHERE THE TWO ANSWERS COME FROM, and every host is NAMED so that the screen
+  # can say who is being asked. None of them needs an account or a key.
   #
   # Every fetch tells a third party this machine's address and which places it
-  # watches, which is why `LEADER s l` can turn each of them off and why they
-  # are named here rather than buried in Rust.
+  # watches, which is why `LEADER s l` can turn each SOURCE off and why the
+  # hosts are named here rather than buried in Rust.
+  #
+  # # Why a source is a LIST
+  #
+  # Because one host being down is one host being down, and the glance then had
+  # nothing to show and nothing to say: the miss was a `debug!` line and the
+  # temperature simply was not on the bar. The owner read that as the weather
+  # not working — *"caso haja algum erro de resposta na API principal, deve
+  # haver API de fallback"*.
+  #
+  # They are asked IN ORDER and only until one answers, so the second costs
+  # nothing on a machine where the first is up.
+  #
+  # # And why each one carries an `id`
+  #
+  # Because a fallback is not a host swap. Each of these has its own path and
+  # its own JSON, so what a declaration can hold is WHO is asked and how often;
+  # the reading is Rust, chosen by this id. An id with no reader is a test that
+  # fails (`every_declared_source_has_a_reader`), never a surprise at run time.
   sources = {
-    # Open-Meteo: current temperature by coordinate.
     weather = {
-      host = "api.open-meteo.com";
+      # Open-Meteo, current temperature by coordinate, and met.no — the
+      # Norwegian Meteorological Institute — behind it. Both are free of
+      # charge, keyless, and answer a plain coordinate.
+      from = [
+        {
+          id = "open-meteo";
+          host = "api.open-meteo.com";
+        }
+        {
+          id = "met-no";
+          host = "api.met.no";
+        }
+      ];
       every-minutes = 30;
     };
-    # Frankfurter, which serves the European Central Bank's daily reference
-    # rates. Daily is what the ECB publishes, so asking more often would be
-    # asking for the same number.
     rate = {
-      host = "api.frankfurter.dev";
+      # Frankfurter, which serves the European Central Bank's daily reference
+      # rates, and open.er-api.com behind it. Daily is what the ECB publishes,
+      # so asking more often would be asking for the same number.
+      from = [
+        {
+          id = "frankfurter";
+          host = "api.frankfurter.dev";
+        }
+        {
+          id = "er-api";
+          host = "open.er-api.com";
+        }
+      ];
       every-minutes = 360;
     };
   };

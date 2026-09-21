@@ -54,6 +54,16 @@ pub struct Piece {
     /// Already translated: this module is given the texts, because the
     /// alternative is the drawing carrying keys and arguments around.
     pub explain: Option<String>,
+    /// Was it placed counting cells from the surface's RIGHT EDGE?
+    ///
+    /// The right-hand cluster is, and everything else is not. It travels on
+    /// the piece because it is asked TWICE — by whoever paints it, which hands
+    /// it to `Span::edge`, and by [`at`], which then reads the pointer through
+    /// `chrome::at_the_edge`. The grid does not reach the border, so a run
+    /// placed from the left sits `cell + remainder` from it rather than a
+    /// cell, and the remainder changes with the window: the owner read exactly
+    /// that beside the glance's countdown.
+    pub edge: bool,
 }
 
 /// One line of the band.
@@ -204,6 +214,7 @@ pub fn lines(
         color: tone,
         hit: None,
         explain: None,
+        edge: false,
     });
     let at = left + 2;
 
@@ -211,8 +222,12 @@ pub fn lines(
     // sentence gets. Laying the text out first and then discovering the pie
     // does not fit is how a line comes to spill.
     //
-    // From the edge inwards: the control, the pie, the counter.
-    let mut right = columns.saturating_sub(tokens::space::MODELINE_EDGERIGHT);
+    // From the edge inwards: the control, the pie, the counter. Every one of
+    // them is placed by `chrome::from_the_edge` and carries `edge: true`, so
+    // the ink sits an exact cell from the border rather than a cell plus the
+    // grid's remainder — and `at` below asks the pointer the same way.
+    let mut taken = 0u16;
+    let mut right;
 
     // THE CONTROL IS THE FIRST THING ON THE RIGHT, at the edge.
     //
@@ -223,13 +238,15 @@ pub fn lines(
     //
     // An open envelope is the drawing everybody already reads as "read", and
     // the screen's right edge is where a hand goes to dismiss something.
-    right = right.saturating_sub(1);
+    taken += 1;
+    right = crate::chrome::from_the_edge(columns, taken);
     first.pieces.push(Piece {
         at: right,
         text: tokens::icon::NOTIFICATION_MARK_READ.to_string(),
         color: tone,
         hit: Some(Hit::Read),
         explain: Some(words.texts.t(ronoctua_i18n::key::HINT_NOTIF_READ)),
+        edge: true,
     });
 
     if let Some(f) = fraction {
@@ -248,7 +265,8 @@ pub fn lines(
         } else {
             countdown_glyph(eighths(f))
         };
-        right = right.saturating_sub(2);
+        taken += 2;
+        right = crate::chrome::from_the_edge(columns, taken);
         first.pieces.push(Piece {
             at: right,
             text: glyph.to_string(),
@@ -259,6 +277,7 @@ pub fn lines(
             } else {
                 ronoctua_i18n::key::HINT_NOTIF_COUNTDOWN
             })),
+            edge: true,
         });
     }
     if let Some((shown_now, total)) = position {
@@ -270,13 +289,15 @@ pub fn lines(
             ],
         );
         let w = layout::width(&text);
-        right = right.saturating_sub(w + 1);
+        taken += w + 1;
+        right = crate::chrome::from_the_edge(columns, taken);
         first.pieces.push(Piece {
             at: right,
             text,
             color: tokens::color::NOTIFICATION_COUNTDOWN,
             hit: None,
             explain: None,
+            edge: true,
         });
     }
 
@@ -292,6 +313,7 @@ pub fn lines(
         },
         hit: None,
         explain: None,
+        edge: false,
     });
 
     let mut out = vec![first];
@@ -312,6 +334,7 @@ pub fn lines(
                 color: tokens::color::NOTIFICATION_QUIET,
                 hit: None,
                 explain: None,
+                edge: false,
             }],
         });
     }
@@ -386,6 +409,7 @@ pub fn lines(
                     // be a target the eye cannot see.
                     hit: None,
                     explain: None,
+                    edge: false,
                 });
                 x += mark_wide + tokens::space::MODELINE_SEGMENTGAP;
             }
@@ -407,6 +431,7 @@ pub fn lines(
                         .texts
                         .t_with(ronoctua_i18n::key::HINT_NOTIF_ACTION, &[("action", &label)]),
                 ),
+                edge: false,
             });
             x += w + tokens::space::MODELINE_SEGMENTGAP;
         }
@@ -421,12 +446,18 @@ pub fn lines(
 /// calculation of where things would be — the same rule the modeline's
 /// segments already follow.
 #[must_use]
-pub fn at(lines: &[Line], row: u16, column: u16) -> Option<&Piece> {
-    lines
-        .get(row as usize)?
-        .pieces
-        .iter()
-        .find(|p| column >= p.at && column < p.at + layout::width(&p.text))
+pub fn at(lines: &[Line], row: u16, column: u16, from_the_edge: Option<u16>) -> Option<&Piece> {
+    lines.get(row as usize)?.pieces.iter().find(|p| {
+        // THE READING THAT PLACED IT is the reading that finds it. A piece
+        // drawn from the left is compared against the left-counted cell; one
+        // anchored to the border is compared against the cell counted from
+        // the border, because the grid's remainder sits between them and can
+        // be most of a cell. Comparing both against the same number is how a
+        // control comes to answer one cell away from where it is drawn —
+        // `paint::bar_box` was rebuilt for exactly this.
+        let at = if p.edge { from_the_edge } else { Some(column) };
+        at.is_some_and(|c| c >= p.at && c < p.at + layout::width(&p.text))
+    })
 }
 
 #[cfg(test)]
@@ -739,20 +770,43 @@ mod tests {
         assert!(last.pieces.iter().all(|p| !is_the_mark(p)));
     }
 
+    /// THE CONTROL IS FOUND BY THE READING THAT DREW IT, and by no other.
+    ///
+    /// THE DEFECT THIS CATCHES: the envelope is anchored to the border, so its
+    /// ink sits at `width - 2 cells` while the left-counted grid puts cell
+    /// `columns - 2` at `(columns - 2) x cell` — and the two differ by the
+    /// grid's remainder, which is nought to one cell and changes with the
+    /// window. Matching an edge-anchored piece against the left-counted cell
+    /// is a control that answers a cell away from where it is drawn, which is
+    /// the defect `paint::bar_box` was carved out to end.
     #[test]
     fn the_pointer_finds_what_was_drawn() {
         let t = words();
         let w = Words { texts: &t };
         let s = shown(Show::Full, "corpo", 2);
         let out = lines(Some(&s), 120, Some(1.0), None, false, false, &w);
-        // The control is at the right edge now, and the left margin carries the
-        // notification's own mark.
-        let edge = 120 - tokens::space::MODELINE_EDGERIGHT - 1;
-        assert_eq!(at(&out, 0, edge).and_then(|p| p.hit), Some(Hit::Read));
+        let control = out[0]
+            .pieces
+            .iter()
+            .find(|p| p.hit == Some(Hit::Read))
+            .expect("no control on the band");
+        assert!(control.edge, "the control is not anchored to the border");
+        assert_eq!(control.at, crate::chrome::from_the_edge(120, 1));
+        assert_eq!(
+            at(&out, 0, 0, Some(control.at)).and_then(|p| p.hit),
+            Some(Hit::Read)
+        );
+        // AND NOT BY THE OTHER ONE. Without the edge reading it is unreachable
+        // — which is honest, and is what says the two are not interchangeable.
+        assert!(
+            at(&out, 0, control.at, None).is_none(),
+            "an edge-anchored control answered the left-counted cell"
+        );
+        // The left margin carries the notification's own mark, which is text.
         let left = tokens::space::MODELINE_EDGELEFT;
-        assert_eq!(at(&out, 0, left).and_then(|p| p.hit), None);
+        assert_eq!(at(&out, 0, left, None).and_then(|p| p.hit), None);
         // A cell with nothing in it is nothing, and not the nearest thing.
-        assert!(at(&out, 0, left + 1).is_none());
-        assert!(at(&out, 9, 0).is_none());
+        assert!(at(&out, 0, left + 1, None).is_none());
+        assert!(at(&out, 9, 0, None).is_none());
     }
 }
