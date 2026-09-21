@@ -288,7 +288,7 @@ impl View {
                 out.push((Vec::new(), Target::Nothing));
             }
             out.push((
-                vec![piece(at, texts.t(key), tokens::color::TEXT_GROUP)],
+                vec![piece(at, texts.t(key), tokens::color::TEXT_HEADING)],
                 Target::Nothing,
             ));
         };
@@ -561,7 +561,7 @@ impl View {
         };
         (
             vec![
-                piece(at, glyph.to_string(), tokens::color::TEXT_GROUP),
+                piece(at, glyph.to_string(), tokens::color::TEXT_HEADING),
                 // THE GLYPH IS ONE CELL AND THE WORD STARTS AFTER IT, with a
                 // space between: a mark against the letters is the "glifo
                 // encostado na borda" the owner has had to point out before.
@@ -571,7 +571,7 @@ impl View {
                         &texts.t(ronoctua_i18n::key::ATUIN_HEADING_ADVANCED),
                         room.saturating_sub(2),
                     ),
-                    tokens::color::TEXT_GROUP,
+                    tokens::color::TEXT_HEADING,
                 ),
             ],
             Target::Drawer,

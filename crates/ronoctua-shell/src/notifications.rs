@@ -2002,7 +2002,7 @@ impl View {
         let split = split_at(columns);
         // THE HEADING OF THE COLUMN THAT HAS THE KEYBOARD IS LIT.
         //
-        // Both used to be `TEXT_GROUP` always, and the only sign of which
+        // Both used to be `TEXT_HEADING` always, and the only sign of which
         // column the keyboard was on was the OTHER column's row losing its
         // accent. On an empty column there is no row to lose it: `TAB` onto
         // "Filtered out" with nothing filtered left the screen saying
@@ -2017,7 +2017,7 @@ impl View {
             if self.pane == pane {
                 tokens::color::STATE_ACCENT
             } else {
-                tokens::color::TEXT_GROUP
+                tokens::color::TEXT_HEADING
             }
         };
         let mut out = vec![Row {
@@ -2116,7 +2116,7 @@ impl View {
                         if several && self.pane == pane {
                             tokens::color::STATE_ACCENT
                         } else {
-                            tokens::color::TEXT_GROUP
+                            tokens::color::TEXT_HEADING
                         },
                     )],
                     Place::Empty(_) => vec![piece(
@@ -3105,7 +3105,7 @@ mod tests {
         // only thing saying which of the two lists the arrows are walking.
         let lit = |r: &Row| r.fields[0].color;
         assert_eq!(lit(&rows[0]), tokens::color::STATE_ACCENT);
-        assert_eq!(lit(&rows[3]), tokens::color::TEXT_GROUP);
+        assert_eq!(lit(&rows[3]), tokens::color::TEXT_HEADING);
     }
 
     #[test]
@@ -3589,13 +3589,13 @@ mod tests {
         };
         let mut v = View::fresh();
         assert_eq!(lit(&v, left), tokens::color::STATE_ACCENT);
-        assert_eq!(lit(&v, split), tokens::color::TEXT_GROUP);
+        assert_eq!(lit(&v, split), tokens::color::TEXT_HEADING);
 
         // AND ON THE EMPTY ONE, which is the case that had nothing to show.
         let _ = v.key(Press::Tab, &lists, &b, 200);
         assert_eq!(v.pane, Pane::Suppressed);
         assert_eq!(lit(&v, split), tokens::color::STATE_ACCENT);
-        assert_eq!(lit(&v, left), tokens::color::TEXT_GROUP);
+        assert_eq!(lit(&v, left), tokens::color::TEXT_HEADING);
     }
 
     #[test]

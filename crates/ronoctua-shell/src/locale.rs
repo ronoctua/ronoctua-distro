@@ -1606,7 +1606,7 @@ impl Builder<'_> {
             fields: vec![Self::piece(
                 self.left,
                 text,
-                tokens::color::TEXT_GROUP,
+                tokens::color::TEXT_HEADING,
                 self.room,
             )],
             focused: false,

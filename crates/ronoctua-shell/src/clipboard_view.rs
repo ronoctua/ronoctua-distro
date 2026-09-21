@@ -349,7 +349,7 @@ impl View {
             vec![piece(
                 left,
                 texts.t(ronoctua_i18n::key::CLIPBOARD_HISTORY),
-                tokens::color::TEXT_GROUP,
+                tokens::color::TEXT_HEADING,
             )],
             Target::Nothing,
         )];
@@ -376,7 +376,7 @@ impl View {
             vec![piece(
                 left,
                 texts.t(ronoctua_i18n::key::CLIPBOARD_HEADING_SYNC),
-                tokens::color::TEXT_GROUP,
+                tokens::color::TEXT_HEADING,
             )],
             Target::Nothing,
         ));
@@ -444,7 +444,7 @@ impl View {
             vec![piece(
                 at,
                 texts.t(ronoctua_i18n::key::CLIPBOARD_ITEM),
-                tokens::color::TEXT_GROUP,
+                tokens::color::TEXT_HEADING,
             )],
             Target::Nothing,
         ));

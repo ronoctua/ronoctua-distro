@@ -987,7 +987,7 @@ impl Builder<'_> {
             fields: vec![Self::piece(
                 self.left,
                 self.texts.t(key),
-                tokens::color::TEXT_GROUP,
+                tokens::color::TEXT_HEADING,
             )],
             focused: false,
             heading: true,

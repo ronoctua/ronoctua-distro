@@ -1328,7 +1328,21 @@ impl ExpansionRow {
             key_flush_right: true,
             separator: true,
             aside: false,
-            key_color: tokens::color::STATE_ACCENT,
+            // THE KEY IS A TEXT RUNG, not the accent's solid.
+            //
+            // It was `STATE_ACCENT`, which is anchored at Lc 52 while the name
+            // beside it is `TEXT_SECONDARY` at 48 — and in the leader's list
+            // that letter is on every row, so the whole left column was drawn
+            // a step louder than the thing it answers for. `TEXT_KEY` is the
+            // accent's own text step, solved to the ramp's Lc: the three inks
+            // of a row now differ by hue and nothing else. See `text.key` in
+            // `assets/tokens/colors.nix`.
+            //
+            // The three lists that paint a key in `STATE_ACCENT` still do —
+            // there it is the CURSOR (the finder, the app list, the theme
+            // chooser), which is what the accent is for, and only now that the
+            // resting key has left that hex does the cursor read as one.
+            key_color: tokens::color::TEXT_KEY,
             text_color: tokens::color::TEXT_SECONDARY,
             fields: Vec::new(),
             foot: false,
@@ -11534,7 +11548,7 @@ impl Footer {
                                 BLANK_MARK,
                                 &self.texts.t(ronoctua_i18n::key::THEME_OPTION_BACKDROP),
                             ),
-                            tokens::color::TEXT_GROUP,
+                            tokens::color::TEXT_HEADING,
                         ),
                         DeskRow::Answer(b) => {
                             let under_cursor = b == v.focused_backdrop();
@@ -11573,7 +11587,7 @@ impl Footer {
                         aside: true,
                         click: Some(Click::Theme(i)),
                         key_color: match row {
-                            ThemeRow::Header => tokens::color::TEXT_GROUP,
+                            ThemeRow::Header => tokens::color::TEXT_HEADING,
                             _ if theme_focus => tokens::color::STATE_ACCENT,
                             ThemeRow::Theme(n) if n == v.cursor() => tokens::color::TEXT_PRIMARY,
                             _ => tokens::color::TEXT_SECONDARY,
@@ -11717,7 +11731,7 @@ impl Footer {
                     // A section title in the group tone, for the same reason as the
                     // `+submenu`: it organizes, it does not run.
                     text_color: if l.title {
-                        tokens::color::TEXT_GROUP
+                        tokens::color::TEXT_HEADING
                     } else {
                         tokens::color::TEXT_SECONDARY
                     },

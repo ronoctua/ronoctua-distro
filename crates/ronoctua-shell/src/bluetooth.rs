@@ -1980,7 +1980,7 @@ impl Builder<'_> {
             fields: vec![Self::piece(
                 self.left,
                 layout::elide_end(&text, self.room),
-                tokens::color::TEXT_GROUP,
+                tokens::color::TEXT_HEADING,
             )],
             focused: false,
             heading: true,

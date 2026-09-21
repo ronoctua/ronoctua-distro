@@ -1617,7 +1617,7 @@ impl Builder<'_> {
             fields: vec![Self::piece(
                 self.left,
                 layout::elide_end(&text, self.room),
-                tokens::color::TEXT_GROUP,
+                tokens::color::TEXT_HEADING,
             )],
             focused: false,
             heading: true,
@@ -1687,7 +1687,7 @@ impl Builder<'_> {
         let colour = if focused {
             tokens::color::STATE_ACCENT
         } else {
-            tokens::color::TEXT_GROUP
+            tokens::color::TEXT_HEADING
         };
         // THE GLYPH IS ONE CELL AND THE WORD STARTS AFTER IT, with a space
         // between: a mark against the letters is the "glifo encostado na

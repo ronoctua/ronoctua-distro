@@ -114,6 +114,26 @@
     # that marks focus. The `distance` gate is what proves the pair still
     # reads as two; this one only records that the old value was left behind
     # on purpose.
+    # THE FROZEN VALUE IS A SOLID, AND THE ROLE IS TEXT.
+    #
+    # The second kind this file carries, and the same kind as the one below:
+    # not a ladder that could not reach a hand value, but a hand value the
+    # owner has since decided against — reading the shortcut list on screen,
+    # *"estou achando que uma das cores está se destacando mais … do que
+    # mantendo um mesmo padrão entre as duas"*.
+    #
+    # `0xBB9AF7` is `group.solid`, the step a family fills a button with,
+    # anchored at Lc 52 plus the family's shift: 56 on the chrome, against the
+    # 48 of the command name on the same line. The whole distance is that
+    # LIGHTNESS — the two are 300° and 302° apart in hue by a hair, and the
+    # generated value is the same family's TEXT rung, solved to the ramp's own
+    # Lc so the pair differs by hue alone. `distance` is what proves it still
+    # reads as two (`text.group vs text.secondary`, and against `text.key`);
+    # this only records that the hand value was left behind on purpose.
+    "text.group" = {
+      max = 0.08;
+      reason = "the frozen value is the group family's SOLID step at Lc 56; the owner asked for the shortcut list's inks to sit on one rung, so this is the same family's text step at the ramp's own Lc 48";
+    };
     "border.inactive" = {
       max = 0.12;
       reason = "the frozen value is the error family's red; the owner asked for both window borders to follow the theme and then for the unfocused one to be quieter still, so this one is the accent's element rung with its chroma drained";

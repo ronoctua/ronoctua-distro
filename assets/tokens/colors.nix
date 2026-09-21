@@ -337,9 +337,109 @@
     # with "this opens more keys". The `+` in front says the same thing in
     # text; the colour says it without taking up a column. Purple for being
     # the only hue in the palette not yet spent: blue is the accent,
-    # green/yellow/red are state. THE SAME PRIMITIVE as `syntax.keyword`, on
-    # purpose: one purple, two names.
-    group = "group.solid";
+    # green/yellow/red are state.
+    #
+    # AND IT IS A TEXT RUNG, not the family's SOLID — which is the whole of
+    # what changed on 2026-09-21, and it was the owner reading the list on
+    # screen that found it: *"estou achando que uma das cores está se
+    # destacando mais e assim facilitando a leitura dela e chamando mais
+    # atenção para ela, do que mantendo um mesmo padrão entre as duas"*.
+    #
+    # Measured, that is exactly what it was. `group.solid` is the step a
+    # family fills a BUTTON with, anchored at Lc 52 plus the family's shift —
+    # 56 on the chrome in all nine themes — while the command beside it is
+    # `text.secondary`, the neutral ramp's own `text` rung at Lc 48. Eight Lc
+    # apart, ΔL 0.05, every theme, and nothing in the gates had ever compared
+    # the two: `text.group` was measured against the GROUNDS it is drawn on
+    # and never against the ink it shares a line with. So the thing that
+    # leads somewhere read louder than the thing that runs, which is the
+    # hierarchy backwards.
+    #
+    # One rung, one job: a role that is TEXT takes a text step. `group.text`
+    # is the same family solved at the same Lc as `text.secondary`, so the
+    # two now differ by HUE alone — which is all the distinction was ever
+    # supposed to be, the `+` carrying the rest.
+    #
+    # AND THE MULTIPLIER IS WHY IT IS STILL A HUE ONE CAN SEE. A text rung is
+    # solved at the family's `text-chroma`, which is the chroma of a ramp
+    # meant to be READ, and at the shared 0.35 this violet lands ΔE 0.056
+    # from a grey ramp (cyber; industrial 0.065, frost 0.067). With the
+    # lightness now equal, that distance is the WHOLE distinction, and a hue
+    # nobody can see is not one. 1.4 is the smallest step that carries every
+    # theme past the gate below — measured, the worst pair goes 0.056 → 0.079.
+    #
+    # WHY A MULTIPLIER ON THE RECIPE AND NOT A `text-chroma` IN THE NINE
+    # SEEDS, which was the first attempt: a family's text-chroma is the whole
+    # ramp's, and this family's ramp has other tenants. The accent's has four
+    # — `text.mine`, the globe's dot and its country, and the waveform — and
+    # raising it for the sake of a key letter moved all of them, in eight
+    # themes, for a reason none of them shares. The build said so out loud:
+    # frost's `surface.wave` is near-white with the accent's temperature, and
+    # at the chroma the KEY needed it came within 0.198 of `#00FFFF`, which is
+    # one of the four film colours no chrome token may approach. A multiplier
+    # on one recipe moves one token, which is the size of this decision.
+    #
+    # THE SAME FAMILY as `syntax.keyword`, which keeps the solid: a keyword
+    # is ink on a page of ink, not a row in a list of rows.
+    group = {
+      of = "group.text";
+      chroma = 1.4;
+    };
+    # THE TITLE OF A SECTION, in every view that has sections.
+    #
+    # THIS TOKEN IS A SPLIT, and the split is what `text.group` moving to a
+    # text rung forced into the open. One name was doing two jobs: the label
+    # of a SUBMENU in the shortcut list, which is what the doc above it
+    # describes and what the name means, and the TITLE OF A SECTION, which
+    # twenty-six call sites across twelve views had borrowed it for — every
+    # `heading(…)` builder in the system, plus the chevron of a drawer.
+    #
+    # They read the same until the day one of them had to move. A submenu is a
+    # ROW in a list of rows and has to weigh what the rows beside it weigh; a
+    # title is what those rows hang under, and hierarchy in this system is
+    # colour and air (invariant 15), so a title that drops to the body's rung
+    # has spent the only thing it had. Dragging every section title in the
+    # system down a step was not what the owner asked for when he asked about
+    # a shortcut list.
+    #
+    # So the title keeps the SOLID, byte for byte what it has always been —
+    # nothing on any of those twelve screens changes — and the name now says
+    # which of the two jobs it is. The contrast gates that were written for
+    # `text.group` came here with it, because they were always measuring this.
+    heading = "group.solid";
+    # THE KEY ONE PRESSES, in every list that teaches one.
+    #
+    # It was `state.accent` — the same token as the PENDING CHORD one line
+    # above it in the minibuffer, and as the cursor in the finder and the
+    # theme chooser. Three jobs, one hex, and the accent's anchor is Lc 52:
+    # the offered keys were drawn louder than the command names they answer
+    # for, for the same reason `text.group` was, and the letter column is on
+    # every row of the list.
+    #
+    # The accent's own TEXT rung instead, which is `text.mine`'s argument
+    # word for word — *"a step down from its solid tone reads as related
+    # without competing with the cursor sitting on the same list"*. Here the
+    # cursor really is on the same list: the finder paints its cursor row in
+    # `state.accent` and the matched letters of a query in it too, and both
+    # of those only started to read as a different thing on the day the
+    # resting key stopped being the identical hex.
+    #
+    # WHAT STAYS AT Lc 52 IS THE CHORD. `CTRL ALT SPC-` is STATE — a sequence
+    # is in progress — and it is the one thing on those lines that is not an
+    # offer; draining it would leave the list with nothing saying that the
+    # keyboard is inside a sequence at all.
+    #
+    # 2.4 AND NOT 1.4: the accent's text ramp has to cross a ramp that is
+    # often the same temperature as the accent itself, and frost is where that
+    # is worst — a cyan accent on a cyan-grey ramp, ΔE 0.020 apart at the
+    # shared chroma, which is a key letter the eye reads as a command name.
+    # The number is what frost needs and the other eight ride along; measured,
+    # it leaves the key no louder than it is today, because what it replaces
+    # is `accent.solid`, which is more saturated still.
+    key = {
+      of = "accent.text";
+      chroma = 2.4;
+    };
     # THE DISCREET REGISTER: interface text that is ABOUT the screen rather
     # than being the screen's content, in three weights and a variant.
     #

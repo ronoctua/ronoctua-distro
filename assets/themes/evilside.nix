@@ -166,6 +166,20 @@
   overrides = {
     text = {
       answer = "answer.text-loud";
+      # THE ACCENT IS AN ORANGE, AND ORANGE IS SPOKEN FOR.
+      #
+      # `text.key` is the accent's text rung with its chroma multiplied, and
+      # the multiplier is one number for the nine — sized for frost, whose
+      # cyan accent has a cyan-grey ramp to get away from. This accent sits at
+      # hue 28, and at that multiplier the key lands 0.237 from `#FF6000`,
+      # inside the quarter no chrome token may enter: it is one of the four
+      # colours the video preview paints with and the screenshot battery
+      # asserts never appear. Measured 0.282 here, and the key still reads ΔE
+      # 0.086 from the command name beside it, which is over the gate.
+      key = {
+        of = "accent.text";
+        chroma = 1.8;
+      };
     };
   };
 }

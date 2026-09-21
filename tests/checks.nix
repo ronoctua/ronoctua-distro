@@ -9811,6 +9811,150 @@ let
     END
   '';
 
+  # A HEADING IS NOT A SUBMENU, and for one day they were the same colour.
+  #
+  # `text.group` is documented as the label of a SUBMENU in the shortcut list —
+  # which-key's `+window`, the row that leads to more keys instead of running
+  # something. It was also, without anybody deciding it, the TITLE OF A SECTION:
+  # twenty-six call sites across twelve views had reached for the nearest token
+  # that was neither body text nor an accent, and it was this one.
+  #
+  # The two read the same until 2026-09-21, when one of them had to move. The
+  # owner read the leader's list on screen and said a submenu was pulling the
+  # eye harder than a command — measured, `group.solid` is the step a family
+  # fills a BUTTON with (Lc 56 on the chrome) and the command beside it is the
+  # ramp's own text rung (Lc 48), so the row that only leads somewhere outweighed
+  # the row that acts. A submenu is a ROW IN A LIST and has to weigh what the
+  # rows beside it weigh, so it went to the text rung; a title is what those rows
+  # HANG UNDER, and hierarchy here is colour and air (invariant 15), so a title
+  # on the body's rung has spent the only thing it had. `text.heading` is the
+  # split, and it keeps the solid byte for byte.
+  #
+  # WHAT THIS REFUSES IS THE DRIFT BACK. Nothing in the compiler knows which of
+  # the two a new `heading(…)` meant, and the symptom is the quietest kind there
+  # is: a section title one step too dim, on one screen, which reads as a theme
+  # being off rather than as a token being wrong. So `TEXT_GROUP` is allowed in
+  # exactly ONE place — the arm that draws a leader row whose sequence carries
+  # on — and every builder whose NAME says it draws a heading has to name
+  # `TEXT_HEADING` and no second text tone.
+  a-heading-is-not-a-submenu = mkCheck "a-heading-is-not-a-submenu" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    SOURCES = sorted(shell.glob("*.rs"))
+    floor(len(SOURCES), 25, "sources in the shell")
+
+    wrong = []
+
+    # -- ONE: `TEXT_GROUP` HAS EXACTLY ONE HOME --------------------------------
+    #
+    # FILE-WIDE: "no source but this one names the token" is a question about
+    # whole files by construction — the defect is a heading written ANYWHERE,
+    # and narrowing to a function would be asking about the place the mistake is
+    # not. The narrowing that does apply is `without_tests`: an assertion naming
+    # the token is a thing a test says, not a thing a view draws.
+    HOME = "surface.rs"
+    homes = []
+    for f in SOURCES:
+        code = code_of(without_tests(f.read_text()))
+        homes += [f.name] * len(re.findall(r"\bTEXT_GROUP\b", code))
+    strays = sorted({n for n in homes if n != HOME})
+    if strays:
+        wrong.append("`TEXT_GROUP` is named outside " + HOME + " (" + ", ".join(strays)
+                     + "): a section title takes `TEXT_HEADING`")
+    elif len(homes) != 1:
+        wrong.append("`TEXT_GROUP` is named " + str(len(homes)) + " times, and the submenu is one arm")
+
+    # AND THE ONE HOME IS THE ARM THAT DRAWS A SUBMENU. Counting alone would be
+    # answered by the token having moved somewhere else in the same file.
+    arm = must(scope(code_of(without_tests((shell / HOME).read_text())), r"if e\.is_group"),
+               "the leader row's `e.is_group` arm")
+    if "TEXT_GROUP" not in arm:
+        wrong.append("the `e.is_group` arm of " + HOME + " no longer names `TEXT_GROUP`")
+
+    # -- TWO: EVERY HEADING BUILDER NAMES `TEXT_HEADING` -----------------------
+    #
+    # THE CENSUS IS THE NAME, and not a list typed here: a builder called
+    # `heading`, `headed`, `heading_said`, `heading_of`, `title` or `drawer` says
+    # in its own name what it draws, and one written tomorrow will say it too.
+    # The `Row { heading: true }` flag was the other candidate and it is the
+    # WRONG one — it means the cursor skips this row, which a note and a blank
+    # line also do, so it answers a question about the keyboard and not about
+    # the tone.
+    #
+    # A builder is swept only if it NAMES A COLOUR: that is what tells a row
+    # builder from a function that returns a key, and from the test named after
+    # the thing it tests.
+    SAYS_HEADING = re.compile(r"\w*(?:head|title|drawer)\w*", re.I)
+    COLOUR = re.compile(r"tokens::color::([A-Z_]+)")
+
+    # THE TWO THAT ARE NOT SECTION TITLES, named rather than inferred — and each
+    # with the reason RE-MEASURED, so the excuse dies with what it rests on.
+    # `chrome::head` is a WINDOW's first line, the one that teaches its keys, and
+    # it is drawn in the discreet register; `files::header` is the listing's
+    # column-name row, dim with the accent on the column that sorts.
+    EXCUSED = {
+        ("chrome.rs", "fn head"): ("TEXT_SUBTLE_STRONG",),
+        ("files.rs", "fn header"): ("TEXT_DIM", "TEXT_PRIMARY"),
+    }
+
+    found = []
+    for f in SOURCES:
+        code = code_of(without_tests(f.read_text()))
+        for m in re.finditer(r"\n\s*(?:pub )?fn (\w+)\s*[(<]", code):
+            if not SAYS_HEADING.fullmatch(m.group(1)):
+                continue
+            body = body_of(code, m.group(1))
+            seen = sorted(set(COLOUR.findall(body))) if body else []
+            if seen:
+                found.append((f.name, "fn " + m.group(1), seen))
+        # AND THE CLOSURES, because three views build their heading as one. A
+        # sweep of `fn` alone would pass over them, which is the vacuous pass
+        # with the defect sitting inside it.
+        for m in re.finditer(r"\n\s*let (\w+) = \|", code):
+            if not SAYS_HEADING.fullmatch(m.group(1)):
+                continue
+            body = scope(code, r"let " + m.group(1) + r" = \|")
+            seen = sorted(set(COLOUR.findall(body))) if body else []
+            if seen:
+                found.append((f.name, "closure " + m.group(1), seen))
+
+    floor(len(found), 12, "heading builders that name a colour")
+
+    for name, what, seen in found:
+        if (name, what) in EXCUSED:
+            for mark in EXCUSED[(name, what)]:
+                if mark not in seen:
+                    wrong.append(name + "'s `" + what + "` is excused as not being a section "
+                                 "title, and it no longer names `" + mark + "`")
+            continue
+        if "TEXT_HEADING" not in seen:
+            wrong.append(name + "'s `" + what + "` draws a heading and names " + str(seen))
+            continue
+        others = [c for c in seen if c.startswith("TEXT_") and c != "TEXT_HEADING"]
+        if others:
+            wrong.append(name + "'s `" + what + "` names a second text tone beside "
+                         "`TEXT_HEADING`: " + str(others))
+
+    for w in wrong:
+        print("ERROR: " + w, file=sys.stderr)
+    if wrong:
+        print("", file=sys.stderr)
+        print("       `text.group` is the SUBMENU in the shortcut list and sits on the", file=sys.stderr)
+        print("       text rung with the command beside it; `text.heading` is the title", file=sys.stderr)
+        print("       of a section and keeps the family's solid, a step above the rows", file=sys.stderr)
+        print("       it covers. They were one token until 2026-09-21 and they resolve", file=sys.stderr)
+        print("       to different colours now, so the wrong one is a title the eye", file=sys.stderr)
+        print("       reads as body text. See `text.heading` in `assets/tokens/colors.nix`.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: `TEXT_GROUP` has one home (" + HOME + "'s `e.is_group` arm), and "
+          + str(len(found) - len(EXCUSED)) + " heading builders name `TEXT_HEADING` ("
+          + str(len(EXCUSED)) + " excused)")
+    END
+  '';
+
   labels-of-a-view-are-distinct = mkCheck "labels-of-a-view-are-distinct" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -21422,6 +21566,7 @@ let
       a-refusal-is-not-cut
       labels-of-a-view-are-distinct
       the-cursor-is-a-colour
+      a-heading-is-not-a-submenu
       the-footer-draws-what-the-keyboard-drives
       run-command-handles-every-key
       keys-are-never-text
@@ -21504,6 +21649,7 @@ let
       a-refusal-is-not-cut
       labels-of-a-view-are-distinct
       the-cursor-is-a-colour
+      a-heading-is-not-a-submenu
       the-footer-draws-what-the-keyboard-drives
       run-command-handles-every-key
       keys-are-never-text

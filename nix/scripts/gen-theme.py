@@ -638,7 +638,24 @@ CONTRAST_GATES = (
     # the update window's step glyphs are dim on a banded row and lift nothing.
     ("text.dim", ("surface.selection",), 15, 20),
     ("state.accent", ("surface.selection",), 45, 48),
-    ("text.group", ("surface.selection",), 45, 50),
+    # THE SHORTCUT LIST'S TWO COLOURED INKS HOLD `text.secondary`'S FLOORS,
+    # because since 2026-09-21 they ARE its rung: `text.group` is `group.text`
+    # and `text.key` is `accent.text`, both solved to Lc 48 on the chrome, the
+    # same number the neutral ramp's `text` step is solved to.
+    #
+    # They are the SAME floors and not floors of their own on purpose: three
+    # inks on one line, one rung, one promise. The day the ramp's rung moves,
+    # all three move with it.
+    #
+    # THE OLD NUMBERS DID NOT DIE, THEY MOVED TO `text.heading` — which is the
+    # other half of the same day's split. `text.group` was one name for two
+    # jobs, a submenu in a list and the title of a section, and these floors
+    # (45/50 on the band, 45/55 on the chrome) were always measuring the
+    # title: they are written for `group.solid`, Lc 52 plus the family's
+    # shift. The title kept that step and the gates came with it.
+    ("text.group", ("surface.selection",), 40, 45),
+    ("text.key", ("surface.selection",), 40, 45),
+    ("text.heading", ("surface.selection",), 45, 50),
     ("text.subtle.strong", ("surface.chrome",), 40, 45),
     ("text.subtle.default", ("surface.chrome",), 18, 20),
     ("text.subtle.faint", ("surface.chrome",), 7, 8),
@@ -719,8 +736,10 @@ CONTRAST_GATES = (
     # 38,2-39,5 on the header, which is the rung's own cost and not a theme
     # drifting.
     ("text.once", RAISED_GROUNDS, 36, 36),
-    ("text.group", RAISED_GROUNDS, 45, 45),
-    ("text.group", ("surface.chrome",), 45, 55),
+    ("text.group", (*SIX_GROUNDS, *RAISED_GROUNDS), 43, 45),
+    ("text.key", (*SIX_GROUNDS, *RAISED_GROUNDS), 43, 45),
+    ("text.heading", RAISED_GROUNDS, 45, 45),
+    ("text.heading", ("surface.chrome",), 45, 55),
     ("brain.text", ("brain.background",), 90, 95),
     ("brain.dim", ("brain.background",), 44, 46),
     ("brain.countdown", ("brain.background",), 60, 70),
@@ -791,6 +810,34 @@ DISTANCE_GATES = (
     ("brain.background", "surface.chrome", 0.04, 0.045),
     ("text.primary", "text.secondary", 0.10, 0.12),
     ("text.secondary", "text.dim", 0.10, 0.12),
+    # THE THREE INKS OF A SHORTCUT LIST, each told from the other two — and
+    # this is the gate that had never existed.
+    #
+    # A row of the leader's list is `key : name`: `text.key` for the letter,
+    # then `text.group` if it opens more keys or `text.secondary` if it runs.
+    # Until 2026-09-21 the three were measured only against the GROUNDS they
+    # are drawn on, never against each other, and what that let through was a
+    # submenu at Lc 56 and a key at 52 beside a command at 48 — a list whose
+    # weights say a thing that leads somewhere matters most. The owner read it
+    # on screen.
+    #
+    # They are on ONE rung now, so LIGHTNESS can no longer tell them apart and
+    # the whole distinction is hue and chroma. That is a promise a gate has to
+    # keep, because it is the kind that breaks silently: the seeds each pick
+    # their own `text-chroma` for these two families, and a theme whose grey
+    # ramp drifts towards either hue turns a distinction into three greys with
+    # nothing on screen saying so. At the shared default it ALREADY did —
+    # measured, frost's key sat ΔE 0.020 from its command and owl's key 0.039
+    # from its submenu.
+    #
+    # The floor is 0.06 and the warn 0.07, which is the band the nine sit in
+    # with their tuned chromas (worst measured 0.076, frost's submenu). It is
+    # higher than the 0.03/0.04 the discreet register carries against the ramp
+    # because that pair is told apart by WEIGHT as well; here there is no
+    # weight left to help.
+    ("text.group", "text.secondary", 0.06, 0.07),
+    ("text.key", "text.secondary", 0.06, 0.07),
+    ("text.key", "text.group", 0.06, 0.07),
     ("text.subtle.strong", "text.subtle.default", 0.10, 0.12),
     ("text.subtle.default", "text.subtle.faint", 0.10, 0.11),
     ("text.subtle.strong", "text.secondary", 0.03, 0.04),
