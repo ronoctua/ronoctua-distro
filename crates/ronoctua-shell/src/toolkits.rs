@@ -128,6 +128,72 @@ pub const SIZE_FILE: &str = "ghostty-size.conf";
 /// Where the person's own font descriptions are kept, as they were.
 pub const UNTOUCHED_FILE: &str = "toolkits.json";
 
+/// The two keys a foreign toolkit reads its POLARITY from.
+///
+/// `nix/modules/foreign.nix` writes the same pair into the dconf profile for
+/// the theme the machine was BUILT with; this is the other half, for the theme
+/// the person is wearing now. The two agree on the first boot and this one
+/// owns every change after it — `/etc/xdg` is in the store and read-only, and
+/// dconf is the only writable layer a GTK or a Qt application reads.
+///
+/// `color-scheme` is what a portal-aware application asks for (GTK 4,
+/// Chromium, Electron) and `gtk-theme` is what GTK 3 and `qgnomeplatform`
+/// watch — the second is in the subscription list quoted above [`FONT_KEYS`],
+/// which is how we know a Qt application hears it.
+pub const MODE_KEYS: [&str; 2] = [
+    "/org/gnome/desktop/interface/color-scheme",
+    "/org/gnome/desktop/interface/gtk-theme",
+];
+
+/// What was last written to [`MODE_KEYS`], so a preview does not fork `dconf`
+/// per keystroke.
+///
+/// The theme chooser writes the file on every cursor move — that is what makes
+/// the preview reach the other doors — and every one of those calls here. Two
+/// `dconf` children per arrow key is a frame's worth of work for a value that
+/// did not change. `copy_fragments` keeps the same rule for the same reason.
+static WEARING: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
+/// Dress the foreign applications for this side of the ladder.
+///
+/// Stock themes and not ours: nothing in this system carries a token into a
+/// foreign window (invariant 10's arrangement, one wall over), so what is said
+/// is only which way round to be. `nix/modules/foreign.nix` picks the same two
+/// names, and the day one of them changes both have to.
+pub fn wear(dark: bool) {
+    {
+        let Ok(mut worn) = WEARING.lock() else {
+            return;
+        };
+        if *worn == Some(dark) {
+            return;
+        }
+        *worn = Some(dark);
+    }
+    let values = if dark {
+        ["'prefer-dark'", "'Adwaita-dark'"]
+    } else {
+        ["'prefer-light'", "'Adwaita'"]
+    };
+    // OFF THE FRAME'S THREAD, for `tell_them`'s reason: two children, each
+    // waited for, is two ways to stall a repaint.
+    let started = std::thread::Builder::new()
+        .name("toolkits-mode".to_owned())
+        .spawn(move || {
+            for (key, value) in MODE_KEYS.iter().zip(values) {
+                if dconf(&["write", key, value]).is_none() {
+                    tracing::debug!(
+                        key,
+                        "dconf would not take the mode; this machine does not do dconf"
+                    );
+                }
+            }
+        });
+    if let Err(e) = started {
+        tracing::warn!(error = %e, "no thread to dress the toolkits with");
+    }
+}
+
 /// `dconf`, by path and not by name.
 ///
 /// A user unit's `PATH` is minimal, and a bare name fails far from the cause

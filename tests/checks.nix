@@ -18657,13 +18657,20 @@ let
       ''
         for id in ${lib.escapeShellArgs themes}; do
           d=${themed}/$id
-          for f in niri-border-active niri-border-inactive niri-background niri-black.kdl niri-backdrop.kdl ghostty.conf; do
+          for f in niri-border-active niri-border-inactive niri-background niri-black.kdl niri-backdrop.kdl ghostty.conf mode; do
             test -s "$d/$f" || { echo "ERROR: the theme $id has no fragment $f" >&2; exit 1; }
           done
           for f in niri-border-active niri-border-inactive niri-background; do
             grep -qE '^#[0-9A-F]{6}$' "$d/$f" || {
               echo "ERROR: $id/$f is not a #RRGGBB: $(cat "$d/$f")" >&2; exit 1; }
           done
+          # THE SEVENTH IS NOT A COLOUR, so it is read rather than matched
+          # against a hex: `nix/modules/foreign.nix` branches on this word and
+          # an unknown one would leave GTK and Qt wearing the wrong side.
+          case "$(cat "$d/mode")" in
+            dark|light) ;;
+            *) echo "ERROR: the theme $id says its mode is '$(cat "$d/mode")'" >&2; exit 1 ;;
+          esac
           for f in niri-black.kdl niri-backdrop.kdl; do
             printf 'layout {\n    gaps 0\n}\ninclude "%s"\n' "$d/$f" > "$id.kdl"
             niri validate --config "$id.kdl" 2>errors.txt || {
@@ -18682,7 +18689,7 @@ let
           grep -q '^palette = 15=#' "$d/ghostty.conf" || {
             echo "ERROR: $id/ghostty.conf has no sixteenth ANSI colour" >&2; exit 1; }
         done
-        echo "OK: every theme carries its six fragments, and niri merges each desk under a layout of its own"
+        echo "OK: every theme carries its seven fragments, and niri merges each desk under a layout of its own"
       '';
 
   # GHOSTTY STILL RELOADS ON THE SIGNAL THIS SYSTEM SENDS.
@@ -18870,38 +18877,75 @@ let
       echo "OK: Ghostty's desktop entry opens a process per window, as the config says"
     '';
 
-  # FOREIGN APPLICATIONS ARE TOLD TO BE DARK, in the three places the toolkits
+  # FOREIGN APPLICATIONS WEAR THE THEME'S SIDE, in the three places the toolkits
   # ask: GTK's two `settings.ini`, the settings portal's dconf, Qt's style.
+  #
+  # IT USED TO ASSERT A CONSTANT, and the constant was right nine times out of
+  # nine — every theme was dark, so `prefer-dark` was both the answer and the
+  # only answer. `flashbang` is the tenth and it is light, so what this has to
+  # say is a RELATION: the three places agree with each other, and all three
+  # agree with the `mode` fragment the generator wrote for the declared theme.
+  # Written as a constant it would now be a check that passes while every
+  # foreign window on a light desktop stays black.
+  #
+  # BOTH SIDES ARE BUILT, and that is the half that makes it a relation rather
+  # than a coincidence: the system is evaluated twice, once with a dark theme
+  # and once with the light one, and the answers have to differ.
   foreign-apps-prefer-dark =
     let
-      vm = self.nixosConfigurations.vm.config;
-      gtk3 = pkgs.writeText "gtk3-settings" vm.environment.etc."xdg/gtk-3.0/settings.ini".text;
-      gtk4 = pkgs.writeText "gtk4-settings" vm.environment.etc."xdg/gtk-4.0/settings.ini".text;
-      dark = lib.any (
-        db: (db.settings."org/gnome/desktop/interface".color-scheme or null) == "prefer-dark"
-      ) vm.programs.dconf.profiles.user.databases;
+      dressed =
+        name:
+        let
+          vm =
+            (self.nixosConfigurations.vm.extendModules {
+              modules = [ { ronoctua.theme = name; } ];
+            }).config;
+          scheme = lib.findFirst (v: v != null) null (
+            map (
+              db: db.settings."org/gnome/desktop/interface".color-scheme or null
+            ) vm.programs.dconf.profiles.user.databases
+          );
+        in
+        {
+          inherit name scheme;
+          mode = lib.removeSuffix "\n" (builtins.readFile "${themed}/${name}/mode");
+          gtk3 = pkgs.writeText "gtk3-${name}" vm.environment.etc."xdg/gtk-3.0/settings.ini".text;
+          gtk4 = pkgs.writeText "gtk4-${name}" vm.environment.etc."xdg/gtk-4.0/settings.ini".text;
+          qt = if vm.ronoctua.foreign.qt then toString vm.qt.style else null;
+        };
+      # A dark one and the light one. Named by their MODE and not by their ids,
+      # so the day another light theme is added this picks one of each on its
+      # own rather than going on asserting something about two names.
+      byMode = lib.groupBy (id: lib.removeSuffix "\n" (builtins.readFile "${themed}/${id}/mode")) themes;
+      sides = map dressed [
+        (builtins.head (byMode.dark or [ ]))
+        (builtins.head (byMode.light or [ ]))
+      ];
+      says = one: ''
+        echo "-- ${one.name} (${one.mode})"
+        for f in ${one.gtk3} ${one.gtk4}; do
+          test "$(grep -c '^\[Settings\]$' "$f")" -eq 1 || {
+            echo "ERROR: $f has not exactly one [Settings] header" >&2; exit 1; }
+          grep -q "^gtk-application-prefer-dark-theme=${if one.mode == "dark" then "1" else "0"}$" "$f" || {
+            echo "ERROR: $f does not wear ${one.mode}" >&2; grep -n 'prefer-dark' "$f" >&2; exit 1; }
+        done
+        test "${toString one.scheme}" = "${
+          if one.mode == "dark" then "prefer-dark" else "prefer-light"
+        }" || {
+          echo "ERROR: dconf answers ${toString one.scheme} to the portal for a ${one.mode} theme" >&2; exit 1; }
+        ${lib.optionalString (one.qt != null) ''
+          test "${one.qt}" = "${if one.mode == "dark" then "adwaita-dark" else "adwaita"}" || {
+            echo "ERROR: Qt's style is ${one.qt} for a ${one.mode} theme" >&2; exit 1; }
+        ''}
+      '';
     in
     mkCheck "foreign-apps-prefer-dark" [ pkgs.gnugrep ] ''
-      for f in ${gtk3} ${gtk4}; do
-        grep -q '^gtk-application-prefer-dark-theme=1$' "$f" || {
-          echo "ERROR: $f does not prefer dark" >&2; exit 1; }
-        test "$(grep -c '^\[Settings\]$' "$f")" -eq 1 || {
-          echo "ERROR: $f has not exactly one [Settings] header" >&2; exit 1; }
-      done
-      test "${lib.boolToString dark}" = true || {
-        echo "ERROR: dconf does not answer prefer-dark to the settings portal" >&2; exit 1; }
-      ${
-        if vm.ronoctua.foreign.qt then
-          ''
-            test "${toString vm.qt.style}" = adwaita-dark || {
-              echo "ERROR: Qt's style is ${toString vm.qt.style}, not adwaita-dark" >&2; exit 1; }
-            echo "OK: GTK, the portal and Qt all prefer dark"
-          ''
-        else
-          ''
-            echo "OK: GTK and the portal prefer dark; Qt is off on this profile"
-          ''
-      }
+      ${lib.optionalString (byMode.dark or [ ] == [ ] || byMode.light or [ ] == [ ]) ''
+        echo "ERROR: this check needs one theme of each mode to compare; the fragments name only one side." >&2
+        exit 1
+      ''}
+      ${lib.concatStringsSep "\n" (map says sides)}
+      echo "OK: GTK, the portal and Qt wear the declared theme's own side — measured on one of each"
     '';
 
   # ===================================================================

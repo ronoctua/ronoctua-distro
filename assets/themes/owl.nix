@@ -17,6 +17,12 @@
 # What a seed is NOT: a lightness or a colour. Those come out of the ladder in
 # `gen-theme.py`, which is the same for every theme.
 {
+  # WHICH WAY THE LADDER CLIMBS. Dark: the ground is the darkest thing and
+  # every rung walks toward white. See `MODES` in `nix/scripts/gen-theme.py`.
+  mode = "dark";
+  # A dark ladder asks for the Lc it wants and gets it; see `lift`.
+  lift = 0;
+
   # The content ground: OLED black, the pixel switched off. And the footer's
   # grey, from which every other grey climbs.
   ground = 0.0;

@@ -29,6 +29,12 @@
 #
 # Same seed schema as `owl.nix`.
 {
+  # WHICH WAY THE LADDER CLIMBS. Dark: the ground is the darkest thing and
+  # every rung walks toward white. See `MODES` in `nix/scripts/gen-theme.py`.
+  mode = "dark";
+  # A dark ladder asks for the Lc it wants and gets it; see `lift`.
+  lift = 0;
+
   ground = 0.0;
   # LOWER THAN THE FIRST THREE THEMES (0.182), and this is the whole of
   # "predominantly black": every paint step climbs from the chrome, so

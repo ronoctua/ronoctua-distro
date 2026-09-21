@@ -58,6 +58,10 @@ pub const FILE: &str = "theme.json";
 /// The variable naming the generator's output, where the fragments are.
 pub const FRAGMENTS_ENV: &str = "RONOCTUA_THEMES";
 
+/// The fragment that says which way round a theme is — `dark` or `light`.
+/// Written by `nix/scripts/gen-theme.py`; read by [`dress_foreign_apps`].
+pub const MODE_FRAGMENT: &str = "mode";
+
 /// What the compositor paints where no window is — the option `LEADER s t`
 /// offers in its second column. Two answers, by name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -325,6 +329,7 @@ fn persist_in(dir: &Path, root: Option<&Path>, choice: Choice) -> std::io::Resul
     ronoctua_xdg::write_atomically(dir, FILE, text.as_bytes())?;
     if let Some(root) = root {
         copy_fragments(root, choice, dir, &fragments(choice.backdrop));
+        dress_foreign_apps(root, choice);
     }
     Ok(())
 }
@@ -401,6 +406,7 @@ fn put_back_in(dir: &Path, root: Option<&Path>, committed: Choice) {
     if matches!(read_choice(&dir.join(FILE)), Ok(Some(_))) {
         if let Some(root) = root {
             copy_fragments(root, committed, dir, &fragments(committed.backdrop));
+            dress_foreign_apps(root, committed);
         }
     } else {
         remove_fragments(dir);
@@ -440,6 +446,35 @@ fn copy_fragments(root: &Path, choice: Choice, dir: &Path, which: &[(&str, &str)
             Err(e) => {
                 tracing::warn!(fragment = %source.display(), error = %e, "could not read the fragment");
             }
+        }
+    }
+}
+
+/// THE SEVENTH FRAGMENT, and it is not a colour.
+///
+/// A palette cannot be asked which side of the ladder it is on — every gate in
+/// the generator measures a MAGNITUDE — so the generator writes the answer
+/// down, one word, beside the six colour fragments. This is what reads it.
+///
+/// It is not copied into the configuration directory like the other six: niri
+/// and Ghostty learn a theme by being given a file, and a toolkit learns one
+/// through dconf. Nothing would ever read the copy.
+fn dress_foreign_apps(root: &Path, choice: Choice) {
+    let source = root.join(choice.theme.id()).join(MODE_FRAGMENT);
+    match std::fs::read_to_string(&source) {
+        Ok(word) => match word.trim() {
+            "dark" => crate::toolkits::wear(true),
+            "light" => crate::toolkits::wear(false),
+            other => tracing::warn!(
+                mode = other,
+                "the theme's mode fragment says something this shell does not know"
+            ),
+        },
+        // A shell built before the generator wrote this, or a store path that
+        // is not there: the toolkits keep what the build gave them, which is
+        // the mode of the theme the machine was declared with.
+        Err(e) => {
+            tracing::debug!(fragment = %source.display(), error = %e, "no mode fragment; the toolkits keep what they had")
         }
     }
 }

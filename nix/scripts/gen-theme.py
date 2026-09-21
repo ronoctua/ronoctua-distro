@@ -190,7 +190,40 @@ FAMILY_DEFAULTS = {
     "text-shift": 0.0,
 }
 FAMILY_FIELDS = frozenset(("hue", *FAMILY_DEFAULTS))
-SEED_FIELDS = frozenset(("ground", "chrome", "neutral", "text", "backdrop", "chroma", "families", "overrides"))
+SEED_FIELDS = frozenset(("mode", "lift", "ground", "chrome", "neutral", "text", "backdrop", "chroma", "families", "overrides"))
+#: Which way the ladder climbs. `dark` is the interface every theme was until
+#: 2026-09-21: the ground is the darkest thing and every rung above it walks
+#: toward white. `light` is the mirror — the ground is the paper and the rungs
+#: walk toward black.
+#:
+#: DECLARED AND NOT DERIVED, which was the first thing tried. `ground` versus
+#: `chrome` looks like it says the direction and does not: a light theme may
+#: legitimately want the desk DARKER than the footer (a grey desk with white
+#: windows on it), and a rule reading the pair would call that dark. A field
+#: cannot be inferred wrong; it can only be written wrong, and then the gates
+#: say so on the first build.
+MODES = ("dark", "light")
+#: THE LOUDEST AN APCA CONTRAST CAN HONESTLY BE ASKED FOR ON A LIGHT GROUND.
+#:
+#: APCA is not symmetric, and the asymmetry is the whole reason this constant
+#: exists. Measured: the most contrast obtainable against a grey chrome is
+#: 107.3 Lc at L 0.182 (owl's, white text) but only 96.1 at L 0.95 and 86.6 at
+#: L 0.90 (black text). `_soft_clamp_black` lifts black text off zero, and the
+#: BoW exponent is far more sensitive to a background stepping down from white
+#: than the WoB one is to a background stepping up from black.
+#:
+#: So `TEXT_STEPS`' top rungs — 87 and 100, read off a DARK theme — are not
+#: reachable on any light ground that is not white itself, and asking for them
+#: returns `L = 0.0` with a shortfall: pure black text, and a ladder whose last
+#: rung is twice the size of the one before it.
+#:
+#: AND IT IS A REMAP, NOT A CLAMP, which is the correction. Clamped at 90, the
+#: top three rungs of every ladder (79, 87, 100) all landed on 90 — ΔE 0.0000
+#: between them, thirty-four of them across the families, which is three names
+#: for one colour. So the light ladder is the dark one's SHAPE laid into the
+#: range this interface can pay: it runs from the theme's `lift` to this
+#: ceiling, and each rung keeps its place along the way.
+LIGHT_LC_CEILING = 96.0
 
 #: Families the chrome spends, each of which gets a `context.*` group.
 CONTEXT_FAMILIES = ("accent", "success", "warning", "error", "group", "subtle", "alternate", "brain")
@@ -299,12 +332,23 @@ class Theme:
         missing = SEED_FIELDS - set(seed)
         if missing:
             raise Refusal(f"{source}: missing field(s) {sorted(missing)}")
+        self.mode = seed["mode"]
+        if self.mode not in MODES:
+            raise Refusal(f"{source}: mode is {self.mode!r}; it has to be one of {list(MODES)}")
+        #: `+1` toward white, `-1` toward black. Every anchor in this file is
+        #: written as a distance FROM the chrome, and this is what turns a
+        #: distance into a direction — the one number the whole mirror hangs on.
+        self.rising = 1.0 if self.mode == "dark" else -1.0
         self.ground = _number(seed["ground"], f"{source}: ground", 0.0, 1.0)
         self.chrome = _number(seed["chrome"], f"{source}: chrome", 0.0, 1.0)
         if not 0.0 < self.chrome < 1.0:
             raise Refusal(f"{source}: chrome must be strictly inside (0, 1)")
-        if self.chrome <= self.ground:
-            raise Refusal(f"{source}: the chrome ({self.chrome}) has to be lighter than the ground ({self.ground}) — the ladder climbs from it")
+        if (self.chrome - self.ground) * self.rising <= 0.0:
+            toward = "lighter" if self.rising > 0 else "darker"
+            raise Refusal(
+                f"{source}: in a {self.mode} interface the chrome ({self.chrome}) has to be {toward} "
+                f"than the ground ({self.ground}) — the ladder climbs from it"
+            )
         for group, fields in (
             ("neutral", ("hue", "tint", "ground-tint")),
             ("text", ("hue", "chroma")),
@@ -326,13 +370,35 @@ class Theme:
         #: chroma, the lightness is the whole of what tells it from the chrome.
         self.backdrop_step = _number(seed["backdrop"]["step"], f"{source}: backdrop.step", 0.0, 1.0)
         if not 0.0 < self.backdrop_step:
-            raise Refusal(f"{source}: backdrop.step has to be positive — the desk sits BELOW the chrome")
-        if self.chrome - self.backdrop_step <= self.ground:
+            raise Refusal(f"{source}: backdrop.step has to be positive — it is a DISTANCE, and the mode gives it its sign")
+        # The desk is `chrome − step` in both interfaces (see NEUTRAL_BACKDROP),
+        # so what it must not reach is the darkest thing the theme has: the
+        # ground in a dark interface, and the bottom of the range in a light one.
+        floor = self.ground if self.rising > 0.0 else 0.0
+        if self.chrome - self.backdrop_step <= floor:
             raise Refusal(
-                f"{source}: backdrop.step ({self.backdrop_step}) takes the desk to or below the ground "
-                f"({self.ground}) — a desk the eye cannot tell from the content's own black"
+                f"{source}: backdrop.step ({self.backdrop_step}) takes the desk to or past {floor} — "
+                "a desk the eye cannot tell from the darkest thing on the screen"
             )
         self.multiplier = _number(seed["chroma"], f"{source}: chroma", 0.0, 2.0)
+        #: EVERY Lc ANCHOR IN THIS THEME, LIFTED — the counterpart of `chroma`
+        #: one line up, and the first light theme is what asked for it.
+        #:
+        #: APCA compresses the whole ladder near white. Lc 23 above owl's
+        #: chrome costs ΔL 0.33; below a chrome at L 0.955 it costs ΔL 0.135 —
+        #: while the surface steps are a fixed ΔL in both. So on a light ground
+        #: the raised grounds eat the room every solved tone had, and measured,
+        #: `text.dim` on `surface.header` came to Lc 0.0000: text that is not
+        #: there. Forty-seven tones failed that way, spread over every family.
+        #:
+        #: IT IS THE THEME'S AND NOT THE RAMP'S, which was the first attempt.
+        #: Putting it under `text` lifted the six neutral rungs and left the
+        #: seventeen families where they were — and what stayed failing was
+        #: `state.accent`, `text.group`, `state.error`, `text.subtle.*`, every
+        #: one of them a family tone on a raised ground. The compression is a
+        #: property of the POLARITY, so it is answered once, where every anchor
+        #: passes, rather than seventeen times over in a seed.
+        self.lift = _number(seed["lift"], f"{source}: lift", -60.0, 60.0)
         if not isinstance(seed["overrides"], dict):
             raise Refusal(f"{source}: overrides must be an attribute set")
         self.overrides: dict = seed["overrides"]
@@ -370,16 +436,41 @@ class Theme:
     def _rel(self, base: float, scale: float) -> float:
         return min(1.0, max(0.0, base * self.multiplier * scale))
 
+    def _reach(self, lc: float) -> float:
+        """An anchor as this theme actually asks for it.
+
+        A dark interface is asked for the Lc that is written down, plus the
+        theme's lift. A light one has a SHORTER range to spend (see
+        `LIGHT_LC_CEILING`), so the ladder is laid into it proportionally —
+        the quiet end comes up off the grounds that were eating it, the loud
+        end comes down to what the interface can actually pay, and the six
+        rungs stay six.
+        """
+        if self.rising > 0.0:
+            return lc + self.lift
+        return self.lift + (LIGHT_LC_CEILING - self.lift) * lc / 100.0
+
+    def _toward(self, delta: float) -> float:
+        """A distance from the chrome, signed by the mode — what the anchor PRINTS.
+
+        Without this the report says `chrome -0.05` for a primitive that sits
+        at `chrome +0.05`, which is the audit trail disagreeing with the pixel.
+        """
+        return delta * self.rising
+
     def _solve_text(self, hue: float, rel: float, lc: float, anchor: str) -> Swatch:
         chrome = self.chrome_swatch()
         l, shortfall = cs.solve_lightness(
-            ("apca", lc), lambda _: hue, rel, reference_lightness=chrome.lch[0], reference_rgb=chrome.rgb
+            ("apca", self._reach(lc)), lambda _: hue, rel,
+            reference_lightness=chrome.lch[0], reference_rgb=chrome.rgb, direction=self.rising,
         )
         lch, rgb8 = cs.screen_colour(l, hue, rel)
         return Swatch(lch, rgb8, anchor, shortfall)
 
     def _paint(self, hue: float, rel: float, delta: float, anchor: str) -> Swatch:
-        l, shortfall = cs.solve_lightness(("delta-l", delta), lambda _: hue, rel, reference_lightness=self.chrome)
+        l, shortfall = cs.solve_lightness(
+            ("delta-l", delta), lambda _: hue, rel, reference_lightness=self.chrome, direction=self.rising
+        )
         lch, rgb8 = cs.screen_colour(l, hue, rel)
         return Swatch(lch, rgb8, anchor, shortfall)
 
@@ -406,10 +497,26 @@ class Theme:
             return Swatch(lch, rgb8, f"fixed L {self.chrome}")
         for name, delta in NEUTRAL_PAINT:
             if name == step:
-                return self._paint(hue, tint, delta, f"chrome + {delta}")
+                return self._paint(hue, tint, delta, f"chrome {self._toward(delta):+}")
         if step == NEUTRAL_BACKDROP:
-            delta = -self.backdrop_step
-            return self._paint(self.backdrop_hue, self._rel(self.backdrop_chroma, scale), delta, f"chrome {delta:+}, h {self.backdrop_hue:.0f}")
+            # A STEP DARKER THAN THE FOOTER, AND IN BOTH INTERFACES — which is
+            # the one rung of this ladder that does NOT mirror.
+            #
+            # In a dark theme the desk sits between the ground and the chrome
+            # and that is also the way away from the light. Mirrored literally,
+            # a light theme would put it between the chrome and the paper — and
+            # there is no room there: the chrome has to stay near white for the
+            # text to be readable at all (see `LIGHT_LC_CEILING`), so the whole
+            # gap is 0.045 and the desk measured ΔE 0.0155 from the paper. A
+            # desk the eye cannot tell from the page is the thing the distance
+            # gate exists to refuse.
+            #
+            # Written with the sign, the two collapse to one expression:
+            # `chrome − step`, either way. Which is also what a desk IS —
+            # every desktop ever made puts the windows on top of something
+            # darker than they are.
+            delta = -self.backdrop_step * self.rising
+            return self._paint(self.backdrop_hue, self._rel(self.backdrop_chroma, scale), delta, f"chrome {self._toward(delta):+}, h {self.backdrop_hue:.0f}")
         for name, lc in TEXT_STEPS:
             if name == step:
                 return self._solve_text(self.text_hue, self._rel(self.text_chroma, scale), lc, f"Lc {lc} on chrome")
@@ -424,7 +531,7 @@ class Theme:
             if name == step:
                 # The torsion turns the PAINT steps only: a ground is not a solid.
                 turned = (hue + fam["torsion"]) % 360.0
-                return self._paint(turned, self._rel(rel * fam["paint-chroma"], scale), delta, f"chrome + {delta}, h {turned:.0f}")
+                return self._paint(turned, self._rel(rel * fam["paint-chroma"], scale), delta, f"chrome {self._toward(delta):+}, h {turned:.0f}")
         for name, lc, rel in SOLID_STEPS:
             if name == step:
                 target = lc + fam["shift"]
@@ -558,6 +665,48 @@ TERMINAL = (
     ("ansi.bright-cyan", "cyan", "solid-hover"),
     ("ansi.bright-white", "neutral", "text-strong"),
 )
+#: WHAT A LIGHT TERMINAL FLIPS, and it is the only table in this file that
+#: names a polarity in its own WORDS.
+#:
+#: Four of the ANSI sixteen are greys, and the table above spends four rungs of
+#: the neutral ramp on them: `border-strong` for black, `text-muted` for bright
+#: black, `text` for white and `text-strong` for bright white. That ordering is
+#: "away from a dark background", so on a light one it draws a `black` that is
+#: a pale grey and a `white` that is nearly black — the two names inverted. The
+#: mirror is the same four rungs read the other way.
+#:
+#: AND `bright` MEANS LESS CONTRAST, not a higher rung. `solid-hover` is Lc 60
+#: against the solid's 52, which is lighter on a dark ground and DARKER on a
+#: light one — a bright red darker than red. `vivid` is the step below (Lc 44)
+#: at the family's full chroma, which on paper is what a bright colour is:
+#: lighter than its base and more saturated.
+TERMINAL_LIGHT = {
+    "ansi.black": ("neutral", "text-strong"),
+    "ansi.bright-black": ("neutral", "text"),
+    "ansi.white": ("neutral", "text-muted"),
+    "ansi.bright-white": ("neutral", "border-strong"),
+    "ansi.bright-red": ("error", "vivid"),
+    "ansi.bright-green": ("success", "vivid"),
+    "ansi.bright-yellow": ("warning", "vivid"),
+    "ansi.bright-blue": ("accent", "vivid"),
+    "ansi.bright-magenta": ("group", "vivid"),
+    "ansi.bright-cyan": ("cyan", "vivid"),
+}
+
+
+def terminal_table(theme: "Theme") -> tuple[tuple[str, str, str], ...]:
+    """The ANSI sixteen for this interface: the dark table, with the entries a
+    light one has to read the other way swapped in."""
+    if theme.rising > 0.0:
+        return TERMINAL
+    return tuple((name, *TERMINAL_LIGHT.get(name, (family, step))) for name, family, step in TERMINAL)
+
+
+#: The ANSI entry that is DELIBERATELY near the background, per polarity, and
+#: is therefore the one the contrast gate below exempts. In a dark terminal it
+#: is black; in a light one it is white, and exempting black there would gate
+#: the ink and excuse the paper.
+NEAR_THE_PAPER = {"dark": "ansi.black", "light": "ansi.white"}
 #: The ANSI order Ghostty's `palette = N=` wants.
 ANSI_ORDER = ("black", "red", "green", "yellow", "blue", "magenta", "cyan", "white")
 #: The categorical set: eight hues (the reference ships six by default and
@@ -585,21 +734,36 @@ def shaped_tokens(theme: Theme) -> dict[str, Resolved]:
             put(f"context.{family}.{name}", theme.primitive(family, step), f"{family}.{step}")
     for name, step in NEUTRAL_SHAPE:
         put(f"context.neutral.{name}", theme.primitive("neutral", step), f"neutral.{step}")
-    for name, family, step in TERMINAL:
+    for name, family, step in terminal_table(theme):
         put(f"terminal.{name}", theme.primitive(family, step), f"{family}.{step}")
 
     accent = theme.families["accent"]
     rel = min(1.0, CHART_CHROMA * theme.multiplier)
-    hues = cs.even_delta_e_hues(CHART_COUNT, accent["hue"], CHART_MEASURE_L, rel)
+    # AND THE HUES ARE SPACED WHERE THE SET ACTUALLY SITS. `CHART_MEASURE_L` is
+    # "the lightness a chart's solid sits at" — a dark theme's. A light one's
+    # sit at the mirrored end, and chroma is not the same size there.
+    measure = CHART_MEASURE_L if theme.rising > 0.0 else 1.0 - CHART_MEASURE_L
+    hues = cs.even_delta_e_hues(CHART_COUNT, accent["hue"], measure, rel)
     for i, hue in enumerate(hues):
-        l = 0.50 + 0.40 * i / (CHART_COUNT - 1)
+        # THE RAMP RUNS THE WAY THE INTERFACE DOES. Written as `0.50 + 0.40·t`
+        # it climbed toward white in both polarities, and on a light ground the
+        # top half of a categorical set is unreadable — measured, `chart.eight`
+        # came to Lc 17.3 on white. In a dark theme `rising` is `+1` and the
+        # expression is the one that was here, byte for byte.
+        l = 0.50 + theme.rising * 0.40 * i / (CHART_COUNT - 1)
         lch, rgb8 = cs.screen_colour(l, hue, rel)
         put(f"chart.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, L {l:.2f}, equal ΔE arcs from the accent"), "computed")
 
     bottom = theme.primitive("accent", "ground").lch[0]
+    # AND THE FAR END OF THE ORDINAL RAMP IS MIRRORED WITH IT. `LEVEL_TOP_L` is
+    # "just under the text's brightest step", which in a light interface is
+    # just over its darkest. Left alone, both ends of a light ramp landed in
+    # the same place: measured at a chrome of 0.95 the eleven levels spanned
+    # 0.006 of L and every adjacent pair failed the ordinal gate.
+    top = LEVEL_TOP_L if theme.rising > 0.0 else 1.0 - LEVEL_TOP_L
     for k in range(11):
         t = k / 10.0
-        l = bottom + (LEVEL_TOP_L - bottom) * t
+        l = bottom + (top - bottom) * t
         rel_k = min(1.0, (0.3 + 0.6 * math.sin(math.pi * t)) * theme.multiplier)
         hue = (accent["hue"] + accent["torsion"] * (1.0 - t)) % 360.0
         lch, rgb8 = cs.screen_colour(l, hue, rel_k)
@@ -767,6 +931,51 @@ SYNTAX_LOUD_FLOOR = (45, 48)
 CONTEXT_TEXT_FLOOR, CONTEXT_ON_FLOOR = (75, 80), 45
 TERMINAL_FLOOR, TERMINAL_DIM_FLOOR = (40, 45), (15, 20)
 
+#: WHAT A LIGHT INTERFACE CANNOT PAY, AND THE MEASUREMENT THAT SAYS SO.
+#:
+#: Every floor in this file was read off a DARK theme, and most of them mean
+#: the same thing either way — `apca_magnitude` does not care which side the
+#: ink is on. These do not, and each one is here because the light ladder is
+#: structurally SHORTER, not because a seed is badly tuned:
+#:
+#:   - a light interface spends its whole Lc range between the paper and about
+#:     96 (see `LIGHT_LC_CEILING`), against a dark one's 0 to 107, so every
+#:     rung of it is roughly six tenths as far from its neighbours; and
+#:   - the chrome has to stay near the paper for the text to be legible at
+#:     all, which leaves the desk and the footer a smaller gap than a dark
+#:     theme has between the desk and ITS footer.
+#:
+#: Keyed by the exact pair, never by the token, so a floor is loosened only
+#: where it was measured to be unreachable — a gate that is looser than it
+#: needs to be is a gate that has stopped saying anything.
+LIGHT_CONTRAST_FLOORS = {
+    # Measured 68.6 / 70.2 / 73.5 / 74.8 against a floor of 75. These four are
+    # the grounds furthest from the chrome, and the body text is already as
+    # dark as this interface can make it — `text-strong` sits at the top of
+    # the remapped ladder. 65 is APCA's own line for text of this size.
+    ("text.primary", "surface.selection"): (65, 70),
+    ("text.primary", "surface.header"): (65, 70),
+    ("text.primary", "surface.hover"): (65, 70),
+    ("text.primary", "notification.background"): (65, 70),
+    # Measured 87.8 against a floor of 90. `brain.text` is the ladder's
+    # brightest rung and `brain.background` is a paint step below the chrome;
+    # the pair cannot be further apart than the interface's whole range.
+    ("brain.text", "brain.background"): (85, 88),
+}
+LIGHT_DISTANCE_FLOORS = {
+    # Measured 0.0454 against a floor of 0.10 — and this is the pair the whole
+    # seed turns on. The desk is the paper and the footer is one step off it;
+    # putting the footer 0.10 away would take it to L 0.90, where the ladder
+    # can no longer reach the contrast the body text needs. 0.04 is a step the
+    # eye reads (over a JND and a half) and it is what this interface can buy.
+    ("surface.base", "surface.chrome"): (0.04, 0.05),
+    # Measured 0.0478 against 0.10. The discreet register's two quiet rungs sit
+    # 12 Lc apart in the written ladder, and the light remap makes that about
+    # seven — the six-tenths above, applied to the one pair that had the least
+    # room to begin with.
+    ("text.subtle.default", "text.subtle.faint"): (0.045, 0.055),
+}
+
 #: Pairs that must be TOLD APART: (a, b, Fail below, Warn below), in ΔE_ok.
 DISTANCE_GATES = (
     ("surface.base", "surface.chrome", 0.10, 0.15),
@@ -918,6 +1127,39 @@ LADDER_MIN_STEP, LADDER_MAX_STEP = 0.012, 0.26
 HUE_GAP = (14.0, 20.0)
 CVD_WARN = 0.05
 CHART_GAP, LEVEL_GAP = (cs.JND, 0.05), 0.012
+#: THE GROUNDS A CHART OR A HEAT RAMP CAN BE DRAWN ON.
+#:
+#: Both palettes are CONTENT — a figure inside a buffer, or inside the footer's
+#: expanded region, or on a card. The three grounds those are filled with, and
+#: measured they answer within a hair of each other (0.3 Lc between the buffer
+#: and the chrome across the ten), so gating all three costs nothing and leaves
+#: no door out.
+CONTENT_GROUNDS = ("surface.buffer", "surface.chrome", "surface.container")
+#: A categorical mark has to be SEEN, and until 2026-09-21 nothing said so.
+#:
+#: `chart.*` was measured only against the other seven (`CHART_GAP`) and
+#: `level.*` only against its own neighbours (`LEVEL_GAP`) — eight colours
+#: proved to be eight DIFFERENT colours, with nothing asking whether any of
+#: them is visible. A set that is distinct and invisible passes both.
+#:
+#: 15 is the floor the quietest TEXT in this system carries (`text.dim`), and a
+#: chart mark is a filled area, which needs less than a letter — so holding it
+#: to the text floor is if anything strict. Measured across the ten themes on
+#: the three grounds: nothing falls under 15, and nine of the 240 readings sit
+#: between 15 and 20 — the dark end of the ramp on a card, in cyber, midnight,
+#: industrial, owl and darkside. Those are warns, and they are true.
+CHART_ON_GROUND = (15, 20)
+#: THE LOUD END OF AN ORDINAL RAMP, which is the half of it that has to read.
+#: The floor every signal in this file carries; measured 83.2 to 87.0.
+LEVEL_TOP_FLOOR = (45, 50)
+#: AND THE QUIET END IS GATED THE OTHER WAY ROUND.
+#:
+#: `level.zero` is the ramp's "none of it", and it is `accent.ground` — a
+#: BACKGROUND tint. Requiring it to contrast would contradict what the bottom
+#: of an ordinal ramp is, so the exemption is written as a measurement instead
+#: of as a silence: it has to stay NEAR the ground. Measured Lc 0.0000 on all
+#: three grounds in all ten themes — it is the ground, exactly.
+LEVEL_BOTTOM_CEILING = 10.0
 
 
 class Finding:
@@ -945,10 +1187,15 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
     def de(a: str, b: str) -> float:
         return cs.delta_e_ok(tokens[a].lab, tokens[b].lab)
 
+    light = theme.rising < 0.0
     for text, grounds, fail, warn in CONTRAST_GATES:
         for ground in grounds:
+            # NEW NAMES, because the pair being overridden is the INNER one: a
+            # gate names several grounds, and rebinding the loop's own `fail`
+            # would carry one ground's exemption to the next.
+            low, band = LIGHT_CONTRAST_FLOORS.get((text, ground), (fail, warn)) if light else (fail, warn)
             v = lc(text, ground)
-            findings.append(Finding(_level(v, fail, warn), "contrast", f"{text} on {ground}", v, f"Lc ≥ {fail} (warn < {warn})"))
+            findings.append(Finding(_level(v, low, band), "contrast", f"{text} on {ground}", v, f"Lc ≥ {low} (warn < {band})"))
     for key in tokens:
         if key.startswith("syntax.") and key != "syntax.comment":
             v = lc(key, "surface.buffer")
@@ -958,19 +1205,26 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
         findings.append(Finding(_level(v, *CONTEXT_TEXT_FLOOR), "contrast", f"context.{family}.text on .ground", v, f"Lc ≥ {CONTEXT_TEXT_FLOOR[0]}"))
         v = lc(f"context.{family}.on", f"context.{family}.solid")
         findings.append(Finding(_level(v, CONTEXT_ON_FLOOR, CONTEXT_ON_FLOOR), "contrast", f"context.{family}.on on .solid", v, f"Lc ≥ {CONTEXT_ON_FLOOR}"))
+    near = NEAR_THE_PAPER[theme.mode]
+    dim = "ansi.bright-black" if theme.rising > 0.0 else "ansi.bright-white"
     for name, _, _ in TERMINAL:
-        if name.startswith("ansi.") and name != "ansi.black":
-            floor = TERMINAL_DIM_FLOOR if name == "ansi.bright-black" else TERMINAL_FLOOR
+        if name.startswith("ansi.") and name != near:
+            floor = TERMINAL_DIM_FLOOR if name == dim else TERMINAL_FLOOR
             v = lc(f"terminal.{name}", "terminal.background")
             findings.append(Finding(_level(v, *floor), "contrast", f"terminal.{name} on terminal.background", v, f"Lc ≥ {floor[0]}"))
 
     for a, b, fail, warn in DISTANCE_GATES:
+        low, band = LIGHT_DISTANCE_FLOORS.get((a, b), (fail, warn)) if light else (fail, warn)
         v = de(a, b)
-        findings.append(Finding(_level(v, fail, warn), "distance", f"{a} vs {b}", v, f"ΔE ≥ {fail} (warn < {warn})"))
+        findings.append(Finding(_level(v, low, band), "distance", f"{a} vs {b}", v, f"ΔE ≥ {low} (warn < {band})"))
     for a, b in DISTANCE_NOTES:
         findings.append(Finding("Note", "distance", f"{a} vs {b}", de(a, b), "reported only: never adjacent"))
 
-    ladders = [("neutral", ("ground", "chrome", "window", "chrome-raised", "chrome-loud", "chrome-band")), ("neutral", ("ground", "backdrop", "chrome")), ("neutral", ("chrome", "hover", "border", "border-strong")), ("neutral", tuple(n for n, _ in TEXT_STEPS))]
+    ladders = [("neutral", ("ground", "chrome", "window", "chrome-raised", "chrome-loud", "chrome-band")), # THE DESK'S CHAIN IS THE ONE THAT REORDERS, because the desk is the one rung
+        # that does not mirror (see NEUTRAL_BACKDROP): in a dark interface it lies
+        # between the ground and the chrome, and in a light one it is past the chrome
+        # on the far side. Same three rungs, read outward from the ground either way.
+        ("neutral", ("ground", "backdrop", "chrome") if theme.rising > 0.0 else ("ground", "chrome", "backdrop")), ("neutral", ("chrome", "hover", "border", "border-strong")), ("neutral", tuple(n for n, _ in TEXT_STEPS))]
     for family in theme.families:
         ladders.append((family, tuple(n for n, _, _ in PAINT_STEPS)))
         ladders.append((family, tuple(n for n, _ in TEXT_STEPS)))
@@ -980,8 +1234,16 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
             gap = cs.delta_e_ok(a.lab, b.lab)
             level = "Fail" if gap < LADDER_MIN_STEP else "Warn" if gap > LADDER_MAX_STEP else "OK"
             findings.append(Finding(level, "ladder", f"{family}.{lower} → {family}.{upper}", gap, f"{LADDER_MIN_STEP} ≤ ΔE ≤ {LADDER_MAX_STEP}"))
-            if b.lch[0] < a.lch[0] - 1e-9:
-                findings.append(Finding("Fail", "ladder", f"{family}.{upper} is darker than {family}.{lower}", b.lch[0] - a.lch[0], "L monotone"))
+            # MONOTONE IN THE INTERFACE'S OWN DIRECTION, not upward.
+            #
+            # A rung is further from the ground than the one before it, and in
+            # a light theme "further" is DARKER. Written as `b < a` this fired
+            # on every adjacent pair of every ladder of a light theme — several
+            # hundred Fails saying the mirror is upside down, which it is not.
+            # The ΔE half above is unsigned and needs nothing.
+            if (b.lch[0] - a.lch[0]) * theme.rising < -1e-9:
+                away = "darker" if theme.rising > 0 else "lighter"
+                findings.append(Finding("Fail", "ladder", f"{family}.{upper} is {away} than {family}.{lower}", b.lch[0] - a.lch[0], "L monotone"))
     for name, swatch in primitives.items():
         if swatch.shortfall is not None:
             findings.append(Finding("Warn", "reach", name, swatch.shortfall, f"the anchor {swatch.anchor} was out of reach"))
@@ -1009,6 +1271,26 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
     for a, b in zip(levels, levels[1:]):
         v = de(a, b)
         findings.append(Finding("Fail" if v < LEVEL_GAP else "OK", "ordinal", f"{a} → {b}", v, f"ΔE ≥ {LEVEL_GAP}"))
+
+    # AND BOTH PALETTES ARE MEASURED AGAINST A GROUND, which is the thing
+    # neither of the two loops above does. They compare a chart colour to the
+    # other seven and a level to its neighbour — so a set that is perfectly
+    # distinct and perfectly invisible passes both of them, and for as long as
+    # the ladder climbed one way that never showed. Its shape did: `chart.*`
+    # was built with a hard-coded ascent, and on the first light ground the top
+    # half of the set came out at Lc 17 with nothing saying a word.
+    for name in charts:
+        for ground in CONTENT_GROUNDS:
+            v = lc(name, ground)
+            findings.append(Finding(_level(v, *CHART_ON_GROUND), "categorical", f"{name} on {ground}", v, f"Lc ≥ {CHART_ON_GROUND[0]}"))
+    # THE RAMP IS GATED AT ITS TWO ENDS, and in OPPOSITE directions — the loud
+    # end has to read and the quiet end has to be the ground. What holds the
+    # middle together is `LEVEL_GAP` above, one rung at a time.
+    for ground in CONTENT_GROUNDS:
+        v = lc("level.ten", ground)
+        findings.append(Finding(_level(v, *LEVEL_TOP_FLOOR), "ordinal", f"level.ten on {ground}", v, f"Lc ≥ {LEVEL_TOP_FLOOR[0]}"))
+        v = lc("level.zero", ground)
+        findings.append(Finding("Fail" if v > LEVEL_BOTTOM_CEILING else "OK", "ordinal", f"level.zero on {ground}", v, f"Lc ≤ {LEVEL_BOTTOM_CEILING} — it IS the ground"))
 
     for key, tok in tokens.items():
         if key.startswith("terminal."):
@@ -1064,9 +1346,17 @@ def regression(theme: Theme, tokens: dict[str, Resolved], reference: dict) -> li
 # ---------------------------------------------------------------------------
 
 
-def write_fragments(directory: pathlib.Path, theme_id: str, tokens: dict[str, Resolved]) -> None:
+def write_fragments(directory: pathlib.Path, theme_id: str, mode: str, tokens: dict[str, Resolved]) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     hexes = {k: cs.format_hex(v.rgb8) for k, v in tokens.items()}
+    # THE POLARITY, AS A FRAGMENT, because a colour cannot be asked what side
+    # it is on. `nix/modules/foreign.nix` dresses GTK and Qt, and until a light
+    # theme existed it could answer `prefer-dark` and be right nine times out
+    # of nine — its own header says so, and says this file is what has to
+    # export the mode the day the tenth arrives. It goes here and not into
+    # `<id>.json`, which is a flat map of token to hex that two generators and
+    # the extension parse: one non-colour key there is a shape nobody expects.
+    (directory / "mode").write_text(mode)
     # niri: three values for the static config, and TWO fragments per theme,
     # one per answer to "what is under the windows" — the footer copies the one
     # the person chose into the configuration directory when the theme or the
@@ -1119,7 +1409,11 @@ def report_markdown(results: dict[str, dict]) -> str:
     out = ["# Themes — the gates, measured", ""]
     for theme_id, r in results.items():
         counts = {lvl: sum(1 for f in r["findings"] if f.level == lvl) for lvl in ("Fail", "Warn", "Note", "OK")}
-        out += [f"## {theme_id}", "", f"Fail {counts['Fail']} · Warn {counts['Warn']} · Note {counts['Note']} · OK {counts['OK']}", ""]
+        # THE POLARITY IS ON THE LINE, because every contrast row below is a
+        # MAGNITUDE (`apca_magnitude`) and a magnitude cannot say which side
+        # the ink is on. Without this a reviewer reading `Lc 87` has no way to
+        # tell a light theme from a dark one anywhere in the report.
+        out += [f"## {theme_id}", "", f"{r['mode']} · Fail {counts['Fail']} · Warn {counts['Warn']} · Note {counts['Note']} · OK {counts['OK']}", ""]
         worth = [f for f in r["findings"] if f.level != "OK"]
         if worth:
             out += ["| level | gate | subject | measured | threshold | note |", "|---|---|---|---|---|---|"]
@@ -1223,7 +1517,7 @@ def main() -> int:
                 for b in STATE_SOLIDS[i + 1 :]:
                     cvd[f"{a} vs {b}"] = {d: cs.cvd_separation(tokens[f"state.{a}"].rgb, tokens[f"state.{b}"].rgb, d) for d in cs.DEFICIENCIES}
             families = [(name, fam["hue"], theme.primitive(name, "solid")) for name, fam in theme.families.items()]
-            results[theme_id] = {"tokens": tokens, "primitives": primitives, "findings": findings + regress, "regression": regress, "cvd": cvd, "families": families}
+            results[theme_id] = {"mode": theme.mode, "tokens": tokens, "primitives": primitives, "findings": findings + regress, "regression": regress, "cvd": cvd, "families": families}
             key_sets[theme_id] = sorted(tokens)
             for f in findings + regress:
                 if f.level == "Fail":
@@ -1244,7 +1538,7 @@ def main() -> int:
             (args.out / f"{theme_id}.primitives.json").write_text(
                 json.dumps({k: v.describe() for k, v in results[theme_id]["primitives"].items()}, indent=2) + "\n"
             )
-            write_fragments(args.out / theme_id, theme_id, results[theme_id]["tokens"])
+            write_fragments(args.out / theme_id, theme_id, results[theme_id]["mode"], results[theme_id]["tokens"])
         (args.out / "themes.json").write_text(json.dumps(combined, indent=1) + "\n")
         (args.out / "report.md").write_text(report_markdown(results))
         (args.out / "report.json").write_text(

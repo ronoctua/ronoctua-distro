@@ -43,6 +43,12 @@
     "owl"
     "darkside"
     "evilside"
+    # THE FIRST LIGHT ONE, and it goes at the END on purpose. `themes-negative`
+    # spoils `builtins.head` and wants the build to fail on the HUE gate; the
+    # installer and the rescue export no `RONOCTUA_THEME` and so run at index
+    # zero; and the screenshot battery photographs the theme after the default.
+    # Three things read a position here, and none of them wants this one first.
+    "flashbang"
   ];
 
   # What a machine shows before anyone has chosen. Must be one of `order`;

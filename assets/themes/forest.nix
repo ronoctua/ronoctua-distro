@@ -16,6 +16,12 @@
 # Same seed schema as `owl.nix`; the ladder that turns these into a palette is
 # `gen-theme.py`'s and is the same for every theme.
 {
+  # WHICH WAY THE LADDER CLIMBS. Dark: the ground is the darkest thing and
+  # every rung walks toward white. See `MODES` in `nix/scripts/gen-theme.py`.
+  mode = "dark";
+  # A dark ladder asks for the Lc it wants and gets it; see `lift`.
+  lift = 0;
+
   ground = 0.0;
   # LOWER THAN OWL'S 0.182, at the owner's word — every surface in this theme
   # climbs from here, so this is the one number that makes the greens darker
