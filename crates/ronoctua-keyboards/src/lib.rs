@@ -4,7 +4,7 @@
 //!
 //! The compositor has ONE `input { keyboard { … } }` for every keyboard
 //! attached to the machine: one layout, one repeat rate, no way to name a
-//! device. That is niri's shape, not an oversight, and invariant 3 keeps it
+//! device. That is the compositor's shape, not an oversight, and invariant 3 keeps it
 //! out of reach. So "this keyboard, not that one" exists in exactly one place
 //! on a Linux desktop: `keyd`, which sits below the compositor and matches
 //! devices by `vendor:product`.

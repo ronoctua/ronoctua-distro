@@ -93,7 +93,7 @@ in
     #
     # Section 7.10 is explicit: "Configure OUT its own tabs, splits and
     # decoration — the compositor already does that job." A Ghostty window
-    # is a foreign buffer; what tiles is Niri (invariant 4).
+    # is a foreign buffer; what tiles is the compositor (invariant 4).
     # Tabs inside it would be a second layout tree competing with the
     # compositor's.
     # -----------------------------------------------------------------

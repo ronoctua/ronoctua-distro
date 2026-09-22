@@ -86,7 +86,8 @@ notif-queue-position = { $shown }/{ $total }
 # que chega à tela. Para uma que nós mesmos levantamos, é o texto padrão e o
 # nome da entrada no gerenciador.
 notif-screenshot-summary = Tela capturada
-notif-screenshot-body = A imagem está na área de transferência e salva no disco.
+notif-screenshot-body = A imagem foi salva no disco.
+notif-screenshot-app = tela
 notif-memory-killed-summary = Fechado para liberar memória
 notif-memory-killed-body = Um aplicativo foi fechado para a máquina não travar.
 
@@ -363,157 +364,138 @@ group-help = ajuda
 help-chords = SEGURANDO A LEADER
 help-emergency = QUANDO A LEADER NÃO RESPONDE
 help-leader-alternate = Abrir a lista de comandos
+## Comandos do compositor — §13, "toda ação do SO tem um comando"
 
-## Compositor actions — §13, "every OS action has a command"
+# São os comandos do compositor, cada um alcançável pelo nome no localizador.
+# A lista é DECLARADA por nós em `assets/compositor-deeds.nix` — não espelhada
+# da ajuda de outro projeto — e o gerador recusa um verbo que o compositor
+# pinado não tem. Uma linha acrescentada lá sem uma frase aqui derruba o
+# build, que é o contrário de aparecer sem tradução no meio da lista.
 
-# This section is LONG on purpose: these are the 141 actions niri exposes, each
-# reachable by name in the command locator. The list of names is
-# GENERATED from the pinned binary (nix/niri-actions.nix); the translations are written
-# here, and the `niri-actions-translated` check rejects an action without a key in both
-# languages. Bumping niri's tag STOPS the build until whatever appeared is
-# translated — which is the opposite of showing up in English in the middle of the list.
+cmd-wm-focus-left = Focar a janela à esquerda
+cmd-wm-focus-right = Focar a janela à direita
+cmd-wm-focus-up = Focar a janela acima
+cmd-wm-focus-down = Focar a janela abaixo
+cmd-wm-focus-beginning = Focar a primeira janela da fita
+cmd-wm-focus-end = Focar a última janela da fita
+cmd-wm-focus-parent = Focar o contêiner em que esta janela está
+cmd-wm-focus-child = Focar dentro do contêiner
+cmd-wm-focus-tiling = Focar as janelas ladrilhadas
+cmd-wm-focus-floating = Focar as janelas flutuantes
+cmd-wm-focus-either = Alternar o foco entre ladrilhada e flutuante
+cmd-wm-focus-screen-left = Focar a tela à esquerda
+cmd-wm-focus-screen-right = Focar a tela à direita
+cmd-wm-focus-screen-up = Focar a tela acima
+cmd-wm-focus-screen-down = Focar a tela abaixo
 
-cmd-niri-quit = Encerrar o niri
-cmd-niri-power-off-monitors = Desligar os monitores (DPMS)
-cmd-niri-power-on-monitors = Ligar os monitores (DPMS)
-cmd-niri-spawn = Executar um programa
-cmd-niri-spawn-sh = Executar um comando pelo shell
-cmd-niri-do-screen-transition = Fazer uma transição de tela
-cmd-niri-screenshot = Abrir a captura de tela
-cmd-niri-screenshot-screen = Capturar a tela em foco
-cmd-niri-screenshot-window = Capturar a janela em foco
-cmd-niri-toggle-keyboard-shortcuts-inhibit = Alternar o inibidor de atalhos da superfície em foco
-cmd-niri-close-window = Fechar a janela em foco
-cmd-niri-fullscreen-window = Alternar tela cheia na janela em foco
-cmd-niri-toggle-windowed-fullscreen = Alternar tela cheia em janela
-cmd-niri-focus-window = Focar uma janela pelo id
-cmd-niri-focus-window-in-column = Focar uma janela da coluna pelo índice
-cmd-niri-focus-window-previous = Focar a janela anterior
-cmd-niri-focus-column-left = Focar a coluna à esquerda
-cmd-niri-focus-column-right = Focar a coluna à direita
-cmd-niri-focus-column-first = Focar a primeira coluna
-cmd-niri-focus-column-last = Focar a última coluna
-cmd-niri-focus-column-right-or-first = Focar a coluna à direita, voltando à primeira no fim
-cmd-niri-focus-column-left-or-last = Focar a coluna à esquerda, indo à última no começo
-cmd-niri-focus-column = Focar uma coluna pelo índice
-cmd-niri-focus-window-or-monitor-up = Focar a janela ou o monitor acima
-cmd-niri-focus-window-or-monitor-down = Focar a janela ou o monitor abaixo
-cmd-niri-focus-column-or-monitor-left = Focar a coluna ou o monitor à esquerda
-cmd-niri-focus-column-or-monitor-right = Focar a coluna ou o monitor à direita
-cmd-niri-focus-window-down = Focar a janela abaixo
-cmd-niri-focus-window-up = Focar a janela acima
-cmd-niri-focus-window-down-or-column-left = Focar a janela abaixo ou a coluna à esquerda
-cmd-niri-focus-window-down-or-column-right = Focar a janela abaixo ou a coluna à direita
-cmd-niri-focus-window-up-or-column-left = Focar a janela acima ou a coluna à esquerda
-cmd-niri-focus-window-up-or-column-right = Focar a janela acima ou a coluna à direita
-cmd-niri-focus-window-or-workspace-down = Focar a janela ou o espaço abaixo
-cmd-niri-focus-window-or-workspace-up = Focar a janela ou o espaço acima
-cmd-niri-focus-window-top = Focar a janela do topo
-cmd-niri-focus-window-bottom = Focar a janela do fim
-cmd-niri-focus-window-down-or-top = Focar a janela abaixo ou a do topo
-cmd-niri-focus-window-up-or-bottom = Focar a janela acima ou a do fim
-cmd-niri-move-column-left = Mover a coluna para a esquerda
-cmd-niri-move-column-right = Mover a coluna para a direita
-cmd-niri-move-column-to-first = Mover a coluna para o começo do espaço
-cmd-niri-move-column-to-last = Mover a coluna para o fim do espaço
-cmd-niri-move-column-left-or-to-monitor-left = Mover a coluna à esquerda ou para o monitor da esquerda
-cmd-niri-move-column-right-or-to-monitor-right = Mover a coluna à direita ou para o monitor da direita
-cmd-niri-move-column-to-index = Mover a coluna para um índice do espaço
-cmd-niri-move-window-down = Mover a janela para baixo na coluna
-cmd-niri-move-window-up = Mover a janela para cima na coluna
-cmd-niri-move-window-down-or-to-workspace-down = Mover a janela para baixo na coluna ou para o espaço abaixo
-cmd-niri-move-window-up-or-to-workspace-up = Mover a janela para cima na coluna ou para o espaço acima
-cmd-niri-consume-or-expel-window-left = Absorver ou expelir a janela à esquerda
-cmd-niri-consume-or-expel-window-right = Absorver ou expelir a janela à direita
-cmd-niri-consume-window-into-column = Absorver a janela da direita para dentro da coluna
-cmd-niri-expel-window-from-column = Expelir a janela de baixo da coluna
-cmd-niri-swap-window-right = Trocar a janela com a da direita
-cmd-niri-swap-window-left = Trocar a janela com a da esquerda
-cmd-niri-toggle-column-tabbed-display = Alternar a coluna entre normal e abas
-cmd-niri-set-column-display = Definir o modo de exibição da coluna
-cmd-niri-center-column = Centralizar a coluna na tela
-cmd-niri-center-window = Centralizar a janela na tela
-cmd-niri-center-visible-columns = Centralizar todas as colunas visíveis
-cmd-niri-focus-workspace-down = Focar o espaço abaixo
-cmd-niri-focus-workspace-up = Focar o espaço acima
-cmd-niri-focus-workspace = Focar um espaço pelo índice ou nome
-cmd-niri-focus-workspace-previous = Focar o espaço anterior
-cmd-niri-move-window-to-workspace-down = Levar a janela para o espaço abaixo
-cmd-niri-move-window-to-workspace-up = Levar a janela para o espaço acima
-cmd-niri-move-window-to-workspace = Levar a janela para um espaço pelo índice ou nome
-cmd-niri-move-column-to-workspace-down = Levar a coluna para o espaço abaixo
-cmd-niri-move-column-to-workspace-up = Levar a coluna para o espaço acima
-cmd-niri-move-column-to-workspace = Levar a coluna para um espaço pelo índice ou nome
-cmd-niri-move-workspace-down = Mover o espaço para baixo
-cmd-niri-move-workspace-up = Mover o espaço para cima
-cmd-niri-move-workspace-to-index = Mover o espaço para um índice do monitor
-cmd-niri-set-workspace-name = Dar nome ao espaço em foco
-cmd-niri-unset-workspace-name = Tirar o nome do espaço em foco
-cmd-niri-focus-monitor-left = Focar o monitor à esquerda
-cmd-niri-focus-monitor-right = Focar o monitor à direita
-cmd-niri-focus-monitor-down = Focar o monitor abaixo
-cmd-niri-focus-monitor-up = Focar o monitor acima
-cmd-niri-focus-monitor-previous = Focar o monitor anterior
-cmd-niri-focus-monitor-next = Focar o próximo monitor
-cmd-niri-focus-monitor = Focar um monitor pelo nome
-cmd-niri-move-window-to-monitor-left = Levar a janela para o monitor da esquerda
-cmd-niri-move-window-to-monitor-right = Levar a janela para o monitor da direita
-cmd-niri-move-window-to-monitor-down = Levar a janela para o monitor de baixo
-cmd-niri-move-window-to-monitor-up = Levar a janela para o monitor de cima
-cmd-niri-move-window-to-monitor-previous = Levar a janela para o monitor anterior
-cmd-niri-move-window-to-monitor-next = Levar a janela para o próximo monitor
-cmd-niri-move-window-to-monitor = Levar a janela para um monitor
-cmd-niri-move-column-to-monitor-left = Levar a coluna para o monitor da esquerda
-cmd-niri-move-column-to-monitor-right = Levar a coluna para o monitor da direita
-cmd-niri-move-column-to-monitor-down = Levar a coluna para o monitor de baixo
-cmd-niri-move-column-to-monitor-up = Levar a coluna para o monitor de cima
-cmd-niri-move-column-to-monitor-previous = Levar a coluna para o monitor anterior
-cmd-niri-move-column-to-monitor-next = Levar a coluna para o próximo monitor
-cmd-niri-move-column-to-monitor = Levar a coluna para um monitor
-cmd-niri-set-window-width = Mudar a largura da janela
-cmd-niri-set-window-height = Mudar a altura da janela
-cmd-niri-reset-window-height = Voltar a altura da janela para automática
-cmd-niri-switch-preset-column-width = Alternar entre as larguras de coluna predefinidas
-cmd-niri-switch-preset-column-width-back = Alternar as larguras de coluna, de trás para a frente
-cmd-niri-switch-preset-window-width = Alternar entre as larguras de janela predefinidas
-cmd-niri-switch-preset-window-width-back = Alternar as larguras de janela, de trás para a frente
-cmd-niri-switch-preset-window-height = Alternar entre as alturas de janela predefinidas
-cmd-niri-switch-preset-window-height-back = Alternar as alturas de janela, de trás para a frente
-cmd-niri-maximize-column = Alternar a coluna maximizada
-cmd-niri-maximize-window-to-edges = Alternar a janela maximizada até as bordas
-cmd-niri-set-column-width = Mudar a largura da coluna
-cmd-niri-expand-column-to-available-width = Expandir a coluna pelo espaço livre
-cmd-niri-switch-layout = Alternar entre os layouts de teclado
-cmd-niri-show-hotkey-overlay = Mostrar a lista de atalhos do compositor
-cmd-niri-move-workspace-to-monitor-left = Levar o espaço para o monitor da esquerda
-cmd-niri-move-workspace-to-monitor-right = Levar o espaço para o monitor da direita
-cmd-niri-move-workspace-to-monitor-down = Levar o espaço para o monitor de baixo
-cmd-niri-move-workspace-to-monitor-up = Levar o espaço para o monitor de cima
-cmd-niri-move-workspace-to-monitor-previous = Levar o espaço para o monitor anterior
-cmd-niri-move-workspace-to-monitor-next = Levar o espaço para o próximo monitor
-cmd-niri-move-workspace-to-monitor = Levar o espaço para um monitor
-cmd-niri-toggle-debug-tint = Alternar o tingimento de depuração nas janelas
-cmd-niri-debug-toggle-opaque-regions = Alternar a visualização das regiões opacas
-cmd-niri-debug-toggle-damage = Alternar a visualização do dano de saída
-cmd-niri-toggle-window-floating = Alternar a janela entre flutuante e mosaico
-cmd-niri-move-window-to-floating = Levar a janela para o flutuante
-cmd-niri-move-window-to-tiling = Levar a janela para o mosaico
-cmd-niri-focus-floating = Focar a camada flutuante
-cmd-niri-focus-tiling = Focar o mosaico
-cmd-niri-switch-focus-between-floating-and-tiling = Alternar o foco entre flutuante e mosaico
-cmd-niri-move-floating-window = Mover a janela flutuante na tela
-cmd-niri-toggle-window-rule-opacity = Alternar a opacidade da janela em foco
-cmd-niri-set-dynamic-cast-window = Transmitir a janela em foco
-cmd-niri-set-dynamic-cast-monitor = Transmitir o monitor em foco
-cmd-niri-clear-dynamic-cast-target = Parar de transmitir qualquer coisa
-cmd-niri-stop-cast = Parar uma transmissão do PipeWire
-cmd-niri-toggle-overview = Alternar o panorama dos espaços
-cmd-niri-open-overview = Abrir o panorama dos espaços
-cmd-niri-close-overview = Fechar o panorama dos espaços
-cmd-niri-toggle-window-urgent = Alternar a marca de urgência da janela
-cmd-niri-set-window-urgent = Marcar a janela como urgente
-cmd-niri-unset-window-urgent = Tirar a marca de urgência da janela
-cmd-niri-load-config-file = Recarregar o arquivo de configuração
+cmd-wm-move-left = Mover a janela para a esquerda
+cmd-wm-move-right = Mover a janela para a direita
+cmd-wm-move-up = Mover a janela para cima
+cmd-wm-move-down = Mover a janela para baixo
+cmd-wm-move-beginning = Levar a janela ao começo da fita
+cmd-wm-move-end = Levar a janela ao fim da fita
+cmd-wm-move-out-left = Tirar a janela da coluna, para a esquerda
+cmd-wm-move-out-right = Tirar a janela da coluna, para a direita
+cmd-wm-move-out-up = Mover a janela para cima dentro da coluna
+cmd-wm-move-out-down = Mover a janela para baixo dentro da coluna
+cmd-wm-move-screen-left = Levar a janela para a tela da esquerda
+cmd-wm-move-screen-right = Levar a janela para a tela da direita
+
+cmd-wm-close = Fechar a janela em foco
+cmd-wm-close-others = Fechar todas as janelas menos esta
+cmd-wm-full-screen = Encher a tela com esta janela
+cmd-wm-full-layout = Encher o layout com esta janela, mantendo-a ladrilhada
+cmd-wm-full-application = Deixar o aplicativo decidir o que é tela cheia
+cmd-wm-full-global = Encher todas as telas com esta janela
+cmd-wm-float = Fazer esta janela flutuar, ou devolvê-la ao layout
+cmd-wm-stick = Manter esta janela em todas as áreas de trabalho
+cmd-wm-calm = Parar de pedir atenção para esta janela
+
+cmd-wm-columns = Janela nova abre numa coluna própria
+cmd-wm-rows = Janela nova abre embaixo desta
+cmd-wm-transpose = Virar o layout de lado
+cmd-wm-width-next = Alargar a coluna para o tamanho seguinte
+cmd-wm-width-previous = Estreitar a coluna para o tamanho anterior
+cmd-wm-height-next = Deixar a janela mais alta
+cmd-wm-height-previous = Deixar a janela mais baixa
+cmd-wm-width-set = Definir a largura da coluna, em fração da tela
+cmd-wm-height-set = Definir a altura da janela, em fração da tela
+cmd-wm-fit-columns = Repartir a tela entre as colunas
+cmd-wm-fit-rows = Repartir a coluna entre as janelas dela
+cmd-wm-fit-visible = Ajustar as colunas que estão na tela
+cmd-wm-maximise = Dar a tela inteira a esta coluna
+
+cmd-wm-align-left = Segurar esta coluna na borda esquerda
+cmd-wm-align-right = Segurar esta coluna na borda direita
+cmd-wm-align-centre = Segurar esta coluna no meio
+cmd-wm-align-top = Segurar esta janela no topo
+cmd-wm-align-bottom = Segurar esta janela embaixo
+cmd-wm-align-middle = Segurar esta janela no meio da coluna
+cmd-wm-align-auto = Deixar o layout posicionar esta coluna de novo
+cmd-wm-pin-beginning = Fixar esta coluna à esquerda da tela
+cmd-wm-pin-end = Fixar esta coluna à direita da tela
+
+cmd-wm-select = Marcar esta janela, ou desmarcá-la
+cmd-wm-select-none = Limpar todas as marcas
+cmd-wm-select-workspace = Marcar todas as janelas desta área de trabalho
+cmd-wm-select-move = Trazer para cá as janelas marcadas
+cmd-wm-select-to-trail = Transformar as janelas marcadas numa trilha
+
+cmd-wm-trailmark = Pôr esta janela na trilha, ou tirá-la
+cmd-wm-trailmark-next = Ir à próxima janela da trilha
+cmd-wm-trailmark-previous = Ir à janela anterior da trilha
+cmd-wm-trailmark-jump = Pular para uma janela da trilha por letra
+cmd-wm-trail-new = Começar uma trilha nova
+cmd-wm-trail-next = Usar a próxima trilha
+cmd-wm-trail-previous = Usar a trilha anterior
+cmd-wm-trail-clear = Esvaziar esta trilha
+cmd-wm-trail-delete = Apagar esta trilha
+
+cmd-wm-jump = Pular para uma janela digitando a letra dela
+cmd-wm-jump-tiling = Pular para uma janela ladrilhada por letra
+cmd-wm-jump-everywhere = Pular para qualquer janela por letra
+cmd-wm-jump-container = Pular para um contêiner por letra
+cmd-wm-jump-workspaces = Pular para uma área de trabalho por letra
+cmd-wm-jump-floating = Pular para uma janela flutuante por letra
+
+cmd-wm-overview = Ver a área de trabalho inteira de uma vez
+cmd-wm-overview-all = Ver todas as áreas de trabalho de uma vez
+cmd-wm-zoom-out = Afastar um pouco a área de trabalho
+cmd-wm-zoom-in = Aproximar um pouco a área de trabalho
+cmd-wm-zoom-reset = Devolver a área de trabalho ao tamanho dela
+cmd-wm-content-smaller = Encolher o que está dentro desta janela
+cmd-wm-content-bigger = Aumentar o que está dentro desta janela
+cmd-wm-content-reset = Devolver o conteúdo desta janela ao tamanho dele
+
+cmd-wm-ring-previous = Voltar pelas janelas em que você acabou de estar
+cmd-wm-ring-next = Avançar pelas janelas em que você acabou de estar
+cmd-wm-ring-first = Ir à janela mais antiga do anel
+cmd-wm-ring-last = Ir à janela mais recente do anel
+cmd-wm-ring-set = Pôr esta janela no fim do anel
+cmd-wm-ring-remove = Tirar esta janela do anel
+
+cmd-wm-workspace-next = Ir à próxima área de trabalho desta tela
+cmd-wm-workspace-previous = Ir à área de trabalho anterior desta tela
+cmd-wm-workspace-next-screen = Ir à próxima área de trabalho, em qualquer tela
+cmd-wm-workspace-previous-screen = Ir à área de trabalho anterior, em qualquer tela
+cmd-wm-workspace-back = Voltar à área de trabalho de onde você veio
+cmd-wm-workspace-go = Ir a uma área de trabalho pelo número
+cmd-wm-workspace-move = Levar esta janela a uma área de trabalho e ir junto
+cmd-wm-workspace-move-next = Levar esta janela à próxima área de trabalho
+cmd-wm-workspace-move-previous = Levar esta janela à área de trabalho anterior
+cmd-wm-workspace-swap = Trocar esta área de trabalho com outra pelo número
+cmd-wm-workspace-split = Mostrar duas áreas de trabalho lado a lado
+cmd-wm-workspace-split-reset = Voltar a mostrar uma área de trabalho
+cmd-wm-workspace-to-screen-left = Levar esta área de trabalho para a tela da esquerda
+cmd-wm-workspace-to-screen-right = Levar esta área de trabalho para a tela da direita
+
+cmd-wm-scratchpad-put = Guardar esta janela na gaveta
+cmd-wm-scratchpad-show = Tirar uma janela da gaveta
+cmd-wm-scratchpad-jump = Pular para uma janela da gaveta por letra
+
+cmd-wm-screens-off = Desligar todas as telas
+cmd-wm-screens-on = Ligar todas as telas de novo
+cmd-wm-keep-shortcuts = Dar os atalhos a esta janela, ou tomá-los de volta
 group-workspace-move = levar a janela
 group-icons = ícones
 glyphs-search = Digite para buscar um glifo das Nerd Fonts
@@ -1304,7 +1286,7 @@ rescue-section-system = Sistema
 ## Rescue console — the actions
 
 rescue-restart-footer = Reiniciar o rodapé
-rescue-restart-niri = Reiniciar o compositor
+rescue-restart-compositor = Reiniciar o compositor
 rescue-restart-session = Reiniciar a sessão gráfica
 rescue-restart-audio = Reiniciar o áudio
 rescue-restore-keyboard = Restaurar o teclado
@@ -3365,7 +3347,6 @@ display-no-watch = esta porta não vê o arquivo mudar
 display-no-thread = As telas não podem ser lidas nesta máquina; nada aqui vai mudar.
 display-no-compositor = Não há compositor para perguntar, então não há o que mostrar.
 display-went-away = Essa tela sumiu.
-display-config-failed = O compositor não conseguiu ler a configuração dele. O que está na tela agora não volta depois de reiniciar.
 
 display-settings-failed = O `display.json` não parseia, então nada do que foi escolhido aparece aqui. O arquivo está intacto — conserte ou remova.
 display-one-screen-only = Há uma tela só, então não há o que arrumar.

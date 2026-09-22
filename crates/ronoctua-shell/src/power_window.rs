@@ -430,7 +430,7 @@ impl PowerWindow {
     ///
     /// The keys are an ARGUMENT and never text in the `.ftl`: a sentence that
     /// carried them went stale the day either moved, and the word "LEADER" is
-    /// nobody's key — `nix/modules/niri.nix` says `SUPER` and `nix/dev.nix`
+    /// nobody's key — `nix/modules/scroll.nix` says `SUPER` and `nix/dev.nix`
     /// says `CTRL ALT SPC`. `crate::leader()` is the one place that knows.
     ///
     /// `leader()` and not `leader_chord()`: these are sequences typed after

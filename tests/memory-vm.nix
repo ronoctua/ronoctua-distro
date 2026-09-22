@@ -27,14 +27,14 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
   bufferMemory,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-memory-panel";
@@ -44,7 +44,7 @@ pkgs.testers.runNixOSTest {
     virtualisation.cores = 2;
 
     environment.systemPackages = [
-      niri
+      scroll
       ronoctua-shell
       pkgs.imagemagick
       pkgs.tesseract
@@ -65,8 +65,8 @@ pkgs.testers.runNixOSTest {
     machine.start()
     machine.wait_for_unit("multi-user.target")
     start_xvfb()
-    start_niri("niri", "${niri}")
-    sock = socket_of("niri")
+    start_compositor("compositor", "${scroll}")
+    sock = socket_of("compositor")
 
     with subtest("the panel comes up, and the host starts sampling"):
         machine.succeed(
@@ -80,7 +80,7 @@ pkgs.testers.runNixOSTest {
         )
         try:
             machine.wait_until_succeeds(
-                "journalctl -u panel --no-pager | grep -q 'component rendered'",
+                "journalctl -u panel --no-pager | grep 'component rendered' > /dev/null",
                 timeout=60,
             )
         except Exception:
@@ -92,21 +92,18 @@ pkgs.testers.runNixOSTest {
             assert bad not in journal, f"the panel reported: {bad}"
 
     with subtest("the COMPOSITOR sees a window, not a region of ours"):
-        machine.wait_until_succeeds(
-            f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'windows: 1'",
-            timeout=30,
-        )
+        await_windows(sock, 1, timeout=30)
 
     with subtest("the machine spoke, and what it said is on screen"):
         # The clock ticks once a second; the first survey does not wait for it.
         machine.wait_until_succeeds(
-            "journalctl -u panel --no-pager | grep -q 'buffer drawn on the xdg_toplevel'",
+            "journalctl -u panel --no-pager | grep 'buffer drawn on the xdg_toplevel' > /dev/null",
             timeout=60,
         )
 
-        w, h, x, y = niri_geometry()
+        w, h, x, y = compositor_geometry()
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
-        # THE WHOLE WINDOW, by the geometry niri reports — cropping by an
+        # THE WHOLE WINDOW, by the geometry the compositor reports — cropping by an
         # assumed position would be assuming layout, which invariant 4 forbids.
         machine.succeed(
             f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "

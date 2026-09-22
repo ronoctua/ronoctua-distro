@@ -42,6 +42,28 @@ pub const fn budget(columns: u16, column: u16, wanted: u16) -> u16 {
     if wanted < left { wanted } else { left }
 }
 
+/// Is there room BELOW `line` for a run `tall` cells high?
+///
+/// # The axis every browser forgot
+///
+/// [`room`] and [`budget`] are the horizontal pair, and the three icon
+/// browsers all use them: each one asks whether the magnifier fits ACROSS
+/// before drawing it. None of them asked whether it fits DOWN — and the
+/// magnifier is a `large` glyph, which occupies its whole box and not the one
+/// row it names. In a window shorter than that box the run begins on row 0
+/// and reaches a row the window does not have; `Pen` refuses it and
+/// `Screen::check` reproves the frame, but nothing stopped the buffer ASKING.
+/// On a screen it is the defect the refusal names in as many words: the host
+/// draws it and the rasteriser throws it away, silently.
+///
+/// `tall` is a count of cells and not a `Scale`, because a component never
+/// names one — the WIT's `Scale` and the arithmetic's are two enums of one
+/// name, which is the reason each browser carries its own `cells(…)`.
+#[must_use]
+pub const fn stands(lines: u16, line: u16, tall: u16) -> bool {
+    lines.saturating_sub(line) >= tall
+}
+
 /// How many cells of HEIGHT a run of this scale occupies.
 ///
 /// `max(1)`: a host that reported zero would put every row of the frame on one

@@ -73,8 +73,8 @@ pub struct Notification {
     pub app: String,
     /// The `IconName` requested, if any. It enters the icon chain.
     ///
-    /// It may also be a `file://` URL: that is what the compositor puts there
-    /// for a screenshot, and it is where an action gets its file.
+    /// It may also be a `file://` URL: that is what WE put there for a capture,
+    /// and it is where an action gets its file.
     pub icon: Option<String>,
     /// A short title.
     pub summary: String,
@@ -1264,13 +1264,13 @@ mod tests {
 
     #[test]
     fn the_file_comes_out_of_the_icon_url() {
-        // It is how the compositor hands over a screenshot's path, and it is
-        // what the `edit` action opens.
+        // It is how a capture hands over its path, and it is what the `edit`
+        // action opens.
         let x = Notification::fresh_one(
             1,
-            "niri".into(),
+            "screen".into(),
             Some("file:///home/x/Pictures/Screenshot.png".into()),
-            "Screenshot captured".into(),
+            "Screen captured".into(),
             String::new(),
             Urgency::Normal,
         );

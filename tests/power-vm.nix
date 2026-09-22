@@ -24,14 +24,14 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
   ronoctua,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-power";
@@ -58,7 +58,7 @@ pkgs.testers.runNixOSTest {
       users.users.${config.ronoctua.user}.linger = true;
 
       environment.systemPackages = [
-        niri
+        scroll
         ronoctua-shell
         pkgs.imagemagick
         pkgs.tesseract
@@ -130,7 +130,7 @@ pkgs.testers.runNixOSTest {
           # what to test — `|| true` made every attempt succeed at once.
           machine.wait_until_succeeds(
               "systemctl --machine=${nodes.machine.ronoctua.user}@ --user is-system-running --wait "
-              "| grep -qE 'running|degraded'",
+              "| grep -E 'running|degraded' > /dev/null",
               timeout=60,
           )
           # A `sleep` inhibitor from the USER'S manager: the same place the footer
@@ -167,19 +167,19 @@ pkgs.testers.runNixOSTest {
               "printf '%s' '{\"tasks\":{\"system-update\":{\"enabled\":false}}}' > /root/.config/ronoctua/brain.json"
           )
           start_xvfb()
-          start_niri("niri", "${niri}")
-          sock = socket_of("niri")
+          start_compositor("compositor", "${scroll}")
+          sock = socket_of("compositor")
           machine.succeed(
               "systemd-run --unit=footer ${xvfb.env} "
               "--setenv=WAYLAND_DISPLAY=wayland-1 "
               "--setenv=HOME=/root "
               "--setenv=RONOCTUA_POWER_PROFILE=performance "
-              f"--setenv=NIRI_SOCKET={sock} "
+              f"--setenv=SCROLLSOCK={sock} "
               "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_power=debug "
               "${ronoctua-shell}/bin/ronoctua-shell"
           )
           machine.wait_until_succeeds(
-              "journalctl -u footer --no-pager | grep -q 'the chosen power profile is not offered here'",
+              "journalctl -u footer --no-pager | grep 'the chosen power profile is not offered here' > /dev/null",
               timeout=60,
           )
           journal = footer_journal()
@@ -195,7 +195,7 @@ pkgs.testers.runNixOSTest {
               i = j.rfind("footer layout resolved")
               return j[i:] if i >= 0 else ""
           machine.wait_until_succeeds(
-              "journalctl -u footer --no-pager | grep -q 'id=\"profile\"'", timeout=60
+              "journalctl -u footer --no-pager | grep 'id=\"profile\"' > /dev/null", timeout=60
           )
           settled = ""
           for _ in range(30):
@@ -212,19 +212,19 @@ pkgs.testers.runNixOSTest {
 
       with subtest("asked for power-saver, the footer applies it and the profile mark appears"):
           machine.succeed("rm -f /run/user/0/ronoctua-*.sock")
-          sock = socket_of("niri")
+          sock = socket_of("compositor")
           machine.succeed(
               "systemd-run --unit=footer-saver ${xvfb.env} "
               "--setenv=WAYLAND_DISPLAY=wayland-1 "
               "--setenv=HOME=/root "
               "--setenv=RONOCTUA_POWER_PROFILE=power-saver "
-              f"--setenv=NIRI_SOCKET={sock} "
+              f"--setenv=SCROLLSOCK={sock} "
               "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_power=debug "
               "${ronoctua-shell}/bin/ronoctua-shell"
           )
           machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = power-saver ]", timeout=60)
           machine.wait_until_succeeds(
-              "journalctl -u footer-saver --no-pager | grep -q 'id=\"profile\"'", timeout=60
+              "journalctl -u footer-saver --no-pager | grep 'id=\"profile\"' > /dev/null", timeout=60
           )
           journal = machine.succeed("journalctl -u footer-saver --no-pager")
           assert "not offered" not in journal, "power-saver is offered; nothing to fall back from"

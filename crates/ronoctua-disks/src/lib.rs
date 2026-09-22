@@ -2,7 +2,7 @@
 //!
 //! # Why a crate of its own
 //!
-//! The same reason `ronoctua-niri` is the only one that speaks `niri-ipc`,
+//! The same reason `ronoctua-scroll` is the only one that speaks the compositor's IPC,
 //! `ronoctua-network` the only one that speaks NetworkManager, `ronoctua-memory`
 //! the only one that reads `/proc` and `ronoctua-files` the only one that
 //! touches the filesystem: **one border, one crate**. When two parts of the

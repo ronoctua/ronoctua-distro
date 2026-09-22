@@ -27,8 +27,9 @@
 //! # The fragments
 //!
 //! Two consumers outside the shell follow the theme through files the
-//! GENERATOR wrote (`nix/themes.nix`, one renderer): niri's border colours as
-//! a `window-rule` its config includes, and Ghostty's palette. On a change the
+//! GENERATOR wrote (`nix/themes.nix`, one renderer): the compositor's border
+//! colours as `client.focused` lines its config includes, and Ghostty's
+//! palette. On a change the
 //! footer COPIES the chosen theme's fragments into the configuration
 //! directory — `$RONOCTUA_THEMES` says where the generator's output is. The
 //! shell renders nothing itself: two renderers of one fragment is how they
@@ -40,8 +41,8 @@
 //! paints where no window is — black, or the theme's own `surface.backdrop`
 //! ([`Backdrop`]). The footer never paints the desk, so it is not a theme: it
 //! is a choice ABOUT the theme, kept in the same file and carried by the same
-//! fragment. The generator writes one niri fragment per answer, each with the
-//! border and a `layout { background-color }`, and which one the footer copies
+//! fragment. The generator writes one compositor fragment per answer, each with
+//! the border and an `output * bg`, and which one the footer copies
 //! IS the answer. A file without the field is on black, which is what every
 //! machine was on before the field existed.
 
@@ -116,12 +117,12 @@ impl Backdrop {
     }
 
     /// The generator's fragment for the compositor with this desk under the
-    /// windows: the theme's border as a `window-rule`, and the desk as a
-    /// `layout { background-color }` that niri merges into its own.
+    /// windows: the theme's border as `client.focused` lines, and the desk as an
+    /// `output * bg` the compositor merges last-wins into its own.
     const fn fragment(self) -> &'static str {
         match self {
-            Self::Black => "niri-black.kdl",
-            Self::Theme => "niri-backdrop.kdl",
+            Self::Black => "scroll-black.conf",
+            Self::Theme => "scroll-backdrop.conf",
         }
     }
 }
@@ -135,8 +136,9 @@ pub struct Choice {
 }
 
 /// The fragments copied on a change: `(name in the theme's directory, name in
-/// the configuration directory)`. niri includes the first with `optional=true`
-/// and Ghostty the second with `?`, so a machine that never chose has neither
+/// the configuration directory)`. The compositor `include`s the first — absent
+/// is not fatal there by construction — and Ghostty the second with `?`, so a
+/// machine that never chose has neither
 /// and is on the default — and [`sync_with_file`] keeps that true, removing
 /// both when there is no file. The first depends on the desk: one generated
 /// file per answer, and copying is choosing. A PREVIEW writes BOTH, because a
@@ -146,7 +148,7 @@ pub struct Choice {
 #[must_use]
 pub const fn fragments(backdrop: Backdrop) -> [(&'static str, &'static str); 2] {
     [
-        (backdrop.fragment(), "niri-theme.kdl"),
+        (backdrop.fragment(), "scroll-theme.conf"),
         ("ghostty.conf", "ghostty-theme.conf"),
     ]
 }
@@ -456,8 +458,9 @@ fn copy_fragments(root: &Path, choice: Choice, dir: &Path, which: &[(&str, &str)
 /// the generator measures a MAGNITUDE — so the generator writes the answer
 /// down, one word, beside the six colour fragments. This is what reads it.
 ///
-/// It is not copied into the configuration directory like the other six: niri
-/// and Ghostty learn a theme by being given a file, and a toolkit learns one
+/// It is not copied into the configuration directory like the other six: the
+/// compositor and Ghostty learn a theme by being given a file, and a toolkit
+/// learns one
 /// through dconf. Nothing would ever read the copy.
 fn dress_foreign_apps(root: &Path, choice: Choice) {
     let source = root.join(choice.theme.id()).join(MODE_FRAGMENT);
@@ -649,7 +652,7 @@ mod tests {
         persist_in(&dir, Some(&root), tried).unwrap();
         assert!(dir.join(FILE).exists(), "the other doors are told nothing");
         assert_eq!(
-            std::fs::read_to_string(dir.join("niri-theme.kdl")).unwrap(),
+            std::fs::read_to_string(dir.join("scroll-theme.conf")).unwrap(),
             "desk theme\n"
         );
         assert_eq!(
@@ -664,7 +667,7 @@ mod tests {
             !dir.join(FILE).exists(),
             "a machine that never chose was given a file by previewing"
         );
-        assert!(!dir.join("niri-theme.kdl").exists());
+        assert!(!dir.join("scroll-theme.conf").exists());
         assert!(!dir.join("ghostty-theme.conf").exists());
 
         // A MACHINE THAT CHOSE. `Esc` puts back what it had, in all three.
@@ -678,7 +681,7 @@ mod tests {
             "the file kept the previewed desk"
         );
         assert_eq!(
-            std::fs::read_to_string(dir.join("niri-theme.kdl")).unwrap(),
+            std::fs::read_to_string(dir.join("scroll-theme.conf")).unwrap(),
             "desk black\n"
         );
         assert_eq!(

@@ -151,7 +151,7 @@ pub enum Ask {
     ///
     /// It is how the modeline stays honest without polling: the footer holds
     /// one of these open on a thread and pushes what arrives into `calloop`,
-    /// exactly as it already does with niri's event stream.
+    /// exactly as it already does with the compositor's event stream.
     Watch,
     /// Take this on.
     Add {

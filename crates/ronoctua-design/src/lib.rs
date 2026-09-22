@@ -136,7 +136,7 @@ pub mod scroll;
 pub mod sheet;
 pub mod table;
 
-pub use budget::{budget, claimed, room, tall, wide};
+pub use budget::{budget, claimed, room, stands, tall, wide};
 pub use grid::Grid;
 pub use phrases::Phrases;
 #[cfg(feature = "host")]

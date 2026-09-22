@@ -30,14 +30,14 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
   ronoctua,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-network";
@@ -64,7 +64,7 @@ pkgs.testers.runNixOSTest {
       users.users.${config.ronoctua.user}.linger = true;
 
       environment.systemPackages = [
-        niri
+        scroll
         ronoctua-shell
         pkgs.tor
       ]
@@ -130,7 +130,7 @@ pkgs.testers.runNixOSTest {
       with subtest("tor is installed, stopped, and the owner may start it with no prompt"):
           # NOT AT BOOT: the owner's decision, and `wantedBy = []` is how a
           # unit stays installed and down.
-          machine.succeed("systemctl show tor.service -p WantedBy | grep -q 'WantedBy=$'")
+          machine.succeed("systemctl show tor.service -p WantedBy | grep 'WantedBy=$' > /dev/null")
           state = machine.succeed("systemctl is-active tor.service || true").strip()
           assert state in ("inactive", "failed"), f"tor started on its own: {state}"
           # AND THE ONE POLKIT RULE. There is no agent in this session: a rule
@@ -241,25 +241,25 @@ pkgs.testers.runNixOSTest {
 
       with subtest("the footer comes up and draws none of the tunnel marks"):
           start_xvfb()
-          start_niri("niri", "${niri}")
-          sock = socket_of("niri")
+          start_compositor("compositor", "${scroll}")
+          sock = socket_of("compositor")
           machine.succeed(
               "systemd-run --unit=footer ${xvfb.env} "
               "--setenv=WAYLAND_DISPLAY=wayland-1 "
               "--setenv=HOME=/root "
-              f"--setenv=NIRI_SOCKET={sock} "
+              f"--setenv=SCROLLSOCK={sock} "
               "--setenv=RUST_LOG=ronoctua_shell=debug "
               "${ronoctua-shell}/bin/ronoctua-shell"
           )
           machine.wait_until_succeeds(
-              "journalctl -u footer --no-pager | grep -q 'footer layout resolved'", timeout=60
+              "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null", timeout=60
           )
           # AFTER THE TUNNEL THREAD HAS ASKED AT LEAST ONCE. It polls every
           # ten seconds and the first reading is immediate, but reading the
           # journal before it lands would pass on a footer that simply had not
           # looked yet — which is a test that cannot fail.
           machine.wait_until_succeeds(
-              "journalctl -u footer --no-pager | grep -q 'footer layout resolved'", timeout=60
+              "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null", timeout=60
           )
           machine.sleep(12)
           journal = machine.succeed("journalctl --no-pager -u footer")
@@ -275,7 +275,7 @@ pkgs.testers.runNixOSTest {
               "${ronoctua-shell}/bin/ronoctua-shell command network-open"
           )
           machine.wait_until_succeeds(
-              "journalctl -u footer --no-pager | grep -qE 'layout resolved width=[0-9]+ height=[0-9]{3}'",
+              "journalctl -u footer --no-pager | grep -E 'layout resolved width=[0-9]+ height=[0-9]{3}' > /dev/null",
               timeout=30,
           )
           # THE REGION GREW PAST THE FOOTER'S OWN TWO LINES, and the number

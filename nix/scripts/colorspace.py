@@ -315,7 +315,7 @@ def format_token(rgb8: Sequence[int], alpha8: int = 255) -> str:
 
 
 def format_hex(rgb8: Sequence[int]) -> str:
-    """`(r, g, b)` to `#RRGGBB`, what niri, Ghostty and CSS read."""
+    """`(r, g, b)` to `#RRGGBB`, what the compositor, Ghostty and CSS read."""
     r, g, b = rgb8
     return f"#{r:02X}{g:02X}{b:02X}"
 

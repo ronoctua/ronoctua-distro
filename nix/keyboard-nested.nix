@@ -1,62 +1,54 @@
 # THE NESTED LOOP'S KEYMAP — production's, with Super taken out of it.
 #
-# `nix run .#dev` runs niri as a WINDOW of another compositor, and that window
-# shares one keyboard with the host. The host sees every key first. When it
-# keeps a chord for itself — `Super+Ctrl+Space` opens the wallpaper manager on
-# the machine this was found on — the nested niri is left holding half a
-# gesture, and it never recovers. This file removes the half that can be
-# removed.
+# `nix run .#dev` runs the compositor as a WINDOW of another compositor, and
+# that window shares one keyboard with the host. The host sees every key first.
+# When it keeps a chord for itself — `Super+Ctrl+Space` opens the wallpaper
+# manager on the machine this was found on — the nested compositor used to be
+# left holding half a gesture, and it never recovered. This file removes the
+# half that can be removed.
 #
-# # The mechanism, read in the code and then measured
+# # WHY IT PROBABLY NO LONGER APPLIES, on paper
 #
-# Three facts, and it takes all three:
+# A bit gets stuck when the nested compositor DERIVES its modifier state by
+# counting presses against releases: a key pressed inside the window and
+# released outside it is counted down nowhere, and the bit stays up for the
+# rest of the session.
 #
-#   1. `winit` reports a lost focus as `Focused(false)` and NOTHING ELSE. Its
-#      Wayland `Leave` handler synthesises no key releases (its X11 one does),
-#      so the keys that were down when the host took the window away are never
-#      reported up.
-#   2. `smithay`'s winit backend drops every synthetic key event
-#      (`if !is_synthetic && !event.repeat`) and never maps `ModifiersChanged`
-#      at all — so even a host that reports the true modifier state on the way
-#      back in cannot be heard. The nested compositor learns modifiers ONLY by
-#      counting presses against releases.
-#   3. niri's winit backend answers `WinitEvent::Focus(_) => ()`.
+# wlroots does not derive it. Its Wayland backend implements `.modifiers` and
+# hands the host's mask straight through (`keyboard_handle_modifiers` →
+# `wlr_keyboard_notify_modifiers`, `backend/wayland/seat.c`), and its key
+# handler passes `update_state = false` — so the nested state is a MIRROR of
+# the host's. A key released outside the window cannot leave a bit behind,
+# because the next `modifiers` event from the host overwrites the whole mask.
 #
-# So a modifier pressed inside the window and released outside it stays down.
-# And it stays down FOR EVER: libxkbcommon keeps one filter per pressed key
-# with a reference count, so pressing that modifier again and letting it go
-# takes the count from 1 to 2 and back to 1. Measured, with the real state
-# machine:
+# What it cost when it did happen was everything, and that part is unchanged:
+# a bind is matched by EQUALITY here too (`modifiers ^ binding->modifiers`,
+# `sway/input/keyboard.c`), so one stray bit means no bind in the session
+# matches — not the leader, not the chords, not the rescue.
 #
-#     host chord down                    super=1 ctrl=1
-#     after tapping Super once           super=1 ctrl=1
-#     after tapping Super twice          super=1 ctrl=1
+# # So why is this file still here
 #
-# Reloading the keymap does not help either: `update_xkb_state` builds a fresh
-# state and REPLAYS the keys smithay still believes are down.
+# BECAUSE IT HAS NOT BEEN MEASURED on this compositor, and the reasoning above
+# is reading, not evidence. The measurement is one gesture: in `nix run .#dev`,
+# press a host chord built on Super, let the host take the window, come back,
+# and try the leader. If it opens, all of this goes — this file, the
+# `nested-survives-a-stray-modifier` check, and the second leader bind with a
+# Shift nobody pressed. `docs/PENDING.md` carries it.
 #
-# What that costs is everything, because niri matches a bind's modifiers by
-# EQUALITY (`bind_modifiers == modifiers`). One stray bit and no bind in the
-# session matches — not the leader, not the chords, not the rescue. The only
-# cure is restarting the nested compositor.
+# Until then it costs one build of a keymap and takes away a modifier the
+# nested loop does not use anyway.
 #
-# # Why removing Super is the fix, and the only one available
+# # Why removing Super is what it removes
 #
-# Prevention is the only route, and the single lever we own is the keymap: a
+# Prevention was the only route, and the single lever we own is the keymap: a
 # key that maps to no modifier cannot leave one behind. Super is the one
 # modifier the nested loop can spare — `nix/dev.nix` already says so in prose
 # ("`Mod` belongs to the host's compositor when running nested"), and this
 # makes it true in the keymap instead of only in the comment. Shift, Control,
 # Alt and AltGr all have work to do in here and stay.
 #
-# It is worth exactly what it covers: every host chord built on Super alone
-# — the launcher, the workspaces, the window moves — stops being able to poison
-# the loop. A chord that also holds Control leaves Control behind, and Control
-# is part of the leader, so the leader survives it; the `Alt` chords do not,
-# and that residue is written down in `docs/PENDING.md`.
-#
-# PRODUCTION IS NOT TOUCHED, and must not be: there niri owns the seat, nothing
-# gets between the keyboard and the compositor, and Super IS the leader
+# PRODUCTION IS NOT TOUCHED, and must not be: there the compositor owns the
+# seat, nothing gets between the keyboard and it, and Super IS the leader
 # (`nix/modules/keyboard.nix`). This file is imported by `nix/dev.nix` and by
 # nothing else.
 #
@@ -90,8 +82,8 @@ runCommand "ronoctua-nested-keymap.xkb"
     # The compositor parses this with `XKB_KEYMAP_FORMAT_TEXT_V1` and has no
     # other option; `xkbcli` defaults to reading format 2 and to "whatever the
     # input was" on the way out. A libxkbcommon that one day changes its
-    # default would hand niri a file it cannot parse — and niri answers that
-    # with a `warn` in a log nobody is reading and a silent fall back to the
+    # default would hand the compositor a file it cannot parse — and it answers
+    # that with a log line nobody is reading and a silent fall back to the
     # layout below, which is the version WITH Super. The failure would look
     # exactly like the bug this file exists to remove.
     xkbcli compile-keymap \

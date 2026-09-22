@@ -126,6 +126,79 @@ const BTOP_PATH: Option<&str> = option_env!("RONOCTUA_BTOP");
 /// The other one — `LEADER+S-Esc`. Same contract.
 const BOTTOM_PATH: Option<&str> = option_env!("RONOCTUA_BOTTOM");
 
+/// Who holds the keyboard, as far as the requests and the answers say.
+///
+/// # The pair, measured
+///
+/// This compositor answers a RE-acquisition of exclusive keyboard
+/// interactivity with a `leave` AND THEN an `enter` on the same surface, and
+/// the footer is holding the keyboard once the pair is over. Measured in
+/// `leader-vm`, one session, the second opening:
+///
+/// ```text
+/// 45.918101  the footer asked for a geometry keyboard=Exclusive
+/// 45.934404  a keyboard leave arrived          <- the first half
+/// 45.942014  the footer gained keyboard focus  <- the second, 7.6 ms later
+/// ```
+///
+/// The FIRST opening of a session has no `leave` at all, because there is no
+/// focus to clear; what produces the pair is letting the keyboard go and
+/// asking for it back, which is every leader after the first.
+///
+/// Taking the first half for a loss closes the leader in the instant it opens
+/// — on screen, a which-key list that flashes and goes. It is not a test
+/// artefact and it is worst on a machine with no windows, which is the
+/// session's own first minute: with nothing to hand the keyboard to, letting
+/// it go sends nothing at all, and the whole pair lands on the next
+/// acquisition.
+///
+/// # Why exactly one
+///
+/// Forgiving every `leave` while the footer wants the keyboard would throw
+/// away the thing the handler exists for: a footer left expanded, holding the
+/// region, receiving nothing. One per acquisition is the whole shape of the
+/// pair, and the `enter` that closes it forgives no more — a keyboard
+/// genuinely taken away reaches `close what was open` on the `leave` after.
+#[derive(Default)]
+struct KeyboardHold {
+    /// Did the last geometry request want the keyboard?
+    ///
+    /// It is what tells a request that TAKES the keyboard from one that merely
+    /// keeps it: narrowing the which-key asks for a new height with the
+    /// keyboard already held, and the compositor answers those with silence.
+    ///
+    /// NOT `asked`, which is the name `Screen` gives the size the compositor
+    /// configured — `every-window-knows-its-scale` forbids writing that one
+    /// outside `configure`, and it reads the token.
+    wanted: bool,
+    /// Is a `leave` still owed to the acquisition just made?
+    owed_a_leave: bool,
+}
+
+impl KeyboardHold {
+    /// A geometry was asked for, with or without the keyboard.
+    fn asked_for(&mut self, exclusive: bool) {
+        if exclusive && !self.wanted {
+            self.owed_a_leave = true;
+        }
+        self.wanted = exclusive;
+    }
+
+    /// The compositor granted it.
+    fn entered(&mut self) {
+        self.owed_a_leave = false;
+    }
+
+    /// The compositor withdrew it. `true` when that is a real loss.
+    fn left(&mut self) -> bool {
+        if self.owed_a_leave {
+            self.owed_a_leave = false;
+            return false;
+        }
+        true
+    }
+}
+
 /// The Wayland client's state.
 struct Footer {
     /// The connection, KEPT on purpose.
@@ -177,7 +250,7 @@ struct Footer {
     /// What the compositor says about windows and focus. Fed by the daemon's
     /// thread; it lives HERE and not in the surface, for the reason of section 9.2
     /// explained in `daemon.rs`.
-    niri: ronoctua_niri::State,
+    windows: ronoctua_compositor::State,
 
     // --- leader and keyboard (section 7.4) ---
     seats: SeatState,
@@ -206,7 +279,7 @@ struct Footer {
     /// Discounting what was already held gets the other case for free, which is
     /// worse because no gesture undoes it: a modifier stuck in the compositor.
     /// Leaving for a host shortcut (`Super+Space`) and coming back makes the
-    /// nested niri miss the key release; from then on it announces the modifier
+    /// nested compositor miss the key release; from then on it announces the modifier
     /// forever, **every** binding stops matching, and there is nothing on screen
     /// saying why.
     ///
@@ -232,7 +305,7 @@ struct Footer {
     /// and THAT is what makes `SPC m` absent rather than empty — a submenu that
     /// opens onto nothing is the same lie as a list with no way back.
     buffer_bindings: Vec<(String, String)>,
-    /// Whose. It is the pid `ronoctua_niri::Window` already carries.
+    /// Whose. It is the pid `ronoctua_compositor::Window` already carries.
     buffer_pid: Option<u32>,
     /// The keys typed since `SPC m`, the `m` itself included.
     ///
@@ -243,8 +316,8 @@ struct Footer {
     buffer_pending: Vec<String>,
 
     // --- notifications (section 4.2) ---
-    /// One at a time, the rest waiting. It lives in the daemon, like the niri
-    /// state and for the same reason of section 9.2.
+    /// One at a time, the rest waiting. It lives in the daemon, like the
+    /// compositor's state and for the same reason of section 9.2.
     notifications: ronoctua_notify::Queue,
     /// The catalogue, the distro's filters and the person's.
     ///
@@ -537,6 +610,8 @@ struct Footer {
     /// sequence. Without a key like that, paging would require spending a letter
     /// of the keymap — and the letter spent would be one less for a command.
     right_ctrl: bool,
+    /// Who holds the keyboard, as far as the requests and the answers say.
+    keyboard_hold: KeyboardHold,
     /// The command registry, for the `M-x` to complete over.
     command_registry: ronoctua_cmd::Registry,
     /// How many frames have been painted. Only to time the first ones.
@@ -1572,7 +1647,7 @@ struct Grid {
     /// **Already limited to half the screen.** The limit used to live in the
     /// drawing, and that is why the height, the pagination and the click read
     /// one number and the drawing read another: on a narrow screen,
-    /// `niri-switch-focus-between-floating-and-tiling` pushed the text past
+    /// `wm-workspace-previous-screen` pushed the text past
     /// the edge — and the compositor does not clip, it simply does not draw.
     /// Here there is a single number.
     ///
@@ -1580,8 +1655,9 @@ struct Grid {
     /// page would make the description jump column on every scroll, and the
     /// list would look like another one. It used to be fixed at 12 cells,
     /// which fits `C-M-S-s-X`. It stopped fitting when the finder started
-    /// showing the command's id: `niri-move-window-to-workspace-down` has 34
-    /// cells and the description ended up on top of it.
+    /// showing the command's id. The longest of the compositor's own is
+    /// `wm-workspace-to-screen-right` at 28 cells, and the description ended up
+    /// on top of it.
     colon: u16,
     /// How many cells the icon reserves before everything. 0 = the list has none.
     ///
@@ -1678,7 +1754,7 @@ fn grid_for(widths: &[Measure], screen_columns: u16, ceiling: usize, in_columns:
         0
     };
     // HALF THE SCREEN IS THE LEFT COLUMN'S CEILING. Without it, an id like
-    // `niri-switch-focus-between-floating-and-tiling` pushes the text past
+    // `wm-workspace-previous-screen` pushes the text past
     // the edge — and the compositor does not clip, it just does not draw.
     // THE SAME INSET `Grid::start` uses, and it has to be the same expression:
     // the colon's column is measured from where the key begins, so a mismatch
@@ -1769,6 +1845,16 @@ pub const BATTERY_LOW: &str = "battery-low";
 pub const BATTERY_CRITICAL: &str = "battery-critical";
 /// See [`BATTERY_LOW`].
 pub const BATTERY_CHARGED: &str = "battery-charged";
+
+/// The capture's tag, and the whole recognition of it.
+///
+/// The picture used to be taken by the compositor, which sent a notification of
+/// its own with an English summary; the entry in `assets/notifications.nix`
+/// matched the pair (app, summary) and a check read the sender's source so that
+/// pair could not move in silence. Now `grim` takes the picture and the footer
+/// raises the notification, so the entry matches a word WE write — which is why
+/// the check is gone and nothing replaced it.
+pub const SCREEN_CAPTURED: &str = "screenshot";
 
 /// The footer's two fixed lines: the modeline and the minibuffer.
 ///
@@ -2099,7 +2185,7 @@ pub fn run() -> Result<()> {
         screens: Vec::new(),
         quit: false,
         owes_paint: false,
-        niri: ronoctua_niri::State::default(),
+        windows: ronoctua_compositor::State::default(),
         seats: SeatState::new(&globals, &qh),
         keyboard: None,
         mods: Modifiers::default(),
@@ -2176,6 +2262,7 @@ pub fn run() -> Result<()> {
         manual: false,
         offset: 0,
         right_ctrl: false,
+        keyboard_hold: KeyboardHold::default(),
         command_registry: registry,
         frames_painted: 0,
         // The channels are hooked up later, along with the other sources.
@@ -2314,9 +2401,10 @@ pub fn run() -> Result<()> {
     queue.roundtrip(&mut state).context("initial roundtrip")?;
     state.ensure_screens(&qh);
 
-    // TWO event sources: Wayland and niri's IPC. Hence the `calloop` instead of
-    // a `blocking_dispatch` in a loop — with a loop blocked on the Wayland
-    // socket, a niri event would only be seen on the next mouse movement.
+    // TWO event sources: Wayland and the compositor's IPC. Hence the `calloop`
+    // instead of a `blocking_dispatch` in a loop — with a loop blocked on the
+    // Wayland socket, an IPC event would only be seen on the next mouse
+    // movement.
     // Milestone 5 adds keyboard and timers on the same rails.
 
     // THE LAUNCH VERDICT. The thread that waits for `systemd-run --scope` —
@@ -2592,29 +2680,28 @@ pub fn run() -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the icons channel: {e}"))?;
 
-    let (sender, receiving) = channel::channel::<ronoctua_niri::Event>();
-    crate::daemon::listen_to_niri(sender);
+    let (sender, receiving) = channel::channel::<ronoctua_compositor::Event>();
+    crate::daemon::listen_to_the_compositor(sender);
     handle
         .insert_source(receiving, |event, (), state: &mut Footer| {
             if let channel::Event::Msg(e) = event {
-                // THE COMPOSITOR RE-READ ITS CONFIGURATION, and the screens
-                // are the only thing that cares. It is how the display view
-                // learns that the fragment it wrote was read — and whether it
-                // PARSED, which is the difference between a change that did
-                // not take and a change that silently did nothing.
-                if let ronoctua_niri::Event::ConfigLoaded { failed } = e
+                // THE SCREENS MOVED, and the display view is the only thing
+                // that cares. The event says only THAT something moved — a
+                // hotplug, a mode, a scale, a re-read — so the answer is to
+                // read them again rather than to guess what changed.
+                if let ronoctua_compositor::Event::ScreensChanged = e
                     && let Some(h) = state.display_orders.as_ref()
                 {
-                    h.send(ronoctua_display::Order::Reloaded { failed });
+                    h.send(ronoctua_display::Order::Look { deep: false });
                 }
-                state.niri.apply_to(&e);
+                state.windows.apply_to(&e);
                 state.states_arrived();
                 // Redrawing on every event is cheap because the layout is integer
                 // arithmetic (section 4.1) and the text only changes when focus changes.
                 state.draw_and_paint();
             }
         })
-        .map_err(|e| anyhow::anyhow!("could not hang niri's channel: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("could not hang the compositor's channel: {e}"))?;
 
     // Third event source: the control socket, where the leader arrives. See
     // `leader.rs` for why the leader comes from OUTSIDE.
@@ -2657,7 +2744,8 @@ pub fn run() -> Result<()> {
                         let showing = state.states.get(&pid) != Some(&id);
                         state.states.insert(pid, id);
                         if showing
-                            && state.niri.focused().and_then(|w| w.pid) == i32::try_from(pid).ok()
+                            && state.windows.focused().and_then(|w| w.pid)
+                                == i32::try_from(pid).ok()
                         {
                             state.draw_and_paint();
                         }
@@ -2699,7 +2787,7 @@ pub fn run() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("could not hang the clipboard's channel: {e}"))?;
 
     // Fourth source: the session bus. The notification daemon runs in a thread
-    // and sends through the same kind of channel as niri and the control socket.
+    // and sends through the same kind of channel as the compositor and the control socket.
     let (notify_sender, notifications) = channel::channel::<ronoctua_notify::Event>();
     let (raw_tx, raw_rx) = std::sync::mpsc::channel::<ronoctua_notify::Event>();
     // FIFTH SOURCE, THE SAME CHANNEL: what `systemd-oomd` closed to keep the
@@ -2917,11 +3005,17 @@ pub fn run() -> Result<()> {
     // and a monitor that answers over DDC/CI takes a fifth of a second: none
     // of that may happen on the frame's thread.
     //
-    // AND THE CRATE HAS NOTHING TO SUBSCRIBE TO. niri publishes no event
-    // about outputs at all — nineteen variants and not one of them is about a
-    // monitor. What tells us a screen arrived is WAYLAND, which this process
-    // already hears as a client: `OutputHandler` below turns it into a
-    // reading.
+    // AND THE CRATE SUBSCRIBES TO NOTHING OF ITS OWN. There are TWO signals
+    // that a screen moved and this process already receives both: the
+    // compositor's `output` event, which the daemon above turns into
+    // `Event::ScreensChanged`, and Wayland's own global, which `OutputHandler`
+    // below hears because the footer is a client. A third connection for the
+    // same fact would be a third thing to keep alive.
+    //
+    // The compositor's event is the wider of the two: it fires on a mode, a
+    // scale or a re-read as well as on a hotplug, where Wayland only says a
+    // global came and went. Neither says WHAT moved, so both answer the same
+    // way — read the screens again.
     let (display_sender, display_events) = channel::channel::<ronoctua_display::Event>();
     match ronoctua_display::watch(move |e| {
         let _ = display_sender.send(e);
@@ -3313,6 +3407,45 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+/// Where a capture lands, and under what name.
+///
+/// `RONOCTUA_SCREENSHOTS` is the directory, relative to home — the SAME
+/// `nix/user-dirs.nix` entry that `xdg.userDirs` creates, so the folder a
+/// capture goes into is the folder the sidebar and the file manager already
+/// show. It used to be a line in the compositor's own configuration; the
+/// compositor has no such line now, and this is where it moved to.
+///
+/// The name carries the moment down to the second and has NO SPACE in it: a
+/// second capture inside one minute must not overwrite the first, and a name
+/// with a space is a name that has to be quoted for the rest of its life.
+fn capture_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    let under = std::env::var("RONOCTUA_SCREENSHOTS").ok()?;
+    if under.is_empty() {
+        return None;
+    }
+    // THE SAME CALENDAR THE REST OF THE SCREEN USES. A second one would be
+    // the same hundred lines with a different bug — and this one is checked
+    // against `coreutils date` on the real zone.
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let zone = ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime"));
+    let c = ronoctua_files::when::civil(i64::try_from(secs).ok()?, &zone);
+    let when = format!(
+        "{:04}-{:02}-{:02}-{:02}-{:02}-{:02}",
+        c.year, c.month, c.day, c.hour, c.minute, c.second
+    );
+    Some(
+        std::path::PathBuf::from(home)
+            .join(under)
+            .join(format!("screenshot-{when}.png")),
+    )
+}
+
+use crate::daemon::open_the_compositor;
+
 impl Footer {
     /// The modeline's segments with the texts of the buffer focused RIGHT NOW.
     ///
@@ -3340,8 +3473,8 @@ impl Footer {
             .map(|id| self.texts.t(&format!("state-{id}")))
             .unwrap_or_default();
         crate::segments(
-            &crate::daemon::buffer_name(&self.niri, &self.texts),
-            &crate::daemon::buffer_mode(&self.niri, &self.texts),
+            &crate::daemon::buffer_name(&self.windows, &self.texts),
+            &crate::daemon::buffer_mode(&self.windows, &self.texts),
             &state,
             // WHAT THE BELL COUNTS IS UNREAD, and it used to be "waiting in the
             // queue". The two answer different questions: the queue empties by
@@ -3432,7 +3565,7 @@ impl Footer {
     /// than anybody expects.
     fn states_arrived(&mut self) {
         let alive: std::collections::HashSet<u32> = self
-            .niri
+            .windows
             .all_windows()
             .iter()
             .filter_map(|w| w.pid)
@@ -3444,7 +3577,7 @@ impl Footer {
         // compositor sends, and a foreign window has no socket to answer on —
         // so without this line every workspace change would try to connect to a
         // path that is not there, once per window that is not ours, forever.
-        let Some(window) = self.niri.focused() else {
+        let Some(window) = self.windows.focused() else {
             return;
         };
         if window
@@ -3785,7 +3918,7 @@ impl Footer {
             return;
         }
         let Some(pid) = self
-            .niri
+            .windows
             .focused()
             .and_then(|w| w.pid)
             .and_then(|p| u32::try_from(p).ok())
@@ -3986,7 +4119,7 @@ impl Footer {
     /// `fundamental` label used to make — a word that takes up a column and says
     /// something nobody checked.
     fn state_now(&self) -> Option<&str> {
-        let window = self.niri.focused()?;
+        let window = self.windows.focused()?;
         window
             .app_id
             .as_deref()?
@@ -4705,6 +4838,9 @@ impl KeyboardHandler for Footer {
         _: &[Keysym],
     ) {
         tracing::debug!("the footer gained keyboard focus");
+        // THE PAIR IS OVER, and nothing more is forgiven: from here a `leave`
+        // is a keyboard actually taken away.
+        self.keyboard_hold.entered();
         // IT ZEROES THE INHERITANCE. Whatever is held now arrives on the next
         // modifier event — the protocol requires the compositor to send one right
         // after the `enter` —, and it is THAT one that becomes this keyboard
@@ -4736,6 +4872,14 @@ impl KeyboardHandler for Footer {
         // as `M-…` and match nothing.
         self.mods = Modifiers::default();
         self.inheritance.on_focus();
+        // THE FIRST HALF OF THE PAIR IS NOT A LOSS — see `KeyboardHold` for the
+        // measurement. The modifiers above are zeroed either way: the `enter`
+        // that follows announces them again, and it is that announcement that
+        // becomes the session's inheritance.
+        if !self.keyboard_hold.left() {
+            tracing::debug!("a keyboard leave answering the acquisition, not a loss");
+            return;
+        }
         if self.grabbing() {
             tracing::debug!("keyboard focus lost; closing what was open");
             self.mx.close_it();
@@ -5730,6 +5874,23 @@ impl Footer {
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
 
         layer.commit();
+        // AND IT IS SAID OUT LOUD, once per surface.
+        //
+        // Invariant 14 is that the tray, the notification and the expansion are
+        // ONE surface growing — never a second one. That used to be proved by
+        // asking the compositor to list its layer surfaces; this one has no
+        // request that enumerates them, and there is no substitute for it in
+        // its whole IPC.
+        //
+        // So the proof moved to the side that can break it. A second surface
+        // can only appear because THIS function ran again, and this line is
+        // what makes that countable: `notify-vm` and `leader-vm` count them in
+        // the journal and refuse a second one on the same output.
+        tracing::info!(
+            namespace = crate::NAMESPACE,
+            screens = self.screens.len() + 1,
+            "a layer surface created"
+        );
         // THE MONITOR'S HEIGHT comes from the output, and not from the surface:
         // it decides the expansion's ceiling. `logical_size` may be missing on an
         // output that has not announced a mode yet; then the ceiling falls back to
@@ -5787,7 +5948,7 @@ impl Footer {
         tracing::info!(window, "buffer chosen by the finder");
         // The SAME action the chord uses. Focus belongs to the compositor
         // (invariant 4), so the shell asks and does not move anything itself.
-        self.niri_action(|n| n.action(serde_json::json!({ "FocusWindow": { "id": window } })));
+        self.compositor_action(|wm| wm.focus_window(window));
     }
 
     /// Opens a file in the distro's editor, which is Emacs.
@@ -5837,7 +5998,7 @@ impl Footer {
     /// otherwise. A window with neither still appears — vanishing from the list
     /// would be worse than an ugly line.
     fn buffer_items(&self) -> Vec<crate::minibuffer::Item> {
-        self.niri
+        self.windows
             .all_windows()
             .iter()
             .map(|w| crate::minibuffer::Item {
@@ -5857,36 +6018,24 @@ impl Footer {
     /// the keymap has no way of carrying a number: a sequence is a path to an
     /// id, not a call with a parameter.
     fn run_with(&mut self, id: &str, argument: Option<&str>) {
-        // OUR OWN COMMANDS WITH AN ARGUMENT, by the same client and for the same
-        // reason: the shape of the argument in the JSON is niri's, and assembling
-        // it by hand would bring back the error the `Screenshot` cost.
-        if let (Some(name), Some(arg)) = (crate::actions::with_argument(id), argument) {
-            match ronoctua_niri::run_through_client(name, Some(arg)) {
-                Ok(()) => {
-                    tracing::info!(command = id, argument = arg, "an action with an argument")
-                }
-                Err(e) => {
-                    let m = e.to_string();
-                    tracing::warn!(command = id, error = %m, "the compositor refused");
-                    self.echo_message(m);
-                }
-            }
-            return;
-        }
-        // THE MIRRORED ACTIONS of the compositor, through its own client.
+        // EVERY DEED OF THE COMPOSITOR, on one path.
         //
-        // They do not go through our JSON: the arguments with defaults live in
-        // niri's clap, and `{}` gives the SAME error as a name that does not
-        // exist — see `ronoctua_niri::run_through_client`.
-        if let Some(name) = id.strip_prefix("niri-") {
-            match ronoctua_niri::run_through_client(name, argument) {
-                Ok(()) => tracing::info!(action = name, "a compositor action"),
+        // There used to be two — a fast one for the curated handful and a slow
+        // one that forked the compositor's own client for the rest — because
+        // the arguments with defaults lived in that client's parser and were
+        // unreachable over the socket. Here the socket takes the same text a
+        // configuration file takes, so there is nothing a subprocess could
+        // fill in, and the refusal comes back on the same connection.
+        if let Some(spoken) = ronoctua_scroll::deeds::spoken_of(id) {
+            let done = open_the_compositor().and_then(|mut wm| wm.deed(&spoken.deed, argument));
+            match done {
+                Ok(()) => tracing::info!(deed = id, argument, "a deed of the compositor"),
                 Err(e) => {
-                    // NIRI'S TEXT, and not one of ours: it is the only clue to
-                    // why the action was refused, and swapping it for "it failed"
-                    // would wipe the information on the way.
-                    let m = e.to_string();
-                    tracing::warn!(action = name, error = %m, "the compositor refused");
+                    // THE COMPOSITOR'S OWN TEXT, and not one of ours: it is
+                    // the only clue to why the deed was refused, and swapping
+                    // it for "it failed" would wipe the information on the way.
+                    let m = format!("{e:#}");
+                    tracing::warn!(deed = id, error = %m, "the compositor refused");
                     self.echo_message(m);
                 }
             }
@@ -5930,11 +6079,7 @@ impl Footer {
             // footer would leave the session standing with no modeline and no
             // leader — a system with no chrome at all and no way out of it.
             "session-quit" => {
-                self.niri_action(|n| {
-                    n.action(serde_json::json!({
-                        "Quit": { "skip_confirmation": true }
-                    }))
-                });
+                self.compositor_action(|wm| wm.leave());
                 self.put_a_preview_back();
                 self.quit = true;
             }
@@ -6916,8 +7061,8 @@ impl Footer {
             // The system's terminal, for whoever wants the whole Ghostty. It is
             // a foreign buffer like any other.
             "buffer-terminal-external" => self.open_foreign("ghostty", &[], None),
-            // THE TWO MONITORS, in a FLOATING window — which is niri's doing and
-            // not ours (invariant 4): what the shell decides is the window's
+            // THE TWO MONITORS, in a FLOATING window — which is the compositor's
+            // doing and not ours (invariant 4): what the shell decides is the window's
             // `app_id`, and the rule that floats it is generated from the same
             // constant (`terminal::floating_rules`).
             //
@@ -6926,6 +7071,17 @@ impl Footer {
             // reflow every other buffer at the moment the machine is already
             // struggling. It is not chrome (invariant 14): nothing shows it
             // unless a key is pressed.
+            // THE CAPTURE IS OURS NOW, and that is a change of owner rather
+            // than of mechanism: the compositor takes no screenshots at all,
+            // so what takes one is `grim`, over the `wlr-screencopy` protocol
+            // the compositor does implement.
+            //
+            // WHERE IT LANDS IS ALSO OURS. It used to be a line in the
+            // compositor's configuration (`screenshot-path`); now the name is
+            // built here, out of the same `nix/user-dirs.nix` entry, and the
+            // `screenshots-land-in-a-declared-directory` check reads BOTH
+            // ends so the two cannot drift.
+            "screen-capture" => self.capture_the_screen(),
             "monitor-btop" => self.open_monitor(BTOP_PATH, "RONOCTUA_BTOP"),
             "monitor-bottom" => self.open_monitor(BOTTOM_PATH, "RONOCTUA_BOTTOM"),
             // The glyph browser, in an `xdg_toplevel` of its own. The
@@ -6997,16 +7153,30 @@ impl Footer {
             "transfers-subtitles-as-me" => {
                 self.queue_the_clipboard(Wish::media(Want::Subtitles).as_me());
             }
-            // The two WINDOW actions are the compositor's (invariant 4). The
-            // shell does not reimplement them: it asks over IPC, which is the
-            // only border it has with niri (invariant 3).
+            // WINDOW AND WORKSPACE ARE THE COMPOSITOR'S (invariant 4). The
+            // shell does not reimplement them: it asks over the IPC, which is
+            // the only border it has with the compositor (invariant 3).
             //
-            // EVERYTHING ELSE goes through the action table, looked up by id.
-            // It is the same one that generates niri's chord binds: an id that
-            // exists in both places cannot diverge, because there is only one.
+            // TWO VOCABULARIES, AND BOTH ARE TRIED — that is the whole of this
+            // arm, and getting it wrong cost every curated window key.
+            //
+            //   - OURS is what the keymap and the text keys use: `window-left`,
+            //     `buffer-close`, `workspace-next`. `actions::deed_of` is the
+            //     join, and `actions::all_of` is the table it reads.
+            //   - THE COMPOSITOR'S is what the generated table holds:
+            //     `wm-focus-left`, `wm-close`. Those are reachable by name from
+            //     `LEADER :` and have no key of their own.
+            //
+            // It used to ask the generated table with OUR id, which answers
+            // `None` for every one of the twenty-three — so `LEADER w h` and
+            // its neighbours drew a row in which-key, echoed "nothing to do"
+            // and moved nothing. `run-command-handles-every-key` is what said
+            // so, by name, for thirteen of them at once.
             otherwise => {
-                if let Some(action) = crate::actions::kdl_of(otherwise) {
-                    self.niri_action(move |n| n.action(action));
+                if let Some(spoken) = crate::actions::deed_of(otherwise)
+                    .or_else(|| ronoctua_scroll::deeds::spoken_of(otherwise))
+                {
+                    self.compositor_action(move |wm| wm.deed(&spoken.deed, None));
                     return;
                 }
                 // NOT just a `warn` in the log. A command that shows up in
@@ -7028,14 +7198,16 @@ impl Footer {
     ///
     /// # Why the compositor is told rather than left to notice
     ///
-    /// Because it notices on its own clock. The desk is a
-    /// `layout { background-color }` in a fragment niri includes, and niri
-    /// watches its config — so writing the file and stopping there left the
-    /// footer changing colour at once and the desk arriving "sometimes a
-    /// little faster, sometimes a little slower", which is what the owner
-    /// read off the screen. The variance is a watcher's cadence, and
-    /// invariant 3 forbids the fork that would tune it. Asking costs one
-    /// unix-socket round trip.
+    /// Because it never notices. The desk is an `output * bg` in a fragment
+    /// the compositor `include`s, and this compositor watches no file of its
+    /// own — there is no inotify anywhere in it. Writing the file and stopping
+    /// there would leave the footer changing colour and the desk staying the
+    /// colour it was, for the rest of the session.
+    ///
+    /// The previous compositor DID watch, and the defect was subtler: the desk
+    /// arrived "sometimes a little faster, sometimes a little slower", which is
+    /// what the owner read off the screen, because a watcher has a cadence.
+    /// Asking is the same one unix-socket round trip either way.
     fn show_theme_everywhere(&self, choice: crate::theme::Choice) {
         crate::theme::show_everywhere(choice);
         self.tell_the_compositor_to_reread();
@@ -7043,7 +7215,7 @@ impl Footer {
 
     /// One round trip, and QUIET when there is nobody to answer.
     ///
-    /// Not [`Self::niri_action`]: that one echoes on the message line, which is
+    /// Not [`Self::compositor_action`]: that one echoes on the message line, which is
     /// right for a key somebody pressed and wrong for something the footer
     /// does on its own. A renderer with no compositor, a test, a nested loop
     /// that went away — none of those is news, and all of them would print it
@@ -7336,8 +7508,85 @@ impl Footer {
         }
     }
 
+    /// Takes a picture of the screen, and says where it went.
+    ///
+    /// # Why an external program
+    ///
+    /// The compositor has no capture command of its own — there is no verb
+    /// for it in its whole table. What it has is `wlr-screencopy`, which is
+    /// the protocol `grim` speaks, so the picture is taken by a program that
+    /// is on the session's PATH for exactly this.
+    ///
+    /// `RONOCTUA_GRIM` and not a baked path, for the reason `RONOCTUA_SWAPPY`
+    /// is read the same way: a store path compiled into the binary is a
+    /// reference no profile switch can remove, and it would put the program
+    /// in every closure including the one that has no media at all.
+    fn capture_the_screen(&mut self) {
+        let Some(grim) = std::env::var("RONOCTUA_GRIM")
+            .ok()
+            .filter(|p| !p.is_empty())
+        else {
+            let said = self.texts.t(ronoctua_i18n::key::ECHO_NO_ACTION);
+            self.echo_message(said);
+            return;
+        };
+        let at = match capture_path() {
+            Some(path) => path,
+            None => {
+                let said = self.texts.t(ronoctua_i18n::key::ECHO_NO_ACTION);
+                self.echo_message(said);
+                return;
+            }
+        };
+        if let Some(parent) = at.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::process::Command::new(&grim).arg(&at).status() {
+            Ok(s) if s.success() => {
+                tracing::info!(at = %at.display(), "the screen was captured");
+                let n = self.capture_notification(&at);
+                self.arrived(n, std::time::Instant::now());
+            }
+            Ok(s) => {
+                tracing::warn!(status = ?s.code(), "the capture failed");
+                let said = self.texts.t(ronoctua_i18n::key::ECHO_NO_ACTION);
+                self.echo_message(said);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "the capture could not be started");
+                let said = self.texts.t(ronoctua_i18n::key::ECHO_NO_ACTION);
+                self.echo_message(said);
+            }
+        }
+    }
+
+    /// What was just captured, as a notification the catalogue recognises by
+    /// its tag — the `power_notification` shape.
+    ///
+    /// # Why the path travels in the ICON field
+    ///
+    /// Because that is where `Notification::file` reads it from, and that is
+    /// the field the four actions of the `screenshot` entry take their argument
+    /// out of: `edit` and `open` want the file, `folder` wants its directory,
+    /// and `copy-path` wants the text. A `file://` URL there is the convention
+    /// the whole system already speaks — `ronoctua-files` writes the same thing
+    /// into a drag — and the GLYPH on screen is not lost by it: the entry names
+    /// `md-monitor_screenshot`, and the catalogue's icon is the one drawn.
+    fn capture_notification(&self, at: &std::path::Path) -> ronoctua_notify::Notification {
+        let mut n = ronoctua_notify::Notification::fresh_one(
+            0,
+            self.texts.t(ronoctua_i18n::key::NOTIF_SCREENSHOT_APP),
+            Some(format!("file://{}", at.display())),
+            self.texts.t(ronoctua_i18n::key::NOTIF_SCREENSHOT_SUMMARY),
+            self.texts.t(ronoctua_i18n::key::NOTIF_SCREENSHOT_BODY),
+            ronoctua_notify::Urgency::Low,
+        );
+        n.tags = vec![SCREEN_CAPTURED.to_owned()];
+        n
+    }
+
     fn tell_the_compositor_to_reread(&self) {
-        let asked = ronoctua_niri::Niri::connect().and_then(|mut n| n.reload_config());
+        let asked = open_the_compositor().and_then(|mut wm| wm.reread());
         if let Err(e) = asked {
             tracing::debug!(error = %e, "the compositor was not told to reread its config");
         }
@@ -7349,10 +7598,13 @@ impl Footer {
     /// reading the event stream, and using the same one would require a `Mutex`
     /// on the path of an event that arrives dozens of times a second. Opening a
     /// local unix socket costs microseconds and happens once per key.
-    fn niri_action(&mut self, f: impl FnOnce(&mut ronoctua_niri::Niri) -> anyhow::Result<()>) {
-        let r = ronoctua_niri::Niri::connect().and_then(|mut n| f(&mut n));
+    fn compositor_action(
+        &mut self,
+        f: impl FnOnce(&mut dyn ronoctua_compositor::Compositor) -> anyhow::Result<()>,
+    ) {
+        let r = open_the_compositor().and_then(|mut wm| f(wm.as_mut()));
         if let Err(e) = r {
-            tracing::warn!(error = %e, "the action on niri failed");
+            tracing::warn!(error = %e, "the action on the compositor failed");
             let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_WINDOW);
             self.echo_message(m);
         }
@@ -7380,30 +7632,11 @@ impl Footer {
                 return;
             }
         };
-        let me = match std::env::current_exe() {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::error!(error = %e, "I do not know my own binary");
-                return;
-            }
-        };
-        let taken = crate::foreign::taken_displays();
-        let cmd = match crate::foreign::first_free_display(&taken) {
-            Some(display) => crate::foreign::command_with_satellite(
-                &scope,
-                &me.to_string_lossy(),
-                display,
-                program,
-                args,
-                working_directory,
-            ),
-            // A hundred displays in use. Opening without X is better than not
-            // opening: a Wayland app works the same, and an X11 one will say why it failed.
-            None => {
-                tracing::warn!("no free display number; the buffer comes up with no satellite");
-                crate::foreign::scope_command(&scope, working_directory, program, args)
-            }
-        };
+        // ONE COMMAND, AND NO DISPLAY TO PICK. The compositor serves X11
+        // itself, so an X11 buffer is launched exactly like a Wayland one —
+        // and the PID the compositor reports for its window is the program's
+        // own, which is what §7.5's correlation needs.
+        let cmd = crate::foreign::scope_command(&scope, working_directory, program, args);
         // The DIRECT command goes along: it is the one that runs if the scope
         // cannot be created. Rebuilding it in there would require taking the
         // `systemd-run` apart, and a new option would break the disassembly
@@ -7710,7 +7943,7 @@ impl Footer {
     /// Because `systemd-run --scope` is SYNCHRONOUS and only comes back when the
     /// app CLOSES — see [`crate::foreign::launch`], which carries the quote from
     /// the manual. The `calloop` is a single thread: waiting here froze keyboard,
-    /// painting and niri events for the application's whole lifetime.
+    /// painting and compositor events for the application's whole lifetime.
     ///
     /// The verdict comes back through the channel, and that is where the echo
     /// area is written — it needs `&mut self`, which the thread does not have.
@@ -8387,7 +8620,7 @@ impl Footer {
         self.state_pending = false;
         self.state_menu.clear();
 
-        let Some(pid) = self.niri.focused().and_then(|w| w.pid) else {
+        let Some(pid) = self.windows.focused().and_then(|w| w.pid) else {
             return;
         };
         let Ok(pid) = u32::try_from(pid) else { return };
@@ -9291,9 +9524,9 @@ impl Footer {
                         tokens::theme::set(v.committed().theme);
                         crate::theme::put_everything_back(v.committed(), v.chosen_before());
                         // AND THE DESK COMES BACK IN THE SAME BREATH, for the
-                        // reason it went: niri would otherwise notice on its
-                        // own clock, and `Esc` would leave the previewed desk
-                        // on screen for as long as that took.
+                        // reason it went: the compositor never notices on its
+                        // own, and `Esc` would leave the previewed desk on
+                        // screen for the rest of the session.
                         self.tell_the_compositor_to_reread();
                     }
                     self.first_page();
@@ -9698,7 +9931,7 @@ impl Footer {
     fn activate_leader(&mut self) {
         // "which-key in one frame" (5.2), counted from here.
         //
-        // What stays OUT: niri receives the key and runs `ronoctua-shell
+        // What stays OUT: the compositor receives the key and runs `ronoctua-shell
         // leader`, a new process, which only then writes to the socket. That
         // stretch is bigger than ours and does not show up in this number;
         // measuring it requires timing the binary from outside. See
@@ -11898,8 +12131,8 @@ impl Footer {
                     // TWO COLUMNS: the name and the description.
                     //
                     // The id alone was not enough with 172 commands —
-                    // `niri-focus-column-left` says what it does, but
-                    // `niri-set-column-display` does not, and guessing by the
+                    // `wm-focus-left` says what it does, but
+                    // `wm-calm` does not, and guessing by the
                     // name is what the finder exists to avoid. The description
                     // comes from the command's own key, so it is the SAME one
                     // the shortcut list shows.
@@ -14093,6 +14326,8 @@ impl Footer {
         // different between monitors and the buffers on one of them would reflow
         // when screen focus changed — with nothing having changed in them (section 9.2).
         let height = self.wanted_height();
+        self.keyboard_hold
+            .asked_for(matches!(keyboard, KeyboardInteractivity::Exclusive));
         // THE ZONE FOLLOWS THE HEIGHT. See the top of the module: the expansion
         // pushes the buffers, it does not cover them.
         let exclusive = height as i32;
@@ -14105,6 +14340,23 @@ impl Footer {
         if let Err(e) = self.conn.flush() {
             tracing::warn!(error = %e, "flushing the connection failed");
         }
+        // WHAT WAS ASKED FOR, said out loud — and it is ASKED and not granted.
+        //
+        // Milestone 5's criterion was that the COMPOSITOR reports the footer
+        // as `exclusive`, and this compositor cannot be asked: nothing in its
+        // IPC enumerates layer surfaces or their keyboard interactivity. What
+        // is left is the request, from the side that makes it.
+        //
+        // It is a weaker fact and the tests say so where they use it. What
+        // makes the weaker fact tolerable is that the same tests then TYPE:
+        // a key that reaches the footer and changes the screen is the
+        // end-to-end evidence that the request was granted, and it needs
+        // nobody's introspection.
+        tracing::info!(
+            keyboard = ?keyboard,
+            height,
+            "the footer asked for a geometry"
+        );
     }
 
     /// Undoes the Caps Lock over the character xkb produced.
@@ -16699,7 +16951,7 @@ impl Footer {
         // wgpu does `attach` and `commit` on the `wl_surface`, but that only
         // queues bytes on the connection. Whoever paints from a Wayland callback
         // has the loop's own flush right after; whoever paints from ANOTHER event
-        // source — niri's channel, in our case — does not. Without this, the
+        // source — the compositor's channel, in our case — does not. Without this, the
         // frame stays stuck in the output buffer until the compositor's next
         // event, and the modeline looks as if it does not update.
         if let Err(e) = self.conn.flush() {
@@ -17322,7 +17574,7 @@ impl Footer {
         //
         // AND ONLY WITH THE VIEW OPEN. This file is the one every `Order::Keep`
         // rewrites, so unconditionally the shell asked for a reading of its
-        // OWN writes — a walk of `/sys/class/drm` and two connections to niri,
+        // OWN writes — a walk of `/sys/class/drm` and two connections to the compositor,
         // on top of the one the order itself takes, up to twice a second while
         // an arrow is held (`Notice` absorbs the rest of the burst). With the
         // view shut nothing would draw the answer: `open_display` takes a DEEP
@@ -19106,9 +19358,10 @@ impl Footer {
 
     /// A monitor arrived or left, and Wayland is the one that said so.
     ///
-    /// niri publishes NO event about outputs — so this is the only signal
-    /// there is, and it costs nothing: the footer is a Wayland client and
-    /// hears the global appear and go away anyway. The reading is SHALLOW:
+    /// It is the SECOND of two signals — the compositor's own `output` event
+    /// is the other, and both land on this same shallow reading. This one
+    /// costs nothing: the footer is a Wayland client and hears the global
+    /// appear and go away anyway. The reading is SHALLOW:
     /// asking every monitor over DDC/CI on a hotplug would be a fifth of a
     /// second per port, over as many ports as the machine offers.
     fn screens_changed(&mut self) {
@@ -19134,7 +19387,7 @@ impl Footer {
         // AND THE READING IS ASKED FOR, not waited on. The view opens on
         // whatever the last one said — which on a fresh footer is nothing —
         // and the answer redraws it a moment later. Waiting here would hold
-        // the frame for a walk of `/sys` and two round trips to niri.
+        // the frame for a walk of `/sys` and two round trips to the compositor.
         let mut view = crate::display::View::fresh();
         match self.display_orders.as_ref() {
             Some(h) => h.send(ronoctua_display::Order::Look { deep: true }),
@@ -19279,19 +19532,6 @@ impl Footer {
                     self.echo_message(said);
                 }
             },
-            // IN THE ORDER THEY WERE MADE, because the last one is the change
-            // the person actually asked for — see `display::Target::First`.
-            crate::display::Errand::Orders(orders) => {
-                if self.display_orders.is_none() {
-                    let said = self.texts.t(ronoctua_i18n::key::DISPLAY_NO_THREAD);
-                    self.echo_message(said);
-                }
-                if let Some(h) = self.display_orders.as_ref() {
-                    for order in orders {
-                        h.send(order);
-                    }
-                }
-            }
         }
         self.draw_and_paint();
     }
@@ -19414,9 +19654,10 @@ impl Footer {
     /// Puts a standing preview back before this process ends.
     ///
     /// THE WINDOW'S DOOR CARRIES THE WHOLE REASON (`DisplayWindow::leave`): a
-    /// preview is a transient over niri's IPC, and only this process's own
-    /// thread can take it down. The footer usually quits because the session
-    /// is going down and niri is going with it — but not always: `nix run
+    /// preview lives in the compositor's running configuration, and only this
+    /// process's own thread can take it down. The footer usually quits because
+    /// the session is going down and the compositor is going with it — but not
+    /// always: `nix run
     /// .#dev` restarts the footer under a compositor that keeps running, the
     /// rescue quits, and a second footer taking this display sends
     /// `Order::Quit`. There the change would stand with nothing left that
@@ -19646,7 +19887,7 @@ fn segment_color(
         //
         // While the footer has the keyboard — leader, `M-x`, manual —, no window
         // is focused as far as the compositor is concerned, and its blue border
-        // disappears. There is no asking niri to keep it: a window with no
+        // disappears. There is no asking the compositor to keep it: a window with no
         // keyboard is not active, and that is the truth the border tells.
         //
         // So the signal MOVES instead of vanishing: the blue leaves the window and
@@ -19707,6 +19948,89 @@ fn narrow_buffer_keymap(
 
 #[cfg(test)]
 mod tests {
+    use super::KeyboardHold;
+
+    /// THE LEADER DOES NOT CLOSE IN THE INSTANT IT OPENS.
+    ///
+    /// The measured sequence of the second and every later opening, replayed:
+    /// the footer asks for the keyboard, the compositor answers with a `leave`
+    /// and then an `enter`, and the footer is holding it when the pair is
+    /// over. See `KeyboardHold` for the journal it was read from.
+    #[test]
+    fn the_acquisitions_own_leave_is_not_a_loss() {
+        let mut hold = KeyboardHold::default();
+        hold.asked_for(true);
+        assert!(
+            !hold.left(),
+            "the first half of the pair was taken for a loss"
+        );
+        hold.entered();
+    }
+
+    /// AND THE FIRST OPENING OF A SESSION NEEDS NO FORGIVENESS.
+    ///
+    /// There is no focus to clear, so no `leave` comes at all — only the
+    /// `enter`. What is asserted is that the forgiveness does not survive it:
+    /// a `leave` after that pair is a keyboard actually taken away.
+    #[test]
+    fn nothing_is_forgiven_after_the_enter() {
+        let mut hold = KeyboardHold::default();
+        hold.asked_for(true);
+        hold.entered();
+        assert!(hold.left(), "a real loss was forgiven");
+    }
+
+    /// AND A SECOND `leave` IS A LOSS EVEN WITHOUT AN `enter`.
+    ///
+    /// Exactly one is forgiven per acquisition. Were it every `leave` while
+    /// the footer wants the keyboard, the handler would stop doing the one
+    /// thing it exists for — a footer left expanded, holding the region, and
+    /// receiving nothing.
+    #[test]
+    fn only_one_leave_is_forgiven_per_acquisition() {
+        let mut hold = KeyboardHold::default();
+        hold.asked_for(true);
+        assert!(!hold.left());
+        assert!(hold.left(), "the second leave was forgiven too");
+    }
+
+    /// AND NARROWING THE LIST IS NOT AN ACQUISITION.
+    ///
+    /// Every key of a sequence asks for a new height with the keyboard already
+    /// held, and the compositor answers those with silence — no pair. Arming
+    /// the forgiveness there would leave it armed for as long as the leader is
+    /// open, and swallow the one `leave` that matters.
+    #[test]
+    fn narrowing_the_list_forgives_nothing() {
+        let mut hold = KeyboardHold::default();
+        hold.asked_for(true);
+        hold.entered();
+        // `LEADER h`: same keyboard, a shorter list.
+        hold.asked_for(true);
+        assert!(hold.left(), "narrowing armed the forgiveness");
+    }
+
+    /// AND LETTING THE KEYBOARD GO ARMS IT AGAIN.
+    ///
+    /// This is the whole cycle the bug lived in: open, close, open. The second
+    /// opening is the one the compositor answers with the pair.
+    #[test]
+    fn letting_it_go_and_asking_again_arms_the_forgiveness() {
+        let mut hold = KeyboardHold::default();
+        hold.asked_for(true);
+        hold.entered();
+        // `Esc`: back to rest, the footer holds nothing.
+        hold.asked_for(false);
+        // And the leader again.
+        hold.asked_for(true);
+        assert!(
+            !hold.left(),
+            "the second opening was not forgiven its leave"
+        );
+        hold.entered();
+        assert!(hold.left());
+    }
+
     /// THE FOOTER DOES NOT GROW WHEN A KEY EXPLAINS ITSELF.
     ///
     /// The one promise the explanation line makes, and the reason it is drawn
@@ -20589,7 +20913,7 @@ mod tests {
         ];
         let with_file = ronoctua_notify::Notification::fresh_one(
             1,
-            "niri".into(),
+            "screen".into(),
             Some("file:///home/x/a%20b.png".into()),
             "s".into(),
             String::new(),

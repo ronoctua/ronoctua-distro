@@ -128,10 +128,10 @@ in
         # And `createDirectories` above covers `extraConfig` too, which is the
         # whole reason this line exists rather than a `tmpfiles` rule: writing it
         # is what MAKES the directory. Until now the distro declared nowhere for
-        # a capture to land, so niri used its own default (`~/Pictures/…`) —
-        # a path that contradicts `pictures` right above it, and that nothing
-        # created. `nix/modules/niri.nix` reads the same entry for
-        # `screenshot-path`, and a check compares the two.
+        # a capture to land, so one went wherever the program that took it
+        # chose. `nix/modules/scroll.nix` reads the same entry for
+        # `RONOCTUA_SCREENSHOTS`, which is what the footer builds a capture's
+        # name from, and a check compares the two.
         extraConfig = {
           SCREENSHOT = "${home}/${dirs.screenshot}";
         };

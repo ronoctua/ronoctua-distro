@@ -15,7 +15,7 @@
 # would make central: `systemd-run --scope` is SYNCHRONOUS — from the manual,
 # "execution in this case is synchronous, and will return only when the
 # command finishes". With the `calloop` on a single thread, waiting for it
-# froze keyboard, painting and niri events for the application's whole
+# froze keyboard, painting and the compositor events for the application's whole
 # lifetime.
 #
 # The test application sleeps TWO MINUTES on purpose. With the defect, the
@@ -25,13 +25,13 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
   # A NAME WITH NO ACCENT AND NO OCR AMBIGUITY. Tesseract confuses `l`/`I` and
   # eats accents in a small font; what is proved here is that the name reaches
   # the pixel, and not the quality of the OCR.
@@ -57,7 +57,7 @@ pkgs.testers.runNixOSTest {
     virtualisation.cores = 2;
 
     environment.systemPackages = [
-      niri
+      scroll
       ronoctua-shell
       pkgs.imagemagick
       pkgs.tesseract
@@ -130,8 +130,8 @@ pkgs.testers.runNixOSTest {
         )
 
     start_xvfb()
-    start_niri("niri", "${niri}")
-    sock = socket_of("niri")
+    start_compositor("compositor", "${scroll}")
+    sock = socket_of("compositor")
 
     with subtest("the footer comes up and SCANS at start-up"):
         machine.succeed(
@@ -140,13 +140,13 @@ pkgs.testers.runNixOSTest {
             "--setenv=LANG=pt_BR.UTF-8 "
             "--setenv=XDG_DATA_DIRS=/tmp/apps "
             "--setenv=XDG_DATA_HOME=/tmp/empty "
-            f"--setenv=NIRI_SOCKET={sock} "
+            f"--setenv=SCROLLSOCK={sock} "
             "--setenv=RUST_LOG=ronoctua_shell=debug "
             "--setenv=RONOCTUA_LEADER=LEADER "
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'control socket opened'",
+            "journalctl -u footer --no-pager | grep 'control socket opened' > /dev/null",
             timeout=90,
         )
         # THE SWEEP IS THE STARTUP ONE, and the log carries the count and the
@@ -160,12 +160,12 @@ pkgs.testers.runNixOSTest {
             "the scan should find ONE application — the `NoDisplay` one and the actions\n"
             f"of the desktop entry cannot get in. Log:\n{journal}"
         )
-        focus_niri()
+        focus_compositor()
 
     with subtest("`LEADER a` opens with the list ALREADY READY"):
         leader()
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
         )
         press_key("a")
         journal = machine.wait_until_succeeds(
@@ -179,12 +179,35 @@ pkgs.testers.runNixOSTest {
     with subtest("the application's name is ON SCREEN"):
         # It closes the chain: catalogue -> expansion -> span -> pixel. A test
         # that only looked at the log would not tell "it found" from "it draws".
-        w, h, x, y = niri_geometry()
+        w, h, x, y = compositor_geometry()
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+
+        # THE FOOTER'S BAND, and not the whole output.
+        #
+        # The finder is drawn in the footer, which is anchored at the BOTTOM —
+        # so a crop of the whole screen is mostly empty desk, and
+        # `tesseract --psm 6`, which expects one uniform block of text, reads
+        # nothing at all from it. It used to work because the window filled
+        # differently; what makes it not depend on that again is counting from
+        # the bottom edge, which is where the footer always is.
+        #
+        # THE HEIGHT THE FOOTER SAYS IT RESOLVED, which is two fixed lines
+        # plus whatever the open expansion took. A guessed band is mostly desk,
+        # and an image that is mostly desk reads as an empty string.
+        band = min(h, footer_band())
+        top = max(0, h - band)
         machine.succeed(
             f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
+            f"-crop {w}x{band}+0+{top} +repage "
             "-colorspace gray -negate -resize 200% /tmp/apps.png"
         )
+        # DIAGNOSIS BEFORE THE OCR, the shape `modeline-vm` uses: `cores=1`
+        # says "uniform band, nothing drawn" and separates a wrong crop from an
+        # absent drawing without costing a second VM round.
+        print("the footer's band: " + machine.succeed(
+            "${pkgs.imagemagick}/bin/magick /tmp/apps.png "
+            "-format 'cores=%k media=%[fx:mean]' info:"
+        ))
         read_back = machine.succeed(
             "${pkgs.tesseract}/bin/tesseract /tmp/apps.png stdout --psm 6 2>/dev/null"
         ).strip()
@@ -204,7 +227,7 @@ pkgs.testers.runNixOSTest {
         prior = leaders_in_log()
         press_key("Return")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'opening the application'", timeout=30
+            "journalctl -u footer --no-pager | grep 'opening the application' > /dev/null", timeout=30
         )
         machine.wait_until_succeeds(
             "pgrep -f '${sleepPattern}' >/dev/null", timeout=30

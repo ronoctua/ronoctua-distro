@@ -3,7 +3,7 @@
 //!
 //! # Why a crate of its own
 //!
-//! The same reason `ronoctua-niri` is the only one that speaks `niri-ipc`,
+//! The same reason `ronoctua-scroll` is the only one that speaks the compositor's IPC,
 //! `ronoctua-network` the only one that speaks NetworkManager and
 //! `ronoctua-memory` the only one that reads `/proc`: one border, one crate.
 //! Nothing here knows Wayland, wgpu or the display list, which is what lets a

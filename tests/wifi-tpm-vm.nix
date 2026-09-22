@@ -91,7 +91,7 @@ pkgs.testers.runNixOSTest {
         # Without the well-known name, the footer would call `Store` and get
         # "name has no owner" — the same error as an absent daemon.
         machine.succeed(
-            "busctl --system list | grep -q org.ronoctua.agent"
+            "busctl --system list | grep org.ronoctua.agent > /dev/null"
         )
 
     with subtest("sealing stores the password, and what stays on disk is NOT it"):

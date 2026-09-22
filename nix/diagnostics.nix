@@ -4,7 +4,7 @@
 #
 # Because the shortcuts froze **four times** and on all four there was no
 # evidence at all. The footer's log went to a terminal that had already been
-# closed, niri's had the four lines from startup, and what was left was a
+# closed, the compositor's had the four lines from startup, and what was left was a
 # description of the symptom — which does not tell the three possible causes apart:
 #
 #   1. the key does not reach the footer (the compositor stopped dispatching);
@@ -21,10 +21,14 @@
 #     Wayland client can ask; whoever does not answer it is not dispatching
 #     anything, and then no key would arrive at all. **This is the one that
 #     closes the case**: the socket queues corroborate, but the sync proves it.
-#   - the socket queues: the `Recv-Q` of niri's IPC says how many connections
-#     went without an `accept`, and the footer's `Send-Q` says how many bytes it
-#     wrote that the compositor never read.
-#   - the layer surface's keyboard interactivity, which answers (3).
+#   - the socket queues: the `Recv-Q` of the compositor's IPC says how many
+#     connections went without an `accept`, and the footer's `Send-Q` says how
+#     many bytes it wrote that the compositor never read.
+#   - whether the IPC itself still answers, which is the same question asked of
+#     a second socket. It used to be the layer surface's keyboard
+#     interactivity, and that answered (3) directly — this compositor's IPC has
+#     no way to enumerate layer surfaces at all, so (3) now has to be read off
+#     the footer's own log.
 #   - the CPU consumed over a time window: it separates "frozen" from "spinning".
 #
 # All of this is READING. Nothing here sends a command, kills a process or
@@ -35,7 +39,7 @@
   procps,
   iproute2,
   python3,
-  niri,
+  scroll,
 }:
 
 writeShellApplication {
@@ -45,7 +49,7 @@ writeShellApplication {
     procps
     iproute2
     python3
-    niri
+    scroll
   ];
 
   text = ''
@@ -67,33 +71,45 @@ writeShellApplication {
     #
     # `|| true`: with no match at all `pgrep` exits 1, and under `set -e` that
     # would take diagnostics down in precisely the "nothing is running" case.
-    target_pids=$( { pgrep -d, -f "ronoctua|niri --config" || true; } )
+    target_pids=$( { pgrep -d, -f "ronoctua|scroll -c" || true; } )
     if [ -n "$target_pids" ]; then
       ps -o pid,etime,rss,args -p "$target_pids" || true
     else
-      echo "  nothing of ronoctua or niri running"
+      echo "  nothing of ronoctua or the compositor running"
     fi
     echo
 
-    # THE NESTED NIRI, through the IPC socket: `niri.<display>.<pid>.sock`.
-    niri_pid=""
-    niri_sock=""
-    for s in "$runtime"/niri.*.sock; do
-      [ -e "$s" ] || continue
-      p=$(basename "$s" | rev | cut -d. -f2 | rev)
-      if kill -0 "$p" 2>/dev/null; then
-        niri_pid="$p"
-        niri_sock="$s"
-        display=$(basename "$s" | cut -d. -f2)
+    # THE COMPOSITOR'S OWN ENVIRONMENT, and not a name to go looking for.
+    #
+    # The socket's path is not derivable from outside: `SCROLLSOCK` is what the
+    # compositor binds and the loop makes it a `mktemp -u` name, so there is no
+    # pattern that finds it and no second copy to be confused with. `/proc` has
+    # the answer exactly, for the same reason the sweep in `nix/dev.nix` reads
+    # `/proc/<pid>/exe`: a process says what it is, nothing else has to guess.
+    #
+    # And it is READING — `environ` is a file, and looking at it disturbs
+    # nothing, which is this whole script's rule.
+    compositor_pid=""
+    compositor_sock=""
+    display=""
+    for p in $(pgrep -f "scroll -c" || true); do
+      env_file="/proc/$p/environ"
+      [ -r "$env_file" ] || continue
+      s=$(tr '\0' '\n' < "$env_file" | sed -n 's/^SCROLLSOCK=//p' | head -1)
+      d=$(tr '\0' '\n' < "$env_file" | sed -n 's/^WAYLAND_DISPLAY=//p' | head -1)
+      if [ -n "$d" ]; then
+        compositor_pid="$p"
+        compositor_sock="$s"
+        display="$d"
       fi
     done
-    if [ -z "$niri_pid" ]; then
-      echo "no nested niri standing — nothing more to measure."
+    if [ -z "$compositor_pid" ]; then
+      echo "no compositor standing — nothing more to measure."
       echo
       echo "the snapshot is at $out_text"
       exit 0
     fi
-    echo "nested niri: pid $niri_pid, display $display"
+    echo "compositor: pid $compositor_pid, display $display"
     echo
 
     # ---------------------------------------------------------------
@@ -118,7 +134,7 @@ writeShellApplication {
         print("  wl_display.sync: ANSWERED — the event loop is alive")
     except socket.timeout:
         print("  wl_display.sync: TIMEOUT after 3 s.")
-        print("    THIS ALONE DOES NOT MEAN LOCKED UP. The nested niri is")
+        print("    THIS ALONE DOES NOT MEAN LOCKED UP. The nested compositor is")
         print("    a client of the host's compositor: with its window hidden, the")
         print("    host stops feeding it and it sleeps — serving neither")
         print("    its own clients nor the IPC. Bring the window to the")
@@ -132,14 +148,14 @@ writeShellApplication {
     echo "## socket queues"
     echo "  (Recv-Q of LISTEN = connections with no accept; Send-Q = bytes the"
     echo "   other side never read)"
-    ss -x -a -p 2>/dev/null | grep -E "niri\.|ronoctua-" | grep -v "Recv-Q" || true
+    ss -x -a -p 2>/dev/null | grep -E "scroll|ronoctua-" | grep -v "Recv-Q" || true
     echo
 
     # ---------------------------------------------------------------
     # 3. Frozen or spinning?
     # ---------------------------------------------------------------
     echo "## CPU over 3 s (100 ticks = 1 s)"
-    for p in $niri_pid $(pgrep -f "bin/ronoctua-shell$" || true); do
+    for p in $compositor_pid $(pgrep -f "bin/ronoctua-shell$" || true); do
       a=$(awk '{print $14+$15}' "/proc/$p/stat" 2>/dev/null || echo 0)
       echo "$p $a"
     done > /tmp/ronoctua-diag-cpu.$$
@@ -154,11 +170,23 @@ writeShellApplication {
     # ---------------------------------------------------------------
     # 4. Does the footer have the keyboard?
     # ---------------------------------------------------------------
-    echo "## the footer's layer surface"
-    if NIRI_SOCKET="$niri_sock" timeout 5 niri msg layers 2>/dev/null | grep -A3 "ronoctua-footer"; then
-      :
+    # THE LAYER SURFACE CANNOT BE ASKED ABOUT, and that is a loss with no
+    # replacement. The previous compositor answered `msg layers` with every
+    # layer surface and its keyboard interactivity, which answered cause (3) in
+    # one line; this one has no such request — `get_tree` is toplevels, and
+    # nothing in its IPC enumerates the layer shell.
+    #
+    # What is left is TWO halves. The IPC answering at all says the compositor
+    # is still serving that socket, which is the same fact the sync above says
+    # about the Wayland one and is worth having from a second door. And the
+    # footer's own log says whether exclusivity was granted, because the footer
+    # is the side that asked for it — read further down.
+    echo "## does the IPC answer?"
+    if SCROLLSOCK="$compositor_sock" SWAYSOCK="$compositor_sock" \
+       timeout 5 scrollmsg -t get_version >/dev/null 2>&1; then
+      echo "  the IPC answered — the compositor is serving that socket too"
     else
-      echo "  niri's IPC did not answer within 5 s (consistent with the sync above)"
+      echo "  the IPC did not answer within 5 s (consistent with the sync above)"
     fi
     echo
 
@@ -171,10 +199,18 @@ writeShellApplication {
     # THIS IS THE LINE THAT CLOSES THE CASE, and it took an hour to work out by hand.
     #
     # A modifier stuck in the nested compositor explains on its own
-    # everything one sees: `Ctrl+Alt+Space` stops firing (niri matches a bind by
-    # EXACT mask, and the mask has one bit too many), and the click stops
-    # reaching the buffers because in the nested backend niri's `Mod` IS Alt —
-    # `Mod+drag` means move window, so every click becomes a drag.
+    # everything one sees: `Ctrl+Alt+Space` stops firing (a bind is matched by
+    # EXACT mask — `modifiers ^ binding->modifiers`, `sway/input/keyboard.c` —
+    # and the mask has one bit too many), and the click stops reaching the
+    # buffers because in the nested loop `$mod` IS Alt — `$mod+drag` means move
+    # window, so every click becomes a drag.
+    #
+    # This may no longer be reachable at all. The Wayland backend of wlroots
+    # implements `.modifiers` and calls `wlr_keyboard_notify_modifiers` with
+    # what the HOST sends, and the host resends that on every focus change —
+    # which is exactly the resynchronisation the previous compositor had no way
+    # to do. Left in place because the cost is a grep and the symptom is an
+    # hour: a line that is never printed costs nothing.
     #
     # And it is the value RIGHT NOW, not the one from when the footer had the
     # keyboard: that is why it comes out with the time. The footer only receives
@@ -213,8 +249,8 @@ writeShellApplication {
       tail -40 "$f"
     done
     echo
-    echo "## end of niri's log"
-    for f in /tmp/ronoctua-niri-*.log; do
+    echo "## end of the compositor's log"
+    for f in /tmp/ronoctua-compositor-*.log; do
       [ -e "$f" ] || continue
       echo "--- $f"
       tail -20 "$f"

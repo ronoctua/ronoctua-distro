@@ -3,8 +3,9 @@
 //! # Blocking, on a thread
 //!
 //! zbus has an async API and a blocking one. We use the **blocking** one, on a
-//! thread of its own, with a channel to the main loop — the same shape as niri's
-//! event stream (`daemon.rs` in the shell). Bringing an async executor inside
+//! thread of its own, with a channel to the main loop — the same shape as the
+//! compositor's event stream (`daemon.rs` in the shell). Bringing an async
+//! executor inside
 //! a calloop loop would add a second concurrency model
 //! to solve a problem a thread already solves.
 //!
@@ -170,10 +171,11 @@ impl Server {
 
         // WHERE THE IMAGE IS, and there are two places by convention.
         //
-        // The compositor puts a screenshot's `file://` URL straight into
-        // `app_icon`, which is what our screenshot entry reads. libnotify does
-        // not: `notify-send -i` loads the file and sends the standard
-        // `image-path` hint instead, leaving `app_icon` empty.
+        // A `file://` URL straight in `app_icon` is one of them, and it is what
+        // our own capture writes — that path does not come through this module,
+        // but a sender on the bus may do the same. libnotify does not:
+        // `notify-send -i` loads the file and sends the standard `image-path`
+        // hint instead, leaving `app_icon` empty.
         //
         // Reading only the first made every action that needs a file vanish for
         // every libnotify client, and the symptom was a band two lines tall
@@ -198,10 +200,10 @@ impl Server {
             app = %n.app,
             actions = n.actions.len(),
             tags = n.tags.len(),
-            // THE ICON FIELD, RAW. It is where a `file://` URL arrives — the
-            // compositor puts a screenshot's path there — and when the actions
-            // that need a file all vanish, this line is the difference between
-            // "the sender did not send one" and "we did not read it".
+            // THE ICON FIELD, RAW. It is where a `file://` URL arrives — a
+            // capture puts its path there — and when the actions that need a
+            // file all vanish, this line is the difference between "the sender
+            // did not send one" and "we did not read it".
             icon = n.icon.as_deref().unwrap_or("-"),
             "notification received"
         );

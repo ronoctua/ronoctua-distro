@@ -1,4 +1,4 @@
-# niri's CHORD binds, GENERATED from the shell's command table.
+# The compositor's CHORD binds, GENERATED from the shell's command table.
 #
 # # Why generated
 #
@@ -9,7 +9,7 @@
 #
 # Writing those binds by hand would bring back exactly what this work has just
 # eliminated: two shortcut tables, two notations, and a which-key
-# that knows only half. Here the KDL comes out of the SAME `actions.rs` that
+# that knows only half. Here the text comes out of the SAME `actions.rs` that
 # `run_command` uses — remove an id there, the bind disappears from here.
 #
 # # Why a derivation, and not `builtins.readFile`
@@ -27,18 +27,44 @@
   # Returns a file with the binds, ready to go inside the config's
   # `binds { … }` block.
   #
-  # `prefix` is `Mod` in production and `Alt` in the nested loop — `Mod` belongs
-  # to the host's compositor when running inside another one.
+  # `prefix` is `Super` in production and `Alt` in the nested loop — Super
+  # belongs to the host's compositor when running inside another one.
   forPrefix =
     prefix:
-    runCommand "ronoctua-binds-${prefix}.kdl" { } ''
-      ${ronoctua-shell}/bin/ronoctua-shell export-niri-binds ${prefix} > $out
+    runCommand "ronoctua-binds-${prefix}.conf" { } ''
+      # THE PREFIX HAS TO BE A NAME THE COMPOSITOR KNOWS, and this is the guard
+      # that would have caught the one defect this whole file exists to make
+      # impossible.
+      #
+      # `Mod` is not a modifier here. The table is
+      # `Shift Lock Control Ctrl Mod1 Alt Mod2 Mod3 Mod4 Super Mod5`
+      # (`get_modifier_mask_by_name`, `sway/input/keyboard.c`), and anything
+      # else returns 0 — so `bindsym Mod+Left …` is refused line by line with
+      # nothing but a log entry, and EVERY chord in the session is dead while
+      # the leader, the emergency binds and the media keys all still work. That
+      # is a defect with no symptom anybody would connect to a config: the
+      # arrows simply stop moving windows.
+      #
+      # It was the previous compositor's spelling, and it survived the rename
+      # because nothing here read it.
+      case "${prefix}" in
+        Shift | Lock | Control | Ctrl | Mod1 | Alt | Mod2 | Mod3 | Mod4 | Super | Mod5) ;;
+        *)
+          echo "ERROR: \`${prefix}\` is not a modifier this compositor knows." >&2
+          echo "       It takes Shift, Lock, Control, Ctrl, Mod1, Alt, Mod2," >&2
+          echo "       Mod3, Mod4, Super or Mod5. Every chord would be refused" >&2
+          echo "       one by one, with only a log line to say so." >&2
+          exit 1
+          ;;
+      esac
 
-      # IT MUST NOT COME OUT EMPTY. An `export-niri-binds` that failed in
+      ${ronoctua-shell}/bin/ronoctua-shell export-binds ${prefix} > $out
+
+      # IT MUST NOT COME OUT EMPTY. An `export-binds` that failed in
       # silence would give a config with no chords — and the symptom would be "the
       # arrows stopped working", with no error anywhere.
       if [ ! -s $out ]; then
-        echo "ERROR: export-niri-binds emitted nothing." >&2
+        echo "ERROR: export-binds emitted nothing." >&2
         exit 1
       fi
 
@@ -48,7 +74,7 @@
       # leader fire something, and the requirement is the opposite: holding has to be
       # inert until the second key arrives. The sequence's trigger is
       # `${prefix}+Space`, a chord like the others.
-      if grep -qE '^ *${prefix} *(repeat=[a-z]+ *)?\{' $out; then
+      if grep -qE '^bindsym( --[a-z-]+)* ${prefix} ' $out; then
         echo "ERROR: there is a bind on the leader ALONE; holding the leader would stop" >&2
         echo "      be inert and would steal the window's focus." >&2
         exit 1
@@ -64,8 +90,11 @@
       # (`Ctr` followed by one or more `l`), so the guard matched nothing and
       # always passed. A guard that never fires is worse than none —
       # it claims to have checked.
-      for press_key in Ctrl+Alt+L Ctrl+Shift+L Ctrl+Alt+Escape Ctrl+Alt+Delete; do
-        if ! grep -qF "    $press_key " $out; then
+      # AND LOWERCASE FOR A SINGLE LETTER, which is not cosmetic: a bind
+      # matches a KEYSYM, so `Ctrl+Alt+L` is the keysym `L` — which needs
+      # Shift to be produced at all, so the bind would simply never fire.
+      for press_key in Ctrl+Alt+l Ctrl+Shift+l Ctrl+Alt+Escape Ctrl+Alt+Delete; do
+        if ! grep -qF "bindsym" $out || ! grep -qF " $press_key " $out; then
           echo "ERROR: the emergency bind $press_key did not come out." >&2
           exit 1
         fi

@@ -4,7 +4,7 @@
 //! # This is not a second border with `/proc`
 //!
 //! `ronoctua-memory` is the only crate that reads `/proc`, the cgroups and
-//! systemd's memory policy, in the same way `ronoctua-niri` is the only one
+//! systemd's memory policy, in the same way `ronoctua-scroll` is the only one
 //! that speaks to the compositor and `ronoctua-network` the only one that
 //! speaks to NetworkManager. Everything here comes from [`ronoctua_memory`],
 //! already read and already a number — including the two readings that had to

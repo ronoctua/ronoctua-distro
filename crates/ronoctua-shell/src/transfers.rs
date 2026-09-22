@@ -539,11 +539,11 @@ pub fn under_the_pointer(job: &Job, texts: &ronoctua_i18n::Texts) -> String {
 /// not fatal**. Without it the footer loses the percentage and the panel and
 /// goes on drawing everything else; taking the shell down over a missing
 /// `XDG_RUNTIME_DIR` would trade one feature for all of them. It is the same
-/// criterion as `daemon::listen_to_niri` and the control socket.
+/// criterion as `daemon::listen_to_the_compositor` and the control socket.
 ///
 /// # Why a thread and not the socket in `calloop`
 ///
-/// The same two reasons the niri stream gives. A JSON line can arrive split
+/// The same two reasons the compositor's stream gives. A JSON line can arrive split
 /// across two reads, which in the main loop is a state machine and on a thread
 /// with a blocking `read_line` is one line of code. And the client RECONNECTS —
 /// it starts the daemon when nobody is home — which is a sleep and a retry, and

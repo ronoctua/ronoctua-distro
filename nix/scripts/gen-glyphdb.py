@@ -498,7 +498,7 @@ def main() -> int:
     #
     # Noisy on purpose: bumping the Nerd Fonts version starts failing until
     # the new glyphs are translated. It is the same design as the check that demands
-    # translation of niri's actions.
+    # translation of the compositor's deeds.
     if stats["no_pt"]:
         sample = stats["no_pt"][:12]
         print("", file=sys.stderr)

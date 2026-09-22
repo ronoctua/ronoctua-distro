@@ -1,11 +1,11 @@
-//! The daemon that consumes niri's event stream — milestone 4.
+//! The daemon that consumes the compositor's event stream — milestone 4.
 //!
 //! # Why a thread, and not the fd in calloop
 //!
-//! It would be possible to hang niri's socket straight off `calloop` as a
+//! It would be possible to hang the compositor's socket straight off `calloop` as a
 //! `Generic` and read in the main loop. That is not what we do, for two reasons:
 //!
-//! 1. `ronoctua-niri` stays **synchronous and runtime-free** — which lets the
+//! 1. `ronoctua-scroll` stays **synchronous and runtime-free** — which lets the
 //!    contract binary exercise exactly the same code as the shell, with no
 //!    executor at all. A contract that tests another path tests nothing.
 //! 2. A JSON line can arrive split across two reads. In the main loop
@@ -23,37 +23,67 @@
 
 use std::thread;
 
+use ronoctua_compositor::{Event, State};
 use ronoctua_i18n::{Texts, key};
-use ronoctua_niri::{Event, Niri, State};
 use smithay_client_toolkit::reexports::calloop::channel::Sender;
 
-/// Starts the thread that reads niri's event stream.
+/// Starts the thread that reads the compositor's event stream.
 ///
 /// It returns `false` when there is no compositor to listen to. **It is not an error**: the
-/// footer runs without niri in tests and in the installer (section 7.1), and taking the
+/// footer runs without one in tests and in the installer (section 7.1), and taking the
 /// shell down over that would trade a degraded modeline for none.
-pub fn listen_to_niri(channel: Sender<Event>) -> bool {
-    let niri = match Niri::connect() {
-        Ok(n) => n,
+/// Opens a connection, or says there is nobody to talk to.
+///
+/// # THE ONE PLACE IN THIS CRATE THAT NAMES AN ADAPTER
+///
+/// Every caller holds a `dyn Compositor` and asks it things, which is what
+/// makes "this crate does not know which compositor it is" a fact about the
+/// code rather than a sentence in a document. There were FOUR of these, and
+/// more than one is how a crate drifts back into naming a product: the day a
+/// second adapter exists, three of the four get updated.
+///
+/// It lives HERE and not beside its busiest caller because this module is the
+/// one about the connection — the event stream below opens the same socket for
+/// the same reason, and a crate with an opener in one file and a second one in
+/// another has two.
+///
+/// The DEED TABLE is the exception, and it is a different kind of naming: it
+/// is generated from `assets/compositor-deeds.nix` and the text in it is this
+/// compositor's own command grammar, so it lives in the adapter by nature
+/// rather than by accident. `ronoctua-compositor` holds the `Deed` and the
+/// `Arity`; only the words are the adapter's.
+///
+/// `only-the-composition-root-names-the-compositor` counts the connections.
+///
+/// # Errors
+///
+/// There is no compositor on this session, or it refused the connection.
+pub fn open_the_compositor() -> anyhow::Result<Box<dyn ronoctua_compositor::Compositor>> {
+    ronoctua_scroll::Scroll::open()
+}
+
+pub fn listen_to_the_compositor(channel: Sender<Event>) -> bool {
+    let wm = match open_the_compositor() {
+        Ok(c) => c,
         Err(e) => {
             tracing::warn!(
                 error = %e,
-                "no niri IPC; the modeline keeps its start-up state"
+                "no compositor IPC; the modeline keeps its start-up state"
             );
             return false;
         }
     };
 
-    let events = match niri.event_stream() {
+    let events = match wm.watch() {
         Ok(e) => e,
         Err(e) => {
-            tracing::warn!(error = %e, "niri refused the event stream");
+            tracing::warn!(error = %e, "the compositor refused the event stream");
             return false;
         }
     };
 
     thread::Builder::new()
-        .name("niri-events".into())
+        .name("compositor-events".into())
         .spawn(move || {
             let mut events = events;
             loop {
@@ -63,7 +93,7 @@ pub fn listen_to_niri(channel: Sender<Event>) -> bool {
                         // did not update" does not tell "the compositor did not
                         // send" from "it sent and we ignored it" — which was
                         // exactly the doubt while building the VM test.
-                        tracing::debug!(?event, "a niri event");
+                        tracing::debug!(?event, "an event from the compositor");
                         // A send error only happens if the main loop has already
                         // died. Then the thread ends silently — there is
                         // nothing useful to log in a shell that is on its way out.
@@ -72,18 +102,18 @@ pub fn listen_to_niri(channel: Sender<Event>) -> bool {
                         }
                     }
                     Ok(None) => {
-                        tracing::info!("niri ended the event stream");
+                        tracing::info!("the compositor ended the event stream");
                         return;
                     }
                     Err(e) => {
                         // A malformed event does not take the stream down: that would be
                         // trading a slightly wrong modeline for none.
-                        tracing::warn!(error = %e, "a niri event ignored");
+                        tracing::warn!(error = %e, "an event from the compositor ignored");
                     }
                 }
             }
         })
-        .expect("niri's thread cannot fail to be born");
+        .expect("the compositor's thread cannot fail to be born");
 
     true
 }
@@ -177,7 +207,7 @@ pub fn mode_label(texts: &Texts, app_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ronoctua_niri::Window;
+    use ronoctua_compositor::Window;
 
     fn texts() -> Texts {
         Texts::fresh("pt-BR").expect("pt-BR has to exist")
@@ -185,7 +215,7 @@ mod tests {
 
     fn with_focus(title: Option<&str>, app_id: Option<&str>) -> State {
         let mut e = State::default();
-        e.apply_to(&Event::WindowsChanged(vec![Window {
+        e.apply_to(&Event::Windows(vec![Window {
             id: 1,
             title: title.map(ToOwned::to_owned),
             app_id: app_id.map(ToOwned::to_owned),

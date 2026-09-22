@@ -216,15 +216,22 @@ mod tests {
     use crate::presentation::Show;
     use crate::rule::{Field, Test};
 
+    /// What the footer raises after `grim` has written a file.
+    ///
+    /// The TAG is the whole recognition. It used to be the pair (app, summary),
+    /// because the sender was the compositor and an English sentence was all it
+    /// gave us; the capture is ours now, so the entry matches a word we write.
     fn shot() -> Notification {
-        Notification::fresh_one(
+        let mut n = Notification::fresh_one(
             7,
-            "niri".into(),
+            "screen".into(),
             Some("file:///home/x/Pictures/a.png".into()),
-            "Screenshot captured".into(),
-            "You can paste the image from the clipboard.".into(),
-            Urgency::Normal,
-        )
+            "Screen captured".into(),
+            "The picture was saved to disk.".into(),
+            Urgency::Low,
+        );
+        n.tags = vec!["screenshot".to_owned()];
+        n
     }
 
     #[test]

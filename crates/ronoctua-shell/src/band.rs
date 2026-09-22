@@ -473,7 +473,7 @@ mod tests {
     fn shown(show: Show, body: &str, actions: usize) -> Shown {
         let mut n = Notification::fresh_one(
             1,
-            "niri".into(),
+            "screen".into(),
             None,
             "Screen captured".into(),
             body.into(),

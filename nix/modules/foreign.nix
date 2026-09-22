@@ -24,7 +24,7 @@
 {
   config,
   lib,
-  # `themed`: the generated palettes. The module arg, as `nix/modules/niri.nix`
+  # `themed`: the generated palettes. The module arg, as `nix/modules/scroll.nix`
   # takes it — `config.ronoctua` carries the CHOICE and this carries the store.
   ronoctua,
   ...
@@ -75,7 +75,7 @@ in
     environment.etc."xdg/gtk-3.0/settings.ini".text = settings;
     environment.etc."xdg/gtk-4.0/settings.ini".text = settings;
 
-    # What the settings portal answers: `programs.dconf.enable` is niri's.
+    # What the settings portal answers: `programs.dconf.enable` is the compositor module's.
     programs.dconf.profiles.user.databases = [
       {
         settings."org/gnome/desktop/interface" = {

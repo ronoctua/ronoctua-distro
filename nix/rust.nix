@@ -48,7 +48,7 @@
   syntaxRs,
   mimeDb,
   i18nRs,
-  niriActions,
+  compositorDeeds,
   coreutils,
   util-linux,
   xdg-utils,
@@ -72,9 +72,7 @@
   zsh,
   polkit,
   nix,
-  niri,
   wl-clipboard,
-  xwayland-satellite,
   xkeyboard_config,
   glibcLocales,
   ghosttyVt,
@@ -273,9 +271,11 @@ let
     # this file, and nothing of it survives into the closure — which is what
     # `files-closure-has-no-mime-db` measures rather than assumes.
     RONOCTUA_MIME_DIR = "${mimeDb}";
-    # The compositor's action table, extracted from the PINNED niri. It is what
-    # makes "every OS action has a command" true without a hand-written list.
-    RONOCTUA_NIRI_ACTIONS = "${niriActions}/niri-actions.rs";
+    # The compositor's command table, DECLARED in
+    # `assets/compositor-deeds.nix`. It is what makes "every OS action has a
+    # command" true without a hand-written list in Rust — and the generator
+    # refuses a verb the pinned compositor does not have.
+    RONOCTUA_DEEDS = "${compositorDeeds}/deeds.rs";
     RONOCTUA_FONT_REGULAR = regularFont;
     RONOCTUA_FONT_EMOJI = emojiFont;
     RONOCTUA_FONT_LUCIDE = lucideFont;
@@ -424,11 +424,6 @@ let
     # What seals the Wi-Fi password into the TPM. A store path for the same reason
     # as the others: the agent runs as a systemd unit, where PATH is minimal.
     RONOCTUA_SYSTEMD_CREDS = "${systemd}/bin/systemd-creds";
-    # THE COMPOSITOR'S OWN CLIENT, which runs the 141 mirrored actions.
-    # It fills in arguments with defaults our JSON has no way of
-    # knowing — see `ronoctua_niri::run_through_client`.
-    RONOCTUA_NIRI = "${niri}/bin/niri";
-    RONOCTUA_XWAYLAND_SATELLITE = "${xwayland-satellite}/bin/xwayland-satellite";
     # WHAT COPIES. `Effect::Copy` was a `tracing::info!` and nothing more: the
     # glyph browser's nine copy formats never put anything on the
     # clipboard.
@@ -755,12 +750,12 @@ rec {
   #
   # # Why a wrapper and not a variable in each launcher
   #
-  # Because there are NINE launchers — the user unit, niri's binds, the nested
+  # Because there are NINE launchers — the user unit, the compositor's binds, the nested
   # loop, six VM tests — and a variable one of them forgets is not a failure: it
   # is a key that stops opening a window, with a line in a journal nobody is
   # reading. Here there is one place, and no launcher has to know anything.
   #
-  # `symlinkJoin` and not a package of its own: `niri-contract`, the benchmarks
+  # `symlinkJoin` and not a package of its own: the contract binary, the benchmarks
   # and the driven tests are all in `bin/` and the tests call them through THIS
   # path. `makeBinaryWrapper` and not `makeWrapper`: the second one puts a bash
   # in the closure of what the ISO carries.

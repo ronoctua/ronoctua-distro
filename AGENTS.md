@@ -1,7 +1,7 @@
 # ronoctua-distro
 
 Distro NixOS pessoal: sem barra, sem dock, sem menu iniciar — só o conteúdo e um rodapé de duas
-linhas. Niri como compositor, camada de shell própria em Rust. O porquê de cada decisão está em
+linhas. Scroll como compositor, camada de shell própria em Rust. O porquê de cada decisão está em
 `docs/ARCHITECTURE.md`; o que ainda falta, em `docs/PENDING.md`.
 
 ## Invariantes — nunca violar
@@ -9,7 +9,10 @@ linhas. Niri como compositor, camada de shell própria em Rust. O porquê de cad
 1. **Escopo é a pasta do projeto.** Nunca vasculhar atrás de código; ler caminho que o dono APONTOU, sim.
 2. **Um repo, PÚBLICO**: `ronoctua/ronoctua-distro`. Nada pessoal — o e-mail do perfil NÃO é o de
    commit: confira `git config user.email` antes do primeiro. MIT + OFL.
-3. **Sem fork e sem patch do Niri.** Só IPC e layer-shell.
+3. **Sem fork e sem patch do compositor.** Só IPC e layer-shell. **E o shell fala com ele por um
+   CONTRATO**: `ronoctua-compositor` são os tipos e o `trait`, `ronoctua-scroll` é o ÚNICO crate
+   da árvore que sabe qual compositor é, e nenhum outro o nomeia. Um WM é externo; o que
+   desenvolvemos não pode depender de externo nenhum.
 4. **O shell nunca reimplementa layout de janelas.** Um `xdg_toplevel` por buffer nativo.
 5. **Sem lógica Nix reimplementada em Rust.**
 6. **Nada imperativo.** Se não está no flake, não existe.
@@ -54,7 +57,7 @@ Ao bater num invariante: **pare e reporte.** Não contorne, não peça exceção
 
 ```
 nix develop           entra no ambiente (direnv é atalho opcional, e do HOST)
-nix run .#dev         niri aninhado + rodapé; leader = Ctrl+Alt+Espaço, não Super
+nix run .#dev         compositor aninhado + rodapé; leader = Ctrl+Alt+Espaço, não Super
 nix run .#png         um buffer vira PNG em 0,2 s, sem VM: a tela antes do "pronto"
 nix build .#shots-<cena>  fotografa UMA cena e o que ela precisa; .#shots são as 19
 nix run .#quick       DEZ escolhidos (tests/quick.nix), ~1 min; subconjunto, não categoria
@@ -69,12 +72,16 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 
 - **O rodapé é o desktop.** `wlr-layer-shell` embaixo: modeline e minibuffer COLADAS, expansão com teto e página abaixo, **faixa de notificação acima**, e nenhuma chrome (inv. 14). Ancorado embaixo, crescer para cima não move a modeline. Clique só faz o que tecla faz.
 - **Todo buffer tem ESTADO, e o primeiro é `normal`** — recusado no load se não for. `Esc` sozinho volta UM nível (o buffer é que anda, e relata); **segurar `Esc` + setas gira**; `LEADER w s` escolhe; clique na modeline gira. O toque-contra-retenção é resolvido NO HOST do buffer (keyd pegaria o `Esc` do vim), que avisa o rodapé pelo socket de controle — e o rodapé PERGUNTA na troca de foco. Estrangeira não tem estado. Id inglês, tela por `state-<id>`; `normal` discreto, todo o resto num token SÓ.
-- **A fronteira com o niri é só IPC** — `ronoctua-niri` é o único crate que fala `niri-ipc`. **E a
+- **A fronteira com o compositor é um CONTRATO, e só o adaptador fala IPC** — `ronoctua-compositor`
+  são os tipos neutros e o `trait Compositor`, com zero socket e zero JSON; `ronoctua-scroll` é o
+  único crate que sabe qual compositor é. Shell, display e resgate dependem só do contrato, e é isso
+  que faz "não depender de externo" ser estrutura em vez de intenção. **E a
   leader vem de FORA**: em repouso o rodapé não captura teclado, senão nenhum buffer receberia tecla.
-  Quem a vê é o niri, que roda `ronoctua-shell leader` no socket de controle
+  Quem a vê é o compositor, que roda `ronoctua-shell leader` no socket de controle
   (`$XDG_RUNTIME_DIR/ronoctua-<display>.sock`); só então a superfície expande e pede exclusividade.
   `ronoctua-shell command <id>` roda qualquer id — é por onde entram os QUATRO binds SEM leader.
-- **`Ctrl+Alt+Del` é o RESGATE** (7 toques em 2 s ainda forçam): janela flutuante, ou VT 8 sem niri.
+- **`Ctrl+Alt+Del` é o RESGATE** (7 toques em 2 s ainda forçam): janela flutuante, ou VT 8 sem
+  compositor.
 - **Rodapé morto tem uma LINHA que sobrevive a ele** (`ronoctua-shell lifeline <unidade>`): uma
   SEGUNDA layer-shell, no lugar do rodapé, com o que aconteceu e quatro opções — ver os logs (abre o
   journal no console de resgate), reiniciar, IA (desenhada e RECUSANDO, ainda não existe) e fechar.
@@ -94,9 +101,10 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   cada **2,01 s durante uma hora**, com `Error: raise the lifeline` no terminal. Agora ele escreve o
   próprio PID em `<pidfile>.watcher` (o `shutdown` o mata pelo nome), e pergunta TRÊS coisas antes de
   repetir: se a morte foi anunciada (`.onpurpose`, que o `dev.nix` passou a escrever ANTES do kill),
-  se o niri sob o qual aquele rodapé nasceu ainda vive — **pelo PID que está no nome do
-  `NIRI_SOCKET`, nunca por `[ -S ]`: soquete de servidor morto por sinal FICA no disco, medido uma
-  hora depois** — e se a sessão que pediu o rodapé ainda existe (`RONOCTUA_DEV_PID`). Mais um teto de
+  se o compositor sob o qual aquele rodapé nasceu ainda vive — **pelo PID que o `dev.nix` EXPORTA
+  (`RONOCTUA_COMPOSITOR_PID`), nunca por `[ -S ]`: soquete de servidor morto por sinal FICA no
+  disco, medido uma hora depois** — e se a sessão que pediu o rodapé ainda existe
+  (`RONOCTUA_DEV_PID`). Mais um teto de
   cinco reinícios por minuto. O `shutdown` também encerra o que o RODAPÉ subiu ao lado (transfers,
   brain: `PGID == PID`, alcançáveis só pelo `/proc/<pid>/exe` apontando para esta build) e poda na
   PARTIDA os logs de sessões velhas — eram 65 arquivos e 55 MB. Cobram o `a-dead-footer-stays-dead`
@@ -110,8 +118,11 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   dizer sobre si é LEMBRADO onde foi medido (`region_can_spare_a_row`, escrito no `grid`), nunca
   perguntado de dentro da soma. Cobra o `the-footer-does-not-ask-itself`, que também recusa qualquer
   ciclo novo entre os métodos do `Footer` — as cinco recursões que existem são declaradas.
-- **Todo comando é `kebab-case`, e a chave é `cmd-<id>`**; o registro recusa divergirem. As 141 ações
-  do niri entram como `niri-<nome>`, GERADAS, alcançáveis por nome (`LEADER :`, e SÓ ele — o `x`
+- **Todo comando é `kebab-case`, e a chave é `cmd-<id>`**; o registro recusa divergirem. Os 112
+  feitos do compositor entram como `wm-<nome>`, DECLARADOS em `assets/compositor-deeds.nix` e
+  GERADOS de lá — este compositor não enumera nada, seus comandos são texto livre espalhado por
+  quatro tabelas em C, então a tabela é NOSSA e o gerador recusa um verbo que a fonte pinada não
+  tem. Alcançáveis por nome (`LEADER :`, e SÓ ele — o `x`
   paralelo saiu a pedido do dono; duas teclas para uma coisa gastam duas linhas da lista, que é o
   recurso escasso ali). **`m` é MISCELÂNEA**, o gaveteiro do que não pertence a nenhum outro grupo
   (a captura de tela e o `m i` dos três navegadores), e é o que libera `c` para ser o clipboard
@@ -706,7 +717,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   por uma rodada ele jogou fora o que `resized` respondia, e as dez portas diagramavam contra o
   tamanho anterior à mudança de escala, justamente no caminho para o qual o módulo existe: janela
   arrastada entre dois monitores, sem `configure` depois. O teto do fator mora num lugar só
-  (`ronoctua_render::MOST_SCALE`), que o `render-png --scale` lê também. Medido no niri sob Xvfb com a
+  (`ronoctua_render::MOST_SCALE`), que o `render-png --scale` lê também. Medido sob Xvfb com a
   saída em `scale 2`, na coluna da janela de energia: pixels acesos 20,19% → 11,35%, pixels de tinta
   cheia 1,27% → 2,63%, halo 93,7% → 76,9% dos acesos. Cobra o `every-window-knows-its-scale`, que
   também LÊ o `hidpi.rs` — a varredura pulava todo arquivo sem `CompositorHandler`, e era lá que o
@@ -716,7 +727,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   `j` nunca andou na lista. A repetição chega pelo CALLBACK, não pelo método, então cada porta tem um
   `typed` por onde passam as duas entradas. O rodapé cria o `calloop` ANTES do roundtrip: é nele que o
   assento anuncia o teclado e o `LoopHandle` já tem de existir. Ritmo e atraso são do COMPOSITOR.
-- **A barra lateral é uma SEÇÃO** (`files::Section`), com extensão, deslocamento e conteúdo próprios — como a listagem, a prévia e os fatos. `sidebar_columns` a RETIRA quando não cabe (`space.files.sidebarFrom`); a marca vai em `layout.from`, nunca em 0; e `header` usa o MESMO `split` das linhas. Padrões por CHAVE (`nix/files-sidebar.nix` sobre `nix/user-dirs.nix` — **uma fonte para as dez pastas**, e de lá sai também o `screenshot-path` do niri, que sem isso escrevia em `~/Pictures`). O ajuste do dono vence, em `$XDG_CONFIG_HOME`: padrão da distro OCULTA (volta), o dele REMOVE — e as frases diferem. `C-l` esconde, `C-e` desmonta, `C-u` tira, `s` do menu e `C-s` do localizador fixam: **LETRAS, porque Ctrl DIREITO com seta é paginar e a janela não o rastreia**. **Atravessar é o anel do `Tab`, e só ele** — `C-o` era um segundo caminho e saiu a pedido do dono.
+- **A barra lateral é uma SEÇÃO** (`files::Section`), com extensão, deslocamento e conteúdo próprios — como a listagem, a prévia e os fatos. `sidebar_columns` a RETIRA quando não cabe (`space.files.sidebarFrom`); a marca vai em `layout.from`, nunca em 0; e `header` usa o MESMO `split` das linhas. Padrões por CHAVE (`nix/files-sidebar.nix` sobre `nix/user-dirs.nix` — **uma fonte para as dez pastas**, e de lá sai também o `RONOCTUA_SCREENSHOTS` que o rodapé lê, que sem isso escrevia onde calhasse). O ajuste do dono vence, em `$XDG_CONFIG_HOME`: padrão da distro OCULTA (volta), o dele REMOVE — e as frases diferem. `C-l` esconde, `C-e` desmonta, `C-u` tira, `s` do menu e `C-s` do localizador fixam: **LETRAS, porque Ctrl DIREITO com seta é paginar e a janela não o rastreia**. **Atravessar é o anel do `Tab`, e só ele** — `C-o` era um segundo caminho e saiu a pedido do dono.
 - **Só o `ronoctua-disks` fala udisks2, e ele NÃO escreve regra polkit** — a do upstream já separa removível (`allow_active: yes`) de sistema (`auth_admin_keep`) pelo `HintSystem`, e uma nossa só poderia ALARGAR. **Não há agente polkit na sessão** (só `pkttyagent`, no resgate): toda chamada leva `auth.no_user_interaction`. E a razão é do DONO, não do desenho: ele nem sempre vê o pedido de digital, ou está longe do laptop — pedido não visto vira recusa no relatório, sobre algo que ninguém viu. **Nada que o sistema faça sozinho pode PERGUNTAR**, e volume de SISTEMA não oferece montar — manda ao terminal root. `HintIgnore` vira `quiet` e anda no `C-h` dos dotfiles. O `override` tira só o `xfsprogs` (538,3 → 343,2 MiB; 258 eram Python do `xfs_scrub`, e montar XFS é do KERNEL). Sinal do `ObjectManager` numa thread, mandando o `Rack` INTEIRO — o relógio do rodapé só bate com a vista aberta, e a janela não tem relógio nenhum.
 - **`LEADER s f` é formatar, e são TRÊS perguntas** (`buffers/format`, `capability::disks`): qual disco, para que serve, tem certeza. Linguagem de gente — o vfat diz *"abre em qualquer computador"*, não FAT32, e **o XFS aparece DESABILITADO dizendo que falta o programa**, alcançável e recusando. **Toda linha tem DOIS registros**: o rótulo, e uma linha discreta SOB O CURSOR com o nome real e os limites (na lista, o tamanho em bytes; no confirmar, o gesto inteiro). Nome técnico é CHAVE, nunca literal no componente. Duas recusas que o hospedeiro não enxerga (de fora, recusa e componente morto são o mesmo "nenhum plano"), e por isso são do `format-driven`: disco que o sistema precisa é DESENHADO e o `Enter` nele não anda; e o primeiro `Enter` do confirmar VOLTA, porque `não` é a primeira linha. **Sem estado `working`** — o `SPC w s` o ofereceria e mentiria; a espera é na lista. O alvo é id que o buffer RECEBEU, reconferido contra o `Rack` mandado **e contra `needed()` de novo**. Disco inteiro é `dos` até 2 TiB (`gpt` acima) mais UMA partição, com `update-partition-type` — sem ele o vfat sai tipado `0x83` e o Windows não abre o pendrive, sem nada dizendo por quê.
 - **`LEADER t` é a fila, e ela é de uma UNIDADE** (`ronoctua-transfers`): três processos olham a mesma
@@ -996,7 +1007,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 - **O CABEÇALHO DE TODA JANELA ABRE** (`chrome::Hinted::head`, cobra o
   `every-window-header-opens`): a linha 0 de uma janela ensina as teclas da vista, e ela é CORTADA
   na largura que recebe — o `hint_spans` elide, não quebra. A tabela da rede tem 174 células em
-  inglês contra uma janela que o niri põe em metade de uma saída, então mais da metade do que
+  inglês contra uma janela que o compositor põe em metade de uma saída, então mais da metade do que
   aquela linha ensinava era inalcançável, em DEZ portas ao mesmo tempo, com uma reticência onde
   parava e nada para apertar. O rodapé tem a gaveta desde que o `crate::fold` foi escrito e o
   gerenciador tem a dele; as outras dez não tinham nenhuma, e o dono achou na janela de idioma e
@@ -1073,15 +1084,17 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   medido, a primeira mudança sai em 5 ms e cada uma atrás dela levava **253**, que é o `QUIET` de um
   quarto de segundo esperando um silêncio que não vem enquanto a mão anda na lista. O `PACE` é
   CONSTANTE NOMEADA para um teste segurar; e a MESA é PEDIDA, não esperada: o desk é um
-  `layout { background-color }` num fragmento que o niri inclui, e ele nota no relógio DELE — o dono
-  leu na tela como uma mesa que segue o rodapé *"às vezes mais rápido, às vezes mais devagar"*. Não
-  se toca no watcher (inv. 3), mas pedir é IPC: escreve e então `Niri::reload_config`
-  (`LoadConfigFile`), um ida-e-volta de socket e não um `niri msg`, que é PROCESSO e bloqueia. **O
-  nome é traduzido e o repositório o confere dos dois lados**: o cliente do niri diz
-  `load-config-file` e o socket quer `LoadConfigFile` — um teste deriva a grafia pela mesma regra
-  que produz as duas que já vão para um niri vivo (`CloseWindow`, `FocusWindowDown`), e o
-  `niri-contract` a manda para um niri DE VERDADE, nas duas versões pinadas. Errada por uma letra
-  ela responde `error parsing request`, que é um `warn` no log e uma mesa que nunca muda. `RET` grava `$XDG_CONFIG_HOME/ronoctua/theme.json`, `Esc` volta ao gravado. A lista mostra SÓ o id. **As DUAS colunas são uma lista** — título em `text.heading` e os itens sob ele, como toda vista do sistema —, e entre elas vai uma RÉGUA vertical (`chrome::divider`) na costura em que a grade já as desenha (`colon`), que é a mesma coluna pela qual o ponteiro decide em qual lista caiu. Antes só a direita tinha título, e em `text.dim`; o dono leu na tela que a região não era da forma do resto. A linha na TELA deixou de ser o índice do item: `theme_row`/`desk_row` respondem o que cada linha é, e clique e cursor perguntam a elas. **E os dois títulos ficam sobre os NOMES**, não sobre a marca: a coluna da direita carrega o próprio check DENTRO do texto (a margem do ícone é da esquerda), então o título dela paga a mesma célula — `BLANK_MARK`, e as duas frases saem de UMA expressão para não divergirem de novo. **A segunda coluna (`←/→`) é o FUNDO do compositor — preto ou `surface.backdrop`, um degrau ABAIXO do chrome no matiz E NA DISTÂNCIA da semente `backdrop` (`hue`, `chroma`, `step`)**; no owl ele é CINZA (`#080808`, croma zero, cinco degraus abaixo) a pedido do dono; no forest e no midnight ele é a cor do tema. **São ONZE temas**: owl (cinza, acento azul), forest (superfícies verdes escuras), moss (o mesmo verde puxado para o azul e desbotado), industrial (cinza PURO e o chrome mais ALTO dos escuros — a mesma ausência de cor do darkside lida como METAL em vez de preto), frost (ciano gelo), midnight (fundo navio, rampa QUENTE — rampa fria sobre fundo frio vira uma cor só em duas luminâncias), cyber (cinza frio, rampa SEM cor), darkside e evilside (os dois mais escuros, e as SUPERFÍCIES deles não têm cor nenhuma — cinzas exatos, a pedido do dono; o vermelho do evilside está só nos elementos), e **DOIS CLAROS — flashbang (branco e cinza frio) e papyrus (folha envelhecida, cinzas quentes)**.
+  `output * bg` num fragmento que o compositor inclui, e **ele não vigia arquivo nenhum** — não há
+  inotify nele —, então escrever e parar aí deixaria a mesa na cor velha pelo resto da sessão. Pedir
+  é IPC: escreve e então `Compositor::reread`, um ida-e-volta de socket e não um `scrollmsg`, que é
+  PROCESSO e bloqueia. O compositor anterior vigiava, e o defeito era mais sutil — a mesa chegava
+  *"às vezes mais rápido, às vezes mais devagar"*, que é a cadência de um watcher, e o dono leu isso
+  na tela. **E o `reload` responde `success` haja o que houver**: medido contra um vivo, fragmento
+  quebrado e config principal quebrado voltaram os dois `{"success": true}`, porque
+  `load_config` devolve `config->active || !config->validating || config_load_success` e
+  `config->active` é verdade em toda sessão de pé. Então o `Ok` diz que ele ACEITOU o pedido e nada
+  mais; quem prova a gramática é o portão de build (`compositor-config-valid`,
+  `display-fragment-validates`) e quem prova a mudança é a LEITURA seguinte. `RET` grava `$XDG_CONFIG_HOME/ronoctua/theme.json`, `Esc` volta ao gravado. A lista mostra SÓ o id. **As DUAS colunas são uma lista** — título em `text.heading` e os itens sob ele, como toda vista do sistema —, e entre elas vai uma RÉGUA vertical (`chrome::divider`) na costura em que a grade já as desenha (`colon`), que é a mesma coluna pela qual o ponteiro decide em qual lista caiu. Antes só a direita tinha título, e em `text.dim`; o dono leu na tela que a região não era da forma do resto. A linha na TELA deixou de ser o índice do item: `theme_row`/`desk_row` respondem o que cada linha é, e clique e cursor perguntam a elas. **E os dois títulos ficam sobre os NOMES**, não sobre a marca: a coluna da direita carrega o próprio check DENTRO do texto (a margem do ícone é da esquerda), então o título dela paga a mesma célula — `BLANK_MARK`, e as duas frases saem de UMA expressão para não divergirem de novo. **A segunda coluna (`←/→`) é o FUNDO do compositor — preto ou `surface.backdrop`, um degrau ABAIXO do chrome no matiz E NA DISTÂNCIA da semente `backdrop` (`hue`, `chroma`, `step`)**; no owl ele é CINZA (`#080808`, croma zero, cinco degraus abaixo) a pedido do dono; no forest e no midnight ele é a cor do tema. **São ONZE temas**: owl (cinza, acento azul), forest (superfícies verdes escuras), moss (o mesmo verde puxado para o azul e desbotado), industrial (cinza PURO e o chrome mais ALTO dos escuros — a mesma ausência de cor do darkside lida como METAL em vez de preto), frost (ciano gelo), midnight (fundo navio, rampa QUENTE — rampa fria sobre fundo frio vira uma cor só em duas luminâncias), cyber (cinza frio, rampa SEM cor), darkside e evilside (os dois mais escuros, e as SUPERFÍCIES deles não têm cor nenhuma — cinzas exatos, a pedido do dono; o vermelho do evilside está só nos elementos), e **DOIS CLAROS — flashbang (branco e cinza frio) e papyrus (folha envelhecida, cinzas quentes)**.
   **A POLARIDADE É UM CAMPO DA SEMENTE** (`mode`), e não uma derivação de `ground` vs `chrome`: um
   tema claro pode querer a mesa mais ESCURA que o rodapé, e a derivação leria "escuro". Dela sai um
   sinal que o `_solve_text` e o `_paint` passam ao `solve_lightness` — que já aceitava `direction`
@@ -1120,7 +1133,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   os fundos do papyrus só pararam de ler como amarelo ao mexer nos DOIS knobs — um quarto do croma
   do rascunho E a matiz vinte graus para fora (80 → 60), que é para onde o papel envelhece.
   **E o piso do croma da rampa é o `text.answer`**, não o gosto: abaixo de 0,32 o multiplicador não
-  tem o que multiplicar e o par reprova, o que põe um chão em quão dessaturado um tema pode ser. **`text.answer` é um MULTIPLICADOR de croma, e só funciona onde a rampa tem croma para multiplicar** — no canto amarelo do sRGB. Rampa cinza ou vermelha: o degrau simples e o multiplicado batem no mesmo teto perto do branco, e a separação PIORA se você subir o croma. Cinco temas precisaram do `overrides` da semente por causa disso, que é para o que ele serve; cobra o portão `text.answer vs text.primary`. **A mesa NÃO pode ser preta** — a semente recusa e o portão pede ΔE 0,1 do preto do conteúdo —, e não precisa: `Backdrop::Black` é o PADRÃO, e a mesa do tema é a segunda coluna do `LEADER s t`; as duas iguais seriam uma escolha que não muda nada. **O `step` é da semente porque um fundo sem cor só tem a luminância para se separar do chrome**: um degrau só mede ΔE 0,026 dali, que o portão chama de legal e marginal —, e a prévia dele é o próprio niri: o fragmento é escrito ao mover o cursor e reescrito no `Esc`; `RET` grava o PAR. **O arquivo É o broadcast**: as cinco portas vigiam `theme.json` por inotify (`Notice::on_file`) e repintam; `RONOCTUA_THEME` (opção `ronoctua.theme`) é o piso, e o chão é o tema `default` declarado. **E o FUNDO nasce no do TEMA**, não no preto: era `Backdrop::Black`, e o dono pediu o contrário — todo tema resolve uma mesa e todo portão a mantém distinta do preto do conteúdo, então mostrá-la de fábrica não custa nada. O rodapé COPIA os fragmentos do tema (`$RONOCTUA_THEMES/<id>/`): `niri-theme.kdl` (borda E fundo — `window-rule` mais `layout { background-color }`, que o niri FUNDE ao incluir; dois `layout` no MESMO arquivo ele recusa; o config o inclui `optional=true` no FIM e recarrega) e `ghostty-theme.conf` (`config-file = ?…`, processo novo — e a entrada `.desktop` é REESCRITA sem o `--gtk-single-instance=true` do upstream: flag vence arquivo). **O Ghostty só lê `~/.config/ghostty/config`** — `/etc/xdg` ele NÃO lê —, e é lá que o home-manager põe o config do módulo. GTK/Qt vestem o MODO DO TEMA (Qt só no perfil `full`: custa 591 MiB); a extensão, o padrão do build.
+  tem o que multiplicar e o par reprova, o que põe um chão em quão dessaturado um tema pode ser. **`text.answer` é um MULTIPLICADOR de croma, e só funciona onde a rampa tem croma para multiplicar** — no canto amarelo do sRGB. Rampa cinza ou vermelha: o degrau simples e o multiplicado batem no mesmo teto perto do branco, e a separação PIORA se você subir o croma. Cinco temas precisaram do `overrides` da semente por causa disso, que é para o que ele serve; cobra o portão `text.answer vs text.primary`. **A mesa NÃO pode ser preta** — a semente recusa e o portão pede ΔE 0,1 do preto do conteúdo —, e não precisa: `Backdrop::Black` é o PADRÃO, e a mesa do tema é a segunda coluna do `LEADER s t`; as duas iguais seriam uma escolha que não muda nada. **O `step` é da semente porque um fundo sem cor só tem a luminância para se separar do chrome**: um degrau só mede ΔE 0,026 dali, que o portão chama de legal e marginal —, e a prévia dele é o próprio compositor: o fragmento é escrito ao mover o cursor e reescrito no `Esc`; `RET` grava o PAR. **O arquivo É o broadcast**: as cinco portas vigiam `theme.json` por inotify (`Notice::on_file`) e repintam; `RONOCTUA_THEME` (opção `ronoctua.theme`) é o piso, e o chão é o tema `default` declarado. **E o FUNDO nasce no do TEMA**, não no preto: era `Backdrop::Black`, e o dono pediu o contrário — todo tema resolve uma mesa e todo portão a mantém distinta do preto do conteúdo, então mostrá-la de fábrica não custa nada. O rodapé COPIA os fragmentos do tema (`$RONOCTUA_THEMES/<id>/`): `scroll-theme.conf` (borda E fundo — `client.focused` mais `output * bg`, e aqui não há ordem a acertar: bloco de saída é MESCLADO campo a campo, o último vence, então o fragmento ganha do `output * bg` que o config já tem; o config o inclui no FIM, e ausência não é fatal por construção) e `ghostty-theme.conf` (`config-file = ?…`, processo novo — e a entrada `.desktop` é REESCRITA sem o `--gtk-single-instance=true` do upstream: flag vence arquivo). **O Ghostty só lê `~/.config/ghostty/config`** — `/etc/xdg` ele NÃO lê —, e é lá que o home-manager põe o config do módulo. GTK/Qt vestem o MODO DO TEMA (Qt só no perfil `full`: custa 591 MiB); a extensão, o padrão do build.
 - **Layout é do `ronoctua-design`** — UM crate compilado dos dois lados (ele é dono das bindings do
   WIT; nenhum buffer chama `generate!`). **DOIS TRILHOS**: texto recua por `chrome::INSET`, régua e
   seleção sangram de borda a borda e não passam pela margem. **UM cabeçalho**, de três células —
@@ -1156,7 +1169,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   **com `under`**, e nunca aqui (o `*.ts` é `video/mp2t` lá, e está certo). Nos buffers é feature
   DESLIGADA: a tabela é 55 KB de fonte contra 80-100 KB de `.wasm`.
 - **Buffers nativos são componentes wasip2.** Devolvem display list; rasteriza o `ronoctua-render`,
-  posiciona o niri (inv. 4); não conhecem Wayland, cor nem idioma (inv. 11). Estado vive na
+  posiciona o compositor (inv. 4); não conhecem Wayland, cor nem idioma (inv. 11). Estado vive na
   `Instance`. **SETE primitivas**: texto, régua, grade, seleção, `svg` (TRAVA `vector`), e as duas
   que o dono mandou acrescentar — **`paragraph`** e **`bar`**. E **campo de record cruza por
   POSIÇÃO** e só depois pelo nome.
@@ -1569,7 +1582,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   linha — o que aquela coluna é em todo o resto da tela. **E o clique SELECIONA, o segundo é que
   age** (inv. 19): o rodapé agia no PRIMEIRO e a janela não agia nunca.
 - **`LEADER s k` são os TECLADOS** (`ronoctua-keyboards` + `buffers/keyboard`), e é o único ajuste
-  POR DISPOSITIVO que existe: o niri tem **um** `input { keyboard { … } }` para todos e não expõe
+  POR DISPOSITIVO que existe: o compositor tem **um** `input type:keyboard { … }` para todos e não expõe
   dispositivo nenhum por IPC, então layout, acentos e repetição são globais **por construção** — a
   tela DIZ isso. Quem distingue teclado é o `keyd`, e a regra dele é: **um id em UM arquivo só**.
   Como o arquivo da distro reivindica `*`, um teclado com regra própria SAI do coringa — e sai da
@@ -1664,7 +1677,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   `playerctl`, que vem do AMBIENTE (`mkIf` do `media.nix`) — e a ausência dele é uma FRASE no
   rodapé, nunca silêncio.
 - **`LEADER s p` é energia** (`ronoctua-power`, a fronteira com UPower, power-profiles-daemon e logind — molde do `ronoctua-disks`, três threads e o snapshot inteiro): uma `View` (`power.rs`), duas portas (`s p p`/`s p w`), oito seções como linhas. **Modeline em repouso é muda**: bateria só abaixo de 99% e fora de `FullyCharged` (limite de carga a 80% diz `FullyCharged` para sempre), `%` só a ≤30, `state.error` a ≤15 (regra literal, carregando ou não); perfil só quando NÃO é o topo que o daemon oferece — **o padrão da distro é `performance`** (`ronoctua.power.profile`, piso; `power.json` vence; aplicado UMA vez por sessão, nunca sobre um hold e **nunca quando ninguém nomeou** — o `nix run .#dev` não mexe no perfil do dono). Limites de carga escrevem no sysfs por regra udev (grupo `users`); as travas de sono/tampa são fds na thread de ordens do RODAPÉ (a janela encaminha `power-keep-*`); `s q s/h/r/p` abrem a vista ARMADA e `RET` confirma. **Nenhuma regra polkit nossa** (logind e PPD já dão `yes`; há check). Alarmes `battery-low/critical/charged` por TRANSIÇÃO (`alarms`), pelo catálogo.
-- **`LEADER s d` são as telas** (`ronoctua-display`, a fronteira com o niri por IPC e com o kernel
+- **`LEADER s d` são as telas** (`ronoctua-display`, a fronteira com o compositor por IPC e com o kernel
   por `/sys` e `/dev/i2c-*`): uma `View` (`display.rs`), DUAS portas (`s d d` rodapé, `s d w` janela),
   três níveis (lista → ficha de uma tela → disposição), resolução, taxa, escala, giro, lugar, VRR,
   brilho e o TAMANHO DO TEXTO. **A janela tem RELÓGIO ARMADO, e é a única assim** — QUATRO outras batem SEMPRE, pela vida da
@@ -1683,7 +1696,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   (`text_pending`, `place_pending`), senão segurar a seta anda um passo por ida-e-volta em vez de um
   por tecla. **"Manter" grava UM
   botão, o que foi perguntado** (e o que foi PEDIDO, senão sair pelo fundo da escada gravaria o
-  número que o niri escolheu no lugar de "escolha você"). **Duas portas escrevem o MESMO arquivo, e por isso `Keep` é MESCLA e não escrita** — a ordem
+  número que o compositor escolheu no lugar de "escolha você"). **Duas portas escrevem o MESMO arquivo, e por isso `Keep` é MESCLA e não escrita** — a ordem
   leva um `Wanted` inteiro, clonado do retrato daquela porta com um campo mudado, e o mapa era
   escrito por cima INTEIRO: guardar uma escala numa tela apagava o que a outra porta tinha acabado
   de guardar em OUTRA, e guardar um giro na MESMA devolvia a escala que aquela porta viu por último.
@@ -1694,18 +1707,26 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   escreve — uma tecla de tamanho de texto bastava para gravar `{"screens":{}}` e esvaziar o
   fragmento junto. Recusar salva o arquivo e não basta: com o padrão no lugar, TODA tela desenha
   como se nada tivesse sido escolhido, e o que a pessoa vê são os ajustes dela sumidos. É a mesma
-  falha muda que o `config_failed` do niri existe para impedir, um arquivo ao lado, e sai pela mesma
-  porta — uma frase na lista. Esquecer TIRA a entrada do arquivo (`Preferences::set`, não
+  falha muda que uma vista deve à pessoa, e sai pela porta de sempre — uma frase na lista. **E não
+  há gêmea dela para o config do COMPOSITOR**: ele não relata isso em lugar nenhum que um cliente
+  ouça (medido: `reload` responde `success` com fragmento quebrado E com config principal
+  quebrado, e `--validate` só devolve o veredito do arquivo PRINCIPAL, porque
+  `load_include_configs` é `void`). Quem responde no lugar é o portão de build —
+  `display-fragment-validates` põe o texto exato que o escritor emite na frente de um compositor de
+  verdade, com uma metade quebrada ao lado. Esquecer TIRA a entrada do arquivo (`Preferences::set`, não
   `insert`): mapa que só cresce vira arquivo listando todo monitor que já passou pela máquina, cada
-  um dizendo nada. **O bloco mais específico vem primeiro no
-  fragmento**: o niri casa saída por conector OU por descrição e fica com o PRIMEIRO, e o nosso
-  arquivo tem as duas espécies de chave — um bloco velho de `DP-1` dizendo `off` apagava o monitor
-  novo que entrou naquela porta, sem nada na vista alcançando ele. **O arquivo é o que sobrevive ao reboot e
-  o IPC é o que faz o compositor concordar com ele** — recarregar sozinho NÃO desfaz um transitório,
-  porque o niri preserva a mudança quando o arquivo relido não mudou. **E fechar a porta com uma
-  prévia de pé a devolve ANTES de sair** (`Handle::finish`, que manda e ESPERA a thread): sair sem
-  isso deixava a mudança valendo até o niri reiniciar, e uma porta nova não ajuda porque o
-  `previewed` é da thread que aplicou. Brilho interno é udev no
+  um dizendo nada. **ORDEM NÃO IMPORTA no fragmento, e isso é propriedade deste compositor**: bloco
+  de saída é MESCLADO — `*`, depois o conector, depois o identificador, campo a campo com o último
+  vencendo —, então os nossos, que são conector e identificador, ganham por construção. O anterior
+  ficava com o PRIMEIRO que casasse, e como o nosso arquivo tem as duas espécies de chave um bloco
+  velho de `DP-1` dizendo `off` apagava o monitor novo que entrou naquela porta. **O preço da mescla
+  é escrever `enable` EXPLÍCITO**: silêncio no bloco mais específico agora significa o que um bloco
+  menos específico disse. **O arquivo é o que sobrevive ao reboot e o IPC é o que faz o compositor
+  concordar com ele** — e escrever sozinho não faz NADA, porque ele não vigia arquivo. **Desfazer é
+  UM comando**: `reload` libera e reconstrói `config->output_configs`, então toda prévia deixa de
+  existir de uma vez. **E fechar a porta com uma prévia de pé a devolve ANTES de sair**
+  (`Handle::finish`, que manda e ESPERA a thread): sair sem isso deixava a mudança valendo até o
+  compositor reiniciar, e uma porta nova não ajuda porque o `previewed` é da thread que aplicou. Brilho interno é udev no
   sysfs; externo é DDC/CI escrito por nós (`rustix` + `/dev/i2c-N`), sem `ddcutil`. **Cache de pixmap LEVA O TAMANHO NA CHAVE; esvaziar não alcança a GPU** — o `Rgba` é
   rasterizado num número de PIXELS e esses números saem do `text::size()`. Esvaziar o mapa do
   hospedeiro parece o conserto e não é: quem DESENHA é a textura em `image::Images`, que **não tem
@@ -1736,7 +1757,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   por `effect::ask`. Relógio de 1 s lê pseudo-arquivo; varredura e `systemctl` vão para thread.
 - **Duas instalações, uma opção só.** `ronoctua.profile` = `full` (22,8 GiB) ou `minimal` (6,9);
   `nix/modules/profile.nix` é a tabela, tudo `mkDefault`. **O ISO leva no `storeContents` o que
-  nenhum cache tem** (shell, niri, ghostty-vt, buffers, fontes): o alvo baixa, não compila.
+  nenhum cache tem** (shell, compositor, ghostty-vt, buffers, fontes): o alvo baixa, não compila.
 
 ## Mapa do repositório
 
@@ -1803,10 +1824,10 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   caso que dói (mais de dez logs do MESMO dia, que é o que faz a idade reprovar e o corpo terminar
   em falso).
 - **`rustc` morto por `signal: 15` SEM diagnóstico é o `earlyoom` do HOST** (`-m 10,5`, `rustc` no `--prefer`), e `--max-jobs` não salva: o que estoura é jobs × cores. Por isso o gate mede e limita o produto. **`cannot download … from any mirror` NÃO é arquivo removido**: o `fetchurl` repete SEM retomar, e o android-studio (1,37 GB, unfree, um espelho, fora de todo cache) reseta aos ~150 MB — quem baixa é o `nix/prefetch.nix`, que o gate roda ANTES de compilar. **`pkill`/`pgrep` casa o PRÓPRIO comando**, e **`git checkout <arquivo>` apaga o não-commitado** (o store guarda cópia: `ls -dt /nix/store/*-source`).
-- **Modificador segurado mata o keymap.** No aninhado a leader É `Ctrl+Alt+Espaço`: DESCONTE o que já estava em baixo ao ganhar o foco E ao começar a sequência. Caps Lock idem — `not bound` mudo. **E no aninhado ele fica preso PARA SEMPRE**: modificador que desce aqui e sobe lá fora — o host comeu um acorde e levou o foco junto — nunca é relatado, porque o `winit` só diz `Focused(false)`, o smithay DESCARTA evento sintético e nunca encaminha `ModifiersChanged`, e o `WinitEvent::Focus(_)` do niri é `()`. Apertar de novo NÃO limpa (o libxkbcommon conta referência: 1 → 2 → 1) e recarregar o keymap também não (`update_xkb_state` REPETE as teclas que o smithay julga em baixo). Como o niri casa bind por IGUALDADE, um bit sobrando mata TODOS os binds da sessão — leader inclusive — e o único conserto é reiniciar o niri. Por isso o aninhado tem keymap PRÓPRIO, SEM Super (`nix/keyboard-nested.nix`; cobra o `nested-keyboard-has-no-super`): Super é o único modificador que o aninhado dispensa, e é o que todo acorde do host carrega. Em produção Super FICA — lá ele É a leader. **Um acorde sobrevive exatamente aos modificadores que já estão DENTRO dele** — por isso a leader do aninhado é `Ctrl+Alt` (o que a família `Super+Ctrl+…` do host prende) e ganhou uma segunda forma com Shift; trocar de modificador só muda a exposição, acrescentar é que fecha. **Os ACORDES não têm essa saída**: `Ctrl+<tecla>` já é tecla de acorde (`LEADER+Ctrl+←` MOVE a coluna), então crescer o prefixo para `Ctrl+Alt` colide com 41 binds e o niri recusa o arquivo inteiro — e com o Ctrl preso alguns acordes não morrem, fazem a AÇÃO ERRADA. Com resíduo que não seja Shift, a saída é reiniciar o `.#dev`. **Não tente consertar do lado do cliente**: o `zwp_virtual_keyboard` do smithay escreve nos CLIENTES e nunca no estado do assento, e o IPC do niri não expõe modificador nenhum — de dentro, preso e segurado de verdade são indistinguíveis.
+- **Modificador segurado mata o keymap.** No aninhado a leader É `Ctrl+Alt+Espaço`: DESCONTE o que já estava em baixo ao ganhar o foco E ao começar a sequência. Caps Lock idem — `not bound` mudo. **Um bind é casado por IGUALDADE** (`modifiers ^ binding->modifiers`), então um bit sobrando mata TODOS os binds da sessão, leader inclusive. **O que o prendia PARA SEMPRE era do compositor anterior, e não deste**: lá o `winit` só dizia `Focused(false)`, o smithay descartava evento sintético e o estado de modificador era CONTADO (pressões contra soltas), então uma tecla que descia aqui e subia lá fora nunca voltava. O backend Wayland do wlroots faz o contrário: implementa `.modifiers` e passa a máscara do HOST direto (`wlr_keyboard_notify_modifiers`), e o handler de tecla manda `update_state = false` — o estado aqui é ESPELHO do de lá, nunca derivado. **Isso ainda não foi MEDIDO neste compositor**, e por isso o `nix/keyboard-nested.nix` continua de pé: ele tira o Super do keymap do aninhado, que é o único modificador que o laço dispensa e o que todo acorde do host carrega. A medição é um gesto (host chord com Super, perder e recuperar o foco, tentar a leader) e está no `docs/PENDING.md`; passando, somem o arquivo, o check `nested-survives-a-stray-modifier` e o segundo bind com Shift. Em produção Super FICA — lá ele É a leader. **Não tente consertar do lado do cliente**: o `zwp_virtual_keyboard` escreve nos CLIENTES e nunca no estado do assento, e o IPC não expõe modificador nenhum — de dentro, preso e segurado de verdade são indistinguíveis.
 - **"Nenhum atalho funciona" tem três causas com a MESMA tela** — tecla que não chega, modificador preso, foco não concedido: `nix run .#diagnostics` ANTES de supor. No Xvfb ninguém tem foco (`xdotool windowfocus`), e **`xdotool key` SOLTA a tecla**: segurar exige `keydown`.
 - **`LD_LIBRARY_PATH` vence o `DT_RUNPATH`**: pôr `/usr/lib64` lá para achar UMA lib traz a `libc` do host junto, e ela só combina com o `ld.so` da MESMA build (`undefined symbol ... GLIBC_PRIVATE`). O driver vem do Nix (`mesa`); do host, só para NVIDIA. **ICD Vulkan ausente custa 650 ms mudo** — filtre por vendor. **`memory_init_cow`** é obrigatório (p99 95× pior); **`Queue::present`** precisa do frame, que o `Drop` DESCARTA sem erro.
-- **O backend DRM do niri rejeita EGL por software**: numa VM sem GPU sobe com **zero output**, e layer-shell sem output nunca é criada. Use **winit** com `Xvfb` + `LD_LIBRARY_PATH` das libs X. **`RUST_LOG` nosso filtra o niri**, que sobe MUDO — ache o display por `niri.<display>.<pid>.sock`.
+- **Sem GPU, escolha o backend E o renderizador**: `WLR_BACKENDS=x11` (sobre `Xvfb`) ou `headless`, com `WLR_RENDERER=pixman` — o segundo é o que tira EGL, GBM e o nó DRM do caminho. Sem eles o DRM sobe com zero output e uma layer-shell sem output nunca é criada. **`RUST_LOG` nosso filtra o compositor**, que sobe MUDO — então não espere o display do log dele: **fixe o socket** (`SCROLLSOCK` é honrado quando o arquivo ainda não existe) e peça o `WAYLAND_DISPLAY` a ele por um `exec` do próprio config. **E `--validate` roda em sandbox** com esses dois: bom sai 0, quebrado sai não-zero — mas **erro dentro de um `include` NÃO chega ao status**, porque `load_include_configs` é `void`; leia a SAÍDA.
 - **Quem tem o codepoint primeiro GANHA** — a face pedida por nome vence o fallback. Custou 634 da PUA (Lucide → `U+F2000`) e 75 emoji da Iosevka (`Emoji_Presentation`); `FE0F` vira dois glifos.
 - **A CADEIA DE FALLBACK É DECLARADA E TEM UM DONO SÓ**: `nix/fontconfig.nix`. De lá saem TRÊS
   coisas — o `.conf` do fontconfig, o `nix/coverage-fonts.nix` (família → arquivo, e **recusa a
@@ -1932,7 +1953,15 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   fixture segurava por processador. Com uma fixture por motivo de espera, o mesmo check passou a
   acusar CINCO rótulos cortados — dois deles em INGLÊS. Ao criar uma vista, desenhe UM quadro por
   variante do enum que vira chave.
-- **Spawn em unidade do systemd: use CAMINHO, nunca nome** — o `PATH` é mínimo e a falha aparece longe da causa. O caminho do store vem por `option_env!`, posto no `nix/rust.nix`. E **`min_cols` é piso de PREFERÊNCIA**; o que não cede é "nada vaza da tela". `Shrink`≠`removable`. **Upstream do Niri: `niri-wm/niri`**, por calendário — pinar tag, nunca `main`. Blur da 26.04 não.
+- **REPEGAR o teclado exclusivo manda um `leave` ANTES do `enter`.** Este compositor responde a uma
+  RE-aquisição de `keyboard_interactivity` exclusiva com um `leave` e então um `enter` na MESMA
+  superfície — medido no `leader-vm`, 7,6 ms entre os dois —, e no fim o rodapé está com o teclado.
+  A primeira aquisição da sessão não tem `leave` nenhum: o que produz o par é LARGAR o teclado e
+  pedi-lo de volta, que é toda leader depois da primeira, e é pior numa máquina sem janela nenhuma
+  — o primeiro minuto da sessão. Tomar a primeira metade por perda fecha a leader no instante em que
+  ela abre, e na tela é uma lista que pisca e some. Quem guarda é o `KeyboardHold` (`surface.rs`):
+  perdoa UM `leave` por aquisição, e o `enter` que fecha o par não perdoa mais nenhum.
+- **Spawn em unidade do systemd: use CAMINHO, nunca nome** — o `PATH` é mínimo e a falha aparece longe da causa. O caminho do store vem por `option_env!`, posto no `nix/rust.nix`. E **`min_cols` é piso de PREFERÊNCIA**; o que não cede é "nada vaza da tela". `Shrink`≠`removable`. **Upstream do compositor: `dawsers/scroll`**, que segue os lançamentos do sway — pinar tag, nunca `main`.
 
 ## Como trabalhar — o dono cobrou o TEMPO duas vezes, e a causa era sempre a mesma
 
@@ -1976,7 +2005,7 @@ isso moram aqui, no único arquivo que chega sozinho ao contexto.
   falhou" e seguia com o rodapé velho. Toda edição de Rust, de toda sessão. O
   `dev-rebuilds-what-sits-beside` não pegou porque conferia o NOME; agora confere o PACOTE, contra
   os manifestos que declaram cada binário.
-- **O PONTEIRO ENTRA NA FOTO, e ele é BRANCO.** O niri compõe o próprio cursor na saída, então o
+- **O PONTEIRO ENTRA NA FOTO, e ele é BRANCO.** O compositor compõe o próprio cursor na saída, então o
   `xwd -root` o pega e todo recorte que o contém carrega uma seta clara. `text.primary` é `#E0E0E0`,
   e 12% de fuzz cobre a distância: uma asserção de "há texto aqui" foi respondida pelo MOUSE, sobre
   uma mesa VAZIA, e o subteste passou. O conserto NÃO é tirar o ponteiro antes de medir — tentei, e

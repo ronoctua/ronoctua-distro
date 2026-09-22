@@ -1,4 +1,4 @@
-# The rescue console — `Ctrl+Alt+Del`, and the door that does not need niri.
+# The rescue console — `Ctrl+Alt+Del`, and the door that does not need the compositor.
 #
 # # What this module is for
 #

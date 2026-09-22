@@ -345,5 +345,53 @@ lib.fix (all: {
         runHook postCheck
       '';
     })
-  ) (lib.filterAttrs (n: _: n != "tested") all);
+  ) (lib.filterAttrs (n: _: n != "tested" && n != "linted") all);
+
+  # AND THE SAME DERIVATION AGAIN, RUNNING CLIPPY.
+  #
+  # # Why the buffers had no lint at all
+  #
+  # `cargo clippy --workspace` does not reach them and never could: the root
+  # `Cargo.toml` EXCLUDES `buffers/` and each one is a workspace of its own
+  # (`nix/rust.nix` says why — one edited comment in there used to recompile
+  # the whole tree). And `nix/buffers.nix` BUILDS them, which is not the same
+  # thing: a build takes warnings and carries on.
+  #
+  # So the only lint they ever got was somebody running it by hand, and the
+  # three with a baked table cannot even be linted that way — `include_str!`
+  # of `RONOCTUA_*_JSON` fails at compile time outside Nix, so `cargo clippy`
+  # in the directory stops before it reads a line of code. What that cost was
+  # measured: `ordered` sat dead in `buffers/unicode` across releases, a
+  # function whose whole doc-comment describes an ordering the file had
+  # stopped asking for, with the same ordering written out inline beside it.
+  # Nothing in the tree could see it.
+  #
+  # Here the variables are already set — they are the same derivation — so
+  # clippy reads the code the buffer actually compiles.
+  #
+  # `--all-targets`, because a test uses what it tests: without it the lint
+  # passes over `#[cfg(test)]` entirely, which is where a buffer's layout
+  # arithmetic is exercised. `-D warnings`, because a warning nobody fails on
+  # is a warning nobody reads.
+  linted = lib.mapAttrs (
+    _: d:
+    d.overrideAttrs (o: {
+      pname = "${o.pname}-clippy";
+      buildPhase = ''
+        runHook preBuild
+        cargo clippy --all-targets --target wasm32-wasip2 --release --offline -- -D warnings
+        runHook postBuild
+      '';
+      # NOTHING TO INSTALL. The `.wasm` is the build's, and this build made
+      # none — it read the code and said so. An empty output is the honest
+      # shape for a check, and it is what keeps this from being mistaken for
+      # a second copy of the component.
+      installPhase = ''
+        runHook preInstall
+        mkdir -p $out
+        echo "${o.pname}: clippy clean" > $out/verdict
+        runHook postInstall
+      '';
+    })
+  ) (lib.filterAttrs (n: _: n != "tested" && n != "linted") all);
 })

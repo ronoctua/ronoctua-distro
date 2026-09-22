@@ -1,6 +1,6 @@
 //! The kernel's side of a monitor — `/sys/class/drm`.
 //!
-//! niri names an output by its connector (`eDP-1`, `DP-3`). The kernel names
+//! The compositor names an output by its connector (`eDP-1`, `DP-3`). The kernel names
 //! the same thing `cardN-eDP-1`, and inside that directory it puts the two
 //! things a compositor cannot answer:
 //!
@@ -38,9 +38,17 @@ pub struct Wiring {
     pub bus: Option<PathBuf>,
     /// Whether the connector is built into the machine.
     pub internal: bool,
+    /// The glass, in millimetres, when the EDID says.
+    ///
+    /// IT IS READ HERE AND NOT ASKED OF THE COMPOSITOR, because the
+    /// compositor does not report it — and this is already the place that
+    /// joins a connector to what the kernel knows about it. It is the only
+    /// way to arrive at a real size or a real DPI; the pixels alone cannot,
+    /// and a scale offered without one is a number with no meaning behind it.
+    pub millimetres: Option<(u32, u32)>,
 }
 
-/// Everything the kernel knows, by the name niri uses.
+/// Everything the kernel knows, by the name the compositor uses.
 #[must_use]
 pub fn read(places: &ronoctua_memory::Places) -> BTreeMap<String, Wiring> {
     read_in(&places.sysfs, Path::new("/dev"))
@@ -74,6 +82,7 @@ pub fn read_in(sys: &Path, dev: &Path) -> BTreeMap<String, Wiring> {
                 backlight: backlight_under(&dir, sys),
                 bus: bus_under(&dir, dev),
                 internal: is_internal(connector),
+                millimetres: glass_of(&dir),
             },
         );
     }
@@ -97,7 +106,42 @@ pub fn read_in(sys: &Path, dev: &Path) -> BTreeMap<String, Wiring> {
     out
 }
 
-/// `card1-eDP-1` is niri's `eDP-1`.
+/// The size of the glass, out of the EDID.
+///
+/// # Why the detailed timing and not the byte pair
+///
+/// The EDID carries the size twice: at `0x15`/`0x16` in CENTIMETRES, which is
+/// too coarse to tell a 13" panel from a 14" one, and again in the first
+/// detailed timing descriptor at `0x36` in MILLIMETRES. The second is the one
+/// worth reading, and the first is the fallback for a monitor that gives no
+/// detailed timing at all.
+///
+/// A monitor that reports an ASPECT RATIO rather than a size — `16` by `9`
+/// centimetres — is refused: those are not millimetres, and a DPI computed
+/// from them is a confident wrong answer.
+fn glass_of(dir: &Path) -> Option<(u32, u32)> {
+    let edid = std::fs::read(dir.join("edid")).ok()?;
+    if edid.len() < 128 {
+        return None;
+    }
+    // The detailed timing's width and height are twelve bits each: a byte of
+    // low bits apiece, and one byte holding both sets of high nibbles.
+    let base = 0x36;
+    let high = usize::from(edid[base + 14]);
+    let width = u32::from(edid[base + 12]) | u32::try_from((high >> 4) << 8).ok()?;
+    let height = u32::from(edid[base + 13]) | u32::try_from((high & 0x0F) << 8).ok()?;
+    if width > 0 && height > 0 {
+        return Some((width, height));
+    }
+    // The coarse pair, in centimetres.
+    let (w, h) = (u32::from(edid[21]), u32::from(edid[22]));
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some((w * 10, h * 10))
+}
+
+/// `card1-eDP-1` is the connector's `eDP-1`.
 ///
 /// It strips `card` and the digits that follow it, and then one hyphen. The
 /// connector's own name may contain hyphens (`DP-1`), so this cannot be a

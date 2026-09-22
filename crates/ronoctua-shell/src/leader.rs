@@ -6,8 +6,8 @@
 //! none`). That is not a detail: if it did, no buffer would receive a key.
 //! Therefore the footer itself **cannot see** the leader's key.
 //!
-//! What sees it is the compositor. `nix/modules/niri.nix` binds `F13` — the key
-//! keyd emits when Super is TAPPED — to `spawn ronoctua-shell leader`, and
+//! What sees it is the compositor. `nix/modules/scroll.nix` binds `F13` — the
+//! key keyd emits when Super is TAPPED — to `exec ronoctua-shell leader`, and
 //! that momentary process tells the daemon over a unix socket. Only then does the
 //! footer ask for the keyboard in `exclusive` mode, and from there it reads the keys
 //! itself until `ESC`.
@@ -156,7 +156,7 @@ pub fn socket_path() -> Result<PathBuf> {
 /// # Why the PID, and not the window id
 ///
 /// It is the only name both sides already know without being told. The footer
-/// learns it from `ronoctua_niri::Window::pid` on the focused window — the same
+/// learns it from `ronoctua_compositor::Window::pid` on the focused window — the same
 /// field the modeline's context segment uses to find the git branch — and the
 /// buffer's process knows its own. Anything else would need a handshake, and a
 /// handshake is a third thing that can be out of date.
@@ -721,7 +721,7 @@ pub const NOTIF_OPEN_KEYS: &str = "n n";
 /// as TEXT in both `.ftl` files: "LEADER s p k, or LEADER s p l". Two things
 /// were wrong with that at once — the sequences would go stale the day either
 /// key moved, exactly as `n h` did; and the word "LEADER" is nobody's key.
-/// `nix/modules/niri.nix` sets `RONOCTUA_LEADER` to `SUPER` and `nix/dev.nix`
+/// `nix/modules/scroll.nix` sets `RONOCTUA_LEADER` to `SUPER` and `nix/dev.nix`
 /// to `CTRL ALT SPC`, and every other surface in this system renders
 /// `crate::leader()` — the one place that knows.
 pub const KEEP_AWAKE_KEYS: &str = "s p k";
@@ -1236,14 +1236,14 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             label: key::CMD_MONITOR_BOTTOM,
         },
         // ---------------------------------------------------------------
-        // WINDOW AND WORKSPACE — what used to be niri binds.
+        // WINDOW AND WORKSPACE — what used to be the compositor's own binds.
         //
         // Section 7.4 wants ONE keymap. While the compositor had its
         // shortcuts and the shell had its own, there were two tables to
         // maintain, two notations and two places where a key could collide
-        // — and which-key knew only half. Now niri has ONE bind (the
-        // leader) and all the rest lives here, reaching the compositor through
-        // an IPC action (invariant 3).
+        // — and which-key knew only half. Now the compositor has ONE bind (the
+        // leader) and all the rest lives here, reaching it over the IPC
+        // (invariant 3).
         // ---------------------------------------------------------------
         Command {
             id: "window-left",
@@ -1324,7 +1324,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // ---------------------------------------------------------------
         // THE ONES THAT EXISTED ONLY AS A KEY OR ONLY AS A SOCKET ORDER.
         //
-        // `window-float` was a chord with hand-written KDL; the `notif-*` were
+        // `window-float` was a chord with a hand-written command; the `notif-*` were
         // socket orders with no id at all. All three were features with no
         // name — the opposite of what section 13 asks for, and invisible in `M-x`.
         // ---------------------------------------------------------------
@@ -1973,9 +1973,9 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // AFTER the leader is released (see the top of this module). What
         // resolves a chord is the compositor.
         //
-        // So that there are not two truths again, niri's chord binds
+        // So that there are not two truths again, the compositor's chord binds
         // are GENERATED from this same command table — see `actions::chords`
-        // and `nix/niri-binds.nix`.
+        // and `nix/compositor-binds.nix`.
         ("w h", "window-left", None),
         ("w l", "window-right", None),
         ("w k", "window-up", None),
@@ -2359,22 +2359,25 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         registry.register(*c)?;
     }
 
-    // THE COMPOSITOR'S 141 ACTIONS, each as a named command.
+    // THE COMPOSITOR'S DEEDS, each as a named command.
     //
     // "Every OS action has a command" (section 13), and what the compositor
-    // knows how to do is part of the OS. The list is GENERATED from the pinned niri
-    // (`nix/niri-actions.nix`): written by hand, it would age silently —
-    // a removed action becomes a command that answers "error parsing request",
-    // which is a `warn` in the log and nothing on screen.
+    // knows how to do is part of the OS. The list is DECLARED by us
+    // (`assets/compositor-deeds.nix` → `nix/compositor-deeds.nix`), because
+    // this compositor enumerates nothing: its commands are free text spread
+    // across four tables in C. What keeps the declaration honest is the
+    // generator, which refuses a verb the PINNED compositor's own command
+    // table does not have — so a verb that goes away is a build failure rather
+    // than a key that answers a parse error nobody sees.
     //
-    // They do NOT get keys, and that is the design: 141 shortcuts would be 141
-    // keys fewer for what actually gets used. They are reachable by NAME, which is
-    // exactly what section 13 asks for — and the ~25 used every day have,
-    // besides the name, a command of ours with its own shortcut and label.
-    for a in ronoctua_niri::NIRI_ACTIONS {
+    // They do NOT get keys, and that is the design: a hundred shortcuts would
+    // be a hundred keys fewer for what actually gets used. They are reachable
+    // by NAME, which is exactly what section 13 asks for — and the ones used
+    // every day have, besides the name, a chord of ours with its own label.
+    for d in ronoctua_scroll::deeds::DEEDS.iter() {
         registry.register(Command {
-            id: a.id,
-            label: a.key,
+            id: d.id,
+            label: d.key,
         })?;
     }
 
@@ -2385,8 +2388,9 @@ pub fn default_of() -> Result<(Tree, Registry)> {
     // key and the argument come from the SAME number.
     //
     // The `0` goes LAST: it is the keyboard's convention, where zero closes the
-    // row after nine. Since the compositor has nine fixed workspaces (see
-    // `nix/modules/niri.nix`), the last one is the ninth.
+    // row after nine. Nine is what `TAB 1..9` names, and `workspace number N`
+    // creates the one it names — see `nix/modules/scroll.nix` — so the last
+    // one is the ninth.
     const LAST: &str = "9";
     let ranges: Vec<(String, &str, &'static str)> = (1..=9)
         .map(|n| (format!("TAB {n}"), "workspace-go", DIGITS[n - 1]))
@@ -2802,7 +2806,7 @@ mod tests {
     ///
     /// The `M-` is Alt. In the nested loop the leader **is** `Ctrl+Alt+Space`, so Ctrl
     /// and Alt are held down by construction when the sequence begins; and after
-    /// a host shortcut (`Super+Space`) the nested niri may miss the key's
+    /// a host shortcut (`Super+Space`) the nested compositor may miss the key's
     /// release and announce it forever. In both cases every binding
     /// stops matching at once.
     #[test]
@@ -2897,13 +2901,13 @@ mod tests {
         for c in registry.all_ones() {
             assert!(!c.id.is_empty(), "a command with no id");
             assert!(!c.label.is_empty(), "a command with no label key");
-            // THE COMPOSITOR'S MIRRORED ONES ARE THE EXCEPTION, and the only one.
+            // THE COMPOSITOR'S DEEDS ARE THE EXCEPTION, and the only one.
             //
-            // They exist to be reachable by NAME (section 13); giving keys
-            // to all 141 would spend the whole keymap on what is almost never
+            // They exist to be reachable by NAME (section 13); giving keys to
+            // all of them would spend the whole keymap on what is almost never
             // used. The exception is recognisable by its prefix, so it cannot
-            // grow without someone writing `niri-` on purpose.
-            if c.id.starts_with("niri-") || BY_NAME_ONLY.contains(&c.id) {
+            // grow without someone writing `wm-` on purpose.
+            if c.id.starts_with("wm-") || BY_NAME_ONLY.contains(&c.id) {
                 continue;
             }
             assert!(
@@ -3191,8 +3195,8 @@ mod tests {
             "display-arrange",
             // SOUND: the two doors, the view's seven gestures, and the
             // keyboard's own top row. The last seven have no leader at all —
-            // niri binds them bare — but they are commands like everything
-            // else, so this list is where they are accounted for.
+            // the compositor binds them bare — but they are commands like
+            // everything else, so this list is where they are accounted for.
             "audio-open",
             "audio-window",
             "audio-up",
@@ -3275,6 +3279,9 @@ mod tests {
             "files-window",
             "buffer-terminal",
             "buffer-terminal-external",
+            // THE CAPTURE IS OURS. The compositor takes none, so the shell
+            // runs `grim` and builds the name — see `capture_the_screen`.
+            "screen-capture",
             "monitor-btop",
             "rescue-open",
             "monitor-bottom",
@@ -3390,23 +3397,20 @@ mod tests {
         ];
         let (tree, registry) = default_of().unwrap();
         for id in super::reachable(&tree) {
-            // The ones that are COMPOSITOR actions go through the action table,
-            // consulted by id — and `niri-contract` proves, against a actual niri,
-            // that every name in it exists.
-            if crate::actions::kdl_of(id).is_some() {
+            // The ones that are COMPOSITOR deeds go through the table,
+            // consulted by id — and the generator proves, against the
+            // compositor's own source, that every one of them exists.
+            if crate::actions::deed_of(id).is_some() {
                 continue;
             }
-            // The compositor's MIRRORED ones are dispatched by prefix, and
-            // `run_with` sends them to niri's client. Now some
-            // DO have keys — the default binds became chords — so they
-            // go through here.
-            if id.starts_with("niri-") {
+            // The compositor's DEEDS are dispatched by prefix: `run_with`
+            // looks the id up in the generated table and sends the text.
+            // Some of them DO have keys, because a chord names one.
+            if id.starts_with("wm-") {
                 continue;
             }
-            // The TWO workspace ones with an argument (`workspace-go`, `workspace-move`)
-            // have no null action: the chord carries the number in the KDL itself, and
-            // `only_a_chord_with_an_argument_escapes_the_action_table` guards that
-            // exception from the other side.
+            // The two workspace ones that take a number have no null form:
+            // the chord carries the number in the bind itself.
             if matches!(id, "workspace-go" | "workspace-move") {
                 continue;
             }

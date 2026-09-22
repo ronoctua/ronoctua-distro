@@ -4,7 +4,7 @@
 //!
 //! The compositor has ONE keyboard configuration for every keyboard attached
 //! to the machine: one layout, one repeat rate, no way to name a device. That
-//! is niri's shape, and invariant 3 keeps it out of reach. So "this keyboard,
+//! is the compositor's shape, and invariant 3 keeps it out of reach. So "this keyboard,
 //! not that one" lives below the compositor, in `keyd` — and this is where a
 //! person says it.
 //!

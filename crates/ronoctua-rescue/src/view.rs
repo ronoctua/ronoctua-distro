@@ -25,7 +25,7 @@ pub struct Paper {
 
 /// The files, and what may be done to each.
 ///
-/// The generated ones are here ON PURPOSE. The person looking for "the niri
+/// The generated ones are here ON PURPOSE. The person looking for "the
 /// config" is looking for the file whose name they know; finding it, and being
 /// told in the same breath where its truth lives, is the difference between an
 /// answer and a dead end.
@@ -41,8 +41,8 @@ pub const fn papers() -> &'static [Paper] {
             origin: None,
         },
         Paper {
-            path: "/etc/niri/config.kdl",
-            origin: Some("nix/modules/niri.nix"),
+            path: "/etc/scroll/config",
+            origin: Some("nix/modules/scroll.nix"),
         },
         Paper {
             path: "/etc/ronoctua/memory-profiles.conf",
@@ -70,7 +70,7 @@ pub const fn papers() -> &'static [Paper] {
 pub const fn logs() -> &'static [(&'static str, bool)] {
     &[
         ("", false),
-        ("niri.service", true),
+        ("scroll.service", true),
         ("ronoctua-footer.service", true),
         ("keyd.service", false),
     ]

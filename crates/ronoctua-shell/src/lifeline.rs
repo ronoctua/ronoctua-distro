@@ -180,7 +180,8 @@ struct Fallen {
     /// # Why the line has to ask
     ///
     /// Because the nested loop has no unit: `nix/footer-single.nix` starts the
-    /// footer as an ordinary background child, and `nix/dev.nix` waits on niri.
+    /// footer as an ordinary background child, and `nix/dev.nix` waits on the
+    /// compositor.
     /// The line is raised there too — it is where the owner met this — and a
     /// `restart` button that asked systemd about a unit it has never heard of
     /// would come back "systemd would not start it", which is a sentence about

@@ -12,16 +12,18 @@
 # (`layout-fast`, `shaping-fast`, `instance-fast`), and what runs here
 # needs a real graphics session.
 #
-# # Why the footer starts from outside, and not through `spawn-at-startup`
+# # Why the footer starts from outside, and not from the config
 #
-# niri sends the output of the processes it spawns to `/dev/null`. With
-# `spawn-at-startup` the footer's log simply does not exist — and the log IS the
-# measurement. Same reason the VM tests use `systemd-run` with an explicit
-# environment.
+# Because the measurement is the footer's LOG, and it has to land in a file
+# this script names, once per start-up, with the previous one still readable.
+# A child of the compositor writes to whatever the compositor's stdout is, all
+# of them into the same stream, and it cannot be restarted without restarting
+# the compositor — and restarting the footer is what "six start-ups" means.
+# Same reason the VM tests use `systemd-run` with an explicit environment.
 {
   lib,
   writeShellApplication,
-  niri,
+  scroll,
   ronoctua-shell,
   python3,
   graphicsHost,
@@ -31,7 +33,7 @@ writeShellApplication {
   name = "ronoctua-bench-frames";
 
   runtimeInputs = [
-    niri
+    scroll
     python3
   ];
 
@@ -47,74 +49,65 @@ writeShellApplication {
     # for precisely that case. That is why the waiting greps carry `|| true`.
     dir=$(mktemp -d -t ronoctua-bench-XXXXXX)
     trap 'rm -rf "$dir"' EXIT
-    niri_log="$dir/niri.log"
+    compositor_log="$dir/compositor.log"
+    display_file="$dir/display"
 
-    # A MINIMAL config: no `spawn-at-startup` (see the header) and no leader
-    # bind, because the measurement fires the leader through the control socket.
-    cat > "$dir/niri.kdl" <<'KDL'
-    prefer-no-csd
-    input {
-        keyboard {
-            xkb { layout "br"; }
-        }
-        focus-follows-mouse
+    # THE IPC SOCKET IS NAMED BEFORE THE COMPOSITOR STARTS, which is what
+    # `SCROLLSOCK` is for: set to a path that does not exist yet, it is the path
+    # the compositor binds instead of one it invents
+    # (`sway/ipc-server.c`). So the socket stops being something to go looking
+    # for — no glob, no sort order, no second compositor to be confused with.
+    export SCROLLSOCK="$dir/ipc.sock"
+
+    # A MINIMAL config: nothing spawned (see the header) and no leader bind,
+    # because the measurement fires the leader through the control socket.
+    #
+    # The one `exec` is how the script learns the DISPLAY: the compositor picks
+    # its Wayland socket with `wl_display_add_socket_auto`, so the name is not
+    # knowable from outside and not passable in — the compositor itself is the
+    # only honest source. Reading the log does not work either: the `RUST_LOG`
+    # this script exports for the FOOTER also reaches the compositor, and a
+    # filter naming our crates leaves it perfectly silent.
+    cat > "$dir/config" <<CONF
+    scrollnag_command -
+    animations enabled no
+    input type:keyboard {
+        xkb_layout "br"
     }
-    layout {
-        gaps 0
-        border { off; }
-        focus-ring { off; }
-        shadow { off; }
-    }
-    output "winit" {
-        mode "1600x900"
-        scale 1
-    }
-    hotkey-overlay { skip-at-startup; }
-    KDL
+    focus_follows_mouse yes
+    default_border none
+    titlebar_padding 1
+    gaps inner 0
+    gaps outer 0
+    output * mode 1600x900
+    output * scale 1
+    exec sh -c 'printf %s "\$WAYLAND_DISPLAY" > "$display_file"'
+    CONF
 
     echo "== nested compositor =="
-    niri --config "$dir/niri.kdl" > "$niri_log" 2>&1 &
-    niri_proc=$!
+    scroll -c "$dir/config" > "$compositor_log" 2>&1 &
+    compositor_proc=$!
     footer_proc=""
     cleanup() {
       [ -n "$footer_proc" ] && kill "$footer_proc" 2>/dev/null || true
-      kill "$niri_proc" 2>/dev/null || true
-      wait "$niri_proc" 2>/dev/null || true
+      kill "$compositor_proc" 2>/dev/null || true
+      wait "$compositor_proc" 2>/dev/null || true
     }
     trap 'cleanup; rm -rf "$dir"' EXIT
 
-    # THE DISPLAY COMES FROM THE IPC SOCKET'S NAME, and not from niri's log.
-    #
-    # niri names it `niri.<display>.<pid>.sock`, so the pid we have just
-    # spawned identifies the socket unambiguously — two niris on the same
-    # machine do not get confused, and it does not depend on the directory
-    # being quiet.
-    #
-    # READING THE LOG DOES NOT WORK. The `RUST_LOG` this script exports for the
-    # FOOTER also reaches niri, which uses the same `EnvFilter`: with
-    # `ronoctua_shell=debug` the compositor comes up perfectly and stays MUTE,
-    # the grep never matches, and the message claims "niri did not start" —
-    # which is false.
     display=""
     for _ in $(seq 60); do
-      # `find` and not `ls`: shellcheck rejects `ls` on a glob (SC2012), and
-      # here it happens to be right — `-quit` stops at the first one and does
-      # not depend on sort order.
-      s=$(find "''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" -maxdepth 1 \
-            -name "niri.*.$niri_proc.sock" -print -quit 2>/dev/null || true)
-      if [ -n "$s" ]; then
-        sock="$s"
-        # `niri.<display>.<pid>.sock` — the display is the middle field.
-        display=$(basename "$s" | cut -d. -f2)
+      if [ -s "$display_file" ]; then
+        display=$(cat "$display_file")
         break
       fi
       # If the process died, waiting the full 30 s only delays the error.
-      kill -0 "$niri_proc" 2>/dev/null || break
+      kill -0 "$compositor_proc" 2>/dev/null || break
       sleep 0.5
     done
     if [ -z "$display" ]; then
       echo "ERROR: the nested compositor did not come up." >&2
-      tail -20 "$niri_log" >&2
+      tail -20 "$compositor_log" >&2
       exit 1
     fi
     echo "display=$display"
@@ -123,7 +116,7 @@ writeShellApplication {
     start_footer() {
       # NO_COLOR: `tracing` interleaves ANSI escapes BETWEEN the fields, and
       # `marco=...` stops matching any grep.
-      env WAYLAND_DISPLAY="$display" NIRI_SOCKET="$sock" NO_COLOR=1 \
+      env WAYLAND_DISPLAY="$display" NO_COLOR=1 \
           RUST_LOG="ronoctua_shell=info,ronoctua_render=info" \
           ${ronoctua-shell}/bin/ronoctua-shell > "$1" 2>&1 &
       footer_proc=$!
@@ -153,7 +146,7 @@ writeShellApplication {
     done
 
     echo
-    echo "== which-key: $leaders aberturas =="
+    echo "== which-key: $leaders openings =="
     for _ in $(seq "$leaders"); do
       env WAYLAND_DISPLAY="$display" ${ronoctua-shell}/bin/ronoctua-shell leader \
         >/dev/null 2>&1 || true

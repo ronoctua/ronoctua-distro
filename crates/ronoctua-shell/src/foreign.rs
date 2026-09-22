@@ -7,7 +7,7 @@
 //! showing one of their states on both — with no error, and with no way to
 //! notice by looking.
 //!
-//! niri's event stream `Window` carries a `pid`. We spawn inside a
+//! The compositor's event stream carries a window's `pid`. We spawn inside a
 //! scope of known name; on seeing the window, we read `/proc/<pid>/cgroup` and
 //! match by name. **It survives a fork** — a launcher that execs another
 //! process stays in the same cgroup — and it requires no cooperation from the application.
@@ -21,7 +21,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 
 /// The prefix of a foreign buffer's scope.
 ///
@@ -192,7 +192,7 @@ pub enum Launch {
 /// ephemeral, it creates the scope and exits in milliseconds"* — and that is true in
 /// SERVICE mode, which is the default, and false with `--scope`, which is what we use. Since
 /// `calloop` is a single thread, opening an app froze the whole footer —
-/// keyboard, painting and niri events — **for the app's lifetime**.
+/// keyboard, painting and compositor events — **for the app's lifetime**.
 ///
 /// It stayed hidden while there were four fixed callers; the app
 /// launcher makes this the main path.
@@ -246,176 +246,19 @@ pub fn launch(scope: &str, direct: &[String], cmd: &[String]) -> Launch {
     }
 }
 
-/// The directory of the X sockets.
-const X_SOCKETS: &str = "/tmp/.X11-unix";
-
-/// `xwayland-satellite`, by PATH and not by name.
-///
-/// The systemd scope comes up with a minimal `PATH`. By name, the satellite did not
-/// resolve and the app opened **without** `DISPLAY` — the degradation worked, and that is
-/// why the defect only showed up as "cannot open display" in the app, far from the
-/// cause. It cost a VM test.
-const SATELLITE: &str = match option_env!("RONOCTUA_XWAYLAND_SATELLITE") {
-    Some(p) => p,
-    None => "xwayland-satellite",
-};
-
-/// How many displays to try before giving up.
-///
-/// A hundred X11 buffers open at once is absurd; the ceiling exists so the
-/// loop terminates, and not to limit anyone.
-const DISPLAY_CEILING: u8 = 100;
-
-/// The first free display number, given the occupied ones.
-///
-/// A **pure** function — it is what the test exercises. The alternative would be
-/// finding out on a actual system that two satellites on the same display trip over
-/// each other: the second fails to create the socket, its app never opens, and the
-/// only symptom is a window that does not appear.
-///
-/// It starts at `:1` because `:0` is usually a actual X server.
-#[must_use]
-pub fn first_free_display(taken: &[u8]) -> Option<u8> {
-    (1..DISPLAY_CEILING).find(|n| !taken.contains(n))
-}
-
-/// The display numbers already in use, read from the socket directory.
-#[must_use]
-pub fn taken_displays_in(dir: &Path) -> Vec<u8> {
-    let Ok(inputs) = std::fs::read_dir(dir) else {
-        // With no directory there is no X running at all. Zero occupied is the
-        // right answer, not an error.
-        return Vec::new();
-    };
-    inputs
-        .filter_map(|e| {
-            let name = e.ok()?.file_name().into_string().ok()?;
-            name.strip_prefix('X')?.parse::<u8>().ok()
-        })
-        .collect()
-}
-
-/// The display numbers in use on the system.
-#[must_use]
-pub fn taken_displays() -> Vec<u8> {
-    taken_displays_in(Path::new(X_SOCKETS))
-}
-
-/// The command that starts an X11 buffer with ITS satellite, in the same scope.
-///
-/// # Why one satellite per scope
-///
-/// §9.1 asks for one instance per buffer. A shared satellite would make
-/// every X11 window report **its** pid, and the correlation at the top of this
-/// module would start pointing them all at the same buffer — with no error, with the
-/// modeline showing the wrong state.
-///
-/// # Why both go through OUR binary
-///
-/// The scope has a single command. For the satellite and the app to end up in the same
-/// cgroup, someone has to be the scope's process and spawn both; that
-/// someone is `ronoctua-shell satellite_of`, which waits for the X socket to appear
-/// before starting the app — without the wait, the app opens with `DISPLAY` pointing
-/// at a socket that does not exist yet and dies saying "cannot open
-/// display", intermittently.
-#[must_use]
-pub fn command_with_satellite(
-    scope: &str,
-    me: &str,
-    display: u8,
-    program: &str,
-    args: &[String],
-    working_directory: Option<&str>,
-) -> Vec<String> {
-    let mut internal = vec![
-        me.to_owned(),
-        "satellite".to_owned(),
-        display.to_string(),
-        program.to_owned(),
-    ];
-    internal.extend_from_slice(args);
-    let (prog, rest) = internal.split_first().expect("never empty");
-    scope_command(scope, working_directory, prog, rest)
-}
-
-/// Starts the satellite, waits for the socket and runs the program on it.
-///
-/// It runs INSIDE the scope: this is the process `systemd-run` puts in the cgroup,
-/// and that is why both the satellite and the program inherit the right cgroup.
-///
-/// # Errors
-///
-/// The satellite does not start, the socket does not appear, or the program does not exist.
-pub fn satellite_of(display: u8, program: &str, args: &[String]) -> Result<()> {
-    let target = format!(":{display}");
-    // The satellite is a CONVENIENCE for whoever is X11. If it does not start, the
-    // Wayland app goes on working just the same — taking the buffer down here
-    // would make Xwayland a dependency of everything.
-    let mut satellite = match wait_for_satellite(display, &target) {
-        Ok(s) => {
-            tracing::info!(display = target, program, "satellite ready");
-            Some(s)
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, program, "no satellite; an X11 app will not open");
-            None
-        }
-    };
-
-    let mut cmd = std::process::Command::new(program);
-    cmd.args(args);
-    if satellite.is_some() {
-        cmd.env("DISPLAY", &target);
-    } else {
-        // Inheriting a `DISPLAY` that is not ours would point the app at another
-        // buffer's X — exactly what §9.1 wants to avoid.
-        cmd.env_remove("DISPLAY");
-    }
-    let st = cmd
-        .status()
-        .with_context(|| format!("could not run `{program}`"));
-
-    // The satellite dies WITH the app: one per scope is only worth anything if it does not
-    // outlive the scope. Outliving it, every closed buffer would leave an
-    // Xwayland alive.
-    if let Some(s) = satellite.as_mut() {
-        let _ = s.kill();
-        let _ = s.wait();
-    }
-
-    if !st?.success() {
-        tracing::info!(program, "the buffer exited with an error");
-    }
-    Ok(())
-}
-
-/// Starts the satellite and waits for the X socket to appear.
-fn wait_for_satellite(display: u8, target: &str) -> Result<std::process::Child> {
-    let mut satellite = std::process::Command::new(SATELLITE)
-        .arg(target)
-        .spawn()
-        .context("could not start xwayland-satellite")?;
-
-    let socket = Path::new(X_SOCKETS).join(format!("X{display}"));
-    // An ACTIVE, short wait, with a ceiling. The satellite comes up in tens of
-    // milliseconds; a fixed `sleep` would be slow in the good case and too short
-    // in the bad one.
-    let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !socket.exists() {
-        if std::time::Instant::now() > limit {
-            let _ = satellite.kill();
-            bail!(
-                "xwayland-satellite did not create {} in 10 s",
-                socket.display()
-            );
-        }
-        if let Some(st) = satellite.try_wait().context("ask the satellite")? {
-            bail!("xwayland-satellite exited with {st} before creating the socket");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    Ok(satellite)
-}
+// THERE IS NO SATELLITE ANY MORE, and its absence is the point.
+//
+// X11 used to need one process per buffer scope: the compositor had no
+// XWayland of its own, so `xwayland-satellite` was started beside every X11
+// app and §9.1's PID → cgroup correlation depended on the two landing in the
+// same scope.
+//
+// The compositor has XWayland built in, and — this is the part that made the
+// removal safe rather than merely simpler — it reports the X CLIENT'S pid for
+// an X11 window, not XWayland's, because wlroots reads it out of the XRes
+// extension. So `Window::pid` is still the real program's, one server serves
+// the session, and the correlation is unchanged with two hundred lines and a
+// package fewer.
 
 /// Extracts the scope's name from the contents of a `/proc/<pid>/cgroup`.
 ///
@@ -435,7 +278,7 @@ pub fn scope_from_cgroup(content: &str) -> Option<String> {
         .map(|c| c.trim_end_matches(".scope").to_owned())
 }
 
-/// Which buffer a window belongs to, by the pid niri reported.
+/// Which buffer a window belongs to, by the pid the compositor reported.
 ///
 /// It reads `/proc/<pid>/cgroup`. A pid that no longer exists, or that is not in a
 /// scope of ours, becomes [`Origin::Orphan`] — which is a record, not an error.
@@ -516,7 +359,7 @@ mod tests {
 
     #[test]
     fn a_pid_that_does_not_exist_becomes_an_orphan() {
-        // The process dies between niri's event and the procfs read.
+        // The process dies between the compositor's event and the procfs read.
         // It happens every time a window closes quickly.
         let tmp = std::env::temp_dir().join("ronoctua-test-empty-procfs");
         assert_eq!(origin_at(&tmp, 999_999), Origin::Orphan);
@@ -540,77 +383,6 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    #[test]
-    fn the_free_display_skips_the_taken_ones() {
-        // Two satellites on the same display trip over each other: the second does not create
-        // the socket, its app never opens, and the only symptom is a window
-        // that does not appear.
-        assert_eq!(super::first_free_display(&[]), Some(1));
-        assert_eq!(super::first_free_display(&[1]), Some(2));
-        assert_eq!(super::first_free_display(&[1, 2, 4]), Some(3));
-        // `:0` is never chosen — it is usually a actual X.
-        assert_ne!(super::first_free_display(&[]), Some(0));
-    }
-
-    #[test]
-    fn the_taken_ones_come_from_the_socket_directory() {
-        let dir = std::env::temp_dir().join(format!("ronoctua-x11-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("X1"), "").unwrap();
-        std::fs::write(dir.join("X7"), "").unwrap();
-        // A file that is not a display socket: it cannot become a number.
-        std::fs::write(dir.join("outro"), "").unwrap();
-
-        let mut v = super::taken_displays_in(&dir);
-        v.sort_unstable();
-        assert_eq!(v, vec![1, 7]);
-        assert_eq!(super::first_free_display(&v), Some(2));
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn a_missing_socket_directory_is_not_an_error() {
-        // With no `/tmp/.X11-unix` there is no X running. Zero occupied is the right
-        // answer; failing here would prevent opening the first X11 buffer.
-        let nothing = std::env::temp_dir().join("ronoctua-x11-that-does-not-exist");
-        assert!(super::taken_displays_in(&nothing).is_empty());
-    }
-
-    #[test]
-    fn the_satellite_and_the_app_stay_in_the_same_scope() {
-        // It is section 9.1's whole point: different scopes would make the X11
-        // window report the satellite's pid, and the correlation would point every
-        // window at the same buffer.
-        let c = super::command_with_satellite(
-            "ronoctua-buffer-y",
-            "/nix/store/x/bin/ronoctua-shell",
-            3,
-            "xterm",
-            &[],
-            None,
-        );
-        assert_eq!(c[0], "systemd-run");
-        assert!(c.contains(&"--unit=ronoctua-buffer-y".to_owned()));
-        // ONE scope only in the command: two `--unit`s would be two cgroups.
-        assert_eq!(c.iter().filter(|a| a.starts_with("--unit=")).count(), 1);
-        assert!(c.contains(&"satellite".to_owned()));
-        assert!(
-            c.contains(&"3".to_owned()),
-            "the display was not passed: {c:?}"
-        );
-        // The app comes AFTER the display, otherwise `satellite_of` would treat it as a
-        // display number.
-        let i = c.iter().position(|x| x == "3").unwrap();
-        assert_eq!(c[i + 1], "xterm");
-    }
-
-    /// THE APPLICATION IS FIRST IN LINE TO DIE, and the desktop is not.
-    ///
-    /// Three separate mechanisms, asserted together because each is silent on
-    /// its own: a slice left to a default the manual documents WRONGLY would
-    /// make the whole memory policy apply to an empty set; a missing
-    /// `OOMPolicy=kill` would leave half an application alive; and a `choom`
-    /// in the wrong place would either not run or eat the program's arguments.
     #[test]
     fn the_application_dies_before_the_desktop_does() {
         let c = scope_command("ronoctua-buffer-x", None, "alacritty", &["-e".into()]);

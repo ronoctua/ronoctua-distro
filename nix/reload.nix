@@ -1,6 +1,6 @@
 # The nested loop's watcher — milestone 3's acceptance criterion.
 #
-# "the nested loop (`nix run .#dev`) starts niri + shell **with hot reload**"
+# "the nested loop (`nix run .#dev`) starts the compositor + shell **with hot reload**"
 #
 # # Why this is a package of its own, and not ten lines inside `dev.nix`
 #

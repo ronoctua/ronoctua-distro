@@ -192,8 +192,8 @@ impl Term {
     /// The three text comparisons, all case-insensitive.
     ///
     /// Case-insensitive because the sender chooses it and nobody writing a
-    /// filter thinks about it: `app is Niri` failing because the process says
-    /// `niri` is a whole evening.
+    /// filter thinks about it: `app is Emacs` failing because the process says
+    /// `emacs` is a whole evening.
     fn text_holds(&self, value: &str) -> bool {
         let value = value.to_lowercase();
         match &self.test {
@@ -332,24 +332,24 @@ mod tests {
     #[test]
     fn a_case_does_not_decide_a_filter() {
         // The sender chooses the case and nobody writing a filter thinks about
-        // it. `app is Niri` failing because the process says `niri` is an
+        // it. `app is Emacs` failing because the process says `emacs` is an
         // evening spent on nothing.
-        let x = n("niri", "Screenshot captured", "");
+        let x = n("emacs", "Compilation finished", "");
         let p = Presentation::from_urgency(Urgency::Normal);
-        assert!(term(Field::App, Test::Is("Niri".into())).holds(&x, &p));
-        assert!(term(Field::Summary, Test::Contains("SCREENSHOT".into())).holds(&x, &p));
-        assert!(term(Field::Summary, Test::StartsWith("screen".into())).holds(&x, &p));
+        assert!(term(Field::App, Test::Is("Emacs".into())).holds(&x, &p));
+        assert!(term(Field::Summary, Test::Contains("COMPILATION".into())).holds(&x, &p));
+        assert!(term(Field::Summary, Test::StartsWith("compil".into())).holds(&x, &p));
     }
 
     #[test]
     fn every_term_has_to_hold() {
-        let x = n("niri", "Screenshot captured", "");
+        let x = n("emacs", "Compilation finished", "");
         let p = Presentation::from_urgency(Urgency::Normal);
         let r = Rule {
             id: "shot".into(),
             when: vec![
-                term(Field::App, Test::Is("niri".into())),
-                term(Field::Summary, Test::Is("Screenshot captured".into())),
+                term(Field::App, Test::Is("emacs".into())),
+                term(Field::Summary, Test::Is("Compilation finished".into())),
             ],
             apply: Verdict {
                 show: Some(Show::Brief),

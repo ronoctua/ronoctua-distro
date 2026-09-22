@@ -31,14 +31,14 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
   ronoctua,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-bluetooth";
@@ -64,7 +64,7 @@ pkgs.testers.runNixOSTest {
       users.users.${config.ronoctua.user}.linger = true;
 
       environment.systemPackages = [
-        niri
+        scroll
         ronoctua-shell
         pkgs.bluez
       ]
@@ -125,7 +125,7 @@ pkgs.testers.runNixOSTest {
       with subtest("the bus lets an ordinary user through: the wall it meets is the absent radio"):
           machine.wait_until_succeeds(
               "systemctl --machine=${nodes.machine.ronoctua.user}@ --user is-system-running --wait "
-              "| grep -qE 'running|degraded'",
+              "| grep -E 'running|degraded' > /dev/null",
               timeout=60,
           )
           # THE WHOLE SECURITY STORY, on the running bus, and readable even
@@ -178,18 +178,18 @@ pkgs.testers.runNixOSTest {
 
       with subtest("the footer comes up with no radio and draws no device mark"):
           start_xvfb()
-          start_niri("niri", "${niri}")
-          sock = socket_of("niri")
+          start_compositor("compositor", "${scroll}")
+          sock = socket_of("compositor")
           machine.succeed(
               "systemd-run --unit=footer ${xvfb.env} "
               "--setenv=WAYLAND_DISPLAY=wayland-1 "
               "--setenv=HOME=/root "
-              f"--setenv=NIRI_SOCKET={sock} "
+              f"--setenv=SCROLLSOCK={sock} "
               "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_bluetooth=debug "
               "${ronoctua-shell}/bin/ronoctua-shell"
           )
           machine.wait_until_succeeds(
-              "journalctl -u footer --no-pager | grep -q 'footer layout resolved'", timeout=60
+              "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null", timeout=60
           )
           journal = footer_journal()
           for mark in ("bt-1", "bt-2", "bt-3", "bt-4"):
@@ -205,7 +205,7 @@ pkgs.testers.runNixOSTest {
           # taller than that is the view on screen. Waiting for the line
           # itself would have been satisfied by subtest 4's own.
           machine.wait_until_succeeds(
-              "journalctl -u footer --no-pager | grep -qE 'layout resolved width=[0-9]+ height=[0-9]{3}'",
+              "journalctl -u footer --no-pager | grep -E 'layout resolved width=[0-9]+ height=[0-9]{3}' > /dev/null",
               timeout=30,
           )
           journal = footer_journal()

@@ -14,7 +14,7 @@
 //! day it lies is the day someone trusts it. Here the lines come out of
 //! [`crate::actions::chords`] and [`crate::actions::emergency`] at the moment
 //! of opening: changing a shortcut changes the manual, with no intermediate
-//! step. It is the same reason niri's binds are generated.
+//! step. It is the same reason the compositor's binds are generated.
 //!
 //! # Why it is not a buffer
 //!

@@ -4,8 +4,9 @@
 //!
 //! The owner's standing rule is that green is not proof: something that appears
 //! on the screen is opened on the screen before anybody says it is done. Until
-//! this binary, obeying that rule cost a NixOS VM — boot, niri under `Xvfb`,
-//! screenshot the X root, crop it by the geometry niri reported, OCR it. Three
+//! this binary, obeying that rule cost a NixOS VM — boot, the compositor under
+//! `Xvfb`, screenshot the X root, crop it by the geometry it reported, OCR it.
+//! Three
 //! minutes, to see whether a rule was touching a title's descenders. A rule
 //! that expensive is a rule that gets skipped, and the title that prompted this
 //! was drawn at twice the body's size for months with every check green.

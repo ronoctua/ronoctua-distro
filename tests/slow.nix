@@ -119,4 +119,12 @@
   # still does not belong here — section 2's measured table is what that rule
   # looks like when it is applied honestly.
   "buffers-test"
+  # And the THIRD compilation of the same eight, for clippy. It is here by the
+  # same criterion and the same number: the buffers are built once for the
+  # `.wasm` every check links, a second time to run their tests, and a third
+  # to be read. What it buys is the only lint they have — `cargo clippy
+  # --workspace` cannot reach a buffer, and the three with a baked table
+  # cannot be linted outside Nix at all, which is how a dead function sat in
+  # `buffers/unicode` across releases.
+  "buffers-lint"
 ]

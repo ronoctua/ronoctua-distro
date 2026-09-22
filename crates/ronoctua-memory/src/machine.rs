@@ -46,7 +46,7 @@ pub fn pressure(p: &Places) -> ronoctua_protocol::Pressure {
 /// # Why it is here and not in whoever wants it
 ///
 /// Because this crate is the only border with `/proc` — the same rule that
-/// makes `ronoctua-niri` the only one that speaks to the compositor. The first
+/// makes `ronoctua-scroll` the only one that speaks to the compositor. The first
 /// caller is `ronoctua-brain`, which refuses to start an update while the
 /// machine is busy, and a scheduler that opened `/proc` for one file would be
 /// the second border this crate exists to prevent.

@@ -358,9 +358,24 @@ fn say_of(a: &Action, view: &View, places: &ronoctua_memory::Places, texts: &Tex
     }
 }
 
+/// Opens a connection, or says there is nobody to talk to.
+///
+/// # THE ONE PLACE IN THIS CRATE THAT NAMES AN ADAPTER
+///
+/// Everything below holds a `dyn Compositor` and asks it things, which is what
+/// makes "this crate does not know which compositor it is" a fact about the
+/// code rather than a sentence in a document. There were THREE of these, and
+/// more than one is how a crate drifts back into naming a product: the day a
+/// second adapter exists, two of the three get updated.
+///
+/// `only-the-composition-root-names-the-compositor` counts them.
+fn open_the_compositor() -> anyhow::Result<Box<dyn ronoctua_compositor::Compositor>> {
+    ronoctua_scroll::Scroll::open()
+}
+
 /// Asks the compositor to close what is focused.
 fn close_focused() -> action::Outcome {
-    match ronoctua_niri::Niri::connect().and_then(|mut n| n.close_window()) {
+    match open_the_compositor().and_then(|mut c| c.close_window()) {
         Ok(()) => action::Outcome::Ran,
         Err(e) => action::Outcome::Failed(e.to_string()),
     }
@@ -370,7 +385,7 @@ fn close_focused() -> action::Outcome {
 ///
 /// It goes through `ronoctua_memory::scan::stop`, and that is the point: the
 /// function refuses anything outside `app.slice`, so clicking a row can never
-/// reach the compositor or the session's own units. Killing niri from the
+/// reach the compositor or the session's own units. Killing the compositor from the
 /// window list would end the session the person is trying to save.
 fn kill_chosen(view: &View, places: &ronoctua_memory::Places) -> action::Outcome {
     let Some(pane) = view.panes.get(view.row) else {
@@ -409,10 +424,10 @@ fn kill_biggest(places: &ronoctua_memory::Places) -> action::Outcome {
 /// Not answering is a legitimate state here — it is, in fact, the state this
 /// whole application exists for.
 fn panes_of() -> Vec<Pane> {
-    let Ok(mut niri) = ronoctua_niri::Niri::connect() else {
+    let Ok(mut wm) = open_the_compositor() else {
         return Vec::new();
     };
-    let Ok(windows) = niri.windows() else {
+    let Ok(windows) = wm.windows() else {
         return Vec::new();
     };
     windows
@@ -429,6 +444,14 @@ fn panes_of() -> Vec<Pane> {
         .collect()
 }
 
+/// Whether the compositor is not merely listening but answering.
+fn compositor_answers() -> bool {
+    let Ok(mut wm) = open_the_compositor() else {
+        return false;
+    };
+    wm.version().is_ok()
+}
+
 /// The diagnosis, as lines of data.
 ///
 /// It is what `nix run .#diagnostics` prints, on the screen of whoever cannot
@@ -443,8 +466,12 @@ fn state_of(places: &ronoctua_memory::Places, texts: &Texts) -> Vec<String> {
         out.push(format!("{unit}: {}", active(unit, *user)));
     }
     out.push(format!(
-        "niri: {}",
-        if ronoctua_niri::Niri::connect().is_ok() {
+        "compositor: {}",
+        // IT IS ASKED SOMETHING, not merely opened. A hung compositor still
+        // accepts a connection on its socket — and a hung compositor is the
+        // state this whole application exists for, so a probe that only
+        // connects would answer "running" in exactly the case that matters.
+        if compositor_answers() {
             texts.t(key::RESCUE_RAN)
         } else {
             texts.t(key::RESCUE_FAILED)
@@ -541,9 +568,9 @@ fn show_journal(unit: &str) {
     // thing everybody does.
     c.arg("-e");
     if !unit.is_empty() {
-        // The footer and niri are USER units; the whole machine's journal has
+        // The footer and the compositor are USER units; the machine's journal has
         // no unit at all.
-        if unit.starts_with("ronoctua-") || unit.starts_with("niri") {
+        if unit.starts_with("ronoctua-") || unit.starts_with("scroll") {
             c.arg("--user");
         }
         c.args(["-u", unit]);

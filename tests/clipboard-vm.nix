@@ -14,13 +14,13 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
   first = "ronoctua-first-copied";
   second = "ronoctua-second-copied";
 in
@@ -32,7 +32,7 @@ pkgs.testers.runNixOSTest {
     virtualisation.cores = 2;
 
     environment.systemPackages = [
-      niri
+      scroll
       ronoctua-shell
       pkgs.wl-clipboard
       pkgs.imagemagick
@@ -68,24 +68,24 @@ pkgs.testers.runNixOSTest {
     machine.start()
     machine.wait_for_unit("multi-user.target")
     start_xvfb()
-    start_niri("niri", "${niri}")
-    sock = socket_of("niri")
+    start_compositor("compositor", "${scroll}")
+    sock = socket_of("compositor")
 
     with subtest("the footer comes up"):
         machine.succeed(
             "systemd-run --unit=footer ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
             "--setenv=LANG=pt_BR.UTF-8 "
-            f"--setenv=NIRI_SOCKET={sock} "
+            f"--setenv=SCROLLSOCK={sock} "
             "--setenv=RUST_LOG=ronoctua_shell=debug "
             "--setenv=RONOCTUA_LEADER=LEADER "
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'control socket opened'",
+            "journalctl -u footer --no-pager | grep 'control socket opened' > /dev/null",
             timeout=90,
         )
-        focus_niri()
+        focus_compositor()
 
     with subtest("the daemon SEES what was copied from outside"):
         # The capture is native (`wl_data_device`), and not a `wl-paste --watch`:
@@ -97,7 +97,7 @@ pkgs.testers.runNixOSTest {
             machine.wait_until_succeeds(
                 "journalctl -u footer --no-pager "
                 "| grep -c 'new entry in the clipboard history' "
-                "| grep -qE '^[2-9]'",
+                "| grep -E '^[2-9]' > /dev/null",
                 timeout=30,
             )
         except Exception:
@@ -110,7 +110,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
         )
         # `c` IS A LEAF, not a prefix. It was the other way round for one
         # delivery, and the screen capture has lived under `m s` since — the
@@ -135,7 +135,7 @@ pkgs.testers.runNixOSTest {
     with subtest("the copied text is ON SCREEN"):
         # The queue keeping is not the same thing as the region showing. The OCR
         # closes the chain: capture -> queue -> expansion -> span -> pixel.
-        w, h, x, y = niri_geometry()
+        w, h, x, y = compositor_geometry()
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         machine.succeed(
             f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
@@ -156,7 +156,7 @@ pkgs.testers.runNixOSTest {
         press_key("Down")
         press_key("Return")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'recopied from the history'",
+            "journalctl -u footer --no-pager | grep 'recopied from the history' > /dev/null",
             timeout=30,
         )
         pasted = machine.succeed(
@@ -175,10 +175,10 @@ pkgs.testers.runNixOSTest {
         # is missing is the path — capture -> queue -> preview.
         machine.succeed("systemctl restart footer")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'control socket opened'",
+            "journalctl -u footer --no-pager | grep 'control socket opened' > /dev/null",
             timeout=60,
         )
-        focus_niri()
+        focus_compositor()
 
         # A PNG of a known size, so the log can be checked.
         machine.succeed(
@@ -195,7 +195,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
         )
         # `c` IS A LEAF, not a prefix. It was the other way round for one
         # delivery, and the screen capture has lived under `m s` since — the

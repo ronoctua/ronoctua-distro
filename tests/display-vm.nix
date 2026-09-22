@@ -13,12 +13,12 @@
 #    header used to say the group was what reached it.
 # 3. The module adds NO polkit rule of its own: the whole directory is read and
 #    nothing in it names a display action.
-# 4. The view opens in the footer over a real niri and the region grows for
+# 4. The view opens in the footer over a real compositor and the region grows for
 #    its rows. WHICH rows is not readable here — see the paragraph below —
-#    so what is compared against niri's own answer is the connector the
+#    so what is compared against the compositor's own answer is the connector the
 #    FRAGMENT files the screen under, in claim 5.
-# 5. The fragment survives the round trip: the view writes `niri-display.kdl`,
-#    the config includes it, and niri RELOADS with no error — which is the one
+# 5. The fragment survives the round trip: the view writes `scroll-display.conf`,
+#    the config includes it, and the compositor RELOADS with no error — which is the one
 #    thing a static check of the file cannot say.
 # 6. Nothing on a machine with no backlight and no I2C walks a brightness
 #    path at all. What the ROW says instead is drawn to a GPU surface and never
@@ -29,7 +29,7 @@
 # WHAT CANNOT BE PROVED HERE, and it is most of the feature: a second monitor,
 # so the arrangement level and "the last lit screen" have nothing to stand on;
 # a backlight, so no percentage is ever written; an I2C bus with a monitor on
-# it, so DDC/CI is never spoken; a mode list, because the winit backend offers
+# it, so DDC/CI is never spoken; a mode list, because the X11 backend offers
 # exactly one; a HiDPI output, because the scale the compositor reports here is
 # whatever the config says rather than a panel's. Nor can it read a SENTENCE:
 # every row of every view is drawn to a GPU surface and none of it reaches a
@@ -40,48 +40,45 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
   ronoctua,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
-  # NIRI'S OWN CONFIG, WITH THE INCLUDE THE SYSTEM WRITES.
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
+  # THE COMPOSITOR'S OWN CONFIG, WITH THE INCLUDE THE SYSTEM WRITES.
   #
-  # `start_niri`'s default carries none, and without it the compositor never
-  # opens the fragment — so "niri reloads it" would be an assertion about a
-  # file nothing read, passing whether the KDL were valid or arbitrary bytes.
-  # `start_niri`'s own docstring says a test passes its own config when what it
+  # `start_compositor`'s default carries none, and without it the compositor never
+  # opens the fragment — so "the compositor reloads it" would be an assertion about a
+  # file nothing read, passing whether the fragment were valid or arbitrary bytes.
+  # `start_compositor`'s own docstring says a test passes its own config when what it
   # is proving IS a piece of the configuration; this is that case.
   #
-  # `optional=true`, and the same SHAPE of path `nix/modules/niri.nix` writes —
-  # that module builds `/home/<the owner's name>/…` literally, and this node
-  # runs as root, so the line here is hand-written to `/root/…` rather than
-  # derived. What that costs is honest to say: renaming `fragment::FILE` would
-  # leave this subtest green, because the `test -f` below is spelt from the
-  # same hand-written string. `display-fragment-validates` reads the file's
-  # CONTENT and not its name, so nothing closes that; what does is that both
-  # halves are one constant away from each other and a rename touches both.
-  configWithFragment = pkgs.writeText "niri-display-test.kdl" ''
-    prefer-no-csd
+  # A MISSING FILE IS NOT FATAL HERE BY CONSTRUCTION — `cmd_include` answers
+  # success when the path does not resolve — so there is no flag to pass, which
+  # is one thing fewer to get wrong than the `optional=true` this replaced.
+  #
+  # The path is the same SHAPE `nix/modules/scroll.nix` writes: that module
+  # builds `${XDG_CONFIG_HOME:-$HOME/.config}/…` and this node runs as root, so
+  # the line here is hand-written to `/root/…` rather than derived. What that
+  # costs is honest to say: renaming `fragment::FILE` would leave this subtest
+  # green, because the `test -f` below is spelt from the same hand-written
+  # string. `display-fragment-validates` reads the file's CONTENT and not its
+  # name, so nothing closes that; what does is that both halves are one
+  # constant away from each other and a rename touches both.
+  configWithFragment = pkgs.writeText "scroll-display-test.conf" ''
+    # NO ANIMATIONS — see `tests/compositor-xvfb.nix` for the measurement.
+    animations enabled no
 
-    layout {
-        gaps 0
-        border {
-            off
-        }
-        focus-ring {
-            off
-        }
-    }
+    default_border none
+    titlebar_padding 1
+    gaps inner 0
+    gaps outer 0
+    scrollnag_command -
 
-    hotkey-overlay {
-        skip-at-startup
-    }
-
-    include "/root/.config/ronoctua/niri-display.kdl" optional=true
+    include "/root/.config/ronoctua/scroll-display.conf"
   '';
 in
 pkgs.testers.runNixOSTest {
@@ -117,7 +114,7 @@ pkgs.testers.runNixOSTest {
       users.users.${config.ronoctua.user}.linger = true;
 
       environment.systemPackages = [
-        niri
+        scroll
         ronoctua-shell
         pkgs.i2c-tools
       ]
@@ -135,9 +132,9 @@ pkgs.testers.runNixOSTest {
       ${xvfb.prelude}
 
       def press_key(name):
-          """One key, into niri's X window.
+          """One key, into the compositor's X window.
 
-          `focus_niri` from the prelude has to have run first: with no window
+          `focus_compositor` from the prelude has to have run first: with no window
           manager nobody calls `XSetInputFocus`, so the focus stays on
           `PointerRoot` and every injected key is lost with no error anywhere.
           `leader-vm.nix` carries the same pair for the same reason.
@@ -211,32 +208,52 @@ pkgs.testers.runNixOSTest {
                   f"a polkit rule mentions {word}; the display module writes none:\n" + out
               )
 
-      with subtest("the view opens over a real niri and the region grows for it"):
+      def scale_of_output():
+          """What scale the compositor says its output is running at.
+
+          PARSED, like the connector below: this IPC answers JSON, and the
+          number comes out as a float — read as TEXT it would make `1.0` and
+          `1` different scales, and `1.3333333730697632` a string nobody can
+          compare.
+          """
+          import json as _json
+
+          sock = socket_of("compositor")
+          said = machine.succeed(f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_outputs")
+          listed = _json.loads(said)
+          assert listed, "the compositor lists no output at all:\n" + said
+          return listed[0]["scale"]
+
+      with subtest("the view opens over a real compositor and the region grows for it"):
           # THE BRAIN STAYS OUT OF IT — and `start_xvfb` is what writes that,
           # for every test that uses this prelude. Writing it here as well was
           # the same bytes twice.
           start_xvfb()
-          start_niri("niri", "${niri}", config="${configWithFragment}")
-          sock = socket_of("niri")
-          connectors = machine.succeed(f"NIRI_SOCKET={sock} ${niri}/bin/niri msg outputs")
+          start_compositor("compositor", "${scroll}", config="${configWithFragment}")
+          sock = socket_of("compositor")
+          connectors = machine.succeed(f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_outputs")
           print(connectors)
-          # THE CONNECTOR NIRI REPORTS, kept and compared below — it was
+          # THE CONNECTOR THE COMPOSITOR REPORTS, kept and compared below — it was
           # fetched, printed and dropped, which is a claim in the header and
           # nothing in the test.
-          import re as _re
-          m = _re.search(r'^Output "[^"]*" \((\S+)\)', connectors, _re.M)
-          assert m, "niri lists no output at all:\n" + connectors
-          connector = m.group(1)
+          #
+          # PARSED, not scanned: this IPC answers `get_outputs` with JSON, and
+          # a regexp written for another compositor's prose answers "no output
+          # at all" over a reply that lists one.
+          import json as _json
+          listed = _json.loads(connectors)
+          assert listed, "the compositor lists no output at all:\n" + connectors
+          connector = listed[0]["name"]
           machine.succeed(
               "systemd-run --unit=footer ${xvfb.env} "
               "--setenv=WAYLAND_DISPLAY=wayland-1 "
               "--setenv=HOME=/root "
-              f"--setenv=NIRI_SOCKET={sock} "
+              f"--setenv=SCROLLSOCK={sock} "
               "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_display=debug "
               "${ronoctua-shell}/bin/ronoctua-shell"
           )
           machine.wait_until_succeeds(
-              "journalctl -u footer --no-pager | grep -q 'footer layout resolved'",
+              "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null",
               timeout=60,
           )
           # THE CONTROL SOCKET IS `$XDG_RUNTIME_DIR/ronoctua-<display>.sock`, so
@@ -244,7 +261,7 @@ pkgs.testers.runNixOSTest {
           # look and says so rather than guessing.
           machine.succeed(
               "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
-              f"NIRI_SOCKET={sock} ${ronoctua-shell}/bin/ronoctua-shell command display-open"
+              f"SCROLLSOCK={sock} ${ronoctua-shell}/bin/ronoctua-shell command display-open"
           )
           # THE SURFACE GREW, which is the footer saying the region is holding
           # rows. It logs its resolved geometry and not the text of the rows,
@@ -282,19 +299,18 @@ pkgs.testers.runNixOSTest {
           journal = machine.succeed("journalctl -u footer --no-pager")
           assert "no screen thread" not in journal, journal[-4000:]
 
-      with subtest("a knob turned and kept writes the fragment, and niri reloads it"):
+      with subtest("a knob turned and kept writes the fragment, and the compositor reloads it"):
           # THE WHOLE PATH, driven by KEYS. The view writes nothing until
           # somebody keeps a change, so a test that only opened it would be
           # asserting about a file the feature never produces. The keys go in
           # through `xdotool` on Xvfb, which is the route a physical keyboard
           # takes — `leader-vm.nix`'s own note on this.
-          # HOW MANY TIMES NIRI HAD ANNOUNCED A CONFIGURATION BEFORE ANY OF
-          # THIS — see the assertion at the end of this subtest for why the
-          # number and not the word.
-          reloads_before = machine.succeed(
-              "journalctl -u footer --no-pager"
-          ).count("ConfigLoaded")
-          focus_niri()
+          focus_compositor()
+          # WHAT THE COMPOSITOR CHOSE FOR ITSELF, before a key is pressed.
+          # The re-read below frees every output config and builds them again
+          # from the files, so this is the number it goes back to when nothing
+          # of ours is loaded.
+          untouched = scale_of_output()
           # RET into the screen's sheet, then down to the scale. The rows
           # before it are the two facts, the power row, the resolution and the
           # rate — the last three drawn refusing on this synthetic output,
@@ -308,62 +324,70 @@ pkgs.testers.runNixOSTest {
           press_key("Down")
           press_key("Return")
 
-          fragment = "/root/.config/ronoctua/niri-display.kdl"
+          fragment = "/root/.config/ronoctua/scroll-display.conf"
           machine.wait_until_succeeds(f"test -f {fragment}", timeout=60)
           written = machine.succeed(f"cat {fragment}")
           print(written)
-          # THE CONNECTOR NIRI REPORTED, which is the header's claim and was
+          # THE CONNECTOR THE COMPOSITOR REPORTED, which is the header's claim and was
           # fetched and dropped: the fragment files this screen under its
-          # connector because the winit output gives no serial, so the name in
-          # the file has to be the name niri gave.
+          # connector because this backend's output gives no serial, so the
+          # name in the file has to be the name the compositor gave.
           assert f'output "{connector}"' in written, (
               f"the fragment does not name `{connector}`:\n" + written
           )
           assert "scale" in written, "the scale that was kept is not in it:\n" + written
-          # AND NIRI READ IT. The config includes the fragment `optional=true`
-          # and reloads when it changes; a fragment it refuses shows up here
-          # and nowhere else, because a refused include leaves the compositor
-          # running on the previous configuration.
-          niri_log = machine.succeed("journalctl -u niri --no-pager 2>/dev/null || true")
-          # A POSITIVE CONTROL, for the reason the polkit sweep has one: an
-          # empty journal passes every "this word is absent" assertion by
-          # having no words at all. niri runs at `RUST_LOG=niri=debug` here,
-          # so it has plenty to say.
-          assert "niri" in niri_log.lower(), (
-              "niri's journal read as empty; the sweep is not reaching it"
-          )
-          # NIRI'S OWN VERDICT, and not a guess at its prose. Three substrings
-          # ("error parsing", "failed to parse", "config error") stood here
-          # with nothing establishing that any of them is what niri prints when
-          # it refuses a config — so a refusal worded any other way passed in
-          # silence, which is the class of defect this crate exists to remove.
-          # What niri says in a form we control is the `ConfigLoaded` event,
-          # whose `failed` field is its answer; `daemon::listen_to_niri` logs
-          # every event at debug and this unit runs at debug.
+          # AND THE COMPOSITOR READ IT, which is the half this subtest is
+          # named for and did not have.
           #
-          # AND IT IS COUNTED, NOT LOOKED FOR. niri replays `ConfigLoaded` to
-          # every event-stream client as part of its INITIAL state
-          # (`niri-ipc`'s `ConfigState::replicate`, sent from `ipc/server.rs`'s
-          # "Send the initial state"), so the footer's journal carries one
-          # before a key is ever pressed. Asserting presence therefore passed
-          # with the `include` line deleted from the config — the very case
-          # this subtest exists for. The count taken before the keys is what
-          # makes it an assertion.
-          footer_log = machine.succeed("journalctl -u footer --no-pager")
-          assert footer_log.count("ConfigLoaded") > reloads_before, (
-              "niri never reloaded; the fragment did not reach it "
-              f"({reloads_before} announcements before the keys, "
-              f"{footer_log.count('ConfigLoaded')} after):\n" + footer_log[-4000:]
+          # It used to COUNT config-load announcements in the footer's
+          # journal, because a refusal only ever arrived asynchronously and
+          # the compositor replayed one to every new client — so asserting
+          # presence passed even with the `include` line deleted from the
+          # config, which is the very case the subtest exists for.
+          #
+          # What replaced it asserted two things that CANNOT FAIL: `reload`
+          # answers `{"success": true}` whatever parsed (measured — see
+          # `ronoctua-scroll`'s `reread`), and every output reports a scale.
+          # Both were satisfied by a compositor that had ignored the file, so
+          # the subtest was asking nothing at all.
+          #
+          # The answer is two readings, and the first of them is the one that
+          # found the defect: the compositor has to ACCEPT the file. It used
+          # to answer every line of the header with `Unknown/invalid command
+          # '//'` and then `Error(s) loading config!`, so the whole fragment
+          # was on the floor — every monitor's settings refused over a comment
+          # marker, on every machine, with `reload` answering `success` and
+          # `scrollnag_command -` refusing the one window that would have
+          # said so.
+          #
+          # NOT COMPARED NUMBER FOR NUMBER, deliberately. `verify_good_scale`
+          # snaps a scale that does not divide the panel into whole logical
+          # pixels, and on this backend it can: the X11 output answers
+          # `"modes": []` with a populated `current_mode`, so `Screen::mode()`
+          # — which indexes the list — is `None` and the scale ladder falls
+          # back to its panel-blind rungs. What the file asks for and what the
+          # compositor settles on may legitimately differ by one snap.
+          #
+          # WHAT MAY NOT DIFFER is that the scale is still not the one the
+          # compositor chooses on its own. A re-read frees `output_configs`
+          # and builds them again from the FILES, so every transient this
+          # subtest applied is gone by then — and a scale that is still not
+          # the untouched one can only have come from the fragment.
+          sock = socket_of("compositor")
+          since = len(machine.succeed("journalctl -u compositor --no-pager").splitlines())
+          machine.succeed(f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg reload")
+          machine.sleep(2)
+          fresh = "\n".join(
+              machine.succeed("journalctl -u compositor --no-pager").splitlines()[since:]
           )
-          assert "ConfigLoaded { failed: true }" not in footer_log, (
-              "niri refused the fragment it just reloaded:\n" + footer_log[-4000:]
+          assert "Error(s) loading config" not in fresh, (
+              "the compositor REFUSED the fragment the view had just written:\n" + fresh
           )
-          # AND THE PROSE TOO, as a second net: it costs nothing and would
-          # catch a refusal that never reached the event.
-          for bad in ("error parsing", "failed to parse", "config error"):
-              assert bad not in niri_log.lower(), (
-                  f"niri refused the fragment ({bad}):\n" + niri_log
-              )
+          running = scale_of_output()
+          assert running != untouched, (
+              f"the re-read put the scale back to {running}, which is what the "
+              "compositor chooses on its own: the file was written and forgotten"
+          )
 
       with subtest("the footer's own clock puts a change back when nobody answers"):
           # THE PRIMARY DOOR'S HALF, and it had none: the subtest above answers
@@ -371,9 +395,9 @@ pkgs.testers.runNixOSTest {
           # countdown — the one `s d d` uses, driven by `display_tick` off the
           # footer's own second — was never allowed to run out. Deleting the
           # one call that drives it left every test green.
-          fragment = "/root/.config/ronoctua/niri-display.kdl"
+          fragment = "/root/.config/ronoctua/scroll-display.conf"
           before = machine.succeed(f"cat {fragment}")
-          focus_niri()
+          focus_compositor()
           # BACK TO THE LIST FIRST. The subtest above left the view INSIDE the
           # sheet with the cursor on the scale, so the same walk from here
           # counted five rows further down and landed on "Opens focused here" —
@@ -396,21 +420,14 @@ pkgs.testers.runNixOSTest {
           # deleting the `apply` call left both halves green while a scale
           # nobody kept stayed on the running compositor for ever.
           #
-          # The scale niri reports is the observable that was missing, and the
+          # The scale the compositor reports is the observable that was missing, and the
           # test already knew how to ask for it.
-          def scale_now():
-              said = machine.succeed(f"NIRI_SOCKET={sock} ${niri}/bin/niri msg outputs")
-              for line in said.splitlines():
-                  if "Scale:" in line:
-                      return line.split("Scale:", 1)[1].strip()
-              raise Exception("niri did not report a scale:\n" + said)
-
-          was = scale_now()
+          was = scale_of_output()
           press_key("Right")
           # THE PREVIEW REACHED THE COMPOSITOR. Without this the assertion
           # below passes because nothing ever changed in the first place.
           machine.sleep(2)
-          previewed = scale_now()
+          previewed = scale_of_output()
           assert previewed != was, (
               f"the preview never reached the compositor: still {was}"
           )
@@ -428,7 +445,7 @@ pkgs.testers.runNixOSTest {
           )
           # AND THE PICTURE CAME BACK. This is the half the subtest was named
           # for and never checked.
-          restored = scale_now()
+          restored = scale_of_output()
           assert restored == was, (
               f"the clock fired and the change stayed: {was} -> {previewed} -> {restored}"
           )
@@ -472,12 +489,12 @@ pkgs.testers.runNixOSTest {
           # not touch: every line of `display_window.rs` had no coverage here.
           # It runs as its own process (`ronoctua-shell display`), so what says
           # it worked is its own journal.
-          sock = socket_of("niri")
+          sock = socket_of("compositor")
           machine.succeed(
               "systemd-run --unit=screens-window ${xvfb.env} "
               "--setenv=WAYLAND_DISPLAY=wayland-1 "
               "--setenv=HOME=/root "
-              f"--setenv=NIRI_SOCKET={sock} "
+              f"--setenv=SCROLLSOCK={sock} "
               "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_display=debug "
               "${ronoctua-shell}/bin/ronoctua-shell display"
           )
@@ -485,19 +502,19 @@ pkgs.testers.runNixOSTest {
           # exists — and it says the app id, which is what the modeline turns
           # into `mode-display`.
           machine.wait_until_succeeds(
-              f"NIRI_SOCKET={sock} ${niri}/bin/niri msg windows "
-              "| grep -q 'br.ronoctua.display'",
+              f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree "
+              "| grep 'br.ronoctua.display' > /dev/null",
               timeout=60,
           )
           windows = machine.succeed(
-              f"NIRI_SOCKET={sock} ${niri}/bin/niri msg windows"
+              f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree"
           )
           print(windows)
           # AND ITS TITLE IS ITS OWN. It read `*Bluetooth*` for one commit,
           # because the mould's key was copied with everything else.
           assert "*Screens*" in windows, "the window's title is not its own:\n" + windows
           # AND THE READER STARTED IN IT TOO — the window has its own thread,
-          # its own niri connection and its own `display.json` watch.
+          # its own the compositor connection and its own `display.json` watch.
           w = machine.succeed("journalctl -u screens-window --no-pager")
           assert "no screen thread" not in w, w[-4000:]
           # AND IT DREW — POSITIVELY. `set_title`/`set_app_id` all run before
@@ -508,7 +525,7 @@ pkgs.testers.runNixOSTest {
           # mapped one.
           machine.wait_until_succeeds(
               "journalctl -u screens-window --no-pager "
-              "| grep -q 'the screens window drew'",
+              "| grep 'the screens window drew' > /dev/null",
               timeout=60,
           )
           w = machine.succeed("journalctl -u screens-window --no-pager")
@@ -532,9 +549,9 @@ pkgs.testers.runNixOSTest {
           #
           # THE FOOTER IS STOPPED by the subtest before this one, so the clock
           # that runs here is the window's own.
-          fragment = "/root/.config/ronoctua/niri-display.kdl"
+          fragment = "/root/.config/ronoctua/scroll-display.conf"
           before = machine.succeed(f"cat {fragment}")
-          focus_niri()
+          focus_compositor()
           press_key("Return")
           for _ in range(5):
               press_key("Down")
@@ -555,6 +572,6 @@ pkgs.testers.runNixOSTest {
               "the question never expired; nothing put the change back:\n" + w[-4000:]
           )
           machine.succeed("systemctl stop screens-window")
-          stop_niri("niri")
+          stop_compositor("compositor")
     '';
 }

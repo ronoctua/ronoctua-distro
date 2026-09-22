@@ -33,6 +33,9 @@
   self,
   inputs,
   system,
+  # The compositor. Every VM test starts one, and the contract puts the
+  # adapter in front of it.
+  scroll,
   fonts,
   fontconfigConf,
   glyphdb,
@@ -78,7 +81,7 @@
   keyboardsRs,
   syntaxTable,
   mimeDb,
-  niriActions,
+  compositorDeeds,
   # The C border in front of libtorrent, which carries the `sizeof` table the
   # layout check compares the Rust against.
   torrentShim,
@@ -139,7 +142,7 @@ let
   # The software rasterizer, from the SAME place the VM tests use — otherwise
   # the two could point at different ICDs and only one of them would be the one
   # the CI actually exercises.
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
 
   py = pkgs.python3.withPackages (ps: [
     ps.fonttools
@@ -254,8 +257,8 @@ let
         return "".join(out)
 
     def hashless(text):
-        # The same, for a language whose comments begin with `#` — Nix, KDL,
-        # shell, Python. `code_of` is Rust-shaped and would leave every one of
+        # The same, for a language whose comments begin with `#` — Nix,
+        # shell, Python, `.ftl`. `code_of` is Rust-shaped and would leave every one of
         # those comments standing, which is how a check comes to be satisfied
         # by the sentence above the code instead of the code.
         return "\n".join(l.split("#", 1)[0] for l in text.splitlines())
@@ -428,7 +431,7 @@ let
   # Under lavapipe (section 9.3 of the plan) — correctness, never performance.
   footerVm = import ./footer-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
   };
 
@@ -436,7 +439,7 @@ let
   # polkit rule is exercised end to end, as the owner and with no agent.
   syncthingVm = import ./syncthing-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
   };
 
@@ -448,7 +451,7 @@ let
     ronoctua = {
       inherit fonts fontconfigConf;
       # The theme list (the option's enum), the solved palettes and the
-      # DEFAULT — base.nix and niri.nix read all three.
+      # DEFAULT — base.nix and scroll.nix read all three.
       #
       # `defaultTheme` was missing here, and `ronoctua.theme`'s option reads it
       # for its `default`: every VM test that imports `base.nix` failed to
@@ -456,7 +459,7 @@ let
       # and default became two facts in `assets/themes/themes.nix`, and it went
       # unseen because these tests are in `most`, which had not been run since.
       inherit themes themed defaultTheme;
-      inherit (inputs) niri;
+
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
     };
@@ -465,7 +468,7 @@ let
   # The modeline reflects the focused buffer, proved ON SCREEN (milestone 4).
   modelineVm = import ./modeline-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
   };
 
@@ -641,7 +644,7 @@ let
   # `<dir>` at all —, and fontconfig was left with no font directory: zero
   # fonts, and everything that goes through it becomes TOFU.
   #
-  # The symptom was an error message from niri in little boxes on the screen.
+  # The symptom was an error message from the compositor in little boxes on the screen.
   # Precisely the message that says what is wrong — the cruelest failure mode
   # there is, because it wipes the information you need exactly when you need it.
   #
@@ -678,119 +681,149 @@ let
     echo "OK: the nested fontconfig finds a font, and it is ours"
   '';
 
-  # NIRI'S CONFIG IS VALID — BOTH of them, the production one and the nested one.
+  # THE SYNTAX GATE IS NOT HERE, AND THAT IS MEASURED RATHER THAN LOST.
   #
-  # # What this catches, and what not having it cost
+  # It used to be: a validator that read a file and exited, catching a
+  # duplicate bind that had sailed through the whole battery and left the
+  # compositor on its own defaults — a red box on screen, none of our
+  # shortcuts, no leader.
   #
-  # A `duplicate keybind` — `Alt+Ctrl+L` from niri's defaults against the
-  # emergency `Ctrl+Alt+L`, the same key written in another order — went through
-  # the WHOLE `nix flake check`. The symptom was a red box on the screen and,
-  # worse, niri falling back to its DEFAULT config: none of our shortcuts, and
-  # the leader not working.
+  # This compositor's `--validate` brings up the SERVER first — libseat, a VT,
+  # a backend, a renderer — and only then looks at the config. In a sandbox it
+  # spends ten seconds failing to find a session; outside one but with no GPU
+  # it prints `Failed to create renderer` for a good config and for a
+  # deliberately broken one alike. A gate that says the same thing whatever it
+  # is shown is not a gate.
   #
-  # Nothing validated the generated files. The `niri-binds.nix` grepped for one
-  # word, the module grepped for another — and neither of them asked the
-  # compositor whether the whole file closes.
+  # So it moved to `tests/compositor-contract.nix`, where there is an X server
+  # for it — and it took a NEGATIVE half with it, which the version here never
+  # had: a broken copy of the same config must be refused, or the gate proves
+  # nothing about the good one.
   #
-  # `niri validate` is the right question, asked of whoever has the answer.
-  niri-config-valid = mkCheck "niri-config-valid" [ inputs.niri.packages.${system}.niri ] ''
-    for cfg in "${self.nixosConfigurations.vm.config.environment.etc."niri/config.kdl".source}" \
-               "${devApp.config}"; do
-      echo "validating $cfg"
-      if ! niri validate --config "$cfg" 2>errors.txt; then
-        echo "ERROR: niri REFUSED the generated config." >&2
-        echo "      A refused config is not a broken shortcut: it is the" >&2
-        echo "      compositor falling back to ITS default, with nothing of ours." >&2
-        cat errors.txt >&2
-        exit 1
-      fi
-    done
-    echo "OK: both niri configs are valid"
-  '';
+  # What stays in the build are the guards that can be answered by READING the
+  # file: `nix/compositor-binds.nix`, `nix/compositor-window-rules.nix` and the
+  # config derivations themselves all grep for what must be in them.
 
   # A CAPTURE LANDS IN A DIRECTORY THE DISTRO DECLARED.
   #
   # # What went wrong without this
   #
-  # Nothing wrote `screenshot-path`, so niri used its own default —
-  # `~/Pictures/Screenshots/…`, from `niri-config/src/misc.rs`. This distro has
-  # no `~/Pictures`: its `XDG_PICTURES_DIR` is `main/media/image`. So every
-  # capture went to a directory the system never declared, never created and
-  # nothing could point at — and it was silent, because a compositor writing a
-  # PNG somewhere is not an error anywhere.
+  # Nothing declared where a capture goes, so it went wherever the program
+  # that took it chose. This distro has no `~/Pictures`: its
+  # `XDG_PICTURES_DIR` is `main/media/image`. So every capture went to a
+  # directory the system never declared, never created and nothing could point
+  # at — and it was silent, because a program writing a PNG somewhere is not an
+  # error anywhere.
   #
-  # # Why it reads BOTH files
+  # # The two ends MOVED, and the check moved with them
   #
-  # Because the defect this replaces is the two DRIFTING, not either one being
-  # wrong on its own. `nix/user-dirs.nix` is what makes the directory (through
-  # `xdg.userDirs`, whose `createDirectories` covers `extraConfig` too), and the
-  # niri config is what writes into it. Checking only that `screenshot-path`
-  # exists would go green on a path pointing anywhere at all.
+  # It used to read a `screenshot-path` line out of the compositor's generated
+  # config. There is no such line now and there cannot be: this compositor
+  # takes no screenshots at all. What takes one is `grim`, started by the
+  # footer, and the NAME is built in Rust (`capture_path`) out of
+  # `RONOCTUA_SCREENSHOTS` — so the two ends to hold together are the module
+  # that exports that variable and the table that declares the directory.
   #
-  # It reads the GENERATED config, and not `nix/modules/niri.nix` — the check is
-  # against the code, not against the criterion. A `screenshot-path` written
-  # into the module and lost on its way through `configNiri`'s `sed` would still
-  # be in the source.
+  # # Why it reads THREE files
+  #
+  # Because the defect is the ends DRIFTING, not any one of them being wrong
+  # alone. `nix/user-dirs.nix` is what makes the directory (through
+  # `xdg.userDirs`, whose `createDirectories` covers `extraConfig` too); the
+  # module is what hands the footer the path; and `surface.rs` is what turns it
+  # into a file name. Checking only that the variable exists would go green on
+  # a path pointing anywhere at all.
+  #
+  # It reads the GENERATED unit, and not the module's source — the check is
+  # against the code, not against the criterion. A variable written into the
+  # module and lost on its way into `systemd.user.services` would still be in
+  # the source.
   screenshots-land-in-a-declared-directory =
-    mkCheck "screenshots-land-in-a-declared-directory" [ pkgs.python3 ]
-      ''
-        python3 - <<'END'
-        import pathlib, re, sys
-        exec(open("${pyPrelude}").read())
+    let
+      footer = self.nixosConfigurations.vm.config.systemd.user.services.ronoctua-footer;
+      given = footer.environment.RONOCTUA_SCREENSHOTS or "";
+    in
+    mkCheck "screenshots-land-in-a-declared-directory" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import pathlib, re, sys
+      exec(open("${pyPrelude}").read())
 
-        # FILE-WIDE: a compositor's config and a Nix table, neither of which
-        # has a function in it.
-        #
-        # `uncommented` for the KDL, whose comment is `//`, and `hashless` for
-        # the Nix: a `screenshot-path` commented out is not a path, and it used
-        # to read as one.
-        config = uncommented(pathlib.Path(
-          "${self.nixosConfigurations.vm.config.environment.etc."niri/config.kdl".source}"
-        ).read_text())
-        floor(len(config), 1000, "characters of niri's config")
+      # THE UNIT'S OWN VALUE, forced by Nix above and pasted in here. An
+      # absent one arrives as the empty string rather than as an evaluation
+      # error, which is what lets this say something useful about it.
+      given = "${given}"
 
-        line = re.search(r'^\s*screenshot-path\s+"([^"]+)"', config, re.M)
-        if not line:
-            print("ERROR: niri's config has no `screenshot-path`.", file=sys.stderr)
-            print("", file=sys.stderr)
-            print("       Without it niri uses ITS default, ~/Pictures/Screenshots/,", file=sys.stderr)
-            print("       which this distro neither declares nor creates. The screenshot lands, and", file=sys.stderr)
-            print("       not one error appears anywhere at all.", file=sys.stderr)
-            raise SystemExit(1)
-        written = line.group(1)
+      if not given:
+          print("ERROR: the footer's unit does not carry RONOCTUA_SCREENSHOTS.", file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       Then `capture_path` returns None, `screen-capture` echoes", file=sys.stderr)
+          print("       \"nothing to do\", and the key looks broken rather than", file=sys.stderr)
+          print("       unconfigured.", file=sys.stderr)
+          raise SystemExit(1)
 
-        # The name the distro declares, from the ONE file that holds it. Read as
-        # text and not evaluated: this check has no Nix to call, and the entry is a
-        # plain string.
-        table = hashless(pathlib.Path("${../nix/user-dirs.nix}").read_text())
-        floor(len(table), 200, "characters of nix/user-dirs.nix")
-        entry = re.search(r'^\s*screenshot\s*=\s*"([^"]+)"\s*;', table, re.M)
-        if not entry:
-            print("ERROR: nix/user-dirs.nix has no `screenshot` entry.", file=sys.stderr)
-            raise SystemExit(1)
-        declared = entry.group(1)
+      # FILE-WIDE, and PROSE is not the word for it: what is read is a Nix
+      # TABLE and a Rust function, and the entry in the first is a plain
+      # string with no function around it to narrow to.
+      #
+      # `hashless` for the Nix, because a `screenshot` entry commented out is
+      # not an entry and it used to read as one.
+      table = hashless(pathlib.Path("${../nix/user-dirs.nix}").read_text())
+      floor(len(table), 200, "characters of nix/user-dirs.nix")
+      entry = re.search(r'^\s*screenshot\s*=\s*"([^"]+)"\s*;', table, re.M)
+      if not entry:
+          print("ERROR: nix/user-dirs.nix has no `screenshot` entry.", file=sys.stderr)
+          raise SystemExit(1)
+      declared = entry.group(1)
 
-        wanted = f"~/{declared}/"
-        if not written.startswith(wanted):
-            print("ERROR: the screenshot does not land in the declared folder.", file=sys.stderr)
-            print("", file=sys.stderr)
-            print(f"       niri writes to: {written}", file=sys.stderr)
-            print(f"       the distro declares: {wanted}", file=sys.stderr)
-            print("", file=sys.stderr)
-            print("       Both come out of nix/user-dirs.nix on purpose: it is the", file=sys.stderr)
-            print("       file that CREATES the folder, through xdg.userDirs, and the one the", file=sys.stderr)
-            print("       manager's sidebar points at.", file=sys.stderr)
-            raise SystemExit(1)
+      if given != declared:
+          print("ERROR: the capture does not land in the declared folder.", file=sys.stderr)
+          print("", file=sys.stderr)
+          print(f"       the footer is given: {given}", file=sys.stderr)
+          print(f"       the distro declares: {declared}", file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       Both come out of nix/user-dirs.nix on purpose: it is the", file=sys.stderr)
+          print("       file that CREATES the folder, through xdg.userDirs, and the", file=sys.stderr)
+          print("       one the manager's sidebar points at.", file=sys.stderr)
+          raise SystemExit(1)
 
-        # And the name has to say WHEN, or a second capture overwrites the first.
-        if "%" not in written:
-            print("ERROR: the screenshot's name has no strftime in it at all.", file=sys.stderr)
-            print(f"       {written} — the second screenshot erases the first.", file=sys.stderr)
-            raise SystemExit(1)
+      # AND THE NAME SAYS WHEN, or a second capture overwrites the first.
+      #
+      # The moment is built in Rust now rather than handed to a compositor as
+      # a strftime, so what is read is the FORMAT STRING that builds it. Its
+      # own test pins the shape; this asks only that a moment is in there at
+      # all, which is the half that a refactor could drop in silence.
+      #
+      # `body_of`, because the question IS about one function.
+      rust = body_of(
+          pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text(),
+          "capture_path",
+      )
+      floor(len(rust), 200, "characters of capture_path")
 
-        print(f"OK: the screenshot lands in {wanted}, which the distro declares and creates")
-        END
-      '';
+      for needed, why in (
+          ("RONOCTUA_SCREENSHOTS", "it does not read the directory from the environment"),
+          ("{:04}-{:02}-{:02}", "the name carries no date"),
+          ("{:02}-{:02}-{:02}", "the name carries no time"),
+      ):
+          if needed not in rust:
+              print(f"ERROR: capture_path — {why}.", file=sys.stderr)
+              print("       A second capture inside one minute erases the first.", file=sys.stderr)
+              raise SystemExit(1)
+
+      # AND NO SPACE IN IT. A name with a space is a name that has to be
+      # quoted for the rest of its life — by every action of the
+      # notification, by the clipboard, by whatever opens it. The previous
+      # compositor's default had two.
+      made = re.search(r'format!\("(screenshot-[^"]*)"', rust)
+      if not made:
+          print("ERROR: capture_path no longer builds a name with `format!`.", file=sys.stderr)
+          raise SystemExit(1)
+      if " " in made.group(1):
+          print(f"ERROR: the capture's name has a space in it: {made.group(1)}", file=sys.stderr)
+          raise SystemExit(1)
+
+      print(f"OK: the capture lands in {declared}, which the distro declares and creates")
+      END
+    '';
 
   # THE DISKS MODULE ADDS NO POLKIT RULE OF ITS OWN.
   #
@@ -1425,22 +1458,22 @@ let
   #
   # # What this is defending against, and why it cannot be repaired
   #
-  # `nix run .#dev` runs niri as a WINDOW of another compositor, sharing one
-  # keyboard with it. When the host keeps a chord for itself and takes the
-  # focus away with it — `Super+Ctrl+Space` opens the wallpaper manager on the
-  # machine this was found on — the nested niri sees the modifiers go DOWN and
-  # never sees them come up: `winit` reports a lost focus as `Focused(false)`
-  # and synthesises no releases, smithay's winit backend drops synthetic key
-  # events and never forwards `ModifiersChanged` at all, and niri answers
-  # `WinitEvent::Focus(_) => ()`.
+  # `nix run .#dev` runs the compositor as a WINDOW of another compositor,
+  # sharing one keyboard with it. When the host keeps a chord for itself and
+  # takes the focus away with it — `Super+Ctrl+Space` opens the wallpaper
+  # manager on the machine this was found on — a nested compositor that
+  # DERIVES its modifier state by counting presses against releases sees the
+  # modifier go down and never sees it come up.
   #
   # A modifier stuck that way is stuck for good. libxkbcommon keeps one filter
   # per pressed key with a reference count, so pressing it again and letting go
-  # takes the count 1 → 2 → 1; reloading the keymap does not help either,
-  # because `update_xkb_state` replays the keys smithay still believes are
-  # down. And niri matches a bind's modifiers by EQUALITY, so one stray bit
-  # kills every bind in the session — the leader included. The only cure is
-  # restarting the compositor.
+  # takes the count 1 → 2 → 1, and reloading the keymap replays the keys the
+  # compositor still believes are down. And a bind's modifiers are matched by
+  # EQUALITY, so one stray bit kills every bind in the session — the leader
+  # included. The only cure is restarting the compositor.
+  #
+  # `nix/keyboard-nested.nix` carries the reading that says this compositor
+  # does NOT derive that state, and the one gesture that would decide it.
   #
   # So the keymap is the only lever, and Super is the only modifier the nested
   # loop can spare: it belongs to the host in there and reaches no bind of
@@ -1453,7 +1486,7 @@ let
   # even built, every guard in it goes unrun, and the loop goes back to being
   # poisonable with nothing failing anywhere.
   #
-  # It reads BOTH configs because the danger runs both ways. In production niri
+  # It reads BOTH configs because the danger runs both ways. In production the compositor
   # owns the seat, nothing gets between the keyboard and the compositor, and
   # Super IS the leader (`nix/modules/keyboard.nix`) — a keymap without it
   # there would take the leader away from the whole system.
@@ -1468,24 +1501,24 @@ let
         export XKB_CONFIG_ROOT=${pkgs.xkeyboard_config}/share/X11/xkb
 
         nested=${devApp.config}
-        production="${self.nixosConfigurations.vm.config.environment.etc."niri/config.kdl".source}"
+        production="${self.nixosConfigurations.vm.config.environment.etc."scroll/config".source}"
 
         # THE NESTED CONFIG POINTS AT A KEYMAP OF OURS.
         # `|| true`: `mkCheck` runs under `set -euo pipefail`, so a grep that
         # finds nothing takes the whole script down AT THE ASSIGNMENT — and the
         # sentence below, which is the entire point of the check, never prints.
         # Measured: the first version of this failed with an empty log.
-        keymap=$(grep -oP '^\s*file "\K[^"]+' "$nested" | head -1 || true)
+        keymap=$(grep -oP '^\s*xkb_file "\K[^"]+' "$nested" | head -1 || true)
         if [ -z "$keymap" ]; then
-          echo "ERROR: the nested config has no \`xkb { file }\`, so the nested" >&2
+          echo "ERROR: the nested config has no \`xkb_file\`, so the nested" >&2
           echo "      compositor is back on the stock keymap — the one where a" >&2
           echo "      chord the HOST swallows can leave Super stuck and take every" >&2
-          echo "      bind in the session with it, until niri is restarted." >&2
+          echo "      bind in the session with it, until the compositor is restarted." >&2
           exit 1
         fi
         test -e "$keymap" || {
           echo "ERROR: the nested config points at \`$keymap\`, which is not there." >&2
-          echo "      niri answers a keymap it cannot read with a warning in a log" >&2
+          echo "      the compositor answers a keymap it cannot read with a warning in a log" >&2
           echo "      and a silent fall back to the layout WITH Super." >&2
           exit 1; }
 
@@ -1538,21 +1571,35 @@ let
         # The keymap covers Super; Ctrl and Alt are inside the chord, so they
         # cannot change its outcome. That leaves Shift, and one extra bind
         # covers it: with a Shift stuck, the same `Ctrl+Alt+Space` reaches the
-        # compositor as `Ctrl+Shift+Alt+Space`. Measured on two nested niri
-        # instances — without the line the leader is dead, with it it fires.
+        # compositor as `Ctrl+Shift+Alt+space`. Measured on two nested
+        # compositor instances — without the line the leader is dead, with it
+        # it fires.
         #
         # It compares the ACTIONS and not just the keys: a variant pointing at
         # something else would be a second leader that does not lead.
-        action_of() { grep -E "^[[:space:]]*$1 " "$nested" | head -1 | sed -E 's/^[[:space:]]*[^[:space:]]+ //'; }
-        plain=$(action_of 'Ctrl\+Alt\+Space' || true)
-        shifted=$(action_of 'Ctrl\+Shift\+Alt\+Space' || true)
+        # THE COMMAND A BIND RUNS, by the key it is bound to.
+        #
+        # `bindsym [--flag…] <key> <command…>`: the flags are optional and the
+        # command is everything after the key, so the key is matched as a WORD
+        # between them rather than at the start of the line.
+        #
+        # AND THE KEY IS `space`, lowercase. A bind matches a KEYSYM, and the
+        # keysym is `space` — `Space` is not one, so the bind would simply
+        # never fire. The same rule put `Ctrl+Alt+l` in the emergency binds.
+        action_of() {
+          grep -E "^[[:space:]]*bindsym( --[a-z-]+)* $1 " "$nested" \
+            | head -1 \
+            | sed -E "s/^[[:space:]]*bindsym( --[a-z-]+)* $1 //"
+        }
+        plain=$(action_of 'Ctrl\+Alt\+space' || true)
+        shifted=$(action_of 'Ctrl\+Shift\+Alt\+space' || true)
         if [ -z "$plain" ]; then
-          echo "ERROR: the nested config has no \`Ctrl+Alt+Space\` leader at all." >&2
+          echo "ERROR: the nested config has no \`Ctrl+Alt+space\` leader at all." >&2
           exit 1
         fi
         if [ "$shifted" != "$plain" ]; then
           echo "ERROR: the nested leader does not answer a stray Shift." >&2
-          echo "      niri matches modifiers by EQUALITY, so a chord survives only" >&2
+          echo "      the compositor matches modifiers by EQUALITY, so a chord survives only" >&2
           echo "      the modifiers already inside it. A host chord holding Shift" >&2
           echo "      leaves it stuck in here for the rest of the session, and then" >&2
           echo "      \`Ctrl+Alt+Space\` arrives as \`Ctrl+Shift+Alt+Space\` and matches" >&2
@@ -1597,18 +1644,18 @@ let
         echo "OK: the installer and nix/keyboard-xkb.nix agree"
       '';
 
-  # EVERY COMPOSITOR ACTION HAS A TRANSLATION IN BOTH LANGUAGES.
+  # EVERY COMPOSITOR COMMAND HAS A TRANSLATION IN EVERY LANGUAGE.
   #
-  # The action list is GENERATED from the pinned niri, and the translations are
-  # written by hand. The two things move separately: bumping niri's tag brings
-  # new actions, and without this check they would show up in the finder as
-  # `[cmd-niri-...]` — the missing-key marker, in the middle of a list of 170
-  # items, where nobody looks.
+  # The list is DECLARED in `assets/compositor-deeds.nix` and the sentences are
+  # written by hand, so the two move separately: a row added there without a
+  # sentence here would show up in the finder as `[cmd-wm-…]` — the
+  # missing-key marker, in the middle of a long list, where nobody looks.
   #
-  # It fails LOUDLY on purpose: a niri bump stops the build until what showed up
-  # is translated. It is the price of mirroring the whole compositor, and it is
-  # paid once per release instead of every day by whoever reads the list.
-  niri-actions-translated = mkCheck "niri-actions-translated" [ pkgs.python3 ] ''
+  # AND THE PRESSURE CHANGED OWNER, which is worth saying out loud. It used to
+  # come from upstream: the list was mirrored from a compositor's own help
+  # text, so a version bump forced the translations. Now the list is ours, and
+  # THIS CHECK is the only thing that forces them.
+  compositor-deeds-translated = mkCheck "compositor-deeds-translated" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import re, sys, pathlib
     exec(open("${pyPrelude}").read())
@@ -1618,9 +1665,9 @@ let
     #
     # `uncommented`, because the key IS the string literal being read out, and
     # `hashless` on the `.ftl`, whose comment is `#`.
-    table_src = uncommented(pathlib.Path("${niriActions}/niri-actions.rs").read_text())
-    key_names = re.findall(r'key: "(cmd-niri-[a-z0-9-]+)"', table_src)
-    floor(len(key_names), 100, "actions in the generated table")
+    table_src = uncommented(pathlib.Path("${compositorDeeds}/deeds.rs").read_text())
+    key_names = re.findall(r'key: "(cmd-wm-[a-z0-9-]+)"', table_src)
+    floor(len(key_names), 40, "deeds in the generated table")
 
     absent = []
     for language in ${builtins.toJSON languages}:
@@ -1630,17 +1677,17 @@ let
         absent += [f"{language}: {c}" for c in key_names if c not in present]
 
     if absent:
-        print("ERROR: a niri action with no translation:", file=sys.stderr)
+        print("ERROR: a compositor command with no translation:", file=sys.stderr)
         for f in absent:
             print(f"  {f}", file=sys.stderr)
         print(
-            "\nThe action list comes from the PINNED niri. If it went up a version,\n"
-            "the new actions have to go into both .ftl files — otherwise they\n"
-            "show up as `[key]` in the finder.",
+            "\nThe list is declared in assets/compositor-deeds.nix. A row added\n"
+            "there needs a sentence in every .ftl — otherwise it shows up as\n"
+            "`[key]` in the finder, and this check is the only thing asking.",
             file=sys.stderr,
         )
         sys.exit(1)
-    print(f"OK: niri's {len(key_names)} actions are in both languages")
+    print(f"OK: the {len(key_names)} compositor commands are in every language")
     PY
   '';
 
@@ -1844,7 +1891,7 @@ let
   # Notifications, history and the proof that there is no second surface.
   notifyVm = import ./notify-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
   };
 
@@ -1856,12 +1903,12 @@ let
   # `ConditionPathIsDirectory=/sys/class/bluetooth` — and the test says so.
   bluetoothVm = import ./bluetooth-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
     ronoctua = {
       inherit fonts fontconfigConf;
       inherit themes themed defaultTheme;
-      inherit (inputs) niri;
+
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
     };
@@ -1872,12 +1919,12 @@ let
   # polkit rule — the owner starting and stopping Tor with no agent anywhere.
   networkVm = import ./network-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
     ronoctua = {
       inherit fonts fontconfigConf;
       inherit themes themed defaultTheme;
-      inherit (inputs) niri;
+
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
     };
@@ -1885,14 +1932,14 @@ let
 
   displayVm = import ./display-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
     # The modules' argument, as `oomVm` builds it: base.nix reads the fonts,
     # the themes and the shell out of it.
     ronoctua = {
       inherit fonts fontconfigConf;
       inherit themes themed defaultTheme;
-      inherit (inputs) niri;
+
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
     };
@@ -1900,14 +1947,14 @@ let
 
   powerVm = import ./power-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
     # The modules' argument, as `oomVm` builds it: base.nix reads the fonts,
     # the themes and the shell out of it.
     ronoctua = {
       inherit fonts fontconfigConf;
       inherit themes themed defaultTheme;
-      inherit (inputs) niri;
+
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
     };
@@ -3236,6 +3283,26 @@ let
   # criterion in `tests/slow.nix`.
   buffers-test = pkgs.linkFarmFromDrvs "check-buffers-test" (lib.attrValues buffers.tested);
 
+  # AND CLIPPY READS THEM, which nothing in this tree did.
+  #
+  # `cargo clippy --workspace` cannot reach a buffer — the root `Cargo.toml`
+  # excludes `buffers/` and each is a workspace of its own — and building one
+  # is not linting it. The three that bake a table in could not even be linted
+  # by hand: `include_str!(env!("RONOCTUA_*_JSON"))` fails at compile time
+  # outside Nix, so `cargo clippy` in the directory stops before reading a
+  # line. `nix/buffers.nix`'s `linted` runs it where the variables already
+  # are.
+  #
+  # WHAT IT WOULD HAVE CAUGHT: `ordered` dead in `buffers/unicode` — a
+  # function whose doc-comment describes an ordering the file had stopped
+  # asking for, with that ordering written out inline three hundred lines
+  # away. It survived releases with nothing in the tree able to see it.
+  #
+  # GATE-ONLY, by `tests/slow.nix`'s fourth criterion and for the same number
+  # as `buffers-test`: it is a THIRD compilation of the eight, and the battery
+  # has already paid for one.
+  buffers-lint = pkgs.linkFarmFromDrvs "check-buffers-lint" (lib.attrValues buffers.linted);
+
   # NOBODY DRAWS A HEADING OF THEIR OWN, AND NOBODY GENERATES BINDINGS.
   #
   # This is the check that makes "these mistakes cannot happen again" mean
@@ -3556,7 +3623,7 @@ let
         # the rule is the same one as below: SAY which kind of question this
         # is, in the check, where a reviewer meets it.
         # `hashless` is the third, and it is the one for a language whose
-        # comment begins with `#` — Nix, KDL, shell, Python. A check that reads
+        # comment begins with `#` — Nix, shell, Python, `.ftl`. A check that reads
         # only those has stripped everything it read when it has called it.
         # AND A CHECK MAY SAY THAT IT PARSES RATHER THAN SEARCHES. A manifest
         # read with `json.loads` is not searched at all, and JSON has no
@@ -5967,7 +6034,7 @@ let
   #
   #   - `Alt+=` on a 1920 monitor takes the column to 2112 px on the FIRST step,
   #     and the window CLOSES BY ITSELF. `Surface::configure` gives back no error:
-  #     it kills the process, and niri sends the output of what it spawns to
+  #     it kills the process, and the compositor sends the output of what it spawns to
   #     /dev/null;
   #   - any monitor wider than 2048 px never had a footer, because it takes the
   #     screen's width and died before the first pixel.
@@ -5985,7 +6052,7 @@ let
   # THE TOOL THAT MAKES "OPEN IT ON THE SCREEN" AFFORDABLE HAS TO KEEP WORKING.
   #
   # `nix run .#png` draws a buffer into a PNG in 0,2 s, and it exists because
-  # the alternative — a NixOS VM, niri under Xvfb, a screenshot of the X root —
+  # the alternative — a NixOS VM, the compositor under Xvfb, a screenshot of the X root —
   # cost three minutes, which is how a title came to be drawn at twice the
   # body's size for months. A tool nobody checks is a tool that stops working
   # quietly, and the discovery happens on the day somebody needs it.
@@ -6193,8 +6260,8 @@ let
   # Two defects that lived together for months with nothing reporting them, and
   # that the owner saw every time they closed with Ctrl+C:
   #
-  #   rm: cannot remove '/nix/store/…-ronoctua-niri-nested.kdl': Permission denied
-  #   rm: cannot remove '/nix/store/…-ronoctua-niri-nested.kdl': Permission denied
+  #   rm: cannot remove '/nix/store/…-ronoctua-nested.conf': Permission denied
+  #   rm: cannot remove '/nix/store/…-ronoctua-nested.conf': Permission denied
   #
   # The first: `shutdown` tried to delete the CONFIG, which became a store path
   # when it started being generated by Nix — immutable by construction. The
@@ -6209,14 +6276,14 @@ let
   # Because the criterion is "the output is clean", and a replica of `shutdown`
   # inside the check would prove nothing about the `shutdown` that runs on the
   # owner's machine — and the lesson at the top of this file is exactly that.
-  # With no display niri does not come up, the script falls into the error path,
+  # With no display the compositor does not come up, the script falls into the error path,
   # and it is the real `shutdown` that runs.
   dev-exits-clean = mkCheck "dev-exits-clean" [ devApp ] ''
     export HOME=$TMPDIR
     export XDG_RUNTIME_DIR=$TMPDIR
     # A DISPLAY THAT DOES NOT EXIST. With none at all, the script stops at the
     # graphical-session guard BEFORE installing the trap, and the path this check
-    # wants to exercise never runs. With a fake name it carries on, niri dies at
+    # wants to exercise never runs. With a fake name it carries on, the compositor dies at
     # startup, the waiting loop gives up — and `shutdown` really runs.
     export WAYLAND_DISPLAY=does-not-exist-1
 
@@ -6237,10 +6304,10 @@ let
     # more than ten times in a day meets it, and he does.
     for n in $(seq 1 14); do
       : > "/tmp/ronoctua-footer-plant$n.log"
-      : > "/tmp/ronoctua-niri-plant$n.log"
+      : > "/tmp/ronoctua-scroll-plant$n.log"
     done
 
-    # It exits non-zero on purpose (niri does not come up here); what is measured
+    # It exits non-zero on purpose (the compositor does not come up here); what is measured
     # is what it PRINTS on ending.
     timeout 300 ronoctua-dev > out_text.txt 2> errors.txt || true
 
@@ -7629,39 +7696,39 @@ let
   # the repository, so the volume keys of every laptop running this did nothing.
   #
   # Now they are declared in `actions::media` and printed by
-  # `export-niri-binds`. Two ways for that to go silently wrong: one of them
+  # `export-scroll-binds`. Two ways for that to go silently wrong: one of them
   # comes out with the leader's PREFIX, which makes it a chord nobody would
   # guess; or the list stops being printed at all, and the keys are dead again
   # with nothing saying so.
   media-keys-are-bare =
     let
       # THE REAL OUTPUT, and not a reading of the table that produces it.
-      # `nix/niri-binds.nix` is what the compositor's config splices in, so
+      # `nix/compositor-binds.nix` is what the compositor's config splices in, so
       # this asks the same derivation the same question — a table that is
       # right and a printer that puts a prefix on it would pass a source scan
       # and fail here.
       binds =
-        (pkgs.callPackage ../nix/niri-binds.nix {
+        (pkgs.callPackage ../nix/compositor-binds.nix {
           ronoctua-shell = rust.shell;
         }).forPrefix
-          "Mod";
+          "Super";
     in
     mkCheck "media-keys-are-bare" [ pkgs.gnugrep ] ''
       # NOT `out`. `mkCheck` ends in `touch $out`, and a shell variable of that
       # name points it at the store path this reads — the check then PASSES and
       # the derivation fails on a permission error, which reads as a broken
       # check rather than a broken product.
-      kdl=${binds}
+      conf=${binds}
       failed=0
 
       for key in XF86AudioRaiseVolume XF86AudioLowerVolume XF86AudioMute \
                  XF86AudioMicMute XF86AudioPlay XF86AudioNext XF86AudioPrev; do
-        if ! grep -qF "    $key " "$kdl"; then
+        if ! grep -qE "^bindsym( --[a-z-]+)* $key " "$conf"; then
           echo "ERROR: the media bind $key did not come out." >&2
           echo "      The key would do nothing, which is what it did before." >&2
           failed=1
         fi
-        if grep -qF "Mod+$key " "$kdl"; then
+        if grep -qF "Super+$key " "$conf"; then
           echo "ERROR: $key came out with the leader's prefix." >&2
           echo "      A media key held behind a leader is worse than the key alone." >&2
           failed=1
@@ -7669,9 +7736,9 @@ let
       done
 
       # AND THEY REACH OUR OWN COMMANDS, not the compositor's. A bind that
-      # spawned the wrong id would be a `warn` in a log and a dead key.
+      # ran the wrong id would be a `warn` in a log and a dead key.
       for id in volume-up volume-down volume-mute mic-mute media-play; do
-        grep -qF "\"command\" \"$id\"" "$kdl" || {
+        grep -qF "command $id" "$conf" || {
           echo "ERROR: no bind runs \`$id\`." >&2
           failed=1
         }
@@ -7863,7 +7930,7 @@ let
   #     `n h` as words, and it went on teaching `n h` after the key became
   #     `n n`. Its fix is the shape this check demands: the keys arrive as a
   #     `{ $keys }` argument built from a constant (`leader::NOTIF_OPEN_KEYS`).
-  #   - THE WORD "LEADER" IS NOBODY'S KEY. `nix/modules/niri.nix` sets
+  #   - THE WORD "LEADER" IS NOBODY'S KEY. `nix/modules/scroll.nix` sets
   #     `RONOCTUA_LEADER` to `SUPER` and `nix/dev.nix` to `CTRL ALT SPC`; that
   #     file's own comment says why two truths would be a screen saying `SPC`
   #     while the key is something else. Every surface renders `crate::leader()`
@@ -7973,16 +8040,21 @@ let
 
     floor(len(handled), 100, "arms of `run_with`")
 
-    # 2) THE GENERATED FAMILIES, which have no arm and do not need one.
+    # 2) THE CURATED JOIN, which has no arm and does not need one.
     #
-    # `actions::all_of` is the table of the compositor's own actions, and
-    # `run_with` dispatches the whole table through `kdl_of` in one branch
-    # rather than one arm each. The pattern is `("id", json!(…))`.
-    generated = set(re.findall(r'\(\s*"([a-z0-9-]+)",\s*json!', actions))
-    # `workspace-go`/`workspace-move` carry their number in the chord's KDL;
-    # `only_a_chord_with_an_argument_escapes_the_action_table` guards that
-    # exception from the other side.
-    generated |= {"workspace-go", "workspace-move"}
+    # `actions::all_of` maps OUR id to the compositor's deed —
+    # `("window-left", "wm-focus-left")` — and `run_with` dispatches the whole
+    # table in ONE fall-through arm (`actions::deed_of`, then the generated
+    # table) rather than in twenty-three arms.
+    #
+    # READING THE TABLE, and not exempting a prefix. `window-*` as a rule would
+    # have gone green on the defect this check actually caught: the
+    # fall-through was asking the GENERATED table with OUR id, which answers
+    # `None` for every one of these, so thirteen keys drew a row and did
+    # nothing. What makes the exemption honest is that it names the pairs — an
+    # id that leaves `all_of` stops being exempt the same day.
+    generated = set(re.findall(r'\(\s*"([a-z0-9-]+)",\s*"(?:wm-[a-z0-9-]+)"\s*\)', actions))
+    floor(len(generated), 20, "pairs in `actions::all_of`")
 
     # 3) AND EVERY ID THE LEADER'S TREE POINTS AT.
     #
@@ -7998,8 +8070,10 @@ let
     floor(len(bound), 60, "bindings in the keymap")
 
     gaps = sorted(bound - handled - generated)
-    # `niri-<name>` is dispatched by prefix, not by an arm.
-    gaps = [g for g in gaps if not g.startswith("niri-")]
+    # A `wm-*` id is the compositor's own, reached by NAME from `LEADER :` and
+    # dispatched by the same fall-through. It has no key, so it should not be
+    # in `bound` at all; the filter is the belt to that brace.
+    gaps = [g for g in gaps if not g.startswith("wm-")]
     if gaps:
         print("ERROR: a key that leads nowhere.", file=sys.stderr)
         print("", file=sys.stderr)
@@ -8667,7 +8741,7 @@ let
   #
   # A window that teaches its keys on line 0 and CUTS that line, with nothing
   # to press for the rest of it. The network view's table is 174 cells in
-  # English against a window niri tiles into half an output — so more than half
+  # English against a window the compositor tiles into half an output — so more than half
   # of what the line taught was unreachable, in ten doors at once, with an
   # ellipsis where it stopped.
   #
@@ -8981,7 +9055,7 @@ let
   # It was worse than it looks. With the footer gone, ALL FOUR emergency binds
   # are dead by construction: `Ctrl+Alt+L`, `Ctrl+Shift+L`, `Ctrl+Alt+Escape`
   # and `Ctrl+Alt+Delete` are every one of them `ronoctua-shell command <id>`,
-  # which writes to the footer's own control socket. Inside a live niri, with
+  # which writes to the footer's own control socket. Inside a live the compositor, with
   # the footer down, there was no way back through the screen at all.
   #
   # # The three things that have to be true together
@@ -8997,7 +9071,7 @@ let
   # else.
   #
   # THREE. The nested loop raises it too. That is where the owner met the crash,
-  # and over there nothing restarts anything: `nix/dev.nix` waits on NIRI, so a
+  # and over there nothing restarts anything: `nix/dev.nix` waits on THE COMPOSITOR, so a
   # footer that aborts leaves the screen bare until somebody saves a file.
   a-dead-footer-is-not-a-dead-desktop =
     mkCheck "a-dead-footer-is-not-a-dead-desktop" [ pkgs.python3 ]
@@ -9018,15 +9092,15 @@ let
         # `uncommented` for the Rust, because the needle there is the string
         # literal `Some("lifeline")` and `code_of` would empty it.
 
-        niri = hashless((root_dir / "nix/modules/niri.nix").read_text())
-        floor(len(niri), 4000, "characters of nix/modules/niri.nix")
+        module = hashless((root_dir / "nix/modules/scroll.nix").read_text())
+        floor(len(module), 4000, "characters of nix/modules/scroll.nix")
 
         # --- ONE. The footer names the unit to raise --------------------------
         footer = re.search(
-            r"systemd\.user\.services\.ronoctua-footer = \{(.*?)\n    \};", niri, re.S
+            r"systemd\.user\.services\.ronoctua-footer = \{(.*?)\n    \};", module, re.S
         )
         if footer is None:
-            bad.append("nix/modules/niri.nix no longer declares `ronoctua-footer`")
+            bad.append("nix/modules/scroll.nix no longer declares `ronoctua-footer`")
             footer = None
         else:
             body = footer.group(1)
@@ -9047,7 +9121,7 @@ let
 
         # --- TWO. The unit exists, and runs the line --------------------------
         line = re.search(
-            r"systemd\.user\.services\.ronoctua-lifeline = \{(.*?)\n    \};", niri, re.S
+            r"systemd\.user\.services\.ronoctua-lifeline = \{(.*?)\n    \};", module, re.S
         )
         if line is None:
             bad.append("there is no `ronoctua-lifeline` unit for the failure to raise")
@@ -12883,7 +12957,7 @@ let
   # match between a `libc.so.6` and the `ld.so` of the SAME build, so the day the
   # host's glibc moved, `nix run .#dev` died with:
   #
-  #   niri: symbol lookup error: /usr/lib64/libc.so.6:
+  #   the compositor: symbol lookup error: /usr/lib64/libc.so.6:
   #         undefined symbol: __pointer_chk_guard, version GLIBC_PRIVATE
   #
   # Measured then: host 2.44, Nix 2.42, the symbol absent from the host's. There
@@ -12908,7 +12982,7 @@ let
         # script that stopped setting up graphics at all.
         grep -q 'ronoctua-graphics/lib' "$script" || {
           echo "ERROR: the loop does not put Nix's mesa on LD_LIBRARY_PATH." >&2
-          echo "      Without it niri comes up with no EGL and dies with DisplayNotSupported." >&2
+          echo "      Without it the compositor comes up with no EGL and dies with DisplayNotSupported." >&2
           failed=1
         }
 
@@ -13368,7 +13442,7 @@ let
         for u in $wanted; do
           case "$u" in
             # The session's own, and the keyboard's — see above.
-            ronoctua-footer.service|niri.service|graphical-session.target) continue ;;
+            ronoctua-footer.service|scroll.service|graphical-session.target) continue ;;
             pipewire.service|pipewire-pulse.service|wireplumber.service) continue ;;
             keyd.service) continue ;;
           esac
@@ -13951,7 +14025,7 @@ let
 
   # HOT RELOAD RELOADS — behavior, not existence.
   #
-  # The criterion of milestone 3 says "brings up niri + shell WITH HOT RELOAD".
+  # The criterion of milestone 3 says "brings up the compositor + shell WITH HOT RELOAD".
   # The old check listed the `devApp` with the comment "it has to exist and be
   # executable", and an app that never reloads anything passes that easily. That
   # is how the milestone closed without the feature.
@@ -14182,16 +14256,23 @@ let
         printf '#!/bin/sh\nexec sleep 300\n' > falso
         chmod +x falso
 
-        # A PID THAT CANNOT ANSWER, in the name shape `dev.nix` exports:
-        # `niri.<display>.<pid>.sock`. A shell that has already exited is the
-        # cheapest dead PID there is; the loop below is against the one chance
-        # in millions that it was recycled before we looked.
+        # A PID THAT CANNOT ANSWER, in the variable `dev.nix` exports.
+        #
+        # It used to be a socket NAME with the pid inside it, because the
+        # previous compositor put it there. This one takes `SCROLLSOCK` as a
+        # path with nothing to read, so `dev.nix` hands the pid over directly
+        # (`RONOCTUA_COMPOSITOR_PID`) and this is the same question asked of the
+        # same variable.
+        #
+        # A shell that has already exited is the cheapest dead PID there is; the
+        # loop below is against the one chance in millions that it was recycled
+        # before we looked.
         gone=$(sh -c 'echo $$')
         for _ in 1 2 3; do
           kill -0 "$gone" 2>/dev/null || break
           gone=$(sh -c 'echo $$')
         done
-        export NIRI_SOCKET="/run/user/0/niri.wayland-9.$gone.sock"
+        export RONOCTUA_COMPOSITOR_PID="$gone"
 
         ronoctua-footer-single "$pidfile" "$PWD/falso"
         first=$(cat "$pidfile")
@@ -14314,10 +14395,26 @@ let
                        "the first footer of every session is watched by a watcher "
                        "that cannot see the session")
 
+        # --- AND THE SESSION HANDS THE PID OVER ------------------------------
+        #
+        # The watcher below asks `RONOCTUA_COMPOSITOR_PID`, and a question
+        # asked of a variable nobody exports is a guard that always answers
+        # "still there" — which is the crash loop this whole check exists for.
+        if "export RONOCTUA_COMPOSITOR_PID=" not in dev:
+            bad.append("dev.nix does not export RONOCTUA_COMPOSITOR_PID; the "
+                       "watcher's question about the compositor answers yes "
+                       "for ever")
+
         # --- FOUR. The watcher declares all three, and the ceiling -----------
         for want, why in [
             ('$pidfile.onpurpose', "the guard that tells a requested death from a crash"),
-            ("NIRI_SOCKET", "the guard that asks whether a compositor is still there"),
+            # THE COMPOSITOR'S PID, HANDED OVER — not derived from a socket
+            # name. The previous compositor put its pid in the socket's
+            # FILENAME, so the watcher read it from there and `dev.nix` had to
+            # export nothing. This one takes `SCROLLSOCK` as a path, and the
+            # loop gives it a `mktemp -u` name with nothing in it to read.
+            ("RONOCTUA_COMPOSITOR_PID",
+             "the guard that asks whether a compositor is still there"),
             ("RONOCTUA_DEV_PID", "the guard that asks whether the session is still there"),
             ("RONOCTUA_FOOTER_TRIES", "the ceiling on a footer that dies as it starts"),
         ]:
@@ -14326,7 +14423,7 @@ let
 
         # AND THE COMPOSITOR IS ASKED BY PID, never by whether its socket file is
         # on disk. A Wayland server killed by a signal leaves the socket behind:
-        # measured, one was still there an hour after its niri was gone, so a
+        # measured, one was still there an hour after its the compositor was gone, so a
         # `[ -S ... ]` test would pass with the whole defect in place.
         if re.search(r"\[\s*-S\s", single):
             bad.append("footer-single.nix tests for a socket FILE; a killed "
@@ -15490,7 +15587,7 @@ let
   # A native buffer in a window of its own, really drawing (milestone 7).
   bufferVm = import ./buffer-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
     bufferExample = buffers.example;
     bufferGlyphs = buffers.glyphs;
@@ -15503,7 +15600,7 @@ let
   # do with the mechanism `buffer-vm` guards.
   memoryVm = import ./memory-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
     bufferMemory = buffers.memory;
   };
@@ -15511,28 +15608,28 @@ let
   # The clipboard history: the native capture, the view and the re-copy (4.2).
   clipboardVm = import ./clipboard-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
   };
 
   # The terminal wired to the shell, with what is typed coming back to the screen (7.10).
   terminalVm = import ./terminal-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
   };
 
-  # The leader as the Super key on its own: keyd standing and niri listening (7.4).
+  # The leader as the Super key on its own: keyd standing and the compositor listening (7.4).
   #
-  # The niri module goes along because the test checks BOTH ends of the contract
-  # — the key keyd emits and the one niri listens for.
+  # The compositor module goes along because the test checks BOTH ends of the contract
+  # — the key keyd emits and the one the compositor listens for.
   # The rescue console's second door: `Ctrl+Alt+Del` with no compositor at all.
   rescueVm = import ./rescue-vm.nix {
     inherit pkgs lib;
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
       # The theme list (the option's enum), the solved palettes and the
-      # DEFAULT — base.nix and niri.nix read all three.
+      # DEFAULT — base.nix and scroll.nix read all three.
       #
       # `defaultTheme` was missing here, and `ronoctua.theme`'s option reads it
       # for its `default`: every VM test that imports `base.nix` failed to
@@ -15540,7 +15637,7 @@ let
       # and default became two facts in `assets/themes/themes.nix`, and it went
       # unseen because these tests are in `most`, which had not been run since.
       inherit themes themed defaultTheme;
-      niri = inputs.niri;
+      inherit scroll;
       shell = rust.shell;
     };
   };
@@ -15563,7 +15660,7 @@ let
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
       # The theme list (the option's enum), the solved palettes and the
-      # DEFAULT — base.nix and niri.nix read all three.
+      # DEFAULT — base.nix and scroll.nix read all three.
       #
       # `defaultTheme` was missing here, and `ronoctua.theme`'s option reads it
       # for its `default`: every VM test that imports `base.nix` failed to
@@ -15571,7 +15668,7 @@ let
       # and default became two facts in `assets/themes/themes.nix`, and it went
       # unseen because these tests are in `most`, which had not been run since.
       inherit themes themed defaultTheme;
-      niri = inputs.niri;
+      inherit scroll;
       shell = rust.shell;
       filesRoot = rust.filesRoot;
     };
@@ -15582,7 +15679,7 @@ let
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
       # The theme list (the option's enum), the solved palettes and the
-      # DEFAULT — base.nix and niri.nix read all three.
+      # DEFAULT — base.nix and scroll.nix read all three.
       #
       # `defaultTheme` was missing here, and `ronoctua.theme`'s option reads it
       # for its `default`: every VM test that imports `base.nix` failed to
@@ -15590,7 +15687,7 @@ let
       # and default became two facts in `assets/themes/themes.nix`, and it went
       # unseen because these tests are in `most`, which had not been run since.
       inherit themes themed defaultTheme;
-      niri = inputs.niri;
+      inherit scroll;
       shell = rust.shell;
       filesRoot = rust.filesRoot;
     };
@@ -15601,7 +15698,7 @@ let
   # the panel with the list the footer already had.
   transfersVm = import ./transfers-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
     ronoctua-transfers = rust.transfers;
   };
@@ -15617,7 +15714,7 @@ let
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
       # The theme list (the option's enum), the solved palettes and the
-      # DEFAULT — base.nix and niri.nix read all three.
+      # DEFAULT — base.nix and scroll.nix read all three.
       #
       # `defaultTheme` was missing here, and `ronoctua.theme`'s option reads it
       # for its `default`: every VM test that imports `base.nix` failed to
@@ -15625,7 +15722,7 @@ let
       # and default became two facts in `assets/themes/themes.nix`, and it went
       # unseen because these tests are in `most`, which had not been run since.
       inherit themes themed defaultTheme;
-      niri = inputs.niri;
+      inherit scroll;
       shell = rust.shell;
     };
   };
@@ -15633,7 +15730,7 @@ let
   # One satellite per buffer scope, proved with TWO X11 apps (9.1).
   x11Vm = import ./x11-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
   };
 
@@ -15643,22 +15740,21 @@ let
   # Leader, which-key and the return to rest (milestone 5).
   leaderVm = import ./leader-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
   };
 
   # The app finder, and the footer that must not freeze when opening one.
   appsVm = import ./apps-vm.nix {
     inherit pkgs lib fonts;
-    niri = inputs.niri.packages.${system}.niri;
+    inherit scroll;
     ronoctua-shell = rust.shell;
   };
 
-  # The IPC contract against the pinned tag AND against `niri-next` (milestone 4).
-  niriContract = import ./niri-contract.nix {
-    inherit pkgs lib;
-    niri = inputs.niri.packages.${system}.niri;
-    niriNext = inputs.niri-next.packages.${system}.niri;
+  # The contract against the pinned compositor (milestone 4). See the file
+  # for why there is no second version any more.
+  compositorContract = import ./compositor-contract.nix {
+    inherit pkgs lib scroll;
     ronoctua-shell = rust.shell;
   };
 
@@ -16334,112 +16430,70 @@ let
     PY
   '';
 
-  # THE COMPOSITOR STILL SENDS WHAT THE FILTER LOOKS FOR.
+  # THE PROGRAMS THE CAPTURE NEEDS COME FROM THE ENVIRONMENT.
   #
-  # The screenshot notification is not ours: niri raises it after a capture,
-  # with `app_name = "niri"`, the English summary "Screenshot captured", and —
-  # this is the part that matters — the FILE'S PATH in the icon field, as a
-  # `file://` URL. That is where the `edit` action gets the image from, with no
-  # directory guessed at.
+  # This check used to be about somebody else's strings: the compositor raised
+  # the screenshot notification itself, with its own app name and its own
+  # English summary, and our catalogue entry FILTERED on all three. Upstream
+  # changing any of them would have stopped the entry matching in silence.
   #
-  # All three are strings that belong to somebody else. If upstream changes any
-  # of them the entry stops matching IN SILENCE: the screenshot arrives in
-  # English, loud, with no actions, and nothing fails. This is the check that
-  # turns that into a build error, and it is the same shape as `niri-contract`,
-  # which already extracts the compositor's actions from the pinned tree.
+  # THAT HALF IS GONE, because the notification is ours now — this compositor
+  # takes no screenshots at all, so `grim` takes the picture and the shell
+  # raises the notification with words that were already in every language.
+  #
+  # WHAT SURVIVES IS THE HALF ABOUT OUR OWN CODE, and it is the half that has
+  # actually caught something: three programs reach the shell through the
+  # ENVIRONMENT rather than being baked in, and a store path compiled into the
+  # binary is a reference no profile switch can remove — it would put the
+  # program in every closure, including the minimal profile that has no media
+  # at all, and make `ronoctua.media.enable = false` a switch that switches
+  # nothing off.
   screenshot-notification-contract = mkCheck "screenshot-notification-contract" [ pkgs.python3 ] ''
     python3 - <<'PY'
-    import pathlib, re, sys
+    import pathlib, sys
     exec(open("${pyPrelude}").read())
 
-    # FILE-WIDE: the pair this depends on is sent from one function of the
-    # pinned compositor and recognised by a filter in an attribute set. Neither
-    # is a question about the inside of one of ours. `notification_program` is
-    # narrowed by name below.
+    # FILE-WIDE: the offence is a NAME being absent from a whole
+    # file, or present in the wrong one. There is no function to narrow to —
+    # `RONOCTUA_GRIM` may be read anywhere in `surface.rs`, and what
+    # `nix/rust.nix` must NOT contain it must not contain anywhere. A
+    # `body_of` here would pass the day somebody moved the read one function
+    # over.
     #
-    # `uncommented` for the Rust and `hashless` for the Nix: the summary, the
-    # app name and the two variables are all string literals, and `code_of`
-    # would empty every one of them.
-    source = uncommented(pathlib.Path("${inputs.niri}/src/utils/mod.rs").read_text())
-    catalogue = hashless(pathlib.Path("${../assets/notifications.nix}").read_text())
-    floor(len(source), 1000, "characters of the pinned niri's utils")
-    floor(len(catalogue), 1000, "characters of assets/notifications.nix")
+    # PROSE: and the subject IS the words — which name a path arrives under —
+    # rather than the shape of any function.
+    rust = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text())
+    built = hashless(pathlib.Path("${../nix/rust.nix}").read_text())
+    module = hashless(pathlib.Path("${../nix/modules/scroll.nix}").read_text())
+    floor(len(rust), 1000, "characters of surface.rs")
+    floor(len(built), 1000, "characters of nix/rust.nix")
+    floor(len(module), 1000, "characters of the compositor's module")
 
-    failed = False
+    failed = []
 
-    # (a) the notification exists at all, and goes to the session bus.
-    for wanted in ("fn show_screenshot_notification", "org.freedesktop.Notifications"):
-        if wanted not in source:
-            print(f"ERROR: the pinned niri does not have `{wanted}`")
-            failed = True
+    # (a) THE CAPTURE READS ITS PROGRAM FROM THE ENVIRONMENT.
+    if 'std::env::var("RONOCTUA_GRIM")' not in rust:
+        failed.append("surface.rs does not read RONOCTUA_GRIM from the environment")
 
-    # (b) the two strings the entry matches on.
-    for wanted in ('"niri"', '"Screenshot captured"'):
-        if wanted not in source:
-            print(f"ERROR: the pinned niri no longer sends {wanted}")
-            failed = True
-        elif wanted.strip('"') not in catalogue:
-            print(f"ERROR: assets/notifications.nix does not match {wanted}")
-            failed = True
+    # (b) AND IT IS NOT BAKED IN. `nix/rust.nix` is the compilation's
+    # environment: a name there becomes an `option_env!` and a store
+    # reference nothing can remove.
+    for baked in ("RONOCTUA_GRIM", "RONOCTUA_SLURP", "RONOCTUA_SWAPPY"):
+        if baked in built:
+            failed.append(f"{baked} is in nix/rust.nix; it would be compiled in")
 
-    # (c) AND THE PATH TRAVELS IN THE ICON FIELD. Without this the `edit`
-    #     action has no file, and it would have to guess a directory.
-    if "image_url" not in source or "filename_to_uri" not in source:
-        print("ERROR: niri no longer puts the path as file:// in the icon field")
-        failed = True
-
-    # (d) AND THE EDITOR IS NOT BAKED INTO THE BINARY.
-    #
-    # `swappy` lives in the `full` profile only. A store path compiled in with
-    # `option_env!` is a reference the closure carries whether the switch is on
-    # or not — the measured trap `RONOCTUA_ICONS` carries a comment about in
-    # `nix/rust.nix`, and the one `notoExtra` and `icons.superpack` cost before
-    # that. Read from the environment, `ronoctua.media.enable = false` really
-    # removes it and the action simply is not offered.
-    rust_nix = hashless(pathlib.Path("${../nix/rust.nix}").read_text())
-    floor(len(rust_nix), 2000, "characters of nix/rust.nix")
-    if "RONOCTUA_SWAPPY" in rust_nix:
-        print("ERROR: `RONOCTUA_SWAPPY` is in nix/rust.nix — baked into the binary.")
-        print("       That puts swappy in every closure, and the profile's")
-        print("       profile stops interrupting. It comes from the ENVIRONMENT.")
-        failed = True
-
-    # (e) AND EACH PROGRAM IS READ FROM THE RIGHT PLACE.
-    #
-    # Two programs, two sources, and getting it wrong fails SILENTLY: both were
-    # read from the environment, `RONOCTUA_XDG_OPEN` only exists at build time,
-    # so at runtime every `Run` action was dropped as "not installed". The
-    # screenshot's band came out two lines instead of three, with no actions and
-    # nothing failing. It took a screenshot to see.
-    resolver = body_of(
-        uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/actions.rs").read_text()),
-        "notification_program",
-    )
-    if not resolver:
-        print("ERROR: `notification_program` went away or changed shape")
-        failed = True
-    else:
-        body = resolver
-        floor(len(body), 100, "characters of `notification_program`")
-        if "XDG_OPEN" not in body:
-            print("ERROR: the action's `open` does not come from the path baked in at build time")
-            failed = True
-        if 'std::env::var("RONOCTUA_SWAPPY")' not in body:
-            print("ERROR: the action's `edit` does not come from the ENVIRONMENT")
-            failed = True
-        if 'std::env::var("RONOCTUA_XDG_OPEN")' in body:
-            print("ERROR: `open` is being read from the environment, where it does not exist")
-            failed = True
+    # (c) AND THE MODULE PUTS THEM THERE, or the feature is offered and does
+    # nothing — which is worse than not being offered.
+    for given in ("RONOCTUA_GRIM", "RONOCTUA_SLURP", "RONOCTUA_SCREENSHOTS"):
+        if given not in module:
+            failed.append(f"{given} is not set by the compositor's module")
 
     if failed:
-        print("")
-        print("       The `screenshot` filter recognises the compositor's")
-        print("       notification by the (app, summary) pair and takes the file out of")
-        print("       the icon field. Change that upstream, and it stops matching here — in")
-        print("       silence, which is why this check exists.")
+        print("ERROR: the capture's plumbing is wrong:", file=sys.stderr)
+        for f in failed:
+            print(f"  {f}", file=sys.stderr)
         sys.exit(1)
-    print("OK: the pinned niri still sends the screenshot the way the filter expects")
-    print("OK: the screenshot's editor comes from the environment, not from the binary")
+    print("OK: the capture's three programs come from the environment, and the module sets them")
     PY
   '';
 
@@ -16683,15 +16737,15 @@ let
 
   # THE FRAGMENT THE COMPOSITOR IS ASKED TO READ, READ BY THE COMPOSITOR.
   #
-  # `ronoctua-display` writes `niri-display.kdl` at runtime and niri includes
-  # it. A fragment niri cannot parse does not fail quietly on one monitor: it
+  # `ronoctua-display` writes `scroll-display.conf` at runtime and the compositor includes
+  # it. A fragment the compositor cannot parse does not fail quietly on one monitor: it
   # fails the WHOLE config load, so every other monitor's settings go with it
   # and the person is left with a compositor on its defaults.
   #
-  # NOTHING IN RUST CAN CATCH THAT. The grammar is niri's, it changes when
-  # niri changes, and a unit test asserting our own string against our own
+  # NOTHING IN RUST CAN CATCH THAT. The grammar is the compositor's, it changes when
+  # the compositor changes, and a unit test asserting our own string against our own
   # expectation proves only that we did not change our mind. What proves it is
-  # `niri validate`, from the SAME binary the session runs.
+  # `the compositor validate`, from the SAME binary the session runs.
   #
   # AND THE TEXT COMES OUT OF THE SOURCE, not out of a fixture beside it. The
   # test `the_whole_grammar_comes_out_at_once` already pins the writer's
@@ -16699,11 +16753,302 @@ let
   # halves impossible to drift apart — change the writer and the test's
   # expectation changes, and this validates the new one.
   #
+  # THE WHOLE GENERATED CONFIG, READ BY THE COMPOSITOR THAT WILL RUN IT.
+  #
+  # # Why it exists
+  #
+  # Because the migration to this compositor shipped TWO defects that every
+  # other gate in this repository passed over, and both were found by running
+  # this command by hand:
+  #
+  #   - `bindsym Mod+Left focus left`. `Mod` is not a modifier here — the table
+  #     is `Shift Lock Control Ctrl Mod1 Alt Mod2 Mod3 Mod4 Super Mod5`
+  #     (`get_modifier_mask_by_name`) — so EVERY chord in the session was
+  #     refused, one line at a time, while the leader and the emergency binds
+  #     went on working. `nix/compositor-binds.nix` now refuses the prefix
+  #     itself, which is earlier; this is what would have caught it anyway.
+  #   - `bindsym Super+WheelScrollDown …`, the previous compositor's name for
+  #     the wheel. Here it is `button5`.
+  #
+  # Neither is visible in any source: they are strings that only the
+  # compositor's own parser can judge.
+  #
+  # # Why the failure mode is so quiet
+  #
+  # Because a bad line does NOT fail the load. `cmd_bindsym` returns
+  # `CMD_INVALID` for that line and the rest of the file goes on — so the
+  # symptom is one shortcut, or a whole family of them, doing nothing, with the
+  # reason in a log nobody opens and in a nag window this distro refuses
+  # (invariant 14). That is the defect class with no screen.
+  #
+  # # Why it runs in a sandbox, when it was written down that it could not
+  #
+  # `--validate` brings the SERVER up before it reads anything — libseat, a VT,
+  # a backend, a renderer — and in a sandbox that ends in a core dump. Two
+  # variables remove all of it: `WLR_BACKENDS=headless` takes away the seat and
+  # the VT, `WLR_RENDERER=pixman` takes away EGL, GBM and the DRM node. With
+  # both, the whole thing costs about ten milliseconds. `XDG_RUNTIME_DIR` still
+  # has to exist, and a directory in the build tree is one.
+  #
+  # AND THE VERDICT IS THE OUTPUT, never `$?` — see
+  # `display-fragment-validates`, which carries the measurement: an error
+  # inside an `include` never reaches the exit status, because
+  # `load_include_configs` returns `void`.
+  # ONLY THE COMPOSITION ROOT NAMES THE COMPOSITOR.
+  #
+  # # What invariant 3 promises
+  #
+  # *"`ronoctua-scroll` é o ÚNICO crate da árvore que sabe qual compositor é,
+  # e nenhum outro o nomeia."* That is the owner's constraint in his own words
+  # — *"tudo que desenvolvermos deve funcionar como um contrato independente,
+  # ou seja, não deve depender de externos como WMs"* — and a promise like that
+  # is worth exactly what enforces it.
+  #
+  # # What it cost to be untrue
+  #
+  # Nine places across three crates each opened their own
+  # `ronoctua_scroll::Scroll`, so the sentence above described a tree that did
+  # not match it. The failure mode is slow and certain: the day a second
+  # adapter exists, eight of the nine get updated and one does not, and what
+  # that one does is connect to a compositor nobody is running.
+  #
+  # # What this counts, and what it deliberately does not
+  #
+  # It counts CONNECTIONS and allows exactly one per crate, which is that
+  # crate's composition root. Everything downstream holds a `dyn Compositor`.
+  #
+  # It does NOT count the deeds table (`ronoctua_scroll::deeds`,
+  # `ronoctua_scroll::wire`). That is a different kind of naming: the table is
+  # generated from `assets/compositor-deeds.nix`, which is OURS, and what is
+  # adapter-shaped about it is the command grammar the words are written in.
+  # `ronoctua-compositor` owns the `Deed` and the `Arity`; the adapter owns the
+  # spelling. Counting it would make the rule refuse the thing it protects.
+  only-the-composition-root-names-the-compositor =
+    mkCheck "only-the-composition-root-names-the-compositor" [ pkgs.python3 ]
+      ''
+        python3 - <<'PY'
+        import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
+
+        # FILE-WIDE: the offence is a connection opened ANYWHERE in a crate, and
+        # narrowing to a function is what would miss it — a second one appears in
+        # whichever function needed it that day.
+        #
+        # `code_of` and not `uncommented`: the needle is CODE, and the doc
+        # comments beside each root name the very call being counted. A stripper
+        # that left comments in would count the prose about the rule as a
+        # breach of it.
+        root = pathlib.Path("${../crates}")
+        OPENS = re.compile(r"ronoctua_scroll::Scroll::(open|connect|connect_at)\b")
+
+        seen = {}
+        total = 0
+        for f in sorted(root.rglob("*.rs")):
+            crate = f.relative_to(root).parts[0]
+            # THE ADAPTER ITSELF IS THE EXCEPTION, and it is the whole point:
+            # it is where knowing which compositor this is belongs.
+            if crate == "ronoctua-scroll":
+                continue
+            hits = OPENS.findall(code_of(f.read_text()))
+            total += len(hits)
+            if hits:
+                seen.setdefault(crate, []).append((str(f.relative_to(root)), len(hits)))
+
+        # A FLOOR, because zero would mean this check had stopped seeing the
+        # tree — three crates talk to a compositor and each needs its one root.
+        floor(total, 3, "connections opened outside the adapter")
+
+        wrong = []
+        for crate, files in sorted(seen.items()):
+            count = sum(n for _, n in files)
+            if count > 1:
+                where = ", ".join(f"{q} ({n})" for q, n in files)
+                wrong.append(f"{crate} opens {count} connections: {where}")
+
+        if wrong:
+            print("ERROR: a crate names the adapter in more than one place.", file=sys.stderr)
+            for w in wrong:
+                print(f"  {w}", file=sys.stderr)
+            print(file=sys.stderr)
+            print("       One per crate, and everything below it holds a", file=sys.stderr)
+            print("       `dyn Compositor`. Invariant 3 says no crate but the", file=sys.stderr)
+            print("       adapter knows which compositor this is; a second", file=sys.stderr)
+            print("       opener is how that stops being true.", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"OK: {len(seen)} crates reach a compositor, one composition root each")
+        for crate, files in sorted(seen.items()):
+            print(f"    {crate}: {files[0][0]}")
+        PY
+      '';
+
+  # THE SESSION REACHES ITS TARGET, and every unit on the way RESOLVES.
+  #
+  # # The defect this exists for, which it has already caught
+  #
+  # `nix/modules/scroll.nix` reads `ronoctua.scroll` for one line — the unit's
+  # `ExecStart` — and the flake was not passing it. Nothing said so for a whole
+  # migration, because the thing everybody builds is the CONFIG FILE, and that
+  # file never names the binary: `nix build …environment.etc."scroll/config"`
+  # forces the text and not the program. The gap appeared only when some other
+  # check happened to evaluate a whole system, and then it appeared as
+  # `attribute 'scroll' missing` inside `services.dbus.packages`, which names
+  # neither the module nor the cause.
+  #
+  # # Why a check and not a VM
+  #
+  # Because what broke is EVALUATION, and a VM would have to boot to find it —
+  # minutes, for something a forced attribute answers in seconds. The VM tests
+  # that do boot a session are the ones that prove it comes UP; this proves
+  # there is something to bring up at all.
+  #
+  # # What it forces
+  #
+  # The whole chain a login walks: the compositor's unit, the target the
+  # compositor's own `exec` starts, and the footer that hangs off it. Each is
+  # read to a STRING, because an unforced attribute set is exactly what the
+  # missing `scroll` hid behind.
+  the-session-reaches-its-target =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      compositor = vm.systemd.user.services.scroll;
+      footer = vm.systemd.user.services.ronoctua-footer;
+      target = vm.systemd.user.targets.scroll-session;
+      # A STORE PATH, forced. `ExecStart` is where the missing package landed,
+      # and reading it is what turns "the attribute is absent" from a surprise
+      # three modules away into this check's own message.
+      started = compositor.serviceConfig.ExecStart;
+      footerStarted = footer.serviceConfig.ExecStart;
+    in
+    mkCheck "the-session-reaches-its-target" [ pkgs.gnugrep ] ''
+      # THE COMPOSITOR'S UNIT RUNS THE COMPOSITOR, by store path.
+      #
+      # A NAME here would be a unit with a minimal PATH looking for a binary
+      # that is not on it — the trap `AGENTS.md` records for every spawn in a
+      # unit, and the one that left production with no footer at all once.
+      case "${started}" in
+        /nix/store/*/bin/scroll\ -c\ /etc/scroll/config) ;;
+        *)
+          echo "ERROR: the compositor's unit does not run a store path:" >&2
+          echo "       ${started}" >&2
+          exit 1
+          ;;
+      esac
+
+      # `Type=exec` AND NOT `notify`, which is a measurement rather than a
+      # taste: this compositor has no `sd_notify` and no `--session`, so a
+      # `notify` unit would sit waiting for a readiness message that never
+      # comes and time out. `exec` means "started", which is the most systemd
+      # can honestly know here — the rest is the config's own three `exec`
+      # lines, which run after the backend, the renderer and the socket.
+      if [ "${compositor.serviceConfig.Type}" != "exec" ]; then
+        echo "ERROR: the compositor's unit is Type=${compositor.serviceConfig.Type}." >&2
+        echo "       It has no sd_notify; anything but \`exec\` waits for a" >&2
+        echo "       readiness message that is never sent." >&2
+        exit 1
+      fi
+
+      # AND THE TARGET THE CONFIG STARTS EXISTS, with a description of its
+      # own. A `systemctl --user start` of a target nobody declared succeeds
+      # and starts nothing, which is the quietest possible way for a session
+      # to come up with no footer.
+      if [ -z "${target.description}" ]; then
+        echo "ERROR: scroll-session.target has no description; is it declared?" >&2
+        exit 1
+      fi
+
+      # AND THE CHAIN FROM THE TARGET TO THE FOOTER CLOSES.
+      #
+      # It is two links, and the first is the one worth writing down.
+      # `scroll-session.target` carries `BindsTo=graphical-session.target`,
+      # and `BindsTo=` includes the effect of `Requires=` — "if this unit gets
+      # activated, the units listed will be activated as well"
+      # (systemd.unit(5)) — so the config's `systemctl --user start
+      # scroll-session.target` reaches `graphical-session.target` too, with
+      # `Before=` putting them in that order. The second link is the footer
+      # hanging off whichever of the two.
+      #
+      # Asserting only the second was this check's own first mistake: it
+      # demanded the footer name `scroll-session.target` and called a working
+      # chain broken. What matters is that SOMETHING the compositor starts
+      # reaches the footer, and the ordering the module documents is real.
+      echo "${builtins.concatStringsSep " " target.bindsTo}" | grep -qw "graphical-session.target" || {
+        echo "ERROR: scroll-session.target does not bind graphical-session.target." >&2
+        echo "       Then starting it reaches nothing: \`BindsTo=\` is what" >&2
+        echo "       pulls the second target in, and the footer hangs off that." >&2
+        exit 1
+      }
+      echo "${builtins.concatStringsSep " " footer.wantedBy}" \
+        | grep -qE "(scroll-session|graphical-session)\.target" || {
+        echo "ERROR: nothing on the compositor's chain starts the footer." >&2
+        echo "       It is wanted by: ${builtins.concatStringsSep " " footer.wantedBy}" >&2
+        echo "       The session would come up with no modeline, no minibuffer" >&2
+        echo "       and no leader — which is what happened once already." >&2
+        exit 1
+      }
+
+      case "${footerStarted}" in
+        /nix/store/*/bin/ronoctua-shell*) ;;
+        *)
+          echo "ERROR: the footer's unit does not run a store path:" >&2
+          echo "       ${footerStarted}" >&2
+          exit 1
+          ;;
+      esac
+
+      echo "OK: the compositor's unit, its target and the footer all resolve"
+      echo "    compositor: ${started}"
+      echo "    footer:     ${footerStarted}"
+    '';
+
+  compositor-config-valid = mkCheck "compositor-config-valid" [ scroll ] ''
+    export XDG_RUNTIME_DIR="$PWD/run"
+    mkdir -p "$XDG_RUNTIME_DIR"
+    export WLR_BACKENDS=headless
+    export WLR_RENDERER=pixman
+
+    cp ${self.nixosConfigurations.vm.config.environment.etc."scroll/config".source} config
+    chmod +w config
+
+    scroll --validate --config config > said.txt 2>&1 || true
+    if grep -q 'Error' said.txt; then
+      echo "ERROR: the compositor refused a line of the config it will run." >&2
+      echo "       A refused line does not fail the load — it is one" >&2
+      echo "       shortcut, or one family of them, doing nothing." >&2
+      cat said.txt >&2
+      exit 1
+    fi
+
+    # AND A BROKEN ONE IS REFUSED, which is the half that makes it a gate.
+    # `Mod` is the exact spelling the migration shipped, so the negative
+    # half is the defect itself rather than a stand-in for it.
+    sed 's/^bindsym --whole-window Super+/bindsym --whole-window Mod+/' config > broken
+    sed -i 's/^bindsym --no-repeat Super+/bindsym --no-repeat Mod+/' broken
+    sed -i 's/^bindsym Super+/bindsym Mod+/' broken
+    if ! grep -q '^bindsym.*Mod+' broken; then
+      echo "ERROR: the sabotage changed nothing, so the refusal below would" >&2
+      echo "       prove nothing. Has the prefix stopped being \`Super\`?" >&2
+      exit 1
+    fi
+    scroll --validate --config broken > broke.txt 2>&1 || true
+    # `Unknown key or button 'Mod'` and not `Unknown modifier`: the parser
+    # splits the chord on `+`, fails to find `Mod` in the modifier table, and
+    # then tries the last-resort reading — that it is the KEY. Which is the
+    # message a person would have to recognise in a log to ever find this.
+    if ! grep -q "Unknown key or button 'Mod'" broke.txt; then
+      echo "ERROR: the compositor said nothing about \`Mod\`, so the pass" >&2
+      echo "       above proves nothing at all." >&2
+      cat broke.txt >&2
+      exit 1
+    fi
+    echo "OK: the compositor reads every line of the config it will run"
+  '';
+
   display-fragment-validates =
     mkCheck "display-fragment-validates"
       [
         pkgs.python3
-        inputs.niri.packages.${system}.niri
+        scroll
       ]
       ''
         python3 - <<'END'
@@ -16715,7 +17060,7 @@ let
         # is not the one already being searched for.
         #
         # `uncommented` and NEVER `code_of`: the payload IS a literal. This
-        # check takes the fragment the writer pins and hands it to niri, so a
+        # check takes the fragment the writer pins and hands it to the compositor, so a
         # stripper that emptied it would validate an empty file and call that
         # a pass.
         source = uncommented(
@@ -16726,7 +17071,7 @@ let
         # THE ONE LITERAL, and not every literal that happens to start with
         # `output`. Other tests in that file pin FRAGMENTS of a block — the
         # escaping test pins a name and nothing else — and sweeping those in
-        # would validate half a monitor's worth of KDL and call it proof. The
+        # would validate half a monitor's worth of config and call it proof. The
         # first version of this did exactly that.
         PINNED = "fn the_whole_grammar_comes_out_at_once"
         at = source.find(PINNED)
@@ -16748,7 +17093,7 @@ let
 
         # AND THE ESCAPED NAME GOES IN TOO, which is the one case where our own
         # expectation proving our own string is worth nothing. `escaped()` is
-        # OUR answer to KDL's grammar; monitors really are sold with a `"` in
+        # OUR answer to the config's grammar; monitors really are sold with a `"` in
         # the name, and a wrong answer takes the whole configuration load down
         # — every monitor unapplied, from one quote. Only the compositor can
         # say whether that answer is right, and this is the only place it is
@@ -16771,22 +17116,54 @@ let
             print(f"ERROR: {ESCAPED} no longer pins the escaped output", file=sys.stderr)
             sys.exit(1)
         node = source[opens + len('assert!(out.contains(r#"') : shuts]
-        text += node + " {\n    focus-at-startup\n}\n"
+        text += node + " {\n    enable\n}\n"
 
-        pathlib.Path("fragment.kdl").write_text(text)
+        # AND THE HEADER THE WRITER PUTS ON TOP OF ALL OF IT.
+        #
+        # This check used to validate the BLOCKS and nothing else, and the
+        # file `text_of` emits is a header plus those blocks. The header was
+        # written with `//` comments — which this compositor does not have. It
+        # answered every line with `Unknown/invalid command '//'` and then
+        # `Error(s) loading config!`, so every monitor's settings were refused
+        # over a comment, on every machine, with nothing saying so: `reload`
+        # answers `success` whatever parsed and `scrollnag_command -` refuses
+        # the window it would otherwise raise. The blocks were valid the whole
+        # time, so this check was green.
+        #
+        # What is validated now is the file, not a piece of it.
+        opens = source.find('String::from(')
+        opens = source.find('"', opens)
+        shuts = opens + 1
+        while True:
+            shuts = source.find('"', shuts)
+            if shuts < 0 or source[shuts - 1] != "\\":
+                break
+            shuts += 1
+        if opens < 0 or shuts < 0:
+            print("ERROR: `text_of` no longer opens with a literal header", file=sys.stderr)
+            sys.exit(1)
+        # A RUST LITERAL, UNESCAPED: a `\` at the end of a line eats the newline
+        # and the indentation after it, and `\n` is a newline.
+        header = re.sub(r"\\\n\s*", "", source[opens + 1 : shuts]).replace("\\n", "\n")
+        if not header.strip():
+            print("ERROR: the header came out empty; it would validate nothing", file=sys.stderr)
+            sys.exit(1)
+        text = header + text
+
+        pathlib.Path("fragment.conf").write_text(text)
 
         # EVERY NODE THE WRITER CAN EMIT HAS TO BE IN IT, or this would validate
-        # a file that exercises nothing. The list is `kdl_of`'s own.
+        # a file that exercises nothing. The list is `text_of`'s own.
         missing = [
             node
             for node in (
-                "off",
+                "disable",
+                "enable",
                 "mode ",
                 "scale ",
                 "transform ",
                 "position ",
-                "variable-refresh-rate",
-                "focus-at-startup",
+                "adaptive_sync ",
             )
             if node not in text
         ]
@@ -16800,15 +17177,51 @@ let
         print(text)
         END
 
-        printf 'include "%s/fragment.kdl"\n' "$PWD" > with-fragment.kdl
-        if ! niri validate --config with-fragment.kdl 2>errors.txt; then
-          echo "ERROR: niri REFUSED the fragment the display view writes." >&2
-          echo "       A refused include fails the WHOLE config load, so every" >&2
-          echo "       other monitor's settings go with it." >&2
-          cat errors.txt >&2
+        # THE SANDBOX'S OWN RUNTIME DIRECTORY. The compositor aborts without
+        # one, and on this path it never writes anything into it.
+        export XDG_RUNTIME_DIR="$PWD/run"
+        mkdir -p "$XDG_RUNTIME_DIR"
+        export WLR_BACKENDS=headless
+        export WLR_RENDERER=pixman
+
+        # THE VERDICT IS THE OUTPUT AND NOT THE EXIT STATUS, and that is a
+        # measurement rather than a preference.
+        #
+        # `--validate` returns what `load_config` returns, and an INCLUDE never
+        # reaches it: `load_include_configs` returns `void` and throws away
+        # every `load_include_config` result (`sway/config.c`). Measured — a
+        # fragment carrying `scale not-a-number`, included from a main file,
+        # prints `Error on line 2 ... Invalid scale.` and then `Error(s)
+        # loading config!`, and exits ZERO. A gate on `$?` here would have
+        # passed on every broken fragment there can be.
+        printf 'include "%s/fragment.conf"\n' "$PWD" > with-fragment.conf
+        scroll --validate --config with-fragment.conf > said.txt 2>&1 || true
+        if grep -q 'Error' said.txt; then
+          echo "ERROR: the compositor REFUSED the fragment the display view writes." >&2
+          echo "       Every output line it could not read is a monitor left on" >&2
+          echo "       the compositor's own choice, with only a log line." >&2
+          cat said.txt >&2
           exit 1
         fi
-        echo "OK: niri reads the fragment the display view writes"
+
+        # AND A BROKEN ONE IS REFUSED, which is the half that makes it a gate.
+        #
+        # A SCALE THAT IS NOT A NUMBER, because `output_cmd_scale` is a
+        # `strtof` and anything left over after it is `Invalid scale.` — the one
+        # mutation of this grammar that is certainly a refusal rather than a
+        # value the compositor quietly tolerates. `transform sideways` was
+        # tried first and was ACCEPTED, which is exactly why a negative half
+        # has to be RUN rather than assumed.
+        sed 's/^    scale .*/    scale not-a-number/' fragment.conf > broken.conf
+        printf 'include "%s/broken.conf"\n' "$PWD" > with-broken.conf
+        scroll --validate --config with-broken.conf > broke.txt 2>&1 || true
+        if ! grep -q 'Invalid scale' broke.txt; then
+          echo "ERROR: the compositor said nothing about a scale that is not a" >&2
+          echo "       number, so the pass above proves nothing at all." >&2
+          cat broke.txt >&2
+          exit 1
+        fi
+        echo "OK: the compositor reads the fragment the view writes, and refuses a broken one"
       '';
 
   # THE TEXT HAS ONE SIZE, AND THE PERSON CAN MOVE IT.
@@ -17225,7 +17638,7 @@ let
 
   # THE FRAGMENT'S NAME IS WRITTEN IN FOUR PLACES AND NOTHING TIED THEM.
   #
-  # `fragment::FILE` is what the shell WRITES; `nix/modules/niri.nix` and
+  # `fragment::FILE` is what the shell WRITES; `nix/modules/scroll.nix` and
   # `nix/dev.nix` are what the compositor INCLUDES; `tests/display-vm.nix`
   # writes its own config with its own copy. Renaming the constant left the
   # real machine including a file nobody writes — the feature stops persisting,
@@ -17233,7 +17646,7 @@ let
   # line rather than the one the module generates.
   #
   # `display-fragment-validates` cannot see it: it validates the CONTENT.
-  # `niri-config-valid` cannot either: it proves the generated config parses,
+  # The contract test's syntax gate cannot either: it proves the generated config parses,
   # and an include of a file that is not there is `optional=true` and parses
   # fine. This is the same shape `MOST_SCALE` was given one home for.
   display-fragment-has-one-name = mkCheck "display-fragment-has-one-name" [ pkgs.python3 ] ''
@@ -17254,8 +17667,8 @@ let
         raise SystemExit(1)
     name = m.group(1)
 
-    # AN `include` LINE, not a mention. `niri-display.kdl` appears in
-    # `nix/modules/niri.nix` twice — once inside an error message and once in
+    # AN `include` LINE, not a mention. `scroll-display.conf` appears in
+    # `nix/modules/scroll.nix` twice — once inside an error message and once in
     # the real include — so deleting the include left the compositor reading
     # nothing while this check stayed green on the sentence. Same shape in the
     # VM test, where one of the two is a comment.
@@ -17263,7 +17676,7 @@ let
     #
     # The header above says "an `include` LINE, not a mention" and then read
     # raw text, so the sentence was not enforced: deleting the real include and
-    # leaving `# we used to include niri-display.kdl here` kept this green,
+    # leaving `# we used to include scroll-display.conf here` kept this green,
     # which is exactly the state the error message below describes.
     # This was a local `code_of` that took a `#` off each line and handed back
     # a LIST. It is `hashless` now — the prelude's, which answers with text —
@@ -17271,19 +17684,19 @@ let
 
     # AND THE WHOLE PATH, NOT THE BASENAME.
     #
-    # `name` is `niri-display.kdl`, and the shell writes it into
+    # `name` is `scroll-display.conf`, and the shell writes it into
     # `ronoctua_store::config_dir()`. An include of the same basename in ANOTHER
-    # directory — `~/.config/niri/` is the plausible one, since the theme
+    # directory — `~/.config/scroll/` is the plausible one, since the theme
     # fragment lives there — matches on the basename and reads a file nobody
     # writes. So the directory the shell writes to has to be in the line too.
     # THE SEGMENT, JOINED TO THE NAME, and not the word on its own: these
     # lines interpolate `config.ronoctua.user`, so a path through
-    # `.config/niri/` still has "ronoctua" somewhere in it and a bare word
+    # `.config/scroll/` still has "ronoctua" somewhere in it and a bare word
     # test passes over exactly the swap it is meant to catch.
     where_written = "ronoctua/" + name
     wrong = []
     for label, path in (
-        ("nix/modules/niri.nix", "${../nix/modules/niri.nix}"),
+        ("nix/modules/scroll.nix", "${../nix/modules/scroll.nix}"),
         ("nix/dev.nix", "${../nix/dev.nix}"),
         ("tests/display-vm.nix", "${../tests/display-vm.nix}"),
     ):
@@ -17331,7 +17744,7 @@ let
         print("       including a file nobody writes: every setting is saved,", file=sys.stderr)
         print("       nothing survives a restart, and no other check can see it", file=sys.stderr)
         print("       — `display-fragment-validates` reads the CONTENT, and", file=sys.stderr)
-        print("       `niri-config-valid` is happy with an `optional=true`", file=sys.stderr)
+        print("       the syntax gate is happy with an include of a file", file=sys.stderr)
         print("       include of a file that is not there.", file=sys.stderr)
         raise SystemExit(1)
 
@@ -18640,27 +19053,42 @@ let
   '';
 
   # THE FRAGMENTS EVERY THEME SHIPS FOR THE CONSUMERS OUTSIDE THE SHELL — and
-  # niri's own parser on the compositor's two. The footer copies these files
-  # verbatim when the theme or the desk changes; a fragment niri refused would
-  # be a border that never follows, with the refusal in a log nobody reads.
-  # Each niri fragment is validated UNDER a config that already has a
-  # `layout {}`, as the system's does: the desk travels as a second `layout`
-  # node, and niri refuses a duplicate inside one file while merging an
-  # included one — the line this whole arrangement stands on.
+  # the compositor's own parser on the compositor's two. The footer copies
+  # these files verbatim when the theme or the desk changes; a fragment the
+  # compositor refused would be a border that never follows, with the refusal
+  # in a log nobody reads and a nag window this distro turns off.
+  #
+  # EACH ONE IS VALIDATED UNDER A CONFIG THAT ALREADY PAINTS A DESK, as the
+  # system's does (`output * bg`). That is the line the whole arrangement
+  # stands on: output settings here are MERGED, last-wins per field
+  # (`get_output_config`), so the fragment's `output * bg` beats the one
+  # already there instead of colliding with it. The previous compositor needed
+  # this subtest for the opposite reason — it refused a duplicate `layout`
+  # inside one file and merged an included one — and the shape of the proof is
+  # the same either way: put the fragment under a config that already says the
+  # thing it says.
   themes-have-fragments =
     mkCheck "themes-have-fragments"
       [
-        inputs.niri.packages.${system}.niri
+        scroll
         pkgs.gnugrep
         pkgs.jq
       ]
       ''
+        # The compositor's own parser, in a sandbox — see
+        # `compositor-config-valid` for the two variables that make that
+        # possible and for why the verdict is the OUTPUT and never `$?`.
+        export XDG_RUNTIME_DIR="$PWD/run"
+        mkdir -p "$XDG_RUNTIME_DIR"
+        export WLR_BACKENDS=headless
+        export WLR_RENDERER=pixman
+
         for id in ${lib.escapeShellArgs themes}; do
           d=${themed}/$id
-          for f in niri-border-active niri-border-inactive niri-background niri-black.kdl niri-backdrop.kdl ghostty.conf mode; do
+          for f in compositor-border-active compositor-border-inactive compositor-background scroll-black.conf scroll-backdrop.conf ghostty.conf mode; do
             test -s "$d/$f" || { echo "ERROR: the theme $id has no fragment $f" >&2; exit 1; }
           done
-          for f in niri-border-active niri-border-inactive niri-background; do
+          for f in compositor-border-active compositor-border-inactive compositor-background; do
             grep -qE '^#[0-9A-F]{6}$' "$d/$f" || {
               echo "ERROR: $id/$f is not a #RRGGBB: $(cat "$d/$f")" >&2; exit 1; }
           done
@@ -18671,25 +19099,27 @@ let
             dark|light) ;;
             *) echo "ERROR: the theme $id says its mode is '$(cat "$d/mode")'" >&2; exit 1 ;;
           esac
-          for f in niri-black.kdl niri-backdrop.kdl; do
-            printf 'layout {\n    gaps 0\n}\ninclude "%s"\n' "$d/$f" > "$id.kdl"
-            niri validate --config "$id.kdl" 2>errors.txt || {
-              echo "ERROR: niri refuses $id/$f under a config with its own layout:" >&2; cat errors.txt >&2; exit 1; }
-            grep -qE '^[[:space:]]*active-color "#' "$d/$f" || {
+          for f in scroll-black.conf scroll-backdrop.conf; do
+            printf 'output * bg #123456 solid_color\ninclude "%s"\n' "$d/$f" > "$id.conf"
+            scroll --validate --config "$id.conf" > said.txt 2>&1 || true
+            grep -q 'Error' said.txt && {
+              echo "ERROR: the compositor refuses $id/$f under a config that already paints a desk:" >&2
+              cat said.txt >&2; exit 1; }
+            grep -qE '^client\.focused #' "$d/$f" || {
               echo "ERROR: $id/$f carries no border" >&2; exit 1; }
           done
           # The desk each fragment names: black by name, and the theme's own
           # `surface.backdrop` — the same bytes the shell's table has.
-          grep -qE '^[[:space:]]*background-color "#000000"$' "$d/niri-black.kdl" || {
-            echo "ERROR: $id/niri-black.kdl does not paint black" >&2; exit 1; }
+          grep -qE '^output \* bg #000000 solid_color$' "$d/scroll-black.conf" || {
+            echo "ERROR: $id/scroll-black.conf does not paint black" >&2; exit 1; }
           desk=$(jq -r '."surface.backdrop"' "${themed}/$id.json" | sed -E 's/^0x([0-9A-F]{6})FF$/#\1/')
-          grep -qE "^[[:space:]]*background-color \"$desk\"$" "$d/niri-backdrop.kdl" || {
-            echo "ERROR: $id/niri-backdrop.kdl does not paint the theme's desk $desk:" >&2
-            grep background-color "$d/niri-backdrop.kdl" >&2; exit 1; }
+          grep -qE "^output \* bg $desk solid_color$" "$d/scroll-backdrop.conf" || {
+            echo "ERROR: $id/scroll-backdrop.conf does not paint the theme's desk $desk:" >&2
+            grep 'output \*' "$d/scroll-backdrop.conf" >&2; exit 1; }
           grep -q '^palette = 15=#' "$d/ghostty.conf" || {
             echo "ERROR: $id/ghostty.conf has no sixteenth ANSI colour" >&2; exit 1; }
         done
-        echo "OK: every theme carries its seven fragments, and niri merges each desk under a layout of its own"
+        echo "OK: every theme carries its seven fragments, and the compositor merges each desk over one already painted"
       '';
 
   # GHOSTTY STILL RELOADS ON THE SIGNAL THIS SYSTEM SENDS.
@@ -18797,7 +19227,7 @@ let
         mkdir -p "$HOME" "$XDG_CONFIG_HOME/ghostty"
         # THE TWO OPTIONAL INCLUDES ARE ABSOLUTE, with the person's user name
         # baked in at build time, so nothing a sandbox can set redirects them —
-        # `docs/PENDING.md` 0.000017 records the same shape for the niri
+        # `docs/PENDING.md` 0.000017 records the same shape for the compositor
         # fragments. Their SPELLING is asserted above, off the module's own
         # text; here they are pointed at this scratch home so the MECHANISM can
         # be measured, which is the half no grep can reach.
@@ -19467,7 +19897,7 @@ let
     # 5) THE CLI'S SUBCOMMANDS
     #
     # These live as STRINGS in a `match` arm, so no declaration rule reaches
-    # them: `comando`, `satelite`, `verificar-keymap` and `exportar-binds-niri`
+    # them: `comando`, `satelite`, `verificar-keymap` and `exportar-binds-the compositor`
     # went through the whole refactor untouched. They are commands, which
     # invariant 18 names explicitly.
     for rs in (root_dir / "crates").rglob("main.rs"):
@@ -19703,7 +20133,7 @@ let
     # string — so a hundred and eighty-five Portuguese messages lived in
     # `.context`, `bail!`, `expect` and `write!` through every green battery
     # this repository has ever run: `"ler o verbo"`, `"mudar o dono de {}"`,
-    # `"o niri recusou {request}"`, `"registry do Wayland"`. They are the
+    # `"o the compositor recusou {request}"`, `"registry do Wayland"`. They are the
     # sentences a person actually SEES when something goes wrong, which makes
     # them the half of invariant 18 that matters most.
     # The macros a message reaches a person through.
@@ -20095,7 +20525,7 @@ let
 
     root_dir = pathlib.Path("${self}")
     # Every VM test splices this prelude into its own script.
-    pre = root_dir / "tests/niri-xvfb.nix"
+    pre = root_dir / "tests/compositor-xvfb.nix"
     prelude = "\n".join(b for _, b in fences(pre.read_text())) if pre.exists() else ""
 
     orphans, swept, scanned = [], 0, 0
@@ -20616,7 +21046,7 @@ let
       fi
 
       # The two units that must never give up.
-      for unit in niri.service ronoctua-footer.service; do
+      for unit in scroll.service ronoctua-footer.service; do
         grep -q "StartLimitIntervalSec=0" "$etc/systemd/user/$unit" || {
           echo "ERROR: $unit gives up after 5 deaths, and then the screen stays empty" >&2
           failed=1
@@ -20662,7 +21092,7 @@ let
   #
   # Everything a NixOS closure inherits from nixpkgs comes prebuilt from the
   # public cache. Everything this repository makes does not exist there, and was
-  # being built on the machine being installed: the shell, niri from the pinned
+  # being built on the machine being installed: the shell, the compositor from the pinned
   # input, `libghostty-vt` and its Zig toolchain, the five wasm buffers, the
   # font family from a GitHub Release. That is where an install's afternoon went.
   #
@@ -20682,7 +21112,7 @@ let
     in
     mkCheck "iso-carries-the-seed" [ pkgs.gnugrep pkgs.coreutils ] ''
       failed=0
-      for ours in -ronoctua-0.1.0 -niri- -libghostty-vt- -ronoctua-buffer-glyphs- \
+      for ours in -ronoctua-0.1.0 -scroll- -libghostty-vt- -ronoctua-buffer-glyphs- \
                   -ronoctua-buffer-unicode- \
                   -ronoctua-buffer-lucide- -ronoctua-buffer-memory- \
                   -ronoctua-buffer-keyboard- \
@@ -20722,7 +21152,7 @@ let
   # # And what may never leave
   #
   # The second list is the more important one. A reduced profile that dropped
-  # niri or the footer would be smaller and would not be this system — the point
+  # the compositor or the footer would be smaller and would not be this system — the point
   # was never the gigabytes, it was installing in minutes what one can then add
   # to one line at a time.
   profile-minimal-closes =
@@ -20781,7 +21211,7 @@ let
       # binary would fail if they left — the panels would simply say the
       # program is missing, on every reduced machine, for ever. This line is
       # what turns that into a build failure instead.
-      for kept in -niri- -ronoctua-0.1.0 -noctua-iosevka-ttf-nerdfonts- -ghostty- \
+      for kept in -scroll- -ronoctua-0.1.0 -noctua-iosevka-ttf-nerdfonts- -ghostty- \
                   -networkmanager- -systemd- -ffmpeg-full- -exiftool- \
                   -ronoctua-buffer-glyphs- \
                   -ronoctua-buffer-unicode- -ronoctua-buffer-lucide- \
@@ -21633,12 +22063,13 @@ let
     # Exposed so they can be run on their own during the work.
     footer-vm = footerVm;
     syncthing-vm = syncthingVm;
-    niri-contract = niriContract;
+    compositor-contract = compositorContract;
     modeline-vm = modelineVm;
     leader-vm = leaderVm;
     apps-vm = appsVm;
     inherit keymap-no-collision i18n-complete i18n-missing-key-fails;
     inherit languages-are-declared buffer-tag-rows-have-text buffers-test;
+    inherit buffers-lint;
     inherit third-language-costs-nothing;
     inherit shell-finds-its-buffers;
     inherit
@@ -21715,7 +22146,7 @@ let
       ;
     inherit
       group-mark-outside-translation
-      niri-actions-translated
+      compositor-deeds-translated
       keyboard-layout-exists
       keyboard-options-do-what-they-say
       nested-survives-a-stray-modifier
@@ -21724,7 +22155,6 @@ let
       wifi-console-asks-once
       ;
     inherit
-      niri-config-valid
       fontconfig-nested-finds-font
       xdg-user-dirs
       screenshots-land-in-a-declared-directory
@@ -21757,6 +22187,9 @@ let
       syncthing-options-have-text
       display-brightness-rule-lands
       display-adds-no-polkit-rule-of-its-own
+      compositor-config-valid
+      the-session-reaches-its-target
+      only-the-composition-root-names-the-compositor
       display-fragment-validates
       display-fragment-has-one-name
       one-text-size
@@ -21921,7 +22354,7 @@ let
     # check below has to be written — never against what has already been built:
     #
     #   A single layer-shell surface, bottom anchor, exclusive zone of 2 lines,
-    #   writing a fixed state; the nested loop (`nix run .#dev`) brings up niri
+    #   writing a fixed state; the nested loop (`nix run .#dev`) brings up the compositor
     #   + shell with hot reload; sops-nix adopted.
     # ===================================================================
     m3 = pkgs.linkFarmFromDrvs "check-m3" [
@@ -21976,19 +22409,27 @@ let
     ];
 
     # ===================================================================
-    # MILESTONE 4 — `ronoctua-niri` + contract, and a live modeline.
+    # MILESTONE 4 — the compositor contract, and a live modeline.
     #
     # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
     # check below has to be written — never against what has already been built:
     #
-    #   The contract test passes against the pinned tag **and** against the
-    #   `niri-next` input; the daemon consumes the event stream; the modeline
-    #   reflects the focused buffer in a screenshot with OCR.
+    #   The contract test passes against the pinned compositor; the daemon
+    #   consumes the event stream; the modeline reflects the focused buffer in a
+    #   screenshot with OCR.
+    #
+    # THE SECOND HALF OF IT IS GONE, and deliberately: the criterion asked for
+    # the contract against a SECOND, newer input as well, to warn of protocol
+    # drift before a release made it mandatory (risk R2). That input was for a
+    # compositor with its own protocol under active change. This one speaks the
+    # i3 IPC, which has not moved in a decade, so a second pin would be a second
+    # build for a risk that is no longer the same size. Written here rather than
+    # dropped, so the criterion and what answers it can be compared.
     # ===================================================================
     m4 = pkgs.linkFarmFromDrvs "check-m4" [
-      # The contract against BOTH versions. It is the subtest against `niri-next`
-      # that gives the drift warning before the release becomes mandatory (risk R2).
-      niriContract
+      # The contract, against the pinned compositor — see the note above for
+      # why there is no second one.
+      compositorContract
       # The daemon consuming the event stream, proved on screen by OCR.
       modelineVm
     ];
@@ -22037,11 +22478,11 @@ let
       third-language-costs-nothing
       i18n-missing-key-fails
       group-mark-outside-translation
-      niri-actions-translated
+      compositor-deeds-translated
       keyboard-layout-exists
       locale-exists
       wifi-console-asks-once
-      niri-config-valid
+
       fontconfig-nested-finds-font
       # THE CATALOGUE: one place for every notification and every filter the
       # distro ships with, generated from Nix — and both languages complete for
@@ -22095,7 +22536,7 @@ let
       # proves that there is a path from the keyboard to the pixel.
       terminalVm
       # The leader as the Super key on its own (7.4): keyd standing, the right
-      # remapping, and niri listening for the key that comes out of it.
+      # remapping, and the compositor listening for the key that comes out of it.
       keyboardVm
       # Switchable impermanence, with the recovery window.
       impermanenceVm

@@ -112,7 +112,7 @@ pub const STEPS_FILE: &str = "update-steps.conf";
 /// dependency or a `grep` that will one day answer confidently and wrongly
 /// about somebody's machine.
 ///
-/// It is the same relationship the theme's niri fragment has with
+/// It is the same relationship the theme's compositor fragment has with
 /// `theme.json`: one file is the decision and the other is the decision
 /// written where a different program can read it.
 ///

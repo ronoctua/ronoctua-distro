@@ -147,7 +147,7 @@ pub fn cache_root() -> Option<PathBuf> {
 ///
 /// It was `<file>.new`, one name for everybody. That held while each of these
 /// files had a single writer, and the screens ended it: two doors — two
-/// PROCESSES — write `display.json` and `niri-display.kdl` through here. Two
+/// PROCESSES — write `display.json` and `scroll-display.conf` through here. Two
 /// of them at once open the same scratch path with truncate, so one write can
 /// interleave with the other and the rename then installs a mixed file; the
 /// other outcome is the loser's `rename` answering `ENOENT` because the winner

@@ -2795,6 +2795,15 @@ name = "ronoctua-cmd"
 version = "0.1.0"
 
 [[package]]
+name = "ronoctua-compositor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ronoctua-design"
 version = "0.1.0"
 dependencies = [
@@ -2817,8 +2826,9 @@ name = "ronoctua-display"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ronoctua-compositor",
  "ronoctua-memory",
- "ronoctua-niri",
+ "ronoctua-scroll",
  "ronoctua-store",
  "ronoctua-tokens",
  "rustix 1.1.4",
@@ -2937,16 +2947,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ronoctua-niri"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "ronoctua-notify"
 version = "0.1.0"
 dependencies = [
@@ -3007,10 +3007,11 @@ dependencies = [
  "anyhow",
  "crossterm",
  "ratatui",
+ "ronoctua-compositor",
  "ronoctua-i18n",
  "ronoctua-memory",
- "ronoctua-niri",
  "ronoctua-protocol",
+ "ronoctua-scroll",
  "ronoctua-tokens",
 ]
 
@@ -3023,6 +3024,17 @@ dependencies = [
  "tracing",
  "wasmtime",
  "wasmtime-wasi",
+]
+
+[[package]]
+name = "ronoctua-scroll"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-compositor",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -3045,6 +3057,7 @@ dependencies = [
  "ronoctua-clipcascade",
  "ronoctua-clock",
  "ronoctua-cmd",
+ "ronoctua-compositor",
  "ronoctua-design",
  "ronoctua-disks",
  "ronoctua-display",
@@ -3056,13 +3069,13 @@ dependencies = [
  "ronoctua-lan",
  "ronoctua-memory",
  "ronoctua-network",
- "ronoctua-niri",
  "ronoctua-notify",
  "ronoctua-options",
  "ronoctua-power",
  "ronoctua-protocol",
  "ronoctua-render",
  "ronoctua-runtime",
+ "ronoctua-scroll",
  "ronoctua-store",
  "ronoctua-syncthing",
  "ronoctua-syntax",

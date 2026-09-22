@@ -9,10 +9,10 @@
 #
 # Nothing downstream reads the output at EVALUATION time: `nix/tokens.nix`
 # takes `themes.json` as a file, the compositor's config is assembled by a
-# build that `cat`s the three niri values, Ghostty is pointed at a file, the
+# build that `cat`s the three compositor values, Ghostty is pointed at a file, the
 # extension's generator reads the flat map, and the screenshot driver loads
 # the JSON when it runs. No import-from-derivation — the same rule
-# `nix/niri-binds.nix` argues for.
+# `nix/compositor-binds.nix` argues for.
 #
 # The two scripts are copied one by one, and not the directory: a derivation
 # references what its bytes cite, and `${./scripts}` would make every other

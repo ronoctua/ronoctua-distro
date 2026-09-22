@@ -44,8 +44,41 @@
 # both sides, and it also refuses a scene that opens no door of its own and
 # declares no need.
 [
+  # THE STATE THE OWNER SENT A PHOTOGRAPH OF. The panel used to reserve three
+  # lines and draw them at `end - 3`, `end - 2` and `end - 1`, where `end` is
+  # the top of the region plus the number of rows — and with no history that
+  # number is ONE. Nothing clamped them, so `ClipCascade: not integrated`
+  # landed on the MINIBUFFER's line and the actions strip landed on the row
+  # that says the history is empty. An empty history is the first state to
+  # photograph and was the only one nobody had: there was no layout test of the
+  # clipboard at all.
+  #
+  # IT RUNS FIRST, before anything opens a WINDOW: it gives the region back
+  # with `Escape`, and an `Escape` with a window focused closes that window —
+  # which took the file manager out from under the theme chooser's subtest when
+  # this sat in the middle.
   { id = "clipboard"; }
+  # WHAT THE OWNER READ ON THE SCREEN: nothing said which line the cursor was
+  # on. `Row::focused` is set by the view and read by NO door in this system —
+  # neither the footer nor the window draws a band behind the cursor — so the
+  # colour IS the cursor, and this view was the one that never set it. Nine
+  # others have carried it since `network.rs` arrived at the split: the label
+  # takes `state.accent` ("the keyboard is here") and the value goes on saying
+  # whether the answer can be changed.
+  #
+  # THE SCENE'S ASSERTION IS A COLOUR, because the report was. A count of rows
+  # or a word on screen would have passed the whole time the defect existed.
   { id = "history"; }
+  # THE OTHER HALF OF WHAT THE OWNER REPORTED: he could not find a way to turn
+  # Tor on. The section lived behind `if let Some(scene)`, and the control
+  # socket only answers when Tor is already running — so a stopped Tor drew no
+  # heading, no row and no key. This machine does not run Tor, which is exactly
+  # the case being photographed: the heading has to be there anyway, with a row
+  # that says what the UNIT is doing.
+  #
+  # (The sentence was cut in half by an earlier move of this prose, which left
+  # `nix/shots.nix` pointing here at a section that had never been written.
+  # Recovered from 3134000.)
   { id = "tor"; }
   # THE ONE SCENE THAT OPENS NOTHING ON PURPOSE: what it photographs is the
   # footer with nothing on it, so anything it opened would be the wrong
@@ -88,6 +121,17 @@
   { id = "band"; }
   { id = "queue"; }
   { id = "loud"; }
+  # THE WHOLE CAPTURE PATH, DRIVEN FOR REAL. The command is ours end to end:
+  # `screen-capture` runs `grim`, `grim` writes a file under
+  # `RONOCTUA_SCREENSHOTS`, and the footer raises the notification itself with
+  # the `file://` URL in the icon field — which is where the four actions get
+  # the image from. Nothing in the scene stands in for anything, which a
+  # hand-written `Notify` over the bus would: that is a scene that goes on
+  # passing after the thing it stood for has been deleted.
+  #
+  # And the glyph is `md-monitor_screenshot`, named in
+  # `assets/notifications.nix` as a NerdFonts glyph rather than a design system
+  # token: nothing in the design system says "screen capture".
   { id = "screenshot"; }
   { id = "notifications"; }
   { id = "catalogue"; }
@@ -255,6 +299,17 @@
     needs = [ "brain" ];
   }
   { id = "update"; }
+  # THREE THINGS PROVED ON SCREEN, and none of them by a buffer (`nix run
+  # .#png` cannot reach a footer view). One: the list opens on the theme in
+  # force, its focused row in that theme's accent. Two: moving the cursor
+  # PREVIEWS — the second theme's accent is on the footer and the first's is
+  # gone — while the file manager's window, opened beforehand, is untouched.
+  # Three: `RET` writes the file, and the window follows the FILE: its focused
+  # row is now in the second theme's accent with no restart, and the footer
+  # copied the two fragments beside the file. The two accents are far more than
+  # the twelve per cent apart; the window is measured on its top half BELOW its
+  # own hint line, so neither the footer's lines nor the hint's registers enter
+  # the count.
   { id = "theme"; }
   # THE LINE `LEADER d` OPENS, and it had no picture at all — which is why
   # every defect the owner found in it went unseen: `nix run .#png` reaches a
@@ -299,7 +354,7 @@
   #
   # The line that teaches a view's keys is CUT at the width it is given —
   # `chrome::hint_spans` elides, it does not wrap — and the network view's
-  # table is 174 cells in English against a window that niri tiles into half
+  # table is 174 cells in English against a window the compositor tiles into half
   # of a 1600-pixel output. So more than half of what that line teaches was
   # unreachable in every one of the ten windows, with an ellipsis where it
   # stopped and nothing to press.

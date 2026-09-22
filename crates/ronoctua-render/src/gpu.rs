@@ -23,8 +23,9 @@ use ronoctua_tokens as tokens;
 /// `configure` down — and `Surface::configure` does not return an error: it KILLS the
 /// process. The symptom was the window disappearing on its own when grown one step past the
 /// screen (`Alt+=` on a 1920 monitor reaches 2112 on the first step), without a
-/// single log line anywhere, because niri sends the output of what it spawns
-/// to `/dev/null`.
+/// single log line where anybody was looking: the footer is a unit, so what it
+/// says on its way out lands in the journal of a service nobody opens while a
+/// window is vanishing.
 ///
 /// The same ceiling broke the ENTIRE distro on any monitor larger than
 /// 2048 px: the footer takes the screen's width, so on a 2560 or a 4K it
@@ -47,8 +48,8 @@ pub fn limits_of(adapter: &wgpu::Adapter) -> wgpu::Limits {
 /// Because `Surface::configure` **does not return an error**: it returns `()`, and a
 /// dimension above the limit becomes a fatal validation error — the process dies.
 /// In a window that appears as the window closing on its own; in the footer, as the
-/// distro not coming up. In both cases with no message, because niri sends the
-/// output of what it spawns to `/dev/null`.
+/// distro not coming up. In both cases with no message where anybody was
+/// looking, for the reason above.
 ///
 /// Asking for the adapter's resolution (see `new`) already removes the 2048 ceiling that
 /// caused this in practice. This function is the net for what is left: a window
@@ -147,7 +148,7 @@ impl Gpu {
         //
         // Asking for both at once makes wgpu initialise the GL backend —
         // opening `libGL`/EGL and creating a context — only to find out that
-        // Vulkan will do. Measured in the footer inside the nested niri: 780 ms
+        // Vulkan will do. Measured in the footer inside the nested session: 780 ms
         // for `Instance::new`, against 5.5 ms for `request_adapter` and 4.4 ms
         // for `request_device`. The cost was in ENUMERATING, not in talking to
         // the GPU.

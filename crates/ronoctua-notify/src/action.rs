@@ -77,8 +77,8 @@ pub enum Arg {
     /// The FILE the notification is about.
     ///
     /// It comes from the `file://` URL the sender put in the icon field — which
-    /// is exactly what niri does with a screenshot's path. Without a file, the
-    /// action is not offered.
+    /// is exactly what the footer does with a capture's path. Without a file,
+    /// the action is not offered.
     File,
     /// The DIRECTORY that file is in.
     Folder,

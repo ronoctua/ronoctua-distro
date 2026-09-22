@@ -77,7 +77,7 @@ teclado não: o `nixos-facter` lê hardware, e layout é o que os seus dedos esp
 
 **A recomendada é a `full`**: ela é a que não pede uma segunda decisão depois.
 
-A `minimal` não é outra distro — niri, rodapé, fonte, teclado, rede, impermanência e terminal
+A `minimal` não é outra distro — compositor, rodapé, fonte, teclado, rede, impermanência e terminal
 continuam lá. O que muda é que ela **instala em minutos**, e é por isso que ela existe: quem trabalha
 NA distro reinstala com frequência, e quem só quer experimentar um aplicativo o instala nela em vez
 de baixar 23 GiB para chegar nele.

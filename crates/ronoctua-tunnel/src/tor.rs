@@ -520,7 +520,8 @@ pub fn look(socket: &Path, cookie: &Path) -> Option<Scene> {
 /// So the module `%include`s a directory this system owns, the view writes one
 /// file into it, and `SIGNAL RELOAD` makes the running daemon re-read the lot.
 /// The file is what survives the reboot; the signal is what makes the running
-/// daemon agree with it — the same division `ronoctua-display` uses for niri.
+/// daemon agree with it — the same division `ronoctua-display` uses for the
+/// compositor.
 ///
 /// # And the flake still wins
 ///

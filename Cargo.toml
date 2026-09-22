@@ -37,7 +37,8 @@ members = [
   "crates/ronoctua-term",
   "crates/ronoctua-keymap",
   "crates/ronoctua-render",
-  "crates/ronoctua-niri",
+  "crates/ronoctua-compositor",
+  "crates/ronoctua-scroll",
   "crates/ronoctua-network",
   "crates/ronoctua-disks",
   "crates/ronoctua-memory",
@@ -69,7 +70,7 @@ publish = false
 
 [workspace.dependencies]
 # --- Wayland -----------------------------------------------------------
-# Integration with Niri is EXCLUSIVELY through IPC and wlr-layer-shell
+# Integration with the compositor is EXCLUSIVELY through IPC and wlr-layer-shell
 # (invariant 3). Nothing here talks to the compositor any other way.
 # The `system` feature swaps the pure-Rust backend for the libwayland one (FFI).
 # It is NOT optional: only it exposes `display_ptr` and `as_ptr`, the C pointers
@@ -95,10 +96,11 @@ cosmic-text = "0.19"
 # trait — two copies of that enum would not even compile together.
 unicode-script = "0.5"
 
-# --- niri IPC (invariant 3: IPC and layer-shell only) ------------------
-# The types on niri's side are OURS, narrow, in `ronoctua-niri`. See why
-# in `crates/ronoctua-niri/src/lib.rs`: depending on the published `niri-ipc`
-# crate would hollow out the contract test against `niri-next`.
+# --- the compositor (invariant 3: IPC and layer-shell only) ------------
+# There is no dependency here, and that is the point: the types are OURS, in
+# `ronoctua-compositor`, and the one crate that speaks a wire protocol
+# (`ronoctua-scroll`) writes it by hand out of `serde_json`. A published
+# client crate would put a third party between us and the contract test.
 # The QR code of the copied content. Just the MATRIX: what draws it is the quad
 # pipeline the footer already has — one quad per module. No image, no font, no
 # new pipeline.

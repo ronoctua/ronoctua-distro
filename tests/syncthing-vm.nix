@@ -20,13 +20,13 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-syncthing";
@@ -56,7 +56,7 @@ pkgs.testers.runNixOSTest {
       };
 
       environment.systemPackages = [
-        niri
+        scroll
         ronoctua-shell
         pkgs.curl
       ]
@@ -128,9 +128,9 @@ pkgs.testers.runNixOSTest {
         )
         assert device["numConnections"] == 3, device
 
-    with subtest("niri comes up on the winit backend over Xvfb"):
+    with subtest("the compositor comes up on the X11 backend over Xvfb"):
         start_xvfb()
-        start_niri("niri", "${niri}")
+        start_compositor("compositor", "${scroll}")
 
     with subtest("the window opens on the real service and draws rows"):
         # A FOLDER AND A MACHINE, so the list has something in it. Both are
@@ -149,7 +149,7 @@ pkgs.testers.runNixOSTest {
             "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
         )
 
-        # THE WINDOW RUNS AS ROOT HERE, and `footer-vm` does the same. niri's
+        # THE WINDOW RUNS AS ROOT HERE, and `footer-vm` does the same. the compositor's
         # socket is in root's `XDG_RUNTIME_DIR`, so a window started as the
         # owner cannot reach it — the message is `Could not find wayland
         # compositor`, which says nothing about permissions.
@@ -172,14 +172,14 @@ pkgs.testers.runNixOSTest {
             ]:
                 machine.wait_until_succeeds(
                     "journalctl -u syncthing-window --no-pager | "
-                    f"grep -q '{marker}'",
+                    f"grep '{marker}' > /dev/null",
                     timeout=90,
                 )
         except Exception:
             print("--- the window's journal ---")
             print(machine.execute("journalctl -u syncthing-window --no-pager")[1])
-            print("--- niri's ---")
-            print(machine.execute("journalctl -u niri --no-pager")[1])
+            print("--- the compositor's ---")
+            print(machine.execute("journalctl -u compositor --no-pager")[1])
             raise
 
         said = machine.succeed("journalctl -u syncthing-window --no-pager")

@@ -154,7 +154,7 @@ in
 
         `minimal` leaves out Android, the compilers, the browser, the
         editor, the media, the font's 27 variants and the icon superpack —
-        about 17 GiB. It leaves out nothing of what MAKES the distro: niri,
+        about 17 GiB. It leaves out nothing of what MAKES the distro: the compositor,
         the footer, the primary font, the keyboard, the network, impermanence and the terminal stay.
 
         Switching a group back on is one line in `host.nix`: for example

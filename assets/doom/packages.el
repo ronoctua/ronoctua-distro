@@ -11,11 +11,6 @@
 ;; the `:lang nix` module's LSP (which handles the editing, not the REPL).
 (package! nix-mode)
 
-;; KDL — the compositor's config language. niri's config is KDL, and without
-;; this it opens as plain text, which is how a misplaced brace becomes a
-;; compositor that does not start.
-(package! kdl-mode)
-
 ;; WIT — the buffer/host boundary (`crates/ronoctua-protocol/wit/`). No mode
 ;; ships for it; `fundamental-mode` on the file that defines the whole contract
 ;; is worse than a rough approximation.

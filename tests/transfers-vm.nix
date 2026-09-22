@@ -32,14 +32,14 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   ronoctua-transfers,
   fonts,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-transfers";
@@ -62,7 +62,7 @@ pkgs.testers.runNixOSTest {
     virtualisation.diskSize = 4096;
 
     environment.systemPackages = [
-      niri
+      scroll
       ronoctua-shell
       ronoctua-transfers
       pkgs.python3
@@ -137,8 +137,8 @@ pkgs.testers.runNixOSTest {
     machine.start()
     machine.wait_for_unit("multi-user.target")
     start_xvfb()
-    start_niri("niri", "${niri}")
-    sock = socket_of("niri")
+    start_compositor("compositor", "${scroll}")
+    sock = socket_of("compositor")
 
     with subtest("the queue comes up as a unit, and not inside the footer"):
         # `--user` and `/run/user/0` because this VM runs as root; on the real
@@ -152,7 +152,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-transfers}/bin/ronoctua-transfers"
         )
         machine.wait_until_succeeds(
-            "journalctl -u queue --no-pager | grep -q 'transfer queue opened'",
+            "journalctl -u queue --no-pager | grep 'transfer queue opened' > /dev/null",
             timeout=60,
         )
 
@@ -161,16 +161,16 @@ pkgs.testers.runNixOSTest {
             "systemd-run --unit=footer ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
             "--setenv=LANG=pt_BR.UTF-8 "
-            f"--setenv=NIRI_SOCKET={sock} "
+            f"--setenv=SCROLLSOCK={sock} "
             "--setenv=RUST_LOG=ronoctua_shell=debug "
             "--setenv=RONOCTUA_LEADER=LEADER "
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'control socket opened'",
+            "journalctl -u footer --no-pager | grep 'control socket opened' > /dev/null",
             timeout=90,
         )
-        focus_niri()
+        focus_compositor()
 
     with subtest("a job enters the queue and reaches the modeline's SEGMENT"):
         # Big enough that the copy is still going when the modeline is read.
@@ -194,7 +194,7 @@ pkgs.testers.runNixOSTest {
         # nowhere on screen.
         try:
             machine.wait_until_succeeds(
-                "journalctl -u footer --no-pager | grep -q 'segment id=\"transfer\"'",
+                "journalctl -u footer --no-pager | grep 'segment id=\"transfer\"' > /dev/null",
                 timeout=60,
             )
         except Exception:
@@ -252,7 +252,7 @@ pkgs.testers.runNixOSTest {
             "XDG_RUNTIME_DIR=/run/user/0 "
             "${pkgs.python3}/bin/python3 /tmp/ask.py "
             """'{"ask":"list"}' read """
-            "| grep -q cancelled",
+            "| grep cancelled > /dev/null",
             timeout=60,
         )
         left = machine.succeed("ls -A /root/destination-pause").strip()
@@ -268,7 +268,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
         )
         press_key("t")
         press_key("t")

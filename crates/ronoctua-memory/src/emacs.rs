@@ -3,7 +3,7 @@
 //! # Why it is here and not in the brain
 //!
 //! Because this crate is the ONLY boundary with `/proc` — the same rule that
-//! keeps `niri-ipc` inside `ronoctua-niri` and NetworkManager inside
+//! keeps the compositor's IPC inside `ronoctua-scroll` and NetworkManager inside
 //! `ronoctua-network`. The brain asks; it does not open `/proc/<pid>/cmdline`
 //! itself, any more than it opens `/proc/pressure/cpu`.
 //!

@@ -10,13 +10,13 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
 
   # THE HEIGHT COMES FROM THE TOKENS, not from a nailed-down number. It used to
   # be `35`, from when the font was 14 px and the line height 1.25 — both
@@ -40,7 +40,7 @@ pkgs.testers.runNixOSTest {
     virtualisation.cores = 2;
 
     environment.systemPackages = [
-      niri
+      scroll
       ronoctua-shell
       pkgs.imagemagick
       pkgs.tesseract
@@ -87,7 +87,7 @@ pkgs.testers.runNixOSTest {
 
     def footer_height():
         """The surface's real height on screen, in px."""
-        w, h, x, y = niri_geometry()
+        w, h, x, y = compositor_geometry()
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         raw = machine.succeed(
             f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
@@ -107,7 +107,7 @@ pkgs.testers.runNixOSTest {
 
         Two lessons in one helper: `assert x == y` with no message hides the
         value that actually came, and measuring right after the paint log runs
-        ahead of the COMPOSITOR — the footer has drawn, niri has not composed yet.
+        ahead of the COMPOSITOR — the footer has drawn, the compositor has not composed yet.
         """
         seen_now = None
         for _ in range(attempts):
@@ -122,12 +122,25 @@ pkgs.testers.runNixOSTest {
 
 
 
-    def layers():
-        out_text = machine.succeed(f"${ronoctua-shell}/bin/niri-contract {sock}")
-        for line in out_text.splitlines():
-            if line.startswith("layers:"):
-                return line
-        raise AssertionError(f"niri-contract did not list layers:\n{out_text}")
+    def surfaces(unit="footer"):
+        """How many layer surfaces the footer has created — from ITS journal.
+
+        # Why the footer is counted and not the compositor asked
+
+        Because this compositor has no request that enumerates layer surfaces:
+        `get_tree` is toplevels, and nothing in its IPC answers "what is on the
+        layer shell". The previous one did, and this helper used to read a
+        `layers:` line out of `ronoctua-contract` — a line that can no longer
+        exist, so the helper could only ever raise.
+
+        What the invariant actually forbids is the FOOTER creating a second
+        surface when the band or the expansion grows, and the footer is the
+        only thing that can do that. It now says so once per surface
+        (`a layer surface created`, `surface.rs`), so counting those lines
+        answers the same question from the side that owns it.
+        """
+        said = machine.succeed(f"journalctl -u {unit} --no-pager")
+        return said.count("a layer surface created")
 
 
     def notify(summary, urgency="normal", body=""):
@@ -156,8 +169,8 @@ pkgs.testers.runNixOSTest {
     machine.start()
     machine.wait_for_unit("multi-user.target")
     start_xvfb()
-    start_niri("niri", "${niri}")
-    sock = socket_of("niri")
+    start_compositor("compositor", "${scroll}")
+    sock = socket_of("compositor")
 
     with subtest("the footer comes up with the notification daemon on the bus"):
         # A SESSION bus of its own: the daemon claims
@@ -179,19 +192,19 @@ pkgs.testers.runNixOSTest {
             # store would silently write nowhere and the last subtest would be
             # measuring an absence.
             "--setenv=HOME=/root "
-            f"--setenv=NIRI_SOCKET={sock} "
+            f"--setenv=SCROLLSOCK={sock} "
             "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
             "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_notify=debug "
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'the notification daemon is on the bus'",
+            "journalctl -u footer --no-pager | grep 'the notification daemon is on the bus' > /dev/null",
             timeout=60,
         )
         # THE PAINTING, and not only the daemon: measuring the height before the
         # first `configure` gives zero pixels, with no error at all.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'footer layout resolved'",
+            "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null",
             timeout=90,
         )
         wait_for_height(FOOTER)
@@ -209,7 +222,7 @@ pkgs.testers.runNixOSTest {
         # text starts with a PUA glyph, and `body= 2` does not match
         # `body=<glyph>2`.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'pending=2'", timeout=30
+            "journalctl -u footer --no-pager | grep 'pending=2' > /dev/null", timeout=30
         )
 
     with subtest("the band appears ABOVE the modeline, on the SAME surface"):
@@ -228,17 +241,17 @@ pkgs.testers.runNixOSTest {
         # A brief notification is ONE line above the pair. The log says which,
         # and the height is what proves it reached the screen.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'band=1'", timeout=30
+            "journalctl -u footer --no-pager | grep 'band=1' > /dev/null", timeout=30
         )
         wait_for_height(WITH_ONE, attempts=5)
 
         # THE CLAUSE ONLY THE VM PROVES. The owner asked for a line above the
         # modeline and not a floating toast; what makes that legal is that it is
         # the footer's own surface growing upwards. One surface, still.
-        c = layers()
-        print(c)
-        assert c.count("ronoctua-footer") == 1, (
-            f"the band created a SECOND surface (invariant 14):\n{c}"
+        how_many = surfaces()
+        print(f"layer surfaces the footer created: {how_many}")
+        assert how_many == 1, (
+            f"the band created a SECOND surface (invariant 14): {how_many}"
         )
 
     with subtest("the critical one goes away on its own, and stays unread"):
@@ -251,7 +264,7 @@ pkgs.testers.runNixOSTest {
         # three, and the third is the row of actions — this one has none, and a
         # band with an empty line is a band lying about its size.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'band=2 loud=true'", timeout=30
+            "journalctl -u footer --no-pager | grep 'band=2 loud=true' > /dev/null", timeout=30
         )
         wait_for_height(WITH_TWO, attempts=5)
         # `long` is 20 s. Well past it, the band is gone and the pair is back.
@@ -322,14 +335,14 @@ pkgs.testers.runNixOSTest {
         expanded = footer_height_above(FOOTER)
         assert expanded > FOOTER, f"the manager did not expand: {expanded} px"
 
-        c = layers()
-        print(c)
-        assert c.count("ronoctua-footer") == 1, (
-            f"the manager created a SECOND surface (invariant 14):\n{c}"
+        how_many = surfaces()
+        print(f"layer surfaces the footer created: {how_many}")
+        assert how_many == 1, (
+            f"the manager created a SECOND surface (invariant 14): {how_many}"
         )
 
         # And the content is there, on the screen, below the footer's two lines.
-        w, h, x, y = niri_geometry()
+        w, h, x, y = compositor_geometry()
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         machine.succeed(
             f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
@@ -360,7 +373,7 @@ pkgs.testers.runNixOSTest {
         assert int(before) >= 4, f"the history holds {before} records"
         machine.succeed("systemctl restart footer")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'notification history read'",
+            "journalctl -u footer --no-pager | grep 'notification history read' > /dev/null",
             timeout=60,
         )
         after = machine.succeed(

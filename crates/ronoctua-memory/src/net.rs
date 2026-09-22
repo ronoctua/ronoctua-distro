@@ -5,7 +5,7 @@
 //! # Why here and not in `ronoctua-network`
 //!
 //! Because this crate is the border with `/proc`, the same rule that makes
-//! `ronoctua-niri` the only one that speaks to the compositor. What
+//! `ronoctua-scroll` the only one that speaks to the compositor. What
 //! `ronoctua-network` knows is what NetworkManager says; what a listening
 //! port is, the daemon has no idea about — it is a row in `/proc/net/tcp`,
 //! and a second crate opening `/proc` would be the second border this one

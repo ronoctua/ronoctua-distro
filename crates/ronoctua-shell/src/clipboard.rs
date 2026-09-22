@@ -91,7 +91,7 @@ struct Watcher {
 ///
 /// It gives back `false` when there is no watching — **it is not fatal**:
 /// without it the whole footer goes on working, only the history stays empty.
-/// It is the same criterion as the control socket and niri's IPC.
+/// It is the same criterion as the control socket and the compositor's IPC.
 pub fn watch(channel: Sender<ronoctua_clipboard::Entry>) -> bool {
     let Ok(conn) = Connection::connect_to_env() else {
         tracing::warn!("no Wayland connection for the clipboard watcher");

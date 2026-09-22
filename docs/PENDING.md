@@ -350,7 +350,7 @@ lado, e o `render-png --scale 2` de um buffer com `Command::Svg`.
 
 As dez portas seguem a escala da tela (`hidpi.rs`, check `every-window-knows-its-scale`), e a
 escala que elas seguem é a INTEIRA: `wl_surface::set_buffer_scale` só aceita inteiro. Numa saída que
-o niri dirige em 1,5, o compositor diz 2 ao cliente e reduz o resultado — o que é nítido, e é uma
+o compositor dirige em 1,5, ele diz 2 ao cliente e reduz o resultado — o que é nítido, e é uma
 reamostragem a mais.
 
 O protocolo tem a resposta (`wp_fractional_scale_v1` + `wp_viewporter`): o cliente pede a escala
@@ -382,20 +382,52 @@ quer um tamanho em CÉLULAS — 80×24 é a medida dele, não 640×400.
 - acabou quando: os nove números saem de `assets/tokens/`, e o terminal declara o dele na unidade em
   que ele pensa
 
-### 0.000017. Os dois fragmentos do niri são incluídos por caminho literal · pequeno
+### 0.000017. O keymap do aninhado espera UMA medição para poder sumir · minúsculo
 
-`nix/modules/niri.nix` escreve `include "/home/<usuário>/.config/ronoctua/niri-theme.kdl"` e o mesmo
-para `niri-display.kdl`, com o caminho montado no build. Quem escreve os dois arquivos é o shell, por
-`ronoctua_store::config_dir()` — que respeita `XDG_CONFIG_HOME`. Numa máquina onde essa variável
-aponta para outro lugar, o shell grava num caminho que o niri não abre, **em silêncio**: a vista
-mostra a escala escolhida, o arquivo existe, e o compositor nunca a lê.
+`nix/keyboard-nested.nix` tira o Super do keymap do laço aninhado, e existe por um defeito medido:
+um modificador que descia dentro da janela e subia fora dela ficava preso para sempre, e como um
+bind é casado por igualdade, um bit sobrando matava todos os atalhos da sessão.
 
-Não é deste entregável (o tema já era assim), mas é este que fez o arquivo carregar decisão de tela.
-A saída provavelmente é o niri aprender a incluir por variável, ou o módulo declarar o
-`XDG_CONFIG_HOME` que assume — as duas mexem em coisa que não é do shell.
+**O que tornava isso incurável era o estado ser CONTADO** — pressões contra soltas —, e o backend
+Wayland do wlroots não conta: ele implementa `.modifiers` e passa a máscara do HOST direto
+(`wlr_keyboard_notify_modifiers`, `backend/wayland/seat.c`), e o handler de tecla manda
+`update_state = false`. O estado aqui é ESPELHO do de lá, nunca derivado, e o host reenvia a máscara
+a cada troca de foco.
 
-- acabou quando: o caminho que o niri inclui e o que o shell escreve saem da mesma fonte, ou há uma
-  frase na tela quando eles divergem
+Isso é LEITURA, não medição, e é por isso que o arquivo continua de pé. **A medição é um gesto**: no
+`nix run .#dev`, apertar um atalho do host construído sobre Super, deixar o host levar a janela,
+voltar, e tentar a leader. Se ela abrir, somem três coisas — este arquivo, o check
+`nested-survives-a-stray-modifier` e o segundo bind de leader com um Shift que ninguém apertou.
+
+- acabou quando: o gesto foi feito e a leader abriu, ou não abriu e o arquivo ganhou a nova medição
+
+### 0.000017d. DOIS PONTEIROS ao mesmo tempo, que é a razão da troca · a medir
+
+A migração foi feita por causa disto e ainda não foi exercida: o dono precisa de vários cursores ao
+mesmo tempo para os apps que pretende escrever, e o compositor anterior dirigia um assento com um
+ponteiro só. Este é um fork do sway, logo herda `seat <nome> { … }` e o `attach` por dispositivo,
+e é isso que ainda não foi posto à prova.
+
+**O teste é do dono e é um gesto**: dois mouses no TTY, com uma configuração de dois assentos, e os
+dois cursores se movendo ao mesmo tempo. Nada na distro declara um segundo assento hoje — o
+`nix/modules/scroll.nix` não escreve nenhum —, então o que está pendente é a medição E, se ela
+passar, de onde esse assento vai ser declarado.
+
+- acabou quando: os dois cursores andaram, e o segundo assento é declarado em um lugar só
+
+### 0.000017c. Espaço de trabalho VAZIO não existe mais · minúsculo, e é uma perda declarada
+
+`LEADER TAB 1..9` continua significando sempre a mesma coisa: o comando é `workspace number N`, que
+nomeia o número e cria o espaço se ele não existir. O que se perdeu é o espaço vazio APARECER — este
+compositor não tem espaço persistente nem pré-criação (conferido no `scroll.5`: há `workspace <nome>
+output/gaps/layout_default_mode/exec` e nenhuma forma de declarar um que exista vazio), e um `exec`
+visitando 1..9 na partida não resolve, porque um espaço vazio é destruído assim que se sai dele.
+
+Na prática: a visão geral mostra os espaços com janela, e os outros aparecem quando alguém põe algo
+neles. Recriá-los exigiria um daemon nosso segurando nove espaços abertos, o que é desproporcional ao
+que se ganha.
+
+- acabou quando: o dono disser que faz falta, ou o compositor ganhar espaço persistente
 
 ### 0.000017b. A palavra de uma recusa sem nome sai em inglês nas quatro vistas · pequeno
 
@@ -429,14 +461,16 @@ GTK e Qt leem. Não há conserto óbvio que não seja reimplementar a camada. Fi
 - acabou quando: o dono decide que é aceitável e isso vira uma linha no ARCHITECTURE, ou aparece
   um caminho declarativo que os toolkits leiam a quente
 
-### 0.000018. A disposição anda 10 px por tecla, e cada tecla recarrega o niri · médio
+### 0.000018. A disposição anda 10 px por tecla, e cada tecla recarrega o compositor · médio
 
 `NUDGE` são 10 px lógicos, e a razão está escrita: um passo que a pessoa consegue segurar. O custo
 não estava. Passar um monitor de 1920 para o outro lado do vizinho são 192 teclas, e cada uma emite
-um `Order::Keep`: uma leitura (`/sys/class/drm` mais duas conexões ao niri), uma reescrita do
-fragmento — que é um rename, logo **uma recarga inteira da configuração do compositor** —, seis
-chamadas de IPC dizendo o que o arquivo diz, e a leitura que o `watch` tira depois. Três leituras e
-uma recarga por repetição de tecla.
+um `Order::Keep`: uma leitura (`/sys/class/drm` mais duas conexões ao compositor), uma reescrita do
+fragmento, **a releitura que o `Keep` pede em seguida — que é uma carga inteira da configuração** —,
+e a leitura que o `watch` tira depois. Três leituras e uma recarga por repetição de tecla.
+
+O rename em si deixou de custar (este compositor não vigia arquivo nenhum); quem custa é o pedido de
+releitura, que é obrigatório justamente por isso.
 
 **Duas saídas, e a escolha é do dono.** Ou as setas ENCOSTAM a tela nas bordas dos vizinhos (o
 `beside_said` já fala nessa linguagem — "à direita de eDP-1"), o que faz do gesto dois ou três
@@ -466,37 +500,36 @@ dizendo que a tela está apagada.
 A vista de telas mexe em modo, taxa, escala, rotação, posição, VRR e brilho. Duas coisas que as
 pessoas esperam de uma tela ficaram de fora, e por motivos diferentes.
 
-**Luz noturna** (temperatura de cor por horário). Dá para fazer: o niri implementa
-`wlr-gamma-control` e o `set_gamma` está lá. Só que **só no backend TTY** — no `winit`, que é onde
-o loop aninhado e todo teste deste repositório rodam, a chamada devolve "não suportado"
-(`src/handlers/mod.rs`: `Ok(0) => None, // Setting gamma is not supported`). Ou seja: dá para
-escrever, não dá para **provar**, e este repositório não chama de pronto o que não fotografou. O
-dono decidiu deixar de fora sabendo disso.
+**Luz noturna** (temperatura de cor por horário). Dá para fazer: o compositor registra o
+`wlr_gamma_control_manager_v1` e liga a cena a ele (`sway/server.c`). Só que quem aplica a rampa é o
+backend, e fora do DRM não há rampa a aplicar — o loop aninhado e todo teste deste repositório rodam
+em `x11` ou `headless`. Ou seja: dá para escrever, não dá para **provar**, e este repositório não
+chama de pronto o que não fotografou. O dono decidiu deixar de fora sabendo disso, e a troca de
+compositor não mudou nada disso — **nem foi remedido**, o que está escrito aqui para não virar
+afirmação.
 
 **Como saber que acabou:** um cliente `wlr-gamma-control` nosso, a rampa calculada da temperatura em
 kelvin, hora de início e fim na ficha da tela — e a prova na máquina do dono, por olho, dita como
 prova por olho no relatório.
 
-**Espelhamento.** Não é adiamento, é ausência do compositor: o niri **não espelha telas**. Não há
-`mirror`, não há `clone`, e nenhuma `OutputAction` que diga isso. Uma linha na tela oferecendo
-espelhar seria um interruptor que não interrompe — que é justamente o que o check
+**Espelhamento.** Não é adiamento, é ausência do compositor, e continua sendo depois da troca: não
+há `mirror` nem `clone` entre os subcomandos de `output` (conferido no `scroll-output.5`). Uma linha
+na tela oferecendo espelhar seria um interruptor que não interrompe — que é justamente o que o check
 `switches-that-do-nothing-say-so` existe para recusar. **Como saber que acabou:** o dia em que o
-niri fixado tiver como espelhar, a linha entra na ficha de um monitor, ao lado da rotação.
+compositor fixado tiver como espelhar, a linha entra na ficha de um monitor, ao lado da rotação.
 
-### 0.00003. A profundidade de bits da tela espera o niri fixado · minúsculo
+### 0.00003. A profundidade de bits existe no compositor e não na vista · minúsculo
 
 A vista de telas mexe em modo, taxa, escala, rotação, posição e VRR. **Não mexe na profundidade de
-bits**, e não é esquecimento: o `niri-next` tem `max_bpc` na saída e uma ação `MaxBpc`; o niri
-**fixado** (`v26.04`, `8ed0da4`) não tem nenhum dos dois e responde `error parsing request`.
+bits**, e a razão MUDOU com a troca de compositor: antes era ausência dele — o fixado não tinha o
+botão e respondia com um erro de parsing —, e agora o botão existe. `output <nome> render_bit_depth
+6|8|10` está no `scroll-output.5`, e a partir de 10 o compositor implicitamente o eleva quando o HDR
+está ligado.
 
-Quem descobriu isso foi o `niri-contract`, na primeira execução contra um compositor de verdade —
-que é exatamente para isso que ele existe. Uma linha na tela para um botão que o compositor que a
-gente entrega não sabe girar é linha morta, então ela não foi desenhada.
-
-`ronoctua_niri::Output` já lê a saída de um niri mais novo sem quebrar (há teste). **Como saber que
-acabou:** quando o `flake.lock` subir para um niri que tenha `MaxBpc`, voltam três coisas — o campo
-`max_bpc` em `Output`, o `Ask::MaxBpc` (o valor vai como **texto**, `"8"`, embora seja lido como
-número) e a sonda no `niri-contract`. Aí a linha entra na ficha de um monitor, ao lado do VRR.
+Então isto deixou de ser espera e virou trabalho: um `Ask` novo, um feito declarado em
+`assets/compositor-deeds.nix`, um campo em `Wanted` e uma linha no fragmento, mais a leitura de
+volta para confirmar (porque `Ok` não é "aconteceu"). **Como saber que acabou:** a linha na ficha de
+um monitor, ao lado do VRR, com o valor lido de volta batendo com o pedido.
 
 
 ### 0.00004. A rede não sabe nomes, e três coisas do plano ficaram medidas · pequeno cada
@@ -774,7 +807,7 @@ não tem tratador de `SIGTERM`, e escrever um exigiria `unsafe` ou um crate novo
 
 ### 3. Desempenho medido só em host não-NixOS · pequeno
 
-`nix run .#bench` mede num niri **aninhado** dentro de outro compositor, com o contorno de driver de
+`nix run .#bench` mede num compositor **aninhado** dentro de outro, com o contorno de driver de
 `nix/graphics-host.nix`. O caminho gráfico da distro instalada é mais curto.
 
 - acabou quando: o mesmo comando roda num NixOS instalado e os números entram no `ARCHITECTURE.md`

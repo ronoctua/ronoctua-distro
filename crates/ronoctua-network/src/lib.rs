@@ -1,6 +1,6 @@
 //! Network — the only crate that talks to NetworkManager.
 //!
-//! Same boundary as `ronoctua-niri`, and for the same reason: when two
+//! Same boundary as `ronoctua-scroll`, and for the same reason: when two
 //! parts of the system ask "am I connected?" of different places,
 //! the day comes when they disagree and nobody knows which to believe.
 //!
@@ -1280,7 +1280,7 @@ impl Manager {
 /// # Why a thread, and why not a timer
 ///
 /// `RequestScan` returns at once and the radio answers seconds later. Blocking
-/// the footer's loop would freeze keyboard, painting and niri events for those
+/// the footer's loop would freeze keyboard, painting and compositor events for those
 /// seconds — the same `systemd-run --scope` trap AGENTS.md records. And polling
 /// on a timer would spend a frame on a list that has not moved.
 ///

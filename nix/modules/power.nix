@@ -106,7 +106,7 @@ in
 
     services.udev.extraRules = lib.concatMapStringsSep "\n" grant attributes + "\n";
 
-    # THE FLOOR, in both places `RONOCTUA_THEME` is exported (`niri.nix`):
+    # THE FLOOR, in both places `RONOCTUA_THEME` is exported (`scroll.nix`):
     # the footer is a user unit and inherits the manager's environment, not a
     # login shell's.
     systemd.user.services.ronoctua-footer.environment.RONOCTUA_POWER_PROFILE = cfg.profile;

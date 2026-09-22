@@ -1,11 +1,17 @@
 # The leader is the Super key ON ITS OWN — §7.4.
 #
-# # Why this is not niri config
+# # Why this is not compositor config
 #
-# niri refuses a bind on a lone modifier: `Mod { … }` gives `invalid key:
-# Mod`. And it has no trigger on RELEASE — the bind properties are
-# `allow-when-locked`, `allow-inhibiting`, `cooldown-ms`, `repeat` and
-# `hotkey-overlay-title`, and none of them is "on-release".
+# The compositor CAN express the shape — `bindsym --release Super_L …` binds a
+# lone modifier keysym and fires when it goes up — and it still cannot do the
+# job, because `--release` does not tell a TAP from a HOLD.
+#
+# Read in `sway/input/keyboard.c`: a release binding that matches at PRESS time
+# is stored in `held_binding`, and it executes as soon as every key in the
+# history has been released (`key_history_is_released`). Nothing clears it when
+# another key is pressed in between. So `Super+d` sets the binding on Super's
+# press, runs `d`'s own binding, and then fires the leader as well when the
+# hand comes off — every chord in the system would open the list behind itself.
 #
 # This is not a limitation to work around: a modifier *is* a modifier. For
 # the same physical key to be a modifier when HELD and a command when
@@ -15,9 +21,9 @@
 # # What keyd does, exactly
 #
 # `overload(meta, f13)`: while the key is held it is the Meta modifier —
-# so `Super+←` still reaches niri as `Mod+Left`. If it is released without
-# any other key having been pressed, it emits `F13`, which niri binds to
-# the leader.
+# so `Super+←` still reaches the compositor as `Mod4+Left`. If it is released
+# without any other key having been pressed, it emits `F13`, which the
+# compositor binds to the leader.
 #
 # # The risk, and why it is acceptable
 #

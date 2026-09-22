@@ -7,13 +7,14 @@
 //! # Why this is not the same file the compositor reads
 //!
 //! There are two, and they hold different things.
-//! [`crate::fragment`] writes KDL for niri, and niri is the only reader; this
-//! one is ours, and holds the same decisions plus the ones niri knows nothing
-//! about — a monitor's own brightness, for one. Writing only the KDL would
-//! mean parsing KDL to read our own preferences back, which is niri's
+//! [`crate::fragment`] writes `output` blocks for the compositor, and the
+//! compositor is the only reader; this one is ours, and holds the same
+//! decisions plus the ones the compositor knows nothing about — a monitor's own
+//! brightness, for one. Writing only the fragment would mean parsing the
+//! compositor's config grammar to read our own preferences back, which is that
 //! grammar leaking into a crate that has no business knowing it.
 //!
-//! Keyed by [`ronoctua_niri::Output::naming`] — the monitor's description
+//! Keyed by [`ronoctua_compositor::Output::naming`] — the monitor's description
 //! when that can only be this monitor, and the CONNECTOR when it cannot. A
 //! monitor with a serial keeps its settings across a different port and
 //! across a week in a drawer; one without a serial keeps them per port,
@@ -151,8 +152,8 @@ mod tests {
         let old: Preferences = serde_json::from_str("{}").unwrap();
         assert_eq!(old, Preferences::default());
         let half: Preferences =
-            serde_json::from_str(r#"{"screens":{"A B C":{"first":true}}}"#).unwrap();
-        assert!(half.of("A B C").first);
+            serde_json::from_str(r#"{"screens":{"A B C":{"vary":true}}}"#).unwrap();
+        assert!(half.of("A B C").vary);
         // AND A FILE FROM A NEWER ONE. `display.json` used to carry a
         // `brightness` map; a machine that downgrades must not lose its
         // screens over a key this version does not know.

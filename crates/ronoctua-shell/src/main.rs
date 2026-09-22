@@ -18,17 +18,19 @@
 //!
 //! # What this binary does NOT do
 //!
-//! - **It does not tile windows.** What does that is Niri (invariant 4). One
-//!   `xdg_toplevel` per native buffer, and the compositor decides where they go.
-//! - **It does not talk to Niri through anything other than IPC or layer-shell**
-//!   (invariant 3). There is no fork and no patch of the compositor.
+//! - **It does not tile windows.** What does that is the compositor
+//!   (invariant 4). One `xdg_toplevel` per native buffer, and the compositor
+//!   decides where they go.
+//! - **It does not talk to the compositor through anything other than IPC or
+//!   layer-shell** (invariant 3). There is no fork and no patch of it, and no
+//!   crate of ours but `ronoctua-scroll` knows which compositor it is.
 //! - **It does not draw a fullscreen surface reimplementing layout.** That
-//!   would throw Niri away and is forbidden (section 7.5).
+//!   would throw the compositor away and is forbidden (section 7.5).
 //!
 //! # This milestone's state
 //!
 //! Milestone 4: the surface comes up in the right font and the modeline reflects the focused
-//! buffer, fed by Niri's event stream. The leader and which-key arrive in 5;
+//! buffer, fed by the compositor's event stream. The leader and which-key arrive in 5;
 //! notifications and tray in 6.
 
 // `deny`, not `forbid`: `surface.rs` needs ONE unsafe block to pass
@@ -119,8 +121,11 @@ mod update_window;
 
 /// The layer-shell surface's namespace.
 ///
-/// `niri` matches layer rules by this name — see the `layer-rule` in
-/// `nix/modules/niri.nix`. Changing it here requires changing it there.
+/// It is what the layer surface calls itself on the wire. Nothing in the
+/// compositor's configuration matches on it today — the previous one had a
+/// `layer-rule` keyed by this string, and this one has no equivalent that we
+/// use — so it is an identity rather than a join, and it is the name a
+/// `WAYLAND_DEBUG` trace shows when one is looking for our surface.
 pub const NAMESPACE: &str = "ronoctua-footer";
 
 fn main() -> Result<()> {
@@ -211,7 +216,7 @@ fn main() -> Result<()> {
                 .with_context(|| format!("send `{id}` to buffer {pid}"));
         }
         // It opens a native buffer in a window of its OWN. What decides where it
-        // goes is niri (invariant 4) — the shell does not tile.
+        // goes is the compositor (invariant 4) — the shell does not tile.
         Some("buffer") => {
             let path = std::env::args()
                 .nth(2)
@@ -227,20 +232,25 @@ fn main() -> Result<()> {
             )
             .context("host the buffer");
         }
-        // It emits the CHORD binds in KDL, for niri's config.
+        // It emits the CHORD binds, for the compositor's config.
         //
-        // It exists so the chord does not become a second table: what it
-        // does is in `actions.rs`, and the KDL comes from there. The prefix is an argument
-        // because the leader is `Mod` in production and `Alt` in the nested loop.
-        Some("export-niri-binds") => {
+        // It exists so the chord does not become a second table: what it does
+        // is in `actions.rs`, and the command text comes from there. The
+        // prefix is an argument because the leader is `Mod` in production and
+        // `Alt` in the nested loop.
+        Some("export-binds") => {
             let prefix = std::env::args()
                 .nth(2)
-                .context("usage: ronoctua-shell export-niri-binds <prefix>")?;
+                .context("usage: ronoctua-shell export-binds <prefix>")?;
             for chord in actions::full_chords() {
-                for (key, kdl) in chord.binds {
+                for (key, said) in chord.binds {
                     // `Shift+1` becomes `Mod+Shift+1`: the prefix goes in
                     // front, and the Shift already came with the key.
-                    println!("    {prefix}+{key}{} {{ {kdl}; }}", repeat_of(&kdl));
+                    println!(
+                        "bindsym{}{} {prefix}+{key} {said}",
+                        repeat_of(&said),
+                        region_of(&key)
+                    );
                 }
             }
             // THE EMERGENCY BINDS come out WITHOUT the leader's prefix — and that is what
@@ -248,42 +258,25 @@ fn main() -> Result<()> {
             // same table for the same reason as the chords: written by hand in the
             // two configs, one day they would diverge, and the day one finds out is
             // the day nothing works any more.
-            for (key, kdl, _) in actions::emergency() {
-                println!("    {key}{} {{ {kdl}; }}", repeat_of(&kdl));
+            for (key, said, _) in actions::emergency() {
+                println!("bindsym{}{} {key} {said}", repeat_of(&said), region_of(key));
             }
             // AND THE MEDIA KEYS, bare for a different reason — see
             // `actions::media`. They come out of the same table for the same
             // reason as everything above: a key written in two configs is a
             // key that one day differs between them.
-            for (key, kdl, _) in actions::media() {
-                println!("    {key}{} {{ {kdl}; }}", repeat_of(&kdl));
+            for (key, said, _) in actions::media() {
+                println!("bindsym{}{} {key} {said}", repeat_of(&said), region_of(key));
             }
             return Ok(());
         }
-        // The `window-rule`s, for the same reason as the binds above: the
+        // The window rules, for the same reason as the binds above: the
         // monitor's `app_id` is set in `terminal.rs` and read by the
-        // compositor's config, and a string written at both ends drifts. The two
-        // configs (`nix/modules/niri.nix` and `nix/dev.nix`) take this in.
-        Some("export-niri-window-rules") => {
+        // compositor's config, and a string written at both ends drifts. The
+        // two configs (`nix/modules/scroll.nix` and `nix/dev.nix`) take this in.
+        Some("export-window-rules") => {
             print!("{}", terminal::floating_rules());
             return Ok(());
-        }
-        // The process for an X11 buffer's scope: it starts ITS satellite and
-        // runs the app inside. It is not meant to be called by hand — the footer's
-        // `run_command` uses it; it exists as a subcommand because the scope needs ONE
-        // process that spawns both into the same cgroup (section 9.1).
-        Some("satellite") => {
-            let args: Vec<String> = std::env::args().skip(2).collect();
-            let (display, rest) = args
-                .split_first()
-                .context("usage: ronoctua-shell satellite <display> <program> [args]")?;
-            let display: u8 = display
-                .parse()
-                .with_context(|| format!("`{display}` is not a display number"))?;
-            let (program, args) = rest
-                .split_first()
-                .context("usage: ronoctua-shell satellite <display> <program> [args]")?;
-            return foreign::satellite_of(display, program, args).context("satellite");
         }
         // A terminal in a window of its own. With no argument it starts `$SHELL`;
         // with one, it runs what is asked — and it is what the VM test uses so as not
@@ -429,7 +422,7 @@ fn main() -> Result<()> {
         }
         // THE SAME TERMINAL, under the monitor's `app_id`. It is a subcommand and
         // not a flag on the one above because what changes is the window's
-        // IDENTITY, which is what niri's rule reads to float it — see
+        // IDENTITY, which is what the compositor's rule reads to float it — see
         // `terminal::APP_ID_MONITOR`. The program is required: a monitor with no
         // monitor to run is a floating window with a shell in it.
         Some("monitor") => {
@@ -491,9 +484,7 @@ fn main() -> Result<()> {
                 .all_ones()
                 .map(|c| c.id)
                 .filter(|id| {
-                    !id.starts_with("niri-")
-                        && !by_name_only.contains(id)
-                        && !reachable.contains(id)
+                    !id.starts_with("wm-") && !by_name_only.contains(id) && !reachable.contains(id)
                 })
                 .collect();
             anyhow::ensure!(
@@ -528,21 +519,47 @@ fn main() -> Result<()> {
 ///
 /// # Why it is not always `false`
 ///
-/// niri repeats a bind while the key is held, and that is **desirable**
-/// for what the compositor applies: holding `LEADER+←` keeps moving the focus,
-/// as holding an arrow in an editor keeps moving. What must not repeat
-/// is what **spawns a process** — holding `LEADER+RET` would open a queue of
-/// terminals, and holding the alternative leader would reopen the sequence on every
-/// repeat, which is the defect that was being fixed.
+/// A bind repeats while the key is held, and that is **desirable** for what
+/// the compositor applies: holding `LEADER+←` keeps moving the focus, as
+/// holding an arrow in an editor keeps moving. What must not repeat is what
+/// **starts a process** — holding `LEADER+RET` would open a queue of
+/// terminals, and holding the alternative leader would reopen the sequence on
+/// every repeat, which is the defect that was being fixed.
 ///
-/// The rule comes from the action itself, and not from an extra column in the table: if it
-/// starts with `spawn`, it creates a process.
-fn repeat_of(kdl: &str) -> &'static str {
-    if kdl.starts_with("spawn ") {
-        " repeat=false"
+/// The rule comes from the command itself, and not from an extra column in
+/// the table: if it starts with `exec`, it creates a process.
+///
+/// THE FLAG GOES BEFORE THE KEY, which is why this returns a prefix rather
+/// than a suffix: `bindsym --no-repeat Ctrl+Alt+space exec …`.
+fn repeat_of(said: &str) -> &'static str {
+    if said.starts_with("exec ") {
+        " --no-repeat"
     } else {
         ""
     }
+}
+
+/// A MOUSE BIND REACHES THE TITLE BAR AND NOTHING ELSE, unless it says so.
+///
+/// That is this compositor's default (`scroll.5`: "mouse bindings are only
+/// triggered when over the title bar"), and this distro draws NO title bar —
+/// `default_border pixel` is the whole decoration, and invariant 15 is why.
+/// So the two wheel chords would be bound to a region that does not exist on
+/// screen: the config would load clean, the manual would teach them, and
+/// scrolling with the leader held would do nothing anywhere.
+///
+/// `--whole-window` also makes them work over an empty workspace, which is
+/// where somebody scrolling between workspaces most often is.
+///
+/// BY THE KEY AND NOT BY THE COMMAND, unlike `repeat_of` above: what decides
+/// is whether the thing pressed is a BUTTON, and the compositor's own spelling
+/// for one is `button1`…`button9` or a `BTN_` event name.
+fn region_of(key: &str) -> &'static str {
+    let button = key
+        .rsplit('+')
+        .next()
+        .is_some_and(|k| k.starts_with("button") || k.starts_with("BTN_"));
+    if button { " --whole-window" } else { "" }
 }
 
 /// How the leader appears on screen.
@@ -555,7 +572,7 @@ fn repeat_of(kdl: &str) -> &'static str {
 /// label that corresponds to no key does not help, it gets in the way.
 ///
 /// Whoever defines the bind defines the label: `nix/dev.nix` in the nested loop,
-/// `nix/modules/niri.nix` in production. A single truth.
+/// `nix/modules/scroll.nix` in production. A single truth.
 ///
 /// Without the variable, it falls back to `SPC` — Doom's notation, which is where the
 /// concept comes from, and which serves whoever runs the binary by hand.

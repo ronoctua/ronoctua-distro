@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-display"
-description = "The one boundary with the screens: niri's outputs, the kernel's backlight, and DDC/CI over I2C."
+description = "The one boundary with the screens: the compositor's outputs, the kernel's backlight, and DDC/CI over I2C."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,9 +11,9 @@ publish.workspace = true
 #
 # It is the frontier with the SCREEN: what a monitor can do, what it is doing,
 # and how bright it is. It is NOT a second frontier with the compositor —
-# invariant 3 keeps that in `ronoctua-niri`, and everything about modes,
+# invariant 3 keeps that in `ronoctua-scroll`, and everything about modes,
 # scales and positions goes through that crate's types. Nothing here writes
-# niri's JSON.
+# the compositor's JSON.
 #
 # NO `[[bin]]`: nothing here is a daemon. The footer raises the threads, the
 # same arrangement as `ronoctua-power`.
@@ -25,9 +25,10 @@ anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# The compositor's side of a screen. This crate never speaks niri's protocol
-# itself; it asks with `ronoctua_niri::Ask` and reads `ronoctua_niri::Output`.
-ronoctua-niri = { path = "../ronoctua-niri" }
+# The compositor's side of a screen. This crate never speaks that protocol
+# itself; it asks with `ronoctua_compositor::Ask` and reads its `Output`.
+ronoctua-compositor = { path = "../ronoctua-compositor" }
+ronoctua-scroll = { path = "../ronoctua-scroll" }
 # `/sys` and `/proc` have ONE declared frontier, and the roots come from there
 # so a test can point the whole crate at a directory it built.
 ronoctua-memory = { path = "../ronoctua-memory" }

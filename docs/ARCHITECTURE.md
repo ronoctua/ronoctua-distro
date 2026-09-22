@@ -22,7 +22,7 @@ um compromisso: nada aqui precisa se parecer com nenhum outro programa.
 | Área | Decisão | Alternativa descartada |
 |---|---|---|
 | Sistema | NixOS mínimo, tudo por flakes | qualquer coisa imperativa |
-| Compositor | Niri upstream, sem fork nem patch | fork com integração direta |
+| Compositor | Scroll upstream, sem fork nem patch, atrás de um contrato | fork com integração direta |
 | Chrome | rodapé de duas linhas, só | barra, dock, popup de canto |
 | Sistema de arquivos | btrfs | ZFS (out-of-tree), bcachefs (fora do mainline na 6.18) |
 | Boot | systemd-boot + lanzaboote | GRUB |
@@ -331,7 +331,7 @@ nenhum; quem executa conhece os cinco. Medido no fecho: o workspace passou a cit
 o embrulho cita os cinco — 1,41 GiB contra 1,42.
 
 Um embrulho e não uma variável em cada lançador porque são **nove lançadores** — a unidade de
-usuário, os binds do niri, o laço aninhado, seis VMs —, e variável que um deles esquece não dá erro:
+usuário, os binds do compositor, o laço aninhado, seis VMs —, e variável que um deles esquece não dá erro:
 dá uma tecla que para de abrir janela. `--inherit-argv0` não é enfeite: o `nix run .#diagnostics` acha
 o rodapé com `pgrep -f "bin/ronoctua-shell$"`, e sem ele todo processo apareceria como
 `.ronoctua-shell-wrapped` — o diagnóstico cegaria justamente quando é ele que se está rodando.
@@ -654,7 +654,7 @@ em que a funcionalidade **parece** pronta e a documentação confirma.
 Agora é `wl-copy`, e a razão não é preguiça: quem é **dono** da seleção precisa continuar vivo para
 servi-la quando alguém colar, e a janela do buffer morre quando se fecha o navegador — copiar um
 glifo **para** fechar e colar é o uso. Dono que morre junto entregaria uma área de transferência
-vazia, que é pior do que não copiar. É a mesma escolha do `niri msg action`: o cliente que já existe,
+vazia, que é pior do que não copiar. É a mesma escolha do `scrollmsg`: o cliente que já existe,
 em vez de reimplementar o outro lado do protocolo.
 
 **O feedback é do HOST, e volta ao buffer.** Copiar sem dizer nada é
@@ -861,36 +861,106 @@ vencedor** — que é o único jeito de responder "de onde veio este ícone e so
 
 ---
 
-## 2. O compositor, e a fronteira com o niri
+## 2. O compositor, e a fronteira com ele
 
-### A fronteira com o niri
+### O compositor é o Scroll, e a razão é o ponteiro
 
-`ronoctua-niri` é o **único** crate que fala com o compositor.
+O Scroll é um fork do sway — logo, do wlroots — que segue os lançamentos do sway e troca o layout em
+grade por **rolagem horizontal infinita**. Duas razões o escolheram, e a primeira é a que decidiu:
 
-**Tipos próprios, não a crate `niri-ipc`.** O contrato tem de passar contra a tag pinada **e** contra
-`niri-next`; depender da crate publicada tornaria isso vazio, porque o Cargo fixaria uma versão dos
-tipos e o teste compararia tipos velhos com binário novo. Com tipos nossos — estreitos, só o que a
-modeline usa — o mesmo código é exercitado contra os dois binários de verdade.
+1. **Vários ponteiros ao mesmo tempo.** O compositor anterior dirige um assento com um ponteiro só, e
+   isso é o modelo de assento dele, não um ajuste — não há como contornar de fora. Os aplicativos que
+   o dono vai escrever são construídos em cima de vários cursores. O wlroots tem multi-seat.
+2. **O layout é o que ele já queria**: rolagem infinita em vez de nove espaços de trabalho.
 
-**Evento desconhecido não é erro.** Eventos são lidos como `Value` e só então mapeados; o que não
-reconhecemos vira `Event::Ignored`. O niri versiona por calendário e acrescenta variantes com
-frequência — um enum estrito quebraria a distro num upgrade por causa de um evento que não usamos.
-O que o contrato prova é o contrário: que os eventos que **usamos** continuam existindo.
+Tudo o mais é consequência — comandos em texto livre, blocos `output` mesclados, `reload` que libera
+tudo o que foi aplicado em execução — e cada consequência está escrita ao lado do código que ela
+alcança.
+
+### A fronteira é um CONTRATO, e o adaptador é um crate só
+
+O pedido do dono foi explícito: *"tudo que desenvolvermos deve funcionar como um contrato
+independente, ou seja, não deve depender de externos como WMs"*. Então não são um crate e sim dois,
+e a divisão é esse pedido feito tipo:
+
+- **`ronoctua-compositor`** é o contrato. Vocabulário neutro (`Window`, `Output`, `Naming`, `Mode`,
+  `Logical`, `Transform`, `Ask`, `Event`, `State`, `Deed`, `Arity`), um `trait Compositor` e um
+  `trait Events`. **Zero protocolo**: nenhum socket, nenhum JSON, nenhuma string de comando — e nem
+  `serde_json` entre as dependências, para que a fronteira não possa ser contornada por descuido. É
+  o molde do `ronoctua-syntax` e do `ronoctua-atlas`, que já são crates puros devolvendo papel e
+  nunca cor.
+- **`ronoctua-scroll`** é o adaptador: o enquadramento do IPC do i3 (`"i3-ipc"` + tamanho + tipo), os
+  comandos em texto, a tradução dos eventos. **É o único lugar da árvore que sabe qual compositor
+  é.**
+
+`ronoctua-shell`, `ronoctua-display` e `ronoctua-rescue` dependem só do contrato.
+
+**E a abstração se paga hoje, em vez de ser cerimônia.** Um `trait` com uma implementação seria
+enfeite se o que ele desse fosse trocar de WM um dia. Ele dá três coisas agora: o teste de contrato
+passa a exercitar o *trait*, então qualquer adaptador futuro passa no mesmo binário; um
+`FakeCompositor` em `#[cfg(test)]` torna testável o que só uma VM alcançava; e "não há compositor"
+vira um estado nomeado em vez de um `warn` repetido em seis lugares.
+
+### A tabela de feitos é NOSSA, e o gerador a confere contra a fonte pinada
+
+O compositor anterior enumerava as ações dele e nós as extraíamos do binário. Este não enumera nada:
+os comandos são texto livre, espalhados por quatro arrays em C. Então a tabela é declarada em
+**`assets/compositor-deeds.nix`** — 112 feitos, no hábito do projeto (`assets/notifications.nix`,
+`assets/syntax.nix`) — e de lá saem a tabela Rust e as chaves que os dois idiomas devem.
+
+O que a mantém honesta é o gerador: ele **recusa um verbo que o `sway/commands.c` da fonte pinada não
+tem**, varrendo as duas tabelas de handlers com um piso de contagem para que uma varredura vazia não
+passe por verde. Um verbo que suma vira falha de build com o id na mensagem — mais cedo e mais barato
+que uma VM.
+
+E `wire::spoken` VALIDA o argumento antes de falar: número tem de parsear como `f64`, palavra tem de
+casar `[A-Za-z0-9._:+-]+`. Os separadores de comando deste compositor são `;` e `,`, então um
+argumento sem validação seria uma superfície de injeção que ações enumeradas não tinham — e há um
+teste chamado `an_argument_cannot_smuggle_a_second_command`.
+
+### O que este compositor NÃO responde, e o que ficou no lugar
+
+Três buracos, e nenhum tem substituto igual:
+
+- **Não há `GET_LAYERS`.** Nada no IPC diz quais layer surfaces existem nem quem tem o teclado. O
+  `.#diagnostics` perguntava isso em uma linha; agora pergunta se o IPC responde (que é o mesmo fato
+  por outra porta) e manda ler o log do rodapé para a metade do foco.
+- **O `reload` responde `success` haja o que houver.** Medido contra um compositor vivo: fragmento
+  quebrado e config principal quebrado voltaram os dois `{"success": true}`, porque `load_config`
+  devolve `config->active || !config->validating || config_load_success` e `config->active` é verdade
+  em toda sessão de pé. E `--validate` só julga o arquivo PRINCIPAL: `load_include_configs` é `void` e
+  joga fora o resultado de cada include. **Não há evento sobre isso.** Por isso o
+  `Snapshot::config_failed` saiu — um campo que nunca pode ser verdade é pior que campo nenhum — e o
+  que responde no lugar é o portão de BUILD (`compositor-config-valid`, `display-fragment-validates`),
+  mais a regra que este projeto já tinha: `Ok` não é "aconteceu", e quem confirma é a leitura seguinte.
+- **Não há captura de tela.** Quem tira a foto é o `grim`, pelo `wlr-screencopy`, e a notificação
+  passou a ser NOSSA — reconhecida por uma tag que nós escrevemos, em vez do par (app, resumo) de
+  outro programa, que custava um `rewrite` e um check lendo a fonte alheia.
+
+E uma coisa que ele NÃO expõe e a distro recusa por cima: **`scrollnag`**. Ele levanta essa janela
+sozinho num erro de config e numa escala que ele considera ruim; é chrome flutuante com botões
+próprios sobre uma mesa cuja única chrome é o rodapé (invariante 14), então o config diz
+`scrollnag_command -`. O preço está escrito onde a linha está.
+
+### O IPC não tem permissão por cliente
+
+`ipc-server.c` carrega um `// TODO: Check if they're permitted` onde a autorização estaria, e entre os
+comandos há `lua_eval` — execução de Lua arbitrário dentro do compositor. **A permissão do arquivo de
+socket é a única fronteira que existe.** Isso não muda nada do que fazemos (o socket é do usuário,
+sob `$XDG_RUNTIME_DIR`), e está escrito aqui porque é o tipo de fato que não se quer descobrir depois.
 
 ---
 
 ### Xwayland
 
-**Sim**, via `xwayland-satellite` (o caminho upstream do Niri). Recusar custaria Steam, Java legado
-e uma cauda de apps que não vão migrar — a regra proíbe *chrome* de desktop tradicional, não
-aplicativos.
+**Sim, e embutido.** Este compositor traz XWayland dentro dele — confirmado no binário construído —,
+então o `xwayland-satellite` saiu inteiro.
 
-**A restrição que isso impõe não é a óbvia.** Buffer estrangeiro é correlacionado por **PID →
-cgroup**, e o satellite cria as superfícies **em nome dele mesmo**: o `pid` reportado seria o dele,
-igual para todas as janelas X11, e a correlação quebraria **em silêncio**.
-
-Decisão: **um satellite por scope systemd de buffer**, com `$DISPLAY` próprio. Custo: um processo de
-poucos MB por buffer X11 — e já se paga um scope por buffer de qualquer forma.
+**O que o satellite existia para resolver continua resolvido, por outro caminho.** Buffer estrangeiro
+é correlacionado por **PID → cgroup**, e um satellite compartilhado criaria as superfícies em nome
+DELE: o `pid` seria o mesmo para toda janela X11 e a correlação quebraria em silêncio. Era por isso
+que havia um satellite por scope de buffer. Aqui o compositor reporta o PID do cliente X REAL, pela
+extensão XRes, então a correlação vale sem processo nenhum no meio.
 
 ---
 
@@ -921,10 +991,13 @@ Dividido em dois, porque uma resposta só seria desonesta.
 `virtio-gpu` acelerado fica fora: exige passthrough e quebra a pureza do sandbox — caro exatamente
 onde o valor do teste está.
 
-**O niri não roda no TTY de uma VM sem GPU.** O backend DRM rejeita renderizadores EGL por software,
-e numa VM o único EGL é o llvmpipe. Ele então sobe, cria o socket e fica com **zero output** — não
-falha, não avisa — e uma superfície layer-shell precisa de output. Por isso os testes usam o backend
-**winit** sobre `Xvfb`.
+**O compositor não roda no TTY de uma VM sem GPU.** O backend DRM rejeita renderizadores EGL por
+software, e numa VM o único EGL é o llvmpipe. Ele então sobe, cria o socket e fica com **zero
+output** — não falha, não avisa — e uma superfície layer-shell precisa de output. Por isso os testes
+escolhem o backend E o renderizador: `WLR_BACKENDS=x11` sobre `Xvfb` onde se precisa de pixels,
+`headless` com `WLR_RENDERER=pixman` onde só se precisa do parser. O segundo par é o que tira EGL,
+GBM e o nó DRM do caminho por inteiro, e é o que faz `--validate` caber num sandbox de dez
+milissegundos.
 
 ---
 
@@ -1033,8 +1106,8 @@ glifo ficava sobre o `2`, em toda linha de ajuste. A reserva e a quantidade de c
 têm de ser o mesmo número.
 
 **E depois disso veio `nix run .#png`, que é a parte que muda o dia a dia.** Nada disso teria durado
-meses se olhar custasse pouco. Custava uma VM NixOS: subir, niri sob Xvfb, capturar a raiz do X,
-recortar pela geometria que o niri informou, passar OCR. Três minutos para ver se uma régua encostava
+meses se olhar custasse pouco. Custava uma VM NixOS: subir, o compositor sob Xvfb, capturar a raiz
+do X, recortar pela geometria que ele informou, passar OCR. Três minutos para ver se uma régua encostava
 numa descida — e regra que custa três minutos é regra que se pula, que é exatamente o que aconteceu.
 
 O comando desenha um buffer num PNG em **0,2 s**, sem compositor e sem VM. O que ele NÃO faz é ter
@@ -1245,28 +1318,35 @@ consertam em lugares opostos:
 
 Duas medições valem mais do que a intuição aqui, e as duas contrariam o palpite óbvio.
 
-**Um niri aninhado que não responde ao `wl_display.sync` não está travado.** Ele é **cliente do
+**Um compositor aninhado que não responde ao `wl_display.sync` não está travado.** Ele é **cliente do
 compositor do host**: com a janela numa workspace oculta, o host para de alimentá-lo e ele dorme — e
 dormindo não serve os próprios clientes nem o IPC. Com a janela visível, o mesmo `sync` responde em
 0,00 s.
 
 **Modificador preso é o que se parece com tudo o mais.** Com ninguém tocando no teclado, o compositor
 chega a anunciar `alt=true logo=true`; o `logo` é a impressão digital do atalho do host, que captura
-o `Super+…`, e o niri aninhado vê a descida e nunca a subida. Um fato explica três sintomas:
+o `Super+…`, e o compositor aninhado via a descida e nunca a subida. Um fato explica três sintomas:
 
-- **A leader para de disparar** — o niri casa bind por máscara EXATA, e o que chega tem um bit a
+- **A leader para de disparar** — um bind é casado por máscara EXATA, e o que chega tem um bit a
   mais do que o bind pede.
-- **O clique não chega aos buffers, mas arrasta a janela** — no backend aninhado o `Mod` do niri
-  **é o Alt**, e `Mod+arrastar` é mover janela. Com o Alt preso, todo clique vira arrasto. Foi esta
+- **O clique não chega aos buffers, mas arrasta a janela** — no laço aninhado o `$mod`
+  **é o Alt**, e `$mod+arrastar` é mover janela. Com o Alt preso, todo clique vira arrasto. Foi esta
   observação do dono que fechou o caso.
 - **O foco ainda muda no clique** — normal, e é o que fazia parecer que "o mouse funciona".
 
-Nem `switch-layout` nem `load-config-file` limpam o latch; ele está no estado xkb do compositor, e o
-invariante 3 proíbe consertá-lo lá dentro. O que sobra é reconhecê-lo depressa.
+Recarregar o keymap não limpava o latch; ele está no estado xkb do compositor, e o invariante 3
+proíbe consertá-lo lá dentro. O que sobrava era reconhecê-lo depressa.
+
+**O mecanismo era do compositor anterior, e não deste.** Lá o estado de modificador era CONTADO —
+pressões contra soltas —, então uma tecla solta fora da janela nunca voltava. O backend Wayland do
+wlroots implementa `.modifiers` e passa a máscara do HOST direto, com `update_state = false` no
+handler de tecla: o estado aqui é espelho do de lá, nunca derivado. Isso ainda **não foi medido**
+neste compositor, e por isso a defesa (`nix/keyboard-nested.nix`) continua de pé; a medição está no
+`docs/PENDING.md`.
 
 Disso saíram três coisas, e a mais importante não é o conserto:
 
-**O log do rodapé vai para arquivo.** Ele ia para o terminal e mais nada, e o do niri tinha as quatro
+**O log do rodapé vai para arquivo.** Ele ia para o terminal e mais nada, e o do compositor tinha as quatro
 linhas da partida — por isso as três primeiras ocorrências não deixaram rastro. Agora `nix run .#dev`
 escreve `RONOCTUA_LOG`, o `tail -f` continua pondo na tela, e os logs **não** são apagados no `trap`
 de saída: quem encerra depois de algo dar errado é quem mais precisa deles. O check
@@ -1655,7 +1735,7 @@ passa a ser a diferença entre preto e cinza, sem régua nem caixa.
 **A borda de foco de 2 px é do compositor, não nossa.** Com `border` e `focus-ring` desligados, duas
 janelas abertas eram indistinguíveis: nada na tela dizia qual recebia tecla. Uma linha não é card,
 sombra nem elevação (invariante 15) — é a mesma classe da régua de uma linha que o desenho já admite
-como única separação além do espaço em branco. Quem a desenha é o niri (invariante 4).
+como única separação além do espaço em branco. Quem a desenha é o compositor (invariante 4).
 
 **A borda inativa é vermelho escuro, e isso é o pedido possível.** O pedido foi: ao apertar a
 leader, o contorno azul deveria **mudar de cor** em vez de sumir. A parte impossível é manter o
@@ -1673,7 +1753,7 @@ perdia toda indicação de limite. Agora ela é `rule.default` (visível), e o *
 entra no nome do buffer na modeline**. Continua havendo exatamente uma coisa azul na tela, e ela
 continua dizendo qual buffer recebe o que vier depois.
 
-As três cores do config do niri — acento, borda inativa e fundo — vinham escritas à mão, iguais por
+As três cores do config do compositor — acento, borda inativa e fundo — vinham escritas à mão, iguais por
 coincidência aos tokens de mesmo nome. Coincidência mantida à mão é o que o invariante 9 proíbe:
 mudar `state.accent` mudava o rodapé e deixava a borda na cor velha. Agora elas são derivadas de
 `assets/tokens/colors.nix`.
@@ -1715,7 +1795,7 @@ Juntá-las é mexer no WIT, que reconstrói todos os buffers, e ninguém pediu i
 
 | segmento | pergunta | de onde vem |
 |---|---|---|
-| `*lucide*` | **qual** buffer é este? | o TÍTULO da janela, pelo niri |
+| `*lucide*` | **qual** buffer é este? | o TÍTULO da janela, pelo compositor |
 | `lucide` | que **espécie** de buffer é? | o último trecho do `app_id` |
 | `filtro` | o que ele está **fazendo**? | o que o próprio buffer relata |
 
@@ -1738,7 +1818,7 @@ host do buffer, no `set_title`; quem traduz o MODO é o rodapé, e só quando o 
 `br.ronoctua.` — o `app_id` de um app estrangeiro é dado dele, como o título, e inventar um nome para
 o software dos outros é pior que mostrar o que eles escolheram.
 
-**O `app_id` NÃO é traduzido**, e isso é deliberado: as *window rules* do niri casam por ele, e uma
+**O `app_id` NÃO é traduzido**, e isso é deliberado: as regras `for_window` do compositor casam por ele, e uma
 regra que só dispara num idioma é uma regra que falha na máquina de quem mudou o `LANG`.
 
 #### Onde cabe um idioma só, ele é o inglês
@@ -1853,7 +1933,7 @@ Perguntar por quadro seria uma ida e volta de socket dentro do orçamento do qua
 muda quando alguém aperta uma tecla. O mapa `pid → estado` é **podado contra a lista de janelas** do
 compositor, e não por relógio: um pid é reusado pelo kernel mais cedo do que se espera.
 
-**Janela estrangeira não tem estado**, e é a mesma regra que apagou o rótulo `fundamental`: o niri
+**Janela estrangeira não tem estado**, e é a mesma regra que apagou o rótulo `fundamental`: o compositor
 não nos diz em que estado o `vim` está, e escrever `normal` ali gastaria uma coluna afirmando algo
 que ninguém conferiu.
 
@@ -1900,7 +1980,8 @@ Duas caras do mesmo defeito, e nenhuma delas apontava para os limites:
 - **A janela fechava sozinha.** `Alt+=` cresce a coluna em 10% da tela; num monitor de 1920 o
   primeiro passo já pede 2112 px. `Surface::configure` **não devolve erro** — ele devolve `()`, e a
   dimensão inválida é erro de validação fatal. O processo morre, a janela some, e não há uma linha
-  de log em lugar nenhum, porque o niri manda a saída do que ele spawna para `/dev/null`.
+  de log em lugar nenhum onde alguém estivesse olhando — o rodapé é uma unidade, e o que ele diz ao
+  cair vai para o journal de um serviço que ninguém abre enquanto uma janela some.
 - **Monitor grande nunca teve rodapé.** Ele ocupa a largura da tela: num 2560 ou num 4K ele morreria
   na primeira configuração, antes do primeiro pixel.
 
@@ -1919,16 +2000,30 @@ quem responde ali é o driver.
 
 Dois defeitos passaram pelo `nix flake check` inteiro e só apareceram na tela:
 
-1. **`duplicate keybind`** — `Alt+Ctrl+L` dos padrões do niri contra o `Ctrl+Alt+L` de emergência: a
+1. **`duplicate keybind`** — um padrão do compositor contra o `Ctrl+Alt+l` de emergência: a
    mesma tecla escrita em outra ordem. A deduplicação comparava **strings**.
-2. **Dois blocos `layout {}`** no config de produção, desde sempre. O niri recusa nó duplicado.
+2. **Dois blocos de layout** no config de produção, desde sempre, e o compositor daquele dia recusava
+   nó duplicado.
 
 Um config recusado não é um atalho quebrado: é o compositor caindo no **config padrão dele** — sem
 nenhum atalho nosso e sem a leader. E o único sinal era uma caixa vermelha na tela.
 
-O que faltava era perguntar a quem tem a resposta. O `niri-binds.nix` grepava por uma palavra e o
-módulo grepava por outra; nenhum dos dois perguntava ao compositor se o arquivo **inteiro** fecha.
-Agora o `niri-config-valid` roda `niri validate` nos dois configs.
+O que faltava era perguntar a quem tem a resposta. O `compositor-binds.nix` grepava por uma palavra e
+o módulo grepava por outra; nenhum dos dois perguntava ao compositor se o arquivo **inteiro** fecha.
+Agora o `compositor-config-valid` roda `scroll --validate` sobre o config de produção, e o
+`display-fragment-validates` faz o mesmo com o fragmento que a vista de telas escreve.
+
+**E o veredito é a SAÍDA, nunca o `$?`.** Medido: um erro dentro de um `include` imprime
+`Error(s) loading config!` e **sai zero**, porque `load_include_configs` é `void` e joga fora o
+resultado de cada include. Um portão no status teria passado sobre todo fragmento quebrado que existe.
+
+**A migração para este compositor mostrou por que isso vale.** Dois defeitos novos passaram por tudo
+e só este comando os viu: `bindsym Mod+Left`, onde `Mod` não é um modificador aqui (a tabela é
+`Shift Lock Control Ctrl Mod1 Alt Mod2 Mod3 Mod4 Super Mod5`) e cada acorde era recusado
+individualmente enquanto a leader seguia funcionando; e `WheelScrollDown`, o nome da roda no
+compositor anterior, que aqui é `button5`. Nenhum dos dois é visível em fonte nenhuma: são strings que
+só o parser dele julga. E o modo de falhar é o mais quieto que existe — **uma linha ruim não derruba o
+arquivo**, ela é recusada sozinha, então o sintoma é uma família inteira de atalhos sem fazer nada.
 
 Para isso o config do aninhado teve de virar **derivação**. Ele era montado por `sed` dentro do
 script, em tempo de execução — nada tinha como alcançá-lo. É o mesmo movimento que o config de
@@ -1942,7 +2037,7 @@ na mesma tecla não "perde para o nosso", ele quebra o arquivo.
 
 ### A mensagem de erro tem de ser legível — e não era
 
-O niri avisou que o config estava quebrado, e o aviso saiu em **tofu**: uma caixinha por caractere. É
+O compositor avisou que o config estava quebrado, e o aviso saiu em **tofu**: uma caixinha por caractere. É
 o modo de falha mais cruel possível, porque apaga a informação de que se precisa exatamente quando se
 precisa dela.
 
@@ -1998,12 +2093,13 @@ gerenciador precisa editar.
 build. Escrito em Rust, "toda notificação da distro" seria um `match` num arquivo e um `format!`
 noutro, e a resposta honesta a "quais existem?" seria um grep. O gerenciador desenha ESSA lista.
 
-**Uma entrada é um reconhecimento, não um construtor.** Nem todas nascem aqui: a da captura de tela é
-mandada pelo compositor, em inglês, com o caminho do arquivo no campo do ícone. Então a entrada diz
-como RECONHECÊ-LA e o que fazer com ela, e a mesma máquina serve uma que levantamos e uma que chega
-de fora. As nossas carregam uma `tag` igual ao próprio id, que é por que quase todo `when` é de uma
-linha. O check `screenshot-notification-contract` lê a fonte do niri fixado: se o texto lá mudar, o
-filtro pararia de casar **em silêncio**.
+**Uma entrada é um reconhecimento, não um construtor.** Nem todas nascem aqui — uma vinda de um
+aplicativo estrangeiro chega pelo barramento com o texto dele. Então a entrada diz como
+RECONHECÊ-LA e o que fazer com ela, e a mesma máquina serve uma que levantamos e uma que chega de
+fora. As nossas carregam uma `tag` igual ao próprio id, que é por que quase todo `when` é de uma
+linha — a da captura inclusive, agora que ela é nossa: havia um check lendo a FONTE de outro
+programa para que o par (app, resumo) não se mexesse em silêncio, e ele morreu junto com a
+dependência que o justificava.
 
 **O sino abre o gerenciador, e só existe com algo não lido.** Era um sino com um número, em toda
 tela, para sempre — um `0` respondendo a uma pergunta que ninguém fez —, e o dono pediu o contrário:
@@ -2287,22 +2383,24 @@ gate de distância contra preto, chrome e janela (owl `#040C24`, forest `#031206
 lado na mesma região: `<left>`/`<right>` cruzam, `<up>`/`<down>` andam na que tem o foco, o cabeçalho
 da opção não recebe cursor, e a linha da direita fica na coluna do texto mesmo quando a da esquerda
 acabou (`ExpansionRow::aside`). A prévia do fundo não pode ser do rodapé, que nunca pinta o fundo: é
-do niri — SÓ o fragmento do niri é escrito ao mover o cursor (`theme::show_to_compositor`, com o tema
+do compositor — SÓ o fragmento dele é escrito ao mover o cursor (`theme::show_to_compositor`, com o tema
 sob o outro cursor; o do Ghostty não, senão um terminal aberto durante a prévia vestiria o que ninguém
 aplicou), e no `Esc` ele volta ao que o arquivo diz — ou SOME, se não há arquivo: máquina que nunca
 escolheu não tem fragmento, e `sync_with_file` mantém isso no arranque e quando o arquivo some.
 `RET` grava o PAR (`{ "theme", "backdrop" }`; arquivo sem o campo é preto, que é o que toda máquina
 tinha). Preto NÃO é token: é o nome da opção, e o fragmento o escreve como `#000000`.
 
-**Fora do shell, três consumidores seguem, e cada um até onde pode.** O niri: a borda estática vem do
-tema padrão (substituída no build do config, sem IFD), e no FIM do config há `include
-"/home/<usuário>/.config/ronoctua/niri-theme.kdl" optional=true` — o gerador escreve por tema DOIS
-fragmentos, um por fundo (`niri-black.kdl`, `niri-backdrop.kdl`), cada um com a borda num `window-rule {
-border { … } }` (nó repetível, o último vence) e o fundo num `layout { background-color }`: o niri
-recusa dois `layout` DENTRO de um arquivo e FUNDE o de um arquivo incluído, campo a campo, o valor
-posterior vencendo (`niri-config`, `MergeWith`; `themes-have-fragments` valida cada fragmento sob um
-config que já tem `layout`). O rodapé COPIA o do par escolhido ao gravar — copiar É escolher — e o niri
-v26.04 vigia arquivos incluídos e recarrega. O `background-color` estático é o `surface.base` do tema
+**Fora do shell, três consumidores seguem, e cada um até onde pode.** O compositor: a borda estática
+vem do tema padrão (substituída no build do config, sem IFD), e no FIM do config há `include
+"${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-theme.conf"` — o gerador escreve por tema DOIS
+fragmentos, um por fundo (`scroll-black.conf`, `scroll-backdrop.conf`), cada um com a borda em
+`client.focused` e companhia e o fundo num `output * bg`. **Aqui não há ordem a acertar**: ajuste de
+saída é MESCLADO (`*`, depois o conector, depois o identificador; campo a campo, o último vence), e
+`client.focused` simplesmente sobrescreve o valor anterior — então o fragmento ganha do que o config
+já diz, sem nó duplicado e sem precedência para lembrar. O `themes-have-fragments` valida cada um sob
+um config que JÁ pinta uma mesa, que é a forma dessa prova. O rodapé COPIA o do par escolhido ao
+gravar — copiar É escolher — **e então PEDE a releitura**, porque este compositor não vigia arquivo
+nenhum: escrever e parar aí deixaria a mesa na cor velha pelo resto da sessão. O `background-color` estático é o `surface.base` do tema
 padrão, o que vale antes de qualquer escolha. O Ghostty: `config-file` com a paleta gerada do tema
 padrão (ANSI 16, fundo, cursor, seleção — `terminal.*`, mapeados das famílias) e depois
 `config-file = ?~/.config/ronoctua/ghostty-theme.conf`, opcional, que o rodapé também copia; processo
@@ -2337,24 +2435,28 @@ que existe; a família que ela quiser criar é uma linha na semente e passa pelo
 
 ### Um keymap, e um bind só no compositor
 
-Fechar janela, trocar de foco, mudar de espaço, capturar tela — tudo isso era bind do niri. Agora é
-comando do shell, e chega ao compositor por ação de IPC. O niri tem **um** bind: o que acorda o
-daemon.
+Fechar janela, trocar de foco, mudar de espaço, capturar tela — tudo isso era bind do compositor.
+Agora é comando do shell, e chega a ele como um FEITO pelo IPC. O compositor tem **um** bind: o que
+acorda o daemon.
 
 **Um keymap, e não dois.** Com dois havia duas notações, dois lugares onde uma tecla podia colidir, e
 a lista de atalhos conhecia metade do sistema — quem apertasse a leader via uma lista que não era a
 verdade.
 
-O risco novo é de outra natureza: o nome da ação viaja como **string**. `MoveColumnLeft` errado por
-uma letra compila, roda, e o niri responde `"error parsing request"` — que vira um `warn` no log e
-nada na tela. É a mesma classe do fallback silencioso, e o `match` do Rust não protege: ele confere o
-id do comando, não o nome do outro lado.
+O risco novo é de outra natureza: o comando viaja como **texto**. Um verbo errado por uma letra
+compila, roda, e volta uma recusa que é uma linha de log e nada na tela. É a mesma classe do fallback
+silencioso, e o `match` do Rust não protege: ele confere o id do comando, não o que vai no fio.
 
-Por isso a tabela vive em **um** lugar (`crates/ronoctua-shell/src/actions.rs`), e o binário
-`ronoctua-niri-actions` a percorre inteira contra um niri de verdade dentro do `niri-contract`. Ele já
-pagou por si: `Screenshot` e `MoveWindowToWorkspaceDown` exigem argumento, e `{}` dá o **mesmo erro**
-de um nome inexistente. Numa sonda à mão a resposta se perdeu num timeout de socket e eu concluí que
-passava; o check não deixou.
+**Três coisas respondem a isso, e duas são de BUILD.** A tabela é declarada uma vez
+(`assets/compositor-deeds.nix`); o gerador **recusa um verbo que o `sway/commands.c` da fonte pinada
+não tem**, então um verbo removido é falha de build com o id na mensagem; e `wire::spoken` valida o
+argumento, porque os separadores de comando aqui são `;` e `,` e um argumento livre seria injeção. A
+terceira é o `compositor-contract`, que percorre a tabela inteira contra um compositor de verdade —
+só ele responde se o verbo existente também ACEITA o que mandamos.
+
+**E "aceitou" não é "fez".** Medido: `fit_size v` parseia, responde `"success": true` e não muda
+nada; o que faz é `fit_size v all equal`. Um comando pode ser silenciosamente inerte, e é por isso
+que nada aqui trata a resposta do IPC como prova.
 
 #### A roda: um evento, dois significados, e três jeitos de o Wayland dizê-lo
 
@@ -2401,7 +2503,7 @@ casaria, e a tela diria `CTRL ALT SPC M-n is not bound`. Exigir que se solte o A
 `i` é uma armadilha, e não há nada na tela que a ensine.
 
 O mesmo estado acontece **sem** a mão, e aí é pior porque não há gesto que o desfaça: sair para um
-atalho do host (`Super+Espaço`, no Omarchy) e voltar faz o niri aninhado perder a soltura da tecla.
+atalho do host (`Super+Espaço`, no Omarchy) e voltar fazia o compositor aninhado perder a soltura da tecla.
 A partir daí ele anuncia o modificador para sempre, toda ligação passa a não casar, e o sintoma é
 "os atalhos pararam de funcionar" sem nada mudar no keymap.
 
@@ -2442,14 +2544,14 @@ de mandar um screenshot.
 #### A leader é a tecla Super sozinha, e isso custou um daemon
 
 Em produção, **tocar** Super abre a sequência; **segurar** Super é o modificador dos acordes. A mesma
-tecla física faz as duas coisas, e nenhuma delas é possível só com o compositor: o niri recusa bind em
+tecla física faz as duas coisas, e nenhuma delas é possível só com o compositor: ele recusa bind em
 modificador sozinho (`invalid key: Mod`) e não tem disparo na soltura — as propriedades de bind são
 `allow-when-locked`, `allow-inhibiting`, `cooldown-ms`, `repeat` e `hotkey-overlay-title`.
 
 Isso não é limitação a contornar. Um modificador **é** um modificador; distinguir toque de pressão
 acontece abaixo do compositor, no fluxo de eventos do kernel. Quem faz isso é o **keyd**
 (`nix/modules/keyboard.nix`): `leftmeta = overload(meta, f13)` — segurada, ela é Meta e os acordes
-chegam ao niri como `Mod+…`; solta sem outra tecla, emite `F13`, que o niri liga à leader.
+chegam ao compositor como `Mod4+…`; solta sem outra tecla, emite `F13`, que ele liga à leader.
 
 **É a peça mais perigosa do sistema por linha de código**, e vale dizer por quê: o keyd fica entre o
 teclado e tudo o mais, e um erro nele é um teclado que não digita. O que limita o estrago é remapear
@@ -2464,7 +2566,7 @@ No modo aninhado nada disso existe: a leader é `Ctrl+Alt+Espaço`. O `Mod` pert
 host, e pôr um remapeador global no caminho para desenvolver seria trocar o teclado da máquina inteira
 por causa de um loop de teste.
 
-**E por isso o aninhado não consegue ser inerte ao segurar.** O niri dispara bind na *descida* da
+**E por isso o aninhado não consegue ser inerte ao segurar.** O compositor dispara bind na *descida* da
 tecla: apertar Espaço com Alt segurado **é** o gatilho. A inércia em produção não vem do compositor,
 vem do keyd. O que dá para consertar — e está consertado — é o `repeat=false`: sem ele, segurar
 a leader re-dispara o `spawn` na taxa de repetição do teclado e a lista reabre sozinha várias
@@ -2496,14 +2598,18 @@ build que recusa um bind na leader sozinha: seria o único jeito de esse comport
 passa a receber teclado. `LEADER+←` é **acorde**: a leader fica segurada, e o rodapé nunca vê essa
 tecla — quando ele ganha o teclado, o acorde já terminou. Quem resolve acorde é o compositor, sempre.
 
-Isso poderia trazer de volta as duas tabelas. Não traz, porque **o bind do niri é gerado**: a tabela
-de acordes vive em `actions.rs`, ao lado do que cada comando faz, e o `export-niri-binds` emite o KDL
-a partir dela. Some um id da tabela, some o bind. É o mesmo padrão dos tokens, do i18n e do WIT —
-gerar, em vez de manter duas cópias sincronizadas à mão.
+Isso poderia trazer de volta as duas tabelas. Não traz, porque **o bind do compositor é gerado**: a
+tabela de acordes vive em `actions.rs`, ao lado do que cada comando faz, e o `export-binds` emite as
+linhas `bindsym` a partir dela. Some um id da tabela, some o bind. É o mesmo padrão dos tokens, do
+i18n e do WIT — gerar, em vez de manter duas cópias sincronizadas à mão.
 
-O nome da ação existe em duas grafias — `FocusColumnLeft` no IPC, `focus-column-left` no config — e a
-segunda é **derivada** da primeira, para não haver uma terceira tabela. Um erro aí não é silencioso: o
-niri recusa o config na partida.
+O texto que vai no bind é o MESMO que vai no fio quando o comando é chamado por nome, porque os dois
+saem do mesmo feito declarado. Não há segunda grafia a derivar, e por isso não há terceira tabela.
+
+**Um erro aí É silencioso, e esse é o perigo novo.** Uma linha `bindsym` que o compositor não entende
+é recusada SOZINHA — o resto do arquivo carrega — então o sintoma é um atalho, ou uma família inteira
+deles, sem fazer nada. Quem responde é o `compositor-config-valid`, que põe o arquivo inteiro na
+frente do parser dele e lê a SAÍDA.
 
 **Os acordes saíram da lista do toque.** Eles apareciam ali em tom apagado, e não eram escolhas do
 que se está fazendo: a leader já está solta, e apertar `←` naquele momento não faz nada. Vinte e
@@ -2515,7 +2621,7 @@ nela.
 
 O `+` que os prefixava virou a marca de **submenu**, e só dela.
 
-O config do niri passou a ser uma **derivação**, e não uma string. Interpolar a saída de uma derivação
+O config do compositor passou a ser uma **derivação**, e não uma string. Interpolar a saída de uma derivação
 numa string de avaliação seria import-from-derivation: a avaliação do flake pararia para esperar um
 build.
 
@@ -2523,37 +2629,44 @@ build.
 comando nomeado (`LEADER w d`), porque não pode depender de uma tecla que se aperta por reflexo ao sair
 de qualquer coisa.
 
-#### As 141 ações do compositor viram comandos
+#### Os feitos do compositor viram comandos
 
 **Toda funcionalidade é um comando nomeado**, e do sistema faz parte o que o compositor sabe fazer.
-As 141 ações do niri entram no registro como `niri-<nome>`, alcançáveis pelo localizador
-(`LEADER :`).
+Os 112 feitos entram no registro como `wm-<nome>`, alcançáveis pelo localizador (`LEADER :`).
 
-**A lista é gerada do binário pinado.** `niri msg action --help` dá nome, descrição e — por
-subcomando — se a ação exige argumento. Escrita à mão, ela envelheceria em silêncio: uma ação
-removida vira comando que responde `"error parsing request"`, que é um `warn` no log e nada na tela.
-O gerador **para o build** se extrair menos de 100 — um parser que degrada em silêncio devolveria
-tabela vazia, e as ações simplesmente sumiriam da lista.
+**A lista é DECLARADA, e não extraída.** O compositor anterior enumerava as ações dele e nós as
+líamos do binário; este não enumera nada — os comandos são texto livre em quatro arrays em C. Então a
+tabela é nossa (`assets/compositor-deeds.nix`), o que aliás é o que o contrato pede: o vocabulário da
+distro deixa de ser emprestado.
 
-**Elas executam pelo cliente do próprio niri**, e não pelo nosso JSON. Não é preguiça: `Screenshot`
-exige `show_pointer` e `MoveWindowToWorkspaceDown` exige `focus`, com padrões que existem no clap do
-niri e em lugar nenhum que a gente possa ler — mandar `{}` dá o **mesmo erro** de um nome
-inexistente. Com `niri msg action <nome>`, os padrões são os dele, o erro é o dele (e vai para a área
-de eco, não para o log), e não há conversão nossa para errar. Os ~25 comandos do keymap continuam no
-caminho direto por IPC, que é o quente e é provado ação por ação pelo `niri-contract`.
+**O que impede uma tabela declarada de envelhecer é o gerador.** Ele varre o `sway/commands.c` da
+fonte PINADA e **recusa um verbo que não esteja lá**, com piso de contagem para que uma varredura
+vazia não passe por verde. Um verbo removido é falha de build com o id na mensagem — e não um comando
+que responde uma recusa que ninguém lê. Ele também recusa um `{n}` sem argumento declarado e um
+argumento sem `{n}`, que é a outra metade da mesma mentira.
 
-**Elas não ganham tecla**, e é a única exceção à regra de que todo comando tem atalho: 141 atalhos
-seriam 141 teclas a menos para o que se usa. A exceção é reconhecível pelo prefixo `niri-`, então ela
+**E o argumento é VALIDADO** (`wire::spoken`): número tem de parsear como `f64`, palavra tem de casar
+`[A-Za-z0-9._:+-]+`. Os separadores de comando aqui são `;` e `,`, então isto não é higiene — é a
+diferença entre um argumento e uma injeção. Há um teste chamado
+`an_argument_cannot_smuggle_a_second_command`.
+
+**Eles vão pelo caminho direto**, sempre. Não há cliente de linha de comando no meio: o texto que o
+bind escreve é o mesmo que o socket recebe, e ambos saem do mesmo feito. O compositor anterior
+guardava padrões de argumento dentro do clap dele, num lugar que não dava para ler, e por isso as
+ações enumeradas eram executadas pelo cliente DELE; aqui não há nada escondido para herdar.
+
+**Eles não ganham tecla**, e é a única exceção à regra de que todo comando tem atalho: 112 atalhos
+seriam 112 teclas a menos para o que se usa. A exceção é reconhecível pelo prefixo `wm-`, então ela
 não cresce sem alguém escrevê-lo.
 
-**Ação com argumento pergunta.** Escolhida no localizador, `focus-workspace` vira um prompt
-(`focus-workspace: `) e o que se digita vai como argumento. Uma sequência de teclas não tem como
-carregar um número — ela é um caminho até um id, não uma chamada com parâmetro.
+**Feito com argumento pergunta.** Escolhido no localizador, ir para um espaço vira um prompt e o que
+se digita vai como argumento — depois de passar pela validação acima. Uma sequência de teclas não tem
+como carregar um número: ela é um caminho até um id, não uma chamada com parâmetro.
 
-**As 141 descrições estão nos dois idiomas**, e um check recusa ação sem chave. Subir a tag do niri
-**para o build** até o que apareceu ser traduzido. É barulhento de propósito: a alternativa é o
-inglês do upstream aparecendo no meio de uma lista em português, que é o fallback silencioso com
-outra roupa.
+**As 112 descrições estão nos dois idiomas**, e um check recusa feito sem chave. Subir a tag do
+compositor **para o build** até o que apareceu ser traduzido. É barulhento de propósito: a
+alternativa é o inglês do upstream aparecendo no meio de uma lista em português, que é o fallback
+silencioso com outra roupa.
 
 ---
 
@@ -2579,12 +2692,12 @@ const fn opens_sequence(ctrl: bool, logo: bool, idle: bool) -> bool {
 
 **Um acorde não é texto; uma letra é.** A primeira tecla vem com `Ctrl` — `Ctrl+m`, depois `s` — e
 da segunda em diante são letras simples, como em `SPC m s`. `logo` fica de fora e não é ignorado:
-`Super` é do compositor, e um buffer que respondesse a ele roubaria uma ligação do niri.
+`Super` é do compositor, e um buffer que respondesse a ele roubaria uma ligação dele.
 
 O que sobra é o which-key não listar essas ligações sob `SPC m`. O obstáculo de tipo saiu —
 `ronoctua_keymap::Entry` passou a guardar `String` justamente por isso —, mas o que ficou é maior e
 só apareceu depois: **o rodapé não tem como saber o descritor de um buffer em execução.** Ele conhece
-as janelas por IPC do niri (id, título, `app_id`) e nada mais.
+as janelas pelo IPC do compositor (id, título, `app_id`) e nada mais.
 
 ---
 
@@ -2595,11 +2708,18 @@ mostra o panorama. Cada ação tem várias teclas de propósito: `j`/`k` do vi, 
 navegador, setas para quem não decorou nenhum dos dois, e `.`/`,`. Redundância aqui custa uma linha
 de tabela e poupa uma decisão por uso.
 
-**São nove espaços declarados no config**, e não os dinâmicos do niri. Ele cria e destrói espaço
-conforme o uso: `LEADER TAB 7` num sistema com três espaços não teria para onde ir, e a mesma tecla
-levaria a lugares diferentes conforme quantas janelas estivessem abertas. Declarados, o número na
-tecla **é** o número do espaço. O `0` vai para o último, que é a convenção do teclado — o zero fecha
-a fileira depois do nove.
+**São nove espaços NUMERADOS**, e não os dinâmicos que aparecem e somem. O compositor cria e destrói
+espaço conforme o uso: `LEADER TAB 7` sem nada declarado não teria para onde ir, e a mesma tecla
+levaria a lugares diferentes conforme quantas janelas estivessem abertas. O que o comando manda é
+`workspace number N`, que NOMEIA o número e cria o espaço se ele não existir — então o dígito na
+tecla **é** o número do espaço, sempre. O `0` vai para o último, que é a convenção do teclado — o
+zero fecha a fileira depois do nove.
+
+**O que se perde é o espaço VAZIO, e isso fica declarado.** Este compositor não tem espaço
+persistente nem pré-criação — conferido no `scroll.5`: há `workspace <nome> output/gaps/…` e nenhuma
+forma de declarar um que exista vazio —, e um `exec` visitando 1..9 na partida não resolve, porque um
+espaço vazio é destruído assim que se sai dele. A visão geral mostra o que tem janela. Recriá-los com
+um daemon nosso seria desproporcional, e está escrito aqui como não feito.
 
 `TAB m` repete o submenu inteiro para **levar a janela**: quem aprendeu `TAB 3` ganha `TAB m 3` de
 graça.
@@ -2607,8 +2727,8 @@ graça.
 **E a ligação passou a carregar argumento.** `TAB 3` e `TAB 7` são o mesmo comando com números
 diferentes; sem isso, a alternativa seria `workspace-ir-1`…`-9` — nove nomes no localizador dizendo a
 mesma coisa e nove chaves de texto para traduzir, só para carregar um dígito. O acorde já fazia isso
-(`LEADER+3` leva o `3` no KDL); agora a sequência também. Os dois vão pelo cliente do compositor,
-porque a forma do argumento no JSON é dele.
+(`LEADER+3` leva o `3` na linha do bind); agora a sequência também. Os dois montam o MESMO texto,
+pelo mesmo feito declarado, e o número passa pela validação de `wire::spoken` antes de sair.
 
 ---
 
@@ -2723,7 +2843,7 @@ O invariante 11 virou propriedade dos **tipos**, não regra que alguém lembra:
 A lista de comandos é curta de propósito: texto, régua de uma linha, seleção. **Não há retângulo
 preenchido, borda, sombra nem raio** — um comando de retângulo seria a porta de entrada para o card.
 
-**`xdg_toplevel`, e não uma região nossa:** quem posiciona a janela é o niri. O shell nunca
+**`xdg_toplevel`, e não uma região nossa:** quem posiciona a janela é o compositor. O shell nunca
 reimplementa layout de janelas, e é o que mantém o invariante 3 possível.
 
 ---
@@ -2794,20 +2914,20 @@ Este bind pede ao compositor que faça `spawn`, e mais nada. É o companheiro de
 `nix/modules/memory.nix`: aquele mantém o desktop vivo sob pressão, este é como a pessoa vê **o que**
 está comendo a máquina.
 
-**A tecla é tomada do niri.** O padrão de upstream põe `Mod+Escape` em
+**A tecla não compete com nada.** Passamos `-c`, então o config que o compositor traz não é lido e
 `toggle-keyboard-shortcuts-inhibit`; o nosso acorde entra primeiro e a deduplicação descarta o dele.
 A ação não se perde — como as outras 140, alcança-se por nome (`LEADER :`), que é para isso que a
 exceção existe.
 
-**Quem faz flutuar é o niri** (inv. 4). O que o shell decide é a IDENTIDADE da janela: o mesmo
+**Quem faz flutuar é o compositor** (inv. 4). O que o shell decide é a IDENTIDADE da janela: o mesmo
 terminal sobe com `app_id` `br.ronoctua.monitor` em vez de `br.ronoctua.terminal`, e uma
 `window-rule` casa esse id. Com um `app_id` só, a regra flutuaria todo terminal — inclusive o
 `LEADER w o`.
 
-**E a regra é GERADA do mesmo constante** (`export-niri-window-rules`, como os acordes). Escrita à
-mão, a string existiria em três lugares — o Rust, `nix/modules/niri.nix` e `nix/dev.nix` —, e o dia
+**E a regra é GERADA da mesma constante** (`export-window-rules`, como os acordes). Escrita à
+mão, a string existiria em três lugares — o Rust, `nix/modules/scroll.nix` e `nix/dev.nix` —, e o dia
 em que um deles divergisse o sintoma seria o monitor abrindo lado a lado: **exatamente com a cara de
-um atalho funcionando**. O `terminal-vm` fecha o outro lado, com um niri de verdade: a janela do
+um atalho funcionando**. O `terminal-vm` fecha o outro lado, com um compositor de verdade: a janela do
 monitor volta `is_floating` verdadeiro no IPC, a do terminal comum volta falso, e oito segundos
 depois a janela ainda existe — o que só é verdade se o programa lá dentro não morreu.
 
@@ -3384,7 +3504,7 @@ meio faria o grifo acender letra que não está mais ali.
 Achado ao ligar o lançamento: do manual, *"execution in this case is synchronous, and will return only
 when the command finishes"*. O comentário no código afirmava o contrário — verdade no modo serviço,
 falso com `--scope`. Com o `calloop` numa thread só, abrir **qualquer** app estrangeiro congelava
-teclado, pintura e eventos do niri pela vida inteira do aplicativo. Escondia-se atrás de quatro
+teclado, pintura e eventos do compositor pela vida inteira do aplicativo. Escondia-se atrás de quatro
 chamadores fixos; o localizador faria dele o caminho principal. A espera foi para uma thread nomeada,
 e o veredito volta pelo canal — o `apps-vm` abre um app que dorme dois minutos e exige o rodapé
 respondendo enquanto ele vive.
@@ -3396,7 +3516,7 @@ respondendo enquanto ele vive.
 O `nix run .#dev` parou de subir com uma mensagem que não nomeia nada:
 
 ```
-niri: symbol lookup error: /usr/lib64/libc.so.6:
+scroll: symbol lookup error: /usr/lib64/libc.so.6:
       undefined symbol: __pointer_chk_guard, version GLIBC_PRIVATE
 ```
 
@@ -3408,7 +3528,7 @@ símbolo ausente do host.
 
 Não existe versão a acertar. O que remove a classe inteira é não pôr as bibliotecas do host no
 caminho — e para AMD e Intel isso não custa nada, porque **quem fala com a placa é o driver do
-kernel**, e o mesa é biblioteca de espaço de usuário que o Nix tem. Medido: o niri aninhado sobe em
+kernel**, e o mesa é biblioteca de espaço de usuário que o Nix tem. Medido: o compositor aninhado sobe em
 `wayland-2` com nada do host no caminho.
 
 **A NVIDIA é a exceção real**: o blob dela tem de casar com o módulo do kernel, então só pode vir do
@@ -3428,7 +3548,7 @@ reescrita.
 
 É a **oitava** vista da região expandida, e a primeira que também abre em janela.
 `ronoctua-files` é a única fronteira com o sistema de arquivos — mesmo critério do
-`ronoctua-niri`, do `ronoctua-network` e do `ronoctua-memory`.
+`ronoctua-scroll`, do `ronoctua-network` e do `ronoctua-memory`.
 
 #### O pedido tinha um conflito, e ele decidiu a arquitetura
 
@@ -3707,7 +3827,7 @@ a resposta não é a linha sob o ponteiro — são todas.
 
 As teclas da vista foram para `M-` quando a letra virou query, e `M-RET` **abria um terminal**. Não
 era defeito da vista: no laço aninhado a família dos acordes da leader É o `Alt` — a config diz isso
-com todas as letras —, então o niri consumia a tecla antes de o rodapé existir para ela.
+com todas as letras —, então o compositor consumia a tecla antes de o rodapé existir para ela.
 
 `Ctrl` é a família que ninguém acima de nós reivindica: a leader é uma sequência, os acordes são
 `Mod+…`, e os binds de emergência são `Ctrl+Alt+…`. A regra ficou simples o bastante para virar
@@ -3826,7 +3946,7 @@ que foi solto.
 A prova de que a tecla chega é de ponta a ponta, no `leader-vm`: abre o gerenciador pela leader,
 digita, e confere no PIXEL que a lista estreitou; depois `Esc`, e depois `alt+h`, que só faz algo se
 o Alt sobreviver ao desconto. Um teste de unidade não podia responder isso — ele entrega a `Key`
-direto na `View::key`, e a pergunta era se a tecla CHEGA, atravessando Xvfb, niri e a layer surface.
+direto na `View::key`, e a pergunta era se a tecla CHEGA, atravessando Xvfb, o compositor e a layer surface.
 
 E o mesmo roteiro cobrou duas lições do próprio harness: sem `HOME`, o `systemd-run` abria o
 gerenciador em `/`, cuja listagem bate no teto de doze linhas — e uma lista no teto mede igual antes
@@ -4408,12 +4528,13 @@ Então `nix/user-dirs.nix` passou a ser a tabela — nomes RELATIVOS à home, pe
 público. `nix/modules/home.nix` monta o `xdg.userDirs` dela, e `nix/files-sidebar.nix` nomeia quais
 entram na barra **por chave**, nunca por caminho.
 
-**A quarta pasta não existia, e as capturas estavam caindo fora da distro.** Nada escrevia
-`screenshot-path`, então o niri usava o padrão dele —
-`~/Pictures/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png` —, um caminho que contradiz o próprio
+**A quarta pasta não existia, e as capturas estavam caindo fora da distro.** Nada declarava onde uma
+captura pousa, então ela ia para o padrão de quem a tirava — um caminho que contradizia o próprio
 `XDG_PICTURES_DIR` desta distro (`main/media/image`) e que nada criava. Uma barra apontando para uma
 pasta de capturas apontaria para o vazio para sempre. Hoje `screenshot` é a décima entrada da tabela,
-o niri escreve nela, o `xdg.userDirs` a CRIA (o `createDirectories` cobre o `extraConfig`), e
+o rodapé monta o nome a partir dela (`RONOCTUA_SCREENSHOTS`, porque o compositor não tira foto
+nenhuma — quem tira é o `grim`), o `xdg.userDirs` a CRIA (o `createDirectories` cobre o
+`extraConfig`), e
 `screenshots-land-in-a-declared-directory` compara as duas pontas — porque o defeito não era nenhuma
 das duas estar errada, era as duas poderem divergir.
 
@@ -4614,7 +4735,7 @@ janela não está ancorada no fundo da tela e simplesmente mostra uma linha a me
 
 **E o cabeçalho de uma janela ABRE, como o minibuffer.** A linha de dicas é CORTADA na largura que
 recebe — `hint_spans` elide, não quebra —, e a tabela da vista de rede tem 174 células em inglês
-contra uma janela que o niri põe em metade de uma saída. Então mais da metade do que aquela linha
+contra uma janela que o compositor põe em metade de uma saída. Então mais da metade do que aquela linha
 ensinava era inalcançável em cada uma das dez portas: uma reticência onde parava, e nada para
 apertar. O rodapé abre a sua desde que o `crate::fold` foi escrito, e o gerenciador abre a dele; as
 dez nunca ganharam nenhuma, e o dono achou isso na janela de idioma e região — *"a linha do header
@@ -6251,7 +6372,7 @@ tivesse melhorado, mas porque passou a **olhar outro lugar**:
 | definição Nix e Python | 274 nomes na camada de build |
 | **variante de enum** | **63**, com enums meio traduzidos (`Gesture::Inserir` ao lado de `Confirm`) |
 | **campo de struct** | **3**, entre eles `Minibuffer.segredo` |
-| **subcomando da CLI** | **4** (`comando`, `satelite`, `verificar-keymap`, `exportar-binds-niri`) |
+| **subcomando da CLI** | **4** (`comando`, `satelite`, `verificar-keymap`, `exportar-binds`) |
 
 O padrão é sempre o mesmo: **a linha que nomeia essas coisas não tem palavra-chave.** Uma variante é
 uma palavra maiúscula indentada; um campo é uma palavra minúscula e dois-pontos; um subcomando é uma
@@ -6309,7 +6430,7 @@ da fence há um segundo idioma, e as regras dos dois valem ao mesmo tempo**:
 - **O `#` da fence é do script, não do Nix.** Numa linha comentada do shell, `${prefixo}` continua
   sendo antiquotação VIVA. Pular essa linha renomeia a ligação e não o uso, e o arquivo para de
   avaliar com `undefined variable` — a única das três que falhou alto.
-- **O comentário do KDL é `//`, não `#`.** Classificar a prosa de `nix/dev.nix` como código fez o
+- **Nem todo comentário começa por `#`.** Classificar a prosa de `nix/dev.nix` como código fez o
   mapa renomear palavras dentro dela: "um `tree_size` que mostre o `footer_proc` de duas `lines`".
 
 E mais duas, que não são do Nix:
@@ -6498,8 +6619,8 @@ confere o que não pediu.
 
 #### O `[[bin]] name` do Cargo sobrepõe o nome do arquivo
 
-Renomear `contrato-niri.rs` para `niri-contract.rs` **não** renomeia o binário: quem manda é o
-`[[bin]] name` do `Cargo.toml`. O teste continuou chamando `bin/contrato-niri` e falhou com exit 127
+Renomear um `contrato-*.rs` para `*-contract.rs` **não** renomeia o binário: quem manda é o
+`[[bin]] name` do `Cargo.toml`. O teste continuou chamando o nome antigo e falhou com exit 127
 — erro de shell, não de Rust, e portanto invisível ao `cargo check`.
 
 #### Verificar por AUSÊNCIA, não por execução
@@ -6588,7 +6709,7 @@ crate dos túneis para ter um decodificador de chunk.
 ### Quem espera o rádio é uma thread, não o quadro
 
 `RequestScan` volta na hora; o rádio responde alguns segundos depois. Esperar no `calloop` congelaria
-teclado, pintura e eventos do niri por esses segundos — a mesma armadilha do `systemd-run --scope`.
+teclado, pintura e eventos do compositor por esses segundos — a mesma armadilha do `systemd-run --scope`.
 E um timer gastaria quadro repintando uma lista parada.
 
 `LastScan` da `org.freedesktop.NetworkManager.Device.Wireless` muda exatamente quando há coisa nova
@@ -6929,7 +7050,7 @@ grandezas sem relação que por acaso compartilham o sinal.
 `OOMScoreAdjust` numa unidade de **usuário** é ignorado em silêncio: o kernel devolve `EACCES` abaixo
 do valor herdado e o systemd engole em nível *debug*. A configuração compilaria, subiria e não faria
 nada. A ordem se cria pelo outro lado, com `choom` elevando cada aplicativo estrangeiro — apps 500,
-niri e rodapé 100, daemons 0.
+compositor e rodapé 100, daemons 0.
 
 #### E a morte não é silenciosa
 
@@ -6964,7 +7085,7 @@ curinga engoliria o próximo caso em silêncio.
 #### Quem lê a máquina é um crate, e a raiz do `/proc` é parâmetro
 
 `ronoctua-memory` é a única fronteira com `/proc`, os cgroups e a política do systemd — o mesmo
-critério do `ronoctua-niri` e do `ronoctua-network`. Os parsers são puros: entra `&str`, sai número.
+critério do `ronoctua-scroll` e do `ronoctua-network`. Os parsers são puros: entra `&str`, sai número.
 A raiz entra por parâmetro, como no `foreign::origin_at`, e é o que permite provar a gramática inteira
 do `/proc/meminfo` **sem** um `/proc` — inclusive o estouro que um teste achou: a mesma linha que traz
 `avg10=1.50` traz `total=2999599462`, e multiplicar isso por dez não cabe em `u32`.
@@ -7037,7 +7158,7 @@ isso, ou seja, acaba deixando o usuário sem interface"*.
 Ele estava certo, e era pior do que parece. **Com o rodapé morto, os quatro binds de emergência estão
 mortos junto.** `Ctrl+Alt+L`, `Ctrl+Shift+L`, `Ctrl+Alt+Esc` e `Ctrl+Alt+Del` são todos
 `ronoctua-shell command <id>`, e todos escrevem no socket de controle **do rodapé**. Dentro de um
-niri vivo, com o rodapé caído, não havia caminho nenhum de volta pela tela — a porta do
+compositor vivo, com o rodapé caído, não havia caminho nenhum de volta pela tela — a porta do
 `Ctrl+Alt+Del` que sobrevive é a do systemd, e ela só dispara num console que o compositor não está
 segurando.
 
@@ -7074,7 +7195,7 @@ lhe dá o foco como a qualquer janela; as opções são uma TABELA justamente pa
 um segundo fechamento carregando o mesmo wgpu para um processo que vive segundos por ano.
 
 No laço aninhado não há unidade nenhuma — `nix/footer-single.nix` sobe o rodapé como filho comum e o
-`dev.nix` espera pelo **niri** —, então o próprio `footer-single` vigia o PID e levanta a mesma
+`dev.nix` espera pelo **compositor** —, então o próprio `footer-single` vigia o PID e levanta a mesma
 linha. Ele distingue queda de recarga por um arquivo `.onpurpose` escrito antes do `kill`: sem isso
 a linha nasceria a cada save, que é o alarme que ninguém lê depois da segunda vez.
 
@@ -7116,21 +7237,21 @@ O rodapé é a **única** chrome (inv. 14): morto, não há modeline, minibuffer
 fora da leader cobriam três casos e todos pedem `spawn` ao **compositor** — ou seja, os três somem
 exatamente quando o compositor é o que quebrou. Faltava a porta que funciona quando nada funciona.
 
-**O pedido tinha um conflito interno, e ele decidiu a arquitetura.** "Independente do niri e das
-ferramentas gráficas" e "matar janela com um clique do mouse" não cabem na mesma tela: o console do
-kernel não tem ponteiro. A saída é **um binário, duas portas**:
+**O pedido tinha um conflito interno, e ele decidiu a arquitetura.** "Independente do compositor e
+das ferramentas gráficas" e "matar janela com um clique do mouse" não cabem na mesma tela: o console
+do kernel não tem ponteiro. A saída é **um binário, duas portas**:
 
-| | com o niri vivo | sem ele |
+| | com o compositor vivo | sem ele |
 |---|---|---|
-| quem abre | bind do niri → janela flutuante | kernel → `ctrl-alt-del.target` → VT 8 |
+| quem abre | bind do compositor → janela flutuante | kernel → `ctrl-alt-del.target` → VT 8 |
 | o que existe | mouse e teclado | teclado |
 | do que depende | Wayland, wgpu, atlas de fontes | nada disso |
 
 É a mesma tela, o mesmo binário. Por isso o resgate é uma **aplicação de terminal** e não um cliente
 Wayland: uma janela de resgate que precisa do compositor vivo é a chave trancada dentro do cofre.
 
-**Não é chrome** (inv. 14). A porta de cima é um `xdg_toplevel` que o niri flutua por `window-rule`
-gerada — exatamente o que o `Ctrl+Alt+Esc` já faz com o btop, com um terceiro `app_id`
+**Não é chrome** (inv. 14). A porta de cima é um `xdg_toplevel` que o compositor flutua por uma regra
+`for_window` gerada — exatamente o que o `Ctrl+Alt+Esc` já faz com o btop, com um terceiro `app_id`
 (`br.ronoctua.rescue`) porque a regra dele pede janela maior. A porta de baixo não está no desktop.
 
 #### Tomar o `Ctrl+Alt+Del` é assumir o que ele fazia
@@ -7154,16 +7275,16 @@ Nada sobre *o que* rodar mora no código que desenha — e é isso que torna a l
 regra de polkit permite, nos dois sentidos. Foi esse segundo sentido que achou, sozinho, que a
 unidade do editor morava noutro arquivo.
 
-**Duas faixas, e a linha é a do dono:** ver é livre, agir prova quem é. Reiniciar rodapé, niri ou a
-sessão inteira não passa por polkit nenhum — não há display manager aqui, e essas são unidades **de
+**Duas faixas, e a linha é a do dono:** ver é livre, agir prova quem é. Reiniciar rodapé, compositor
+ou a sessão inteira não passa por polkit nenhum — não há display manager aqui, e essas são unidades **de
 usuário**. O que toca o sistema, dá shell ou não se desfaz vai para `auth_self_keep`: a senha da
 própria pessoa, uma vez, lembrada pela sessão. Quem pergunta é o polkit, com `pkttyagent` no VT — este
 crate nunca vê senha, e um console de resgate é o pior lugar possível para errar autenticação.
 
 #### O que ele não faz, e por quê
 
-**Não edita o config do niri.** `/etc/niri/config.kdl` é link para o store e é gerado
-(`nix/modules/niri.nix`): editar seria imperativo (inv. 6) e sumiria no rebuild. Ele **abre em
+**Não edita o config do compositor.** `/etc/scroll/config` é link para o store e é gerado
+(`nix/modules/scroll.nix`): editar seria imperativo (inv. 6) e sumiria no rebuild. Ele **abre em
 leitura**, dizendo de qual arquivo do flake nasceu — o que a pessoa procura é o arquivo cujo nome ela
 sabe, e encontrá-lo junto com a origem é a diferença entre resposta e beco sem saída. O único
 arquivo que a máquina de fato possui é o `host.nix`, e esse abre para editar.
@@ -7242,7 +7363,7 @@ módulos que divergem.
 Todas as chaves entram por `lib.mkDefault`, porque a tabela é a voz mais fraca da sala: `host.nix` e
 `vm.nix` continuam vencendo.
 
-**A reduzida não é outra distro.** Niri, rodapé, fonte primária, teclado, rede, impermanência e
+**A reduzida não é outra distro.** Compositor, rodapé, fonte primária, teclado, rede, impermanência e
 terminal ficam. O que sai é aplicativo — o que se instala para USAR, não o que é preciso para entrar.
 
 Duas coisas apareceram ao medir isto, e as duas eram interruptores que não interruptavam:
@@ -7266,7 +7387,7 @@ Duas coisas apareceram ao medir isto, e as duas eram interruptores que não inte
 
 Instalar custava uma tarde, e o motivo não era o download. `nixos-install` **constrói** o sistema: o
 que vem do nixpkgs chega pronto do cache público, e o que este repositório produz não existe em cache
-nenhum — o shell, o niri do input pinado, o `libghostty-vt` com o Zig, os buffers wasm, a
+nenhum — o shell, o compositor do input pinado, o `libghostty-vt` com o Zig, os buffers wasm, a
 família de fontes que vem de um Release do GitHub. São exatamente as compilações que o `earlyoom`
 deste host mata por peso.
 
@@ -7399,7 +7520,7 @@ padrão da distro, a tabela da máquina, e por cima delas os GIROS da pessoa, qu
 Uma fonte de verdade (`brain.json`) e uma vista derivada dela, na forma de uma linha por passo, que é
 a forma que o script já sabe ler — a alternativa era ensinar um `writeShellApplication` a parsear
 JSON, que é ou uma dependência nova ou um `grep` que um dia responderá com confiança e errado sobre
-a máquina de alguém. É a mesma relação que o fragmento do niri tem com o `theme.json`.
+a máquina de alguém. É a mesma relação que o fragmento do compositor tem com o `theme.json`.
 
 **A camada da pessoa é só da metade dela**, e isso é uma fronteira e não um esquecimento: a metade
 root roda como root, cuja casa é `/root`, e não há jeito honesto de ela descobrir de quem foi a
@@ -7474,7 +7595,7 @@ e não sobem processo. É isso que permite provar um ANO de agendamento em milis
 
 #### Não há uma segunda fronteira com o `/proc`
 
-O `ronoctua-memory` continua sendo a única — o mesmo critério do `ronoctua-niri` e do
+O `ronoctua-memory` continua sendo a única — o mesmo critério do `ronoctua-scroll` e do
 `ronoctua-network`. Quem cresceu foi ele: ganhou `cpu_pressure()` e `on_battery()`, e o cérebro recebe
 o pulso já lido, por um trait (`pulse::Meter`). A alternativa seria o cérebro abrindo `pressure/cpu`
 e
@@ -7930,7 +8051,7 @@ sentidos; e o Tor não sobe no boot, porque quem não pediu Tor não está usand
 
 ### `/proc`, ICMP e o que se pode saber sem privilégio
 
-**`ronoctua-memory::net` é a fronteira do `/proc/net`** — a mesma regra que faz o `ronoctua-niri` o
+**`ronoctua-memory::net` é a fronteira do `/proc/net`** — a mesma regra que faz o `ronoctua-scroll` o
 único a falar com o compositor. Duas armadilhas viraram teste: o endereço em `/proc/net/tcp` é
 LITTLE-ENDIAN (lido ao contrário, `0100007F` vira `1.0.0.127`, um endereço plausível que não é o que
 está aberto), e UDP não tem `LISTEN` — o kernel escreve `07` para um socket sem par, e ler `0A` ali
@@ -7954,7 +8075,7 @@ Então a varredura responde QUEM, e `ping` — um endereço de cada vez, já res
 
 O molde é o da rede e o da energia, e a razão é a mesma: o rodapé tem teto de doze linhas (inv. 14) e
 a ficha de UMA tela tem dezoito. `s d d` desenha na região; `s d w` abre a mesma `View` numa janela
-(`br.ronoctua.display`). Um crate é a fronteira (`ronoctua-display`): niri por IPC, os backlights por
+(`br.ronoctua.display`). Um crate é a fronteira (`ronoctua-display`): o compositor por IPC, os backlights por
 `/sys`, os monitores externos por DDC/CI escrito por nós sobre `/dev/i2c-*` — sem `ddcutil`.
 
 **O que é diferente de toda outra vista é o RELÓGIO.** Uma mudança de escala, de resolução, de taxa ou
@@ -7971,13 +8092,19 @@ mudança numa tela APAGADA não é prevista de jeito nenhum: não há imagem par
 gravada direto.
 
 **"Manter" grava UM botão, o que foi perguntado, e o que foi PEDIDO.** Gravar os três que a leitura
-sabe (escala, modo, posição) tirava a pessoa da escolha automática do niri em todos eles na primeira
-vez que ela mexesse em qualquer um; e ler o valor de volta trocaria "escolha você" pelo número que o
-niri escolheu — a prévia e a coisa mantida deixariam de ser a mesma mudança.
+sabe (escala, modo, posição) tirava a pessoa da escolha automática do compositor em todos eles na
+primeira vez que ela mexesse em qualquer um; e ler o valor de volta trocaria "escolha você" pelo
+número que ELE escolheu — a prévia e a coisa mantida deixariam de ser a mesma mudança.
 
-**O arquivo é o que sobrevive ao reboot; o IPC é o que faz o compositor concordar com ele.** Recarregar
-sozinho NÃO desfaz um transitório: o niri preserva a mudança quando o arquivo relido é igual ao
-anterior. Por isso `Order::Keep` grava e depois DIZ, botão por botão, o que o arquivo diz.
+**O arquivo é o que sobrevive ao reboot; o IPC é o que faz o compositor concordar com ele.** E
+escrever sozinho não faz NADA, porque ele não vigia arquivo nenhum — não há inotify nele. Por isso
+`Order::Keep` grava e então PEDE a releitura.
+
+**Desfazer é UM comando, e isso é propriedade deste compositor.** `load_main_config` libera
+`config->output_configs` e reconstrói do arquivo, então toda ordem `output` mandada em execução deixa
+de existir de uma vez. O anterior fazia o contrário — PRESERVAVA o transitório quando o arquivo
+relido era igual ao anterior —, e desfazer custava seis chamadas por tela, inclusive dos botões que
+ninguém tinha tocado, porque "não escolhido" era uma instrução e não uma ausência.
 
 **Uma frase não é uma linha, e uma ordem que não muda nada não é uma ordem.** As duas regras foram
 escritas cada uma num lugar e valiam só ali. A prosa: a pergunta mantinha suas duas frases fora do
@@ -7990,18 +8117,18 @@ mesmo assim — uma leitura, uma reescrita do `display.json` e seis chamadas de 
 de tecla, redesenhando byte a byte. A regra mora em `keep_for` agora, que compara o `Wanted` que
 montou com o que está no arquivo, e vale para todo botão que grava.
 
-**Sair com uma pergunta de pé devolve a mudança primeiro.** A prévia é um transitório do IPC do
-niri, e o que a derruba é esta thread dizendo os números do arquivo de volta — `Order::Undo`. Uma
+**Sair com uma pergunta de pé devolve a mudança primeiro.** A prévia vive na configuração EM
+EXECUÇÃO do compositor, e o que a derruba é esta thread pedindo a releitura — `Order::Undo`. Uma
 porta que marcava `quit` e voltava largava o remetente, `main` acabava, e o processo levava a thread
-junto: a ordem enfileirada nunca era cumprida e a mudança ficava de pé até o niri reiniciar. Pior:
+junto: a ordem enfileirada nunca era cumprida e a mudança ficava de pé até o compositor reiniciar. Pior:
 `previewed` é o conjunto DAQUELA thread, então uma porta aberta depois manda um `Undo` que não envia
 nada — não havia volta de dentro do shell. `Handle::finish` manda e ESPERA (o canal entrega o que
 está na fila antes de dizer que o remetente sumiu), e as duas portas o chamam: a janela ao ser
 fechada, o rodapé ao sair. **A espera tem PRAZO — três segundos — e não é um `join`**: o
-`Niri::request` comum não tem tempo de leitura, então um compositor que aceita a conexão e nunca
+pedido comum do adaptador não tem tempo de leitura, então um compositor que aceita a conexão e nunca
 responde seguraria a thread, e um `join` seguraria a PORTA — uma janela que não fecha. O prazo é o
-que a thread pode honestamente levar: uma leitura profunda (um quinto de segundo por porta, sobre quantas
-portas a máquina tiver) mais as seis chamadas do `Undo`.
+que a thread pode honestamente levar: uma leitura profunda (um quinto de segundo por porta, sobre
+quantas portas a máquina tiver) mais a releitura do `Undo`.
 
 **Cada porta escreve de volta só o que ELA mudou.** São duas `Eyes` — uma por porta —, e cada uma
 guarda a leitura que a última ordem dela deixou. `write` levava as telas SEMPRE, no argumento de que
@@ -8009,9 +8136,10 @@ guarda a leitura que a última ordem dela deixou. `write` levava as telas SEMPRE
 mexer no tamanho do texto numa janela escrevia as telas velhas dela por cima do arquivo — apagando
 do `display.json` E do fragmento uma escala que a outra porta acabara de gravar. Agora há uma
 bandeira por metade (`wrote_the_text`, `wrote_the_screens`) e a mesclagem é uma função pura,
-testável sem disco. **E o fragmento só é reescrito quando os BYTES dele mudam**: toda escrita é um
-rename, que é o que o observador de include do niri vê, e recarregar a configuração inteira a cada
-passo do tamanho do texto era um `ConfigLoaded` — e uma leitura completa em cada porta — por tecla.
+testável sem disco. **E o fragmento só é reescrito quando os BYTES dele mudam** — agora pelo que vem
+DEPOIS da escrita, e não pela escrita: este compositor não vigia arquivo, então o rename não custa
+nada; o que custa é a releitura que o `Keep` manda em seguida, que é uma carga completa da
+configuração e uma leitura nova em cada porta. Pular a escrita é o que pula isso.
 
 **E uma recusa derruba só a pergunta dela.** A resposta de uma ordem chega depois de uma ida e volta,
 e nesse meio-tempo a pergunta pode ter sido respondida e outra ter subido — `→`, `Esc`, `→` de novo
@@ -8021,10 +8149,13 @@ dizia ser impossível. O conector não basta; o `Ask` também viaja na ordem e �
 **A janela tem relógio ARMADO, e é a única assim** — quatro outras batem sempre, pela vida da
 janela, e a do gerenciador arma uma só quando o inotify falha; o do rodapé não alcança esta: são dois processos
 com duas `View`s. Ele é armado só enquanto há uma pergunta com relógio de pé e se desarma sozinho, de
-modo que em repouso a janela não acorda nenhuma vez. Ela também ouve o `wl_output` (o niri não publica
-evento nenhum sobre monitores), o `display.json` inteiro (a metade das telas, não só a do texto) e o
-`ConfigLoaded` do niri — sem esse último, a porta que ESCREVE o fragmento seria a única incapaz de
-dizer que o compositor o recusou.
+modo que em repouso a janela não acorda nenhuma vez. Ela também ouve DOIS sinais de que uma tela
+mexeu — o `wl_output` do Wayland, que ela já recebe por ser cliente, e o evento `output` do próprio
+compositor, que é o mais largo dos dois (dispara também em modo, escala e releitura) — e o
+`display.json` inteiro. **O terceiro sinal que existia morreu com o compositor anterior**: havia um
+evento dizendo que a última carga de configuração falhou, e era por ele que a porta que ESCREVE o
+fragmento sabia que ele fora recusado. Este não publica nada disso e o `reload` responde `success`
+haja o que houver, então quem responde agora é o portão de BUILD.
 
 ### Bluetooth — `LEADER s b`, e o glifo é o que a coisa É
 
@@ -8146,7 +8277,7 @@ seco de lugar nenhum: abre a vista e pede no minibuffer, senão o que sairia daq
 
 ### Teclados — `LEADER s k`, e por que o ajuste por dispositivo mora abaixo do compositor
 
-O niri tem **um** `input { keyboard { … } }` para todos os teclados da máquina: um layout, uma taxa
+O compositor tem **um** `input type:keyboard { … }` para todos os teclados da máquina: um layout, uma taxa
 de repetição, e nenhuma forma de nomear um dispositivo. Não é esquecimento — as sete seções de
 entrada dele são por TIPO de dispositivo, e o `apply_libinput_settings` ramifica pela capacidade do
 aparelho, nunca pelo nome. O IPC também não expõe dispositivo de entrada nenhum: as dezesseis
@@ -8192,7 +8323,8 @@ carregavam e DOIS eram teclados. O filtro é o alfabeto, como o próprio keyd fa
 
 `tokens`, `i18n`, `protocol` e `cmd` não dependem de nada e são dependência de todo o resto.
 `runtime` **não conhece** `render` — produz display list, não rasteriza, e é o que permite testar
-buffers headless. `niri` é folha: só o `shell` a toca. `term` isola todo o `unsafe` e todo o FFI.
+buffers headless. `compositor` e `scroll` são folhas: só o `shell` as toca, e só a segunda sabe qual
+compositor é. `term` isola todo o `unsafe` e todo o FFI.
 
 Duas adições ao grafo original, cada uma por um problema real:
 
@@ -8243,7 +8375,7 @@ Duas correções que esses números carregam, ambas de ordem de grandeza:
 | # | risco | mitigação |
 |---|---|---|
 | R1 | **Build Zig/Nix do `libghostty-vt`.** API pre-1.0; a FOD quebra a cada bump. | O trait torna isso não-bloqueante. Commit pinado. Sem ele, o diferencial degrada para golden-file. |
-| R2 | **Deriva do IPC do Niri** contra "sem fork". | `ronoctua-niri` é folha com superfície estreita; o contrato roda contra a tag pinada **e** contra `niri-next`, dando aviso antes de a release virar obrigatória. Se a capability sumir: **parar e reportar**. |
+| R2 | **Deriva do IPC do compositor** contra "sem fork". | Metade desse IPC é o do i3, congelado por compatibilidade há uma década. A outra metade — os comandos do fork — é conferida em BUILD: o gerador recusa um verbo que a fonte pinada não tenha. O contrato roda contra a tag pinada, e não contra uma segunda, porque o risco deixou de ter o mesmo tamanho. Se um verbo sumir: **parar e reportar**. |
 | R3 | **Instanciação de 5 ms** contra os dados do `glyphdb`. | `memory_init_cow` + AOT `.cwasm`, com gate de CI que mede e falha acima de 5 ms. |
-| R4 | **Xwayland quebrando PID → cgroup.** | Um satellite por scope. |
+| R4 | **Xwayland quebrando PID → cgroup.** | Resolvido pelo compositor: o XWayland é embutido e ele reporta o PID do cliente X real (extensão XRes), então não há processo intermediário para confundir a correlação. Era um satellite por scope. |
 | R5 | **Closure de fonte de ~10 GB.** | Cinco derivações; o ISO leva 62 MB; `noto-fonts-extra` isolado e removível por opção de host. |

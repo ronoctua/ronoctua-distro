@@ -12,9 +12,9 @@
 #   - `nix/modules/home.nix` turns it into `xdg.userDirs`, which is what writes
 #     `~/.config/user-dirs.dirs` — the file a dialog, a browser download and
 #     `xdg-open` actually read;
-#   - `nix/modules/niri.nix` takes `screenshot` for the compositor's
-#     `screenshot-path`, so a capture lands where the distro says and not where
-#     upstream's default says;
+#   - `nix/modules/scroll.nix` takes `screenshot` for `RONOCTUA_SCREENSHOTS`,
+#     which is where the footer builds a capture's name — so a capture lands
+#     where the distro says;
 #   - `nix/files-sidebar.nix` names WHICH of these the file manager's sidebar
 #     opens with, by KEY — so the sidebar cannot drift from the directory.
 #
@@ -25,11 +25,12 @@
 # `screenshot` IS NOT A FREEDESKTOP DIRECTORY, and it is here anyway.
 # -------------------------------------------------------------------
 # The spec has eight; `projects` was already a ninth, for the reason written in
-# `nix/modules/home.nix`. This is the tenth, and it exists because the niri we
-# pin defaults to `~/Pictures/Screenshots/…` (`niri-config/src/misc.rs`) — a
-# path that contradicts `XDG_PICTURES_DIR` as this distro sets it, and that
-# nothing here creates. A directory the system writes into and never declares is
-# a directory nobody can point at.
+# `nix/modules/home.nix`. This is the tenth, and it exists because a capture
+# has to land SOMEWHERE and nothing else declares where. The compositor takes
+# no screenshots at all — `grim` does, started by the footer — so there is no
+# upstream default to contradict any more; what there is instead is a name the
+# footer builds, and it builds it from here. A directory the system writes into
+# and never declares is a directory nobody can point at.
 #
 # SINGULAR, like its three siblings under `media/`: `image`, `video`,
 # `audio-music`. A plural among them would read as a different kind of thing.

@@ -240,8 +240,8 @@ pub struct Binding {
     /// to carry a number — nine names in the locator saying the same
     /// thing, and nine text keys to translate.
     ///
-    /// The chord already did this: `LEADER+3` carries the `3` in the KDL itself. Here the
-    /// sequence gains the same ability.
+    /// The chord already did this: `LEADER+3` carries the `3` in the bind
+    /// itself. Here the sequence gains the same ability.
     pub argument: Option<&'static str>,
 }
 

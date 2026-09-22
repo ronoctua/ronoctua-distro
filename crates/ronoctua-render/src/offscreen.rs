@@ -4,8 +4,9 @@
 //! # Why this exists
 //!
 //! Until it did, the only way to LOOK at anything this renderer draws was to
-//! boot a NixOS VM, start niri under `Xvfb`, screenshot the X root and crop it
-//! by the geometry niri reported. Three minutes and a QEMU, to see whether a
+//! boot a NixOS VM, start the compositor under `Xvfb`, screenshot the X root
+//! and crop it by the geometry it reported. Three minutes and a QEMU, to see
+//! whether a
 //! title was touching a rule. The owner's own rule says green is not proof —
 //! open it on the screen before saying it is done — and a rule that costs three
 //! minutes every time is a rule that gets skipped.

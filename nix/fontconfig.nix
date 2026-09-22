@@ -453,7 +453,7 @@ in
   # fontconfig with no font directory: no font found, and everything
   # that goes through it turns into TOFU.
   #
-  # The symptom was an unreadable niri error message on screen — little boxes in
+  # The symptom was an unreadable compositor error message on screen — little boxes in
   # place of every letter. Precisely the message that says what is wrong.
   #
   # Our renderer does not go through here (section 6.4: it resolves by

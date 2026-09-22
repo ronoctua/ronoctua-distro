@@ -40,7 +40,7 @@ pub enum Ask {
     ///
     /// It is how a screen stays honest without polling: the footer holds one of
     /// these open on a thread and pushes what arrives into `calloop`, exactly
-    /// as it already does with the transfer queue and with niri's events.
+    /// as it already does with the transfer queue and with the compositor's events.
     Watch,
     /// Put this task in the queue now, whatever its schedule says.
     Run {

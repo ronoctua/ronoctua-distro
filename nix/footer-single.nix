@@ -37,7 +37,7 @@ writeShellApplication {
   text = ''
     # Usage: ronoctua-footer-single <pidfile> <binary> [args...]
     #
-    # The footer's ENVIRONMENT is inherited (WAYLAND_DISPLAY, RUST_LOG, NIRI_SOCKET).
+    # The footer's ENVIRONMENT is inherited (WAYLAND_DISPLAY, RUST_LOG, SCROLLSOCK).
     # Passing it by argument would force the caller to build a complete `env`
     # at both call sites, and the two would diverge.
     if [ $# -lt 2 ]; then
@@ -125,7 +125,7 @@ writeShellApplication {
     # ---------------------------------------------------------------
     # In production this is `OnFailure=ronoctua-lifeline.service` on the unit,
     # and it costs nothing at all. Here there is no unit: `dev.nix` waits on
-    # NIRI, so a footer that aborts leaves the screen bare until somebody saves
+    # the COMPOSITOR, so a footer that aborts leaves the screen bare until somebody saves
     # a file — which is exactly where the owner met a crash and reported that
     # the distro "acaba deixando o usuário sem interface".
     #
@@ -169,21 +169,26 @@ writeShellApplication {
       fi
 
       # TWO. THE COMPOSITOR THAT FOOTER WAS BORN UNDER IS STILL THERE — and the
-      # question is niri's PID, never whether its socket file is on disk. A
+      # question is its PID, never whether its socket file is on disk. A
       # Wayland server killed by a signal does not unlink its own socket:
-      # measured, `/run/user/1000/wayland-2` was still there an hour after that
-      # niri was gone, which is also why the lifeline answers "could not find
-      # wayland compositor" (it connects and takes ECONNREFUSED) instead of
-      # hanging. A `[ -S … ]` test here would pass with the whole defect in
-      # place. `NIRI_SOCKET` is `niri.<display>.<pid>.sock`, so the PID is in
-      # the NAME, and reading it costs no process at all.
-      if [ -n "''${NIRI_SOCKET:-}" ]; then
-        sock=''${NIRI_SOCKET##*/}
-        compositor=''${sock%.sock}
-        compositor=''${compositor##*.}
-        case "$compositor" in
+      # measured, `/run/user/1000/wayland-2` was still there an hour after the
+      # compositor that made it was gone, which is also why the lifeline answers
+      # "could not find wayland compositor" (it connects and takes
+      # ECONNREFUSED) instead of hanging. A `[ -S … ]` test here would pass with
+      # the whole defect in place.
+      #
+      # THE PID IS HANDED OVER and no longer derived. It used to be read out of
+      # the IPC socket's NAME, because the previous compositor put it there;
+      # this one takes `SCROLLSOCK` as a path, and `dev.nix` gives it a
+      # `mktemp -u` name with nothing in it to read. So `dev.nix` exports the
+      # pid it already holds (`$!`), and this costs no process either.
+      if [ -n "''${RONOCTUA_COMPOSITOR_PID:-}" ]; then
+        case "$RONOCTUA_COMPOSITOR_PID" in
           *[!0-9]* | "") ;;
-          *) kill -0 "$compositor" 2>/dev/null || { rm -f "$pidfile.watcher"; exit 0; } ;;
+          *)
+            kill -0 "$RONOCTUA_COMPOSITOR_PID" 2>/dev/null ||
+              { rm -f "$pidfile.watcher"; exit 0; }
+            ;;
         esac
       fi
 

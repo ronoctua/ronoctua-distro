@@ -9,7 +9,7 @@ publish.workspace = true
 
 # ZERO dependencies. It is specification logic over `&str` and `Path` — the same
 # nature as `foreign::scope_from_cgroup`, which parses cgroups by hand, and as
-# `ronoctua-niri`, which defines the types instead of depending on `niri-ipc`.
+# `ronoctua-scroll`, which defines the types instead of depending on the compositor.
 #
 # A desktop entry crate would bring locale negotiation we do not need
 # (we have ONE language, chosen at startup) and would leave `Exec` to us.

@@ -13,9 +13,10 @@
 #
 # HOW THE SCREEN IS CAPTURED
 # --------------------------
-# Through X, with `xwd -root`, and not through `wlr-screencopy`. niri runs on
-# the winit backend inside Xvfb (see `niri-xvfb.nix`), so the winit window
-# ALREADY contains everything it composes — including our layer-shell surface.
+# Through X, with `xwd -root`, and not through `wlr-screencopy`. The compositor
+# runs on the wlroots X11 backend inside Xvfb (see `compositor-xvfb.nix`), so
+# its X window ALREADY contains everything it composes — our layer-shell
+# surface included.
 # Capturing X's root is one call, with no capture protocol in the middle.
 #
 # The OCR is done only on the FOOTER'S BAND, enlarged. Tesseract on 14 px text
@@ -26,13 +27,13 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
 
   # THE HEIGHT COMES FROM THE TOKENS, not from a nailed-down number. It used
   # to be `35`, from when the font was 14 px and the line height 1.25 — both
@@ -54,7 +55,7 @@ pkgs.testers.runNixOSTest {
     virtualisation.cores = 2;
 
     environment.systemPackages = [
-      niri
+      scroll
       ronoctua-shell
       client
       pkgs.imagemagick
@@ -78,8 +79,8 @@ pkgs.testers.runNixOSTest {
 
 
     def modeline_ocr():
-        w, h, x, y = niri_geometry()
-        print(f"niri's window: {w}x{h}+{x}+{y}")
+        w, h, x, y = compositor_geometry()
+        print(f"the compositor's window: {w}x{h}+{x}+{y}")
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
 
         window = f"-crop {w}x{h}+{x}+{y} +repage"
@@ -116,10 +117,10 @@ pkgs.testers.runNixOSTest {
     machine.start()
     machine.wait_for_unit("multi-user.target")
     start_xvfb()
-    start_niri("niri", "${niri}")
+    start_compositor("compositor", "${scroll}")
 
-    with subtest("the footer comes up connected to niri's IPC"):
-        sock = socket_of("niri")
+    with subtest("the footer comes up connected to the compositor's IPC"):
+        sock = socket_of("compositor")
         machine.succeed(
             "systemd-run --unit=footer ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
@@ -128,21 +129,21 @@ pkgs.testers.runNixOSTest {
             # all, the update task keeps its default afternoon window, and this
             # test measured a three-line footer between 13h and 18h.
             "--setenv=HOME=/root "
-            f"--setenv=NIRI_SOCKET={sock} "
+            f"--setenv=SCROLLSOCK={sock} "
             "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_render=trace "
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'footer layout resolved'",
+            "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null",
             timeout=60,
         )
 
-        # Without NIRI_SOCKET the daemon degrades instead of failing — correct
+        # Without SCROLLSOCK the daemon degrades instead of failing — correct
         # behavior, but one that would make this test pass without testing
         # anything. This assert is what guarantees that the IPC did connect.
-        assert "no niri IPC" not in machine.succeed(
+        assert "no the compositor IPC" not in machine.succeed(
             "journalctl -u footer --no-pager"
-        ), "the footer did not connect to the IPC; NIRI_SOCKET did not arrive"
+        ), "the footer did not connect to the IPC; SCROLLSOCK did not arrive"
 
     with subtest("with no window, the modeline does NOT invent a buffer"):
         # The initial state matters: it is what shows up when the compositor comes up.
@@ -169,21 +170,21 @@ pkgs.testers.runNixOSTest {
         )
         try:
             machine.wait_until_succeeds(
-                "journalctl -u footer --no-pager | grep -q 'text=ronoctua-teste'",
+                "journalctl -u footer --no-pager | grep 'text=ronoctua-teste' > /dev/null",
                 timeout=60,
             )
         except Exception:
             # The decisive question: did the COMPOSITOR see the window? If it
             # reports zero, the problem is the client; if it reports one, the
             # problem is ours. Without this the two hypotheses stay tied.
-            print("--- what niri says exists ---")
+            print("--- what the compositor says exists ---")
             print(machine.execute(
-                f"${ronoctua-shell}/bin/niri-contract {sock}")[1])
+                f"${ronoctua-shell}/bin/ronoctua-contract {sock}")[1])
             print("--- client ---")
             print(machine.execute("systemctl status client --no-pager")[1])
             print(machine.execute("journalctl -u client --no-pager")[1])
-            print("--- niri ---")
-            print(machine.execute("journalctl -u niri --no-pager")[1])
+            print("--- the compositor ---")
+            print(machine.execute("journalctl -u compositor --no-pager")[1])
             print("--- footer ---")
             print(machine.execute("journalctl -u footer --no-pager")[1])
             raise
@@ -233,7 +234,7 @@ pkgs.testers.runNixOSTest {
         )
         block = lines[last_layout:]
         assert not any('id="state"' in l for l in block), (
-            "a foreign window got a state: niri does not tell us what\n"
+            "a foreign window got a state: the compositor does not tell us what\n"
             "state `vim` is in, and writing `normal` would be asserting what\n"
             "nobody checked.\n" + "\n".join(block[:10])
         )
@@ -245,7 +246,7 @@ pkgs.testers.runNixOSTest {
         # Back to NO segment: with no focused window there is no name and no
         # mode to show, and with nothing unread there is no bell.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | tail -20 | grep -q 'segments=0'",
+            "journalctl -u footer --no-pager | tail -20 | grep 'segments=0' > /dev/null",
             timeout=60,
         )
   '';

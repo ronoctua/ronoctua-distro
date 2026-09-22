@@ -3,10 +3,10 @@
 # WHAT THIS MODULE IS FOR, AND WHAT IT IS NOT
 # -------------------------------------------
 # Almost everything about a monitor — its mode, its scale, how it is turned,
-# where it sits — is the COMPOSITOR's, and the shell asks niri for it over the
+# where it sits — is the COMPOSITOR's, and the shell asks it over the
 # IPC it already speaks. None of that needs a line here.
 #
-# What does need a line is the one thing niri cannot answer: how bright the
+# What does need a line is the one thing the compositor cannot answer: how bright the
 # picture is. There are two kinds of screen and they answer differently, and
 # neither of them answers to a Wayland client:
 #

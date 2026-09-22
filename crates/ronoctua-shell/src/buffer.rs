@@ -4,11 +4,11 @@
 //!
 //! Invariant 4 is explicit: **the shell never reimplements window
 //! layout**. A native buffer is a WINDOW like any other, and what
-//! decides where it goes is niri. Drawing buffers inside a fullscreen
+//! decides where it goes is the compositor. Drawing buffers inside a fullscreen
 //! surface of ours would throw the compositor away — and section 7.5 forbids that
 //! by name.
 //!
-//! The practical consequence: a native buffer appears in niri's window
+//! The practical consequence: a native buffer appears in the compositor's window
 //! column, stacks, resizes and closes like everything else. There is nothing special
 //! about it from the compositor's point of view, and that is how it should be.
 //!
@@ -736,7 +736,7 @@ fn input_of_key(sym: Keysym, utf8: Option<&str>) -> Option<ronoctua_protocol::In
 /// is worse than not copying: it looks as if it worked.
 ///
 /// `wl-copy` leaves a minimal process serving the selection until someone
-/// replaces it. It is the same choice as `niri msg action`: using the client that
+/// replaces it. It is the same choice as `scrollmsg`: using the client that
 /// already exists instead of reimplementing the other side's protocol.
 ///
 /// # Errors
@@ -889,7 +889,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     // the same time). Now the buffer publishes `glyphs` and this is what turns
     // it into what the person reads.
     //
-    // The `app_id` is NOT translated, and that is deliberate: niri's window
+    // The `app_id` is NOT translated, and that is deliberate: the compositor's window
     // rules match on it, and a rule that only fires in one language is a rule
     // that fails on the machine of whoever changed `LANG`.
     let texts = crate::language::texts();
@@ -936,7 +936,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     let surface_of = compositor.create_surface(&qh);
     // `RequestServer`: decoration belongs to the COMPOSITOR, never to us. Drawing a
     // border or a title bar here would be reimplementing window layout, and
-    // invariant 4 forbids it. niri runs with `prefer-no-csd`, so in
+    // invariant 4 forbids it. The compositor draws no titlebar, so in
     // practice there is no decoration at all — which is what section 3 wants.
     let window = xdg.create_window(surface_of, WindowDecorations::RequestServer, &qh);
     window.set_title(format!("*{title}*"));
@@ -3712,7 +3712,7 @@ smithay_client_toolkit::delegate_dispatch2!(Host);
 /// in a buffer whose keymap starts with `m`.
 const fn opens_sequence(ctrl: bool, logo: bool, idle: bool) -> bool {
     // `logo` excluded and not ignored: `Super` belongs to the compositor, and a
-    // buffer answering to it would steal a binding from niri.
+    // buffer answering to it would steal a binding from the compositor.
     ctrl && !logo && idle
 }
 
@@ -4005,7 +4005,7 @@ mod tests {
     }
 
     /// `Super` is the compositor's. A buffer answering to it would steal a
-    /// binding from niri.
+    /// binding from the compositor.
     #[test]
     fn super_does_not_open_a_sequence() {
         assert!(!super::opens_sequence(true, true, true));

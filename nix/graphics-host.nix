@@ -15,7 +15,7 @@
 # `libEGL.so.1` — the nixGL approach, without the dependency. It worked until
 # the host's glibc moved, and then it broke in a way that names nothing:
 #
-#   niri: symbol lookup error: /usr/lib64/libc.so.6:
+#   scroll: symbol lookup error: /usr/lib64/libc.so.6:
 #         undefined symbol: __pointer_chk_guard, version GLIBC_PRIVATE
 #
 # `LD_LIBRARY_PATH` beats `DT_RUNPATH`, so a directory put there for ONE
@@ -29,42 +29,31 @@
 # the host's libraries on the path at all — and for AMD and Intel that costs
 # nothing, because what actually talks to the card is the KERNEL driver, and
 # mesa is just a userspace library that Nix has a perfectly good copy of.
-# Measured: the nested niri comes up on `wayland-2` with nothing of the host's
+# Measured: the nested compositor comes up on `wayland-2` with nothing of the host's
 # on the path.
 #
 # NVIDIA is the exception, and it is a real one: its userspace blob has to match
 # the kernel module, so it can only come from the host. That path is kept, and
 # it prints what it is doing — on an NVIDIA-only machine the glibc mixing above
 # is a risk somebody has to know they are taking.
+#
+# AND THERE IS NO LIST OF X LIBRARIES HERE ANY MORE. There used to be one, for
+# a compositor that reached the X platform through `dlopen` and therefore did
+# not carry those libraries in its RPATH; without the path it died in
+# `EventLoopCreation` with `libXcursor.so.1: cannot open shared object file`,
+# which reads like a broken package and is not. This compositor links them,
+# measured with `ldd` on the built binary: `libxcb`, `libX11` and
+# `libxkbcommon` all resolve through its RUNPATH. So the export went, and with
+# it one more chance for the class of failure this file's header is about.
 {
   lib,
   buildEnv,
-  libx11,
-  libxcursor,
-  libxi,
-  libxrandr,
-  libxcb,
-  libxkbcommon,
   mesa,
   libgbm,
   libglvnd,
 }:
 
 let
-  # The libs winit opens by `dlopen` when it falls back to the X11 platform.
-  #
-  # `libx11` and not `xorg.libX11`: the `xorg` set was deprecated in nixpkgs
-  # 26.05 and warns on every evaluation. Five warnings per `nix run .#dev` are
-  # five lines of noise in the project's most-run command.
-  libsX = lib.makeLibraryPath [
-    libx11
-    libxcursor
-    libxi
-    libxrandr
-    libxcb
-    libxkbcommon
-  ];
-
   # Everything the graphics stack needs, from Nix: the glvnd loader, mesa's
   # vendor libraries, the DRI drivers and the Vulkan ICDs.
   graphics = buildEnv {
@@ -95,7 +84,7 @@ let
   # 650 ms this table exists to avoid.
 in
 {
-  inherit libsX graphics;
+  inherit graphics;
 
   # Shell snippet that prepares the graphics environment. Use with `${...}`.
   prelude = ''
@@ -104,14 +93,6 @@ in
       echo "      The nested compositor runs as a WINDOW inside your" >&2
       echo "      session. With no graphical session, use 'nix run .#vm'." >&2
       exit 1
-    fi
-
-    # Host session on X11: winit goes through the X platform and opens the X libs
-    # by `dlopen` — they are not in niri's RPATH, and without this it panics
-    # in `EventLoopCreation` with "libXcursor.so.1: cannot open shared object
-    # file", which looks like a broken package and is not.
-    if [ -z "''${WAYLAND_DISPLAY:-}" ]; then
-      export LD_LIBRARY_PATH="${libsX}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     fi
 
     if [ ! -d /run/opengl-driver ]; then
@@ -136,8 +117,8 @@ in
           if [ -e "$d/libEGL.so.1" ]; then
             export LD_LIBRARY_PATH="$d''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
             echo "NVIDIA GPU: the host's driver, from $d"
-            echo "  (this mixes the host's libc with Nix's ld.so; if niri" >&2
-            echo "   dies with 'undefined symbol ... GLIBC_PRIVATE', this is it.)" >&2
+            echo "  (this mixes the host's libc with Nix's ld.so; if the" >&2
+            echo "   compositor dies with 'undefined symbol ... GLIBC_PRIVATE', this is it.)" >&2
             break
           fi
         done

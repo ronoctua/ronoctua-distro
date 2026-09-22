@@ -19930,7 +19930,7 @@ mod tests {
         //
         // The view's commands were moved to `M-` when the bare letters became
         // query text, and `M-RET` never arrived: in the nested loop the chord
-        // family IS `Alt`, so niri opened a terminal instead. It was reported
+        // family IS `Alt`, so the compositor opened a terminal instead. It was reported
         // from the screen as "M-RET opens the terminal, not the menu" — and the
         // view was blameless, because the key never reached it.
         //

@@ -22,7 +22,7 @@
 #
 # # Why the desktop survives BY CONSTRUCTION
 #
-# `session.slice` (niri and the footer) is a SIBLING of `app.slice` (the
+# `session.slice` (the compositor and the footer) is a SIBLING of `app.slice` (the
 # applications), not a descendant. `systemd-oomd` only ever considers descendants
 # of a monitored cgroup, so with `app.slice` monitored and nothing else in the
 # session, the compositor and the footer are not candidates. No xattr, no
@@ -287,7 +287,7 @@ in
       # BOTH OF THESE ARE FALSE BY DECISION.
       #
       # `enableRootSlice` monitors `-.slice`, whose candidate set includes
-      # `niri.service` and `ronoctua-footer.service`. And their
+      # `scroll.service` and `ronoctua-footer.service`. And their
       # `ManagedOOMPreference=avoid` would be IGNORED there:
       # `systemd.resource-control(5)` only honours that attribute when the
       # unit's cgroup owner and the monitored ancestor's owner are the same, and

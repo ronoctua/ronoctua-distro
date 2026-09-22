@@ -97,7 +97,8 @@ notif-queue-position = { $shown }/{ $total }
 # what reaches the screen. For one we raise ourselves, they are the default
 # text and the entry's name in the manager.
 notif-screenshot-summary = Screen captured
-notif-screenshot-body = The image is on the clipboard and saved to disk.
+notif-screenshot-body = The picture was saved to disk.
+notif-screenshot-app = screen
 notif-memory-killed-summary = Closed to free memory
 notif-memory-killed-body = An application was closed to keep the machine responsive.
 
@@ -376,157 +377,139 @@ group-help = help
 help-chords = HOLDING THE LEADER
 help-emergency = WHEN THE LEADER DOES NOT ANSWER
 help-leader-alternate = Open the command list
+## Compositor commands — §13, "every OS action has a command"
 
-## Compositor actions — §13, "every OS action has a command"
+# These are the compositor's commands, each reachable by name in the command
+# locator. The list is DECLARED by us in `assets/compositor-deeds.nix` — not
+# mirrored from somebody else's help text — and the generator refuses a verb
+# the pinned compositor does not have. A row added there without a sentence
+# here stops the build, which is the opposite of appearing untranslated in the
+# middle of the list.
 
-# This section is LONG on purpose: these are the 141 actions niri exposes, each
-# reachable by name in the command locator. The list of names is
-# GENERATED from the pinned binary (nix/niri-actions.nix); the translations are written
-# here, and the `niri-actions-translated` check rejects an action without a key in both
-# languages. Bumping niri's tag STOPS the build until whatever appeared is
-# translated — which is the opposite of showing up in English in the middle of the list.
+cmd-wm-focus-left = Focus the window to the left
+cmd-wm-focus-right = Focus the window to the right
+cmd-wm-focus-up = Focus the window above
+cmd-wm-focus-down = Focus the window below
+cmd-wm-focus-beginning = Focus the first window on the scroll
+cmd-wm-focus-end = Focus the last window on the scroll
+cmd-wm-focus-parent = Focus the container this window is in
+cmd-wm-focus-child = Focus inside the container
+cmd-wm-focus-tiling = Focus the tiled windows
+cmd-wm-focus-floating = Focus the floating windows
+cmd-wm-focus-either = Switch focus between tiled and floating
+cmd-wm-focus-screen-left = Focus the screen to the left
+cmd-wm-focus-screen-right = Focus the screen to the right
+cmd-wm-focus-screen-up = Focus the screen above
+cmd-wm-focus-screen-down = Focus the screen below
 
-cmd-niri-quit = Exit niri
-cmd-niri-power-off-monitors = Power off all monitors via DPMS
-cmd-niri-power-on-monitors = Power on all monitors via DPMS
-cmd-niri-spawn = Spawn a command
-cmd-niri-spawn-sh = Spawn a command through the shell
-cmd-niri-do-screen-transition = Do a screen transition
-cmd-niri-screenshot = Open the screenshot UI
-cmd-niri-screenshot-screen = Screenshot the focused screen
-cmd-niri-screenshot-window = Screenshot the focused window
-cmd-niri-toggle-keyboard-shortcuts-inhibit = Enable or disable the keyboard shortcuts inhibitor (if any) for the focused surface
-cmd-niri-close-window = Close the focused window
-cmd-niri-fullscreen-window = Toggle fullscreen on the focused window
-cmd-niri-toggle-windowed-fullscreen = Toggle windowed (fake) fullscreen on the focused window
-cmd-niri-focus-window = Focus a window by id
-cmd-niri-focus-window-in-column = Focus a window in the focused column by index
-cmd-niri-focus-window-previous = Focus the previously focused window
-cmd-niri-focus-column-left = Focus the column to the left
-cmd-niri-focus-column-right = Focus the column to the right
-cmd-niri-focus-column-first = Focus the first column
-cmd-niri-focus-column-last = Focus the last column
-cmd-niri-focus-column-right-or-first = Focus the next column to the right, looping if at end
-cmd-niri-focus-column-left-or-last = Focus the next column to the left, looping if at start
-cmd-niri-focus-column = Focus a column by index
-cmd-niri-focus-window-or-monitor-up = Focus the window or the monitor above
-cmd-niri-focus-window-or-monitor-down = Focus the window or the monitor below
-cmd-niri-focus-column-or-monitor-left = Focus the column or the monitor to the left
-cmd-niri-focus-column-or-monitor-right = Focus the column or the monitor to the right
-cmd-niri-focus-window-down = Focus the window below
-cmd-niri-focus-window-up = Focus the window above
-cmd-niri-focus-window-down-or-column-left = Focus the window below or the column to the left
-cmd-niri-focus-window-down-or-column-right = Focus the window below or the column to the right
-cmd-niri-focus-window-up-or-column-left = Focus the window above or the column to the left
-cmd-niri-focus-window-up-or-column-right = Focus the window above or the column to the right
-cmd-niri-focus-window-or-workspace-down = Focus the window or the workspace below
-cmd-niri-focus-window-or-workspace-up = Focus the window or the workspace above
-cmd-niri-focus-window-top = Focus the topmost window
-cmd-niri-focus-window-bottom = Focus the bottommost window
-cmd-niri-focus-window-down-or-top = Focus the window below or the topmost window
-cmd-niri-focus-window-up-or-bottom = Focus the window above or the bottommost window
-cmd-niri-move-column-left = Move the focused column to the left
-cmd-niri-move-column-right = Move the focused column to the right
-cmd-niri-move-column-to-first = Move the focused column to the start of the workspace
-cmd-niri-move-column-to-last = Move the focused column to the end of the workspace
-cmd-niri-move-column-left-or-to-monitor-left = Move the focused column to the left or to the monitor to the left
-cmd-niri-move-column-right-or-to-monitor-right = Move the focused column to the right or to the monitor to the right
-cmd-niri-move-column-to-index = Move the focused column to a specific index on its workspace
-cmd-niri-move-window-down = Move the focused window down in a column
-cmd-niri-move-window-up = Move the focused window up in a column
-cmd-niri-move-window-down-or-to-workspace-down = Move the focused window down in a column or to the workspace below
-cmd-niri-move-window-up-or-to-workspace-up = Move the focused window up in a column or to the workspace above
-cmd-niri-consume-or-expel-window-left = Consume or expel the focused window left
-cmd-niri-consume-or-expel-window-right = Consume or expel the focused window right
-cmd-niri-consume-window-into-column = Consume the window to the right into the focused column
-cmd-niri-expel-window-from-column = Expel the bottom window from the focused column
-cmd-niri-swap-window-right = Swap focused window with one to the right
-cmd-niri-swap-window-left = Swap focused window with one to the left
-cmd-niri-toggle-column-tabbed-display = Toggle the focused column between normal and tabbed display
-cmd-niri-set-column-display = Set the display mode of the focused column
-cmd-niri-center-column = Centre the focused column on the screen
-cmd-niri-center-window = Centre the focused window on the screen
-cmd-niri-center-visible-columns = Centre all fully visible columns on the screen
-cmd-niri-focus-workspace-down = Focus the workspace below
-cmd-niri-focus-workspace-up = Focus the workspace above
-cmd-niri-focus-workspace = Focus a workspace by reference (index or name)
-cmd-niri-focus-workspace-previous = Focus the previous workspace
-cmd-niri-move-window-to-workspace-down = Move the focused window to the workspace below
-cmd-niri-move-window-to-workspace-up = Move the focused window to the workspace above
-cmd-niri-move-window-to-workspace = Move the focused window to a workspace by reference (index or name)
-cmd-niri-move-column-to-workspace-down = Move the focused column to the workspace below
-cmd-niri-move-column-to-workspace-up = Move the focused column to the workspace above
-cmd-niri-move-column-to-workspace = Move the focused column to a workspace by reference (index or name)
-cmd-niri-move-workspace-down = Move the focused workspace down
-cmd-niri-move-workspace-up = Move the focused workspace up
-cmd-niri-move-workspace-to-index = Move the focused workspace to a specific index on its monitor
-cmd-niri-set-workspace-name = Set the name of the focused workspace
-cmd-niri-unset-workspace-name = Unset the name of the focused workspace
-cmd-niri-focus-monitor-left = Focus the monitor to the left
-cmd-niri-focus-monitor-right = Focus the monitor to the right
-cmd-niri-focus-monitor-down = Focus the monitor below
-cmd-niri-focus-monitor-up = Focus the monitor above
-cmd-niri-focus-monitor-previous = Focus the previous monitor
-cmd-niri-focus-monitor-next = Focus the next monitor
-cmd-niri-focus-monitor = Focus a monitor by name
-cmd-niri-move-window-to-monitor-left = Move the focused window to the monitor to the left
-cmd-niri-move-window-to-monitor-right = Move the focused window to the monitor to the right
-cmd-niri-move-window-to-monitor-down = Move the focused window to the monitor below
-cmd-niri-move-window-to-monitor-up = Move the focused window to the monitor above
-cmd-niri-move-window-to-monitor-previous = Move the focused window to the previous monitor
-cmd-niri-move-window-to-monitor-next = Move the focused window to the next monitor
-cmd-niri-move-window-to-monitor = Move the focused window to a specific monitor
-cmd-niri-move-column-to-monitor-left = Move the focused column to the monitor to the left
-cmd-niri-move-column-to-monitor-right = Move the focused column to the monitor to the right
-cmd-niri-move-column-to-monitor-down = Move the focused column to the monitor below
-cmd-niri-move-column-to-monitor-up = Move the focused column to the monitor above
-cmd-niri-move-column-to-monitor-previous = Move the focused column to the previous monitor
-cmd-niri-move-column-to-monitor-next = Move the focused column to the next monitor
-cmd-niri-move-column-to-monitor = Move the focused column to a specific monitor
-cmd-niri-set-window-width = Change the width of the focused window
-cmd-niri-set-window-height = Change the height of the focused window
-cmd-niri-reset-window-height = Reset the height of the focused window back to automatic
-cmd-niri-switch-preset-column-width = Switch between preset column widths
-cmd-niri-switch-preset-column-width-back = Switch between preset column widths backwards
-cmd-niri-switch-preset-window-width = Switch between preset window widths
-cmd-niri-switch-preset-window-width-back = Switch between preset window widths backwards
-cmd-niri-switch-preset-window-height = Switch between preset window heights
-cmd-niri-switch-preset-window-height-back = Switch between preset window heights backwards
-cmd-niri-maximize-column = Toggle the maximised state of the focused column
-cmd-niri-maximize-window-to-edges = Toggle the maximised-to-edges state of the focused window
-cmd-niri-set-column-width = Change the width of the focused column
-cmd-niri-expand-column-to-available-width = Expand the focused column to space not taken up by other fully visible columns
-cmd-niri-switch-layout = Switch between keyboard layouts
-cmd-niri-show-hotkey-overlay = Show the hotkey overlay
-cmd-niri-move-workspace-to-monitor-left = Move the focused workspace to the monitor to the left
-cmd-niri-move-workspace-to-monitor-right = Move the focused workspace to the monitor to the right
-cmd-niri-move-workspace-to-monitor-down = Move the focused workspace to the monitor below
-cmd-niri-move-workspace-to-monitor-up = Move the focused workspace to the monitor above
-cmd-niri-move-workspace-to-monitor-previous = Move the focused workspace to the previous monitor
-cmd-niri-move-workspace-to-monitor-next = Move the focused workspace to the next monitor
-cmd-niri-move-workspace-to-monitor = Move the focused workspace to a specific monitor
-cmd-niri-toggle-debug-tint = Toggle a debug tint on windows
-cmd-niri-debug-toggle-opaque-regions = Toggle visualisation of render element opaque regions
-cmd-niri-debug-toggle-damage = Toggle visualisation of output damage
-cmd-niri-toggle-window-floating = Move the focused window between the floating and the tiling layout
-cmd-niri-move-window-to-floating = Move the focused window to the floating layout
-cmd-niri-move-window-to-tiling = Move the focused window to the tiling layout
-cmd-niri-focus-floating = Switches focus to the floating layout
-cmd-niri-focus-tiling = Switches focus to the tiling layout
-cmd-niri-switch-focus-between-floating-and-tiling = Toggles the focus between the floating and the tiling layout
-cmd-niri-move-floating-window = Move the floating window on screen
-cmd-niri-toggle-window-rule-opacity = Toggle the opacity of the focused window
-cmd-niri-set-dynamic-cast-window = Set the dynamic cast target to the focused window
-cmd-niri-set-dynamic-cast-monitor = Set the dynamic cast target to the focused monitor
-cmd-niri-clear-dynamic-cast-target = Clear the dynamic cast target, making it show nothing
-cmd-niri-stop-cast = Stop a PipeWire screencast
-cmd-niri-toggle-overview = Toggle (open/close) the Overview
-cmd-niri-open-overview = Open the Overview
-cmd-niri-close-overview = Close the Overview
-cmd-niri-toggle-window-urgent = Toggle urgent status of a window
-cmd-niri-set-window-urgent = Set urgent status of a window
-cmd-niri-unset-window-urgent = Unset urgent status of a window
-cmd-niri-load-config-file = Reload the config file
+cmd-wm-move-left = Move the window left
+cmd-wm-move-right = Move the window right
+cmd-wm-move-up = Move the window up
+cmd-wm-move-down = Move the window down
+cmd-wm-move-beginning = Move the window to the start of the scroll
+cmd-wm-move-end = Move the window to the end of the scroll
+cmd-wm-move-out-left = Take the window out of its column, to the left
+cmd-wm-move-out-right = Take the window out of its column, to the right
+cmd-wm-move-out-up = Move the window up within its column
+cmd-wm-move-out-down = Move the window down within its column
+cmd-wm-move-screen-left = Move the window to the screen on the left
+cmd-wm-move-screen-right = Move the window to the screen on the right
+
+cmd-wm-close = Close the focused window
+cmd-wm-close-others = Close every window but this one
+cmd-wm-full-screen = Fill the screen with this window
+cmd-wm-full-layout = Fill the layout with this window, keeping it tiled
+cmd-wm-full-application = Let the application decide what fullscreen means
+cmd-wm-full-global = Fill every screen with this window
+cmd-wm-float = Float this window, or put it back in the layout
+cmd-wm-stick = Keep this window on every workspace
+cmd-wm-calm = Stop this window asking for attention
+
+cmd-wm-columns = New windows open in a column of their own
+cmd-wm-rows = New windows open under this one
+cmd-wm-transpose = Turn the layout on its side
+cmd-wm-width-next = Widen the column to the next size
+cmd-wm-width-previous = Narrow the column to the previous size
+cmd-wm-height-next = Make the window taller
+cmd-wm-height-previous = Make the window shorter
+cmd-wm-width-set = Set the column's width, as a fraction of the screen
+cmd-wm-height-set = Set the window's height, as a fraction of the screen
+cmd-wm-fit-columns = Share the screen out between the columns
+cmd-wm-fit-rows = Share the column out between its windows
+cmd-wm-fit-visible = Fit the columns that are on screen
+cmd-wm-maximise = Give this column the whole screen
+
+cmd-wm-align-left = Hold this column against the left edge
+cmd-wm-align-right = Hold this column against the right edge
+cmd-wm-align-centre = Hold this column in the middle
+cmd-wm-align-top = Hold this window against the top
+cmd-wm-align-bottom = Hold this window against the bottom
+cmd-wm-align-middle = Hold this window in the middle of its column
+cmd-wm-align-auto = Let the layout place this column again
+cmd-wm-pin-beginning = Pin this column to the left of the screen
+cmd-wm-pin-end = Pin this column to the right of the screen
+
+cmd-wm-select = Mark this window, or unmark it
+cmd-wm-select-none = Clear every mark
+cmd-wm-select-workspace = Mark every window on this workspace
+cmd-wm-select-move = Bring the marked windows here
+cmd-wm-select-to-trail = Turn the marked windows into a trail
+
+cmd-wm-trailmark = Put this window on the trail, or take it off
+cmd-wm-trailmark-next = Go to the next window on the trail
+cmd-wm-trailmark-previous = Go to the previous window on the trail
+cmd-wm-trailmark-jump = Jump to a window on the trail by letter
+cmd-wm-trail-new = Start a new trail
+cmd-wm-trail-next = Use the next trail
+cmd-wm-trail-previous = Use the previous trail
+cmd-wm-trail-clear = Empty this trail
+cmd-wm-trail-delete = Delete this trail
+
+cmd-wm-jump = Jump to a window by typing the letter on it
+cmd-wm-jump-tiling = Jump to a tiled window by letter
+cmd-wm-jump-everywhere = Jump to any window at all by letter
+cmd-wm-jump-container = Jump to a container by letter
+cmd-wm-jump-workspaces = Jump to a workspace by letter
+cmd-wm-jump-floating = Jump to a floating window by letter
+
+cmd-wm-overview = See the whole workspace at once
+cmd-wm-overview-all = See every workspace at once
+cmd-wm-zoom-out = Zoom the workspace out a little
+cmd-wm-zoom-in = Zoom the workspace in a little
+cmd-wm-zoom-reset = Put the workspace back to its own size
+cmd-wm-content-smaller = Shrink what is inside this window
+cmd-wm-content-bigger = Enlarge what is inside this window
+cmd-wm-content-reset = Put this window's contents back to their own size
+
+cmd-wm-ring-previous = Go back through the windows you were just in
+cmd-wm-ring-next = Go forward through the windows you were just in
+cmd-wm-ring-first = Go to the oldest window in the ring
+cmd-wm-ring-last = Go to the newest window in the ring
+cmd-wm-ring-set = Put this window at the end of the ring
+cmd-wm-ring-remove = Take this window out of the ring
+
+cmd-wm-workspace-next = Go to the next workspace on this screen
+cmd-wm-workspace-previous = Go to the previous workspace on this screen
+cmd-wm-workspace-next-screen = Go to the next workspace, on any screen
+cmd-wm-workspace-previous-screen = Go to the previous workspace, on any screen
+cmd-wm-workspace-back = Go back to the workspace you came from
+cmd-wm-workspace-go = Go to a workspace by number
+cmd-wm-workspace-move = Take this window to a workspace and follow it
+cmd-wm-workspace-move-next = Take this window to the next workspace
+cmd-wm-workspace-move-previous = Take this window to the previous workspace
+cmd-wm-workspace-swap = Swap this workspace with another by number
+cmd-wm-workspace-split = Show two workspaces side by side
+cmd-wm-workspace-split-reset = Show one workspace again
+cmd-wm-workspace-to-screen-left = Move this workspace to the screen on the left
+cmd-wm-workspace-to-screen-right = Move this workspace to the screen on the right
+
+cmd-wm-scratchpad-put = Put this window away in the drawer
+cmd-wm-scratchpad-show = Take a window out of the drawer
+cmd-wm-scratchpad-jump = Jump to a window in the drawer by letter
+
+cmd-wm-screens-off = Turn every screen off
+cmd-wm-screens-on = Turn every screen back on
+cmd-wm-keep-shortcuts = Let this window take the shortcuts, or take them back
 group-workspace-move = move window
 group-icons = icons
 glyphs-search = Type to search for a Nerd Fonts glyph
@@ -1306,7 +1289,7 @@ rescue-section-system = System
 ## Rescue console — the actions
 
 rescue-restart-footer = Restart the footer
-rescue-restart-niri = Restart the compositor
+rescue-restart-compositor = Restart the compositor
 rescue-restart-session = Restart the graphical session
 rescue-restart-audio = Restart audio
 rescue-restore-keyboard = Restore the keyboard
@@ -3374,7 +3357,6 @@ display-no-watch = this door cannot see the file change
 display-no-thread = The screens cannot be read on this machine; nothing here will change.
 display-no-compositor = There is no compositor to ask, so there is nothing to show.
 display-went-away = That screen is gone.
-display-config-failed = The compositor could not read its configuration. What is on the screen now will not come back after a restart.
 
 display-settings-failed = `display.json` will not parse, so nothing chosen is shown here. The file is untouched — fix or remove it.
 display-one-screen-only = There is one screen, so there is nothing to arrange.

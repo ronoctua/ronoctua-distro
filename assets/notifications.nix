@@ -52,31 +52,25 @@
     # THE SCREENSHOT, and the owner asked for it by name: it appears
     # DISCREETLY, in the band, and it offers to edit what was just captured.
     #
-    # It is the compositor that sends it (`show_screenshot_notification`, in
-    # the pinned niri), with `app_name = "niri"` and an English summary. Two
-    # consequences, and both are deliberate:
+    # THE CAPTURE IS OURS, so the recognition is a TAG. The compositor has no
+    # capture verb at all — the picture is taken by `grim`, which speaks
+    # `wlr-screencopy` and writes a file and nothing else — and the footer
+    # raises the notification itself (`capture_the_screen`), with the summary
+    # and body from our keys and the `file://` URL of what was written.
     #
-    #   - `rewrite = true`, so the sentence on screen is ours and exists in
-    #     both languages (invariant 8). Upstream's is not translated and never
-    #     will be.
-    #   - the pair (app, summary) is the recognition, and it depends on a
-    #     string that belongs to somebody else. The
-    #     `screenshot-notification-contract` check reads the pinned niri's
-    #     source and fails if that string moves — without it, the entry would
-    #     stop matching in silence and the screenshot would arrive in English,
-    #     loud, with no actions.
+    # It used to be recognised by the pair (app, summary), because the sender
+    # was somebody else's program and an English sentence was all it gave us.
+    # That cost a `rewrite = true` to get invariant 8 back, and a check that
+    # read the sender's SOURCE so the pair could not move in silence. Both are
+    # gone: a tag we write cannot drift away from a tag we match, and the
+    # sentence was never in another language to begin with.
     screenshot = {
       when = [
         {
-          field = "app";
-          is = "niri";
-        }
-        {
-          field = "summary";
-          is = "Screenshot captured";
+          field = "tag";
+          is = "screenshot";
         }
       ];
-      rewrite = true;
       # `full`, and `loud = false`. They are two different things and the owner
       # asked for both: DISCREET is the formatting — no shouting colour — and
       # `full` is the SIZE. A capture offers to be edited, opened and copied,

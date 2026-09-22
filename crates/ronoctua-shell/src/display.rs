@@ -33,8 +33,8 @@
 
 use std::time::{Duration, Instant};
 
+use ronoctua_compositor::{Ask, Transform};
 use ronoctua_display::{Screen, Snapshot};
-use ronoctua_niri::{Ask, Transform};
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 
@@ -190,7 +190,6 @@ pub enum Target {
     /// The brightness.
     Light,
     /// Whether the session opens focused here.
-    First,
     /// The size of the text, which belongs to no one screen.
     Text,
     /// Where this screen sits, in the arrangement.
@@ -215,8 +214,8 @@ pub struct Row {
     /// Drawn reachable and REFUSING, with the reason in its own value.
     ///
     /// ELEVEN things set it: the last lit screen, a screen the compositor is
-    /// not driving that nothing here turned off, a dark screen, a screen niri
-    /// reports no mode for, a size with no second size, a rate with no second
+    /// not driving that nothing here turned off, a dark screen, a screen the
+    /// compositor reports no mode for, a size with no second size, a rate with no second
     /// rate, a panel with no variable refresh, a light that belongs to root, a
     /// machine with no reading thread, a door that cannot see `display.json`
     /// change, and a machine with fewer than two lit screens. One of them is
@@ -281,11 +280,11 @@ pub struct Asking {
     /// Not the text key, which only names it for the sentence. "Keep it" has
     /// to write down the ONE thing that changed and leave every other knob
     /// where it was: a question about the scale that also wrote the mode and
-    /// the position would opt somebody out of niri's own choice of both,
+    /// the position would opt somebody out of the compositor's own choice of both,
     /// silently, having asked about neither. And it has to write down what was
     /// ASKED, not only what is on the glass: stepping off the bottom of the
     /// scale ladder asks for `Scale(None)` — "you choose" — and reading the
-    /// number niri then chose would write that number down instead, so the
+    /// number the compositor then chose would write that number down instead, so the
     /// preview and the thing kept would be different changes.
     pub deciding: Deciding,
     /// Where the cursor was when the question went up, by INDEX.
@@ -342,11 +341,6 @@ pub enum Errand {
     /// Ask the screens for something.
     Order(Box<ronoctua_display::Order>),
     /// Several changes, in the order they were made.
-    ///
-    /// For the one gesture that is about more than one screen: making a
-    /// monitor the one the session opens on has to take that away from
-    /// whichever had it.
-    Orders(Vec<ronoctua_display::Order>),
     /// The screen a standing question was about is not there any more.
     ///
     /// It carries the connector so the door can name it, and whether the
@@ -391,7 +385,7 @@ pub struct View {
     /// compositor's: a `Snapshot::default()` has `compositor: false`.
     ///
     /// The window opens on one. Its reader's first act is a DEEP reading (a
-    /// walk of `/sys/class/drm`, two niri connections, and a DDC/CI exchange
+    /// walk of `/sys/class/drm`, two connections to the compositor, and a DDC/CI exchange
     /// per monitor — three tries at 50 ms apart for one that does not answer),
     /// while the compositor's `configure` arrives in milliseconds and the door
     /// paints. So the screens' own window opened, on a working machine, saying
@@ -814,7 +808,7 @@ impl View {
             // only row is a sentence.
             //
             // AND A DARK SCREEN HAS NO KNOB TO HAND BACK, which is `automatic`'s
-            // own first line: on a screen niri is not driving it refuses on
+            // own first line: on a screen the compositor is not driving it refuses on
             // every row of the sheet, so `screen.is_some()` taught a letter
             // that does nothing on the one screen the view exists to rescue.
             //
@@ -1322,13 +1316,13 @@ fn first_row(rows: &[Row]) -> usize {
 
 /// `1920x1200`, with the multiplication sign the design uses.
 #[must_use]
-pub fn size_said(mode: ronoctua_niri::Mode) -> String {
+pub fn size_said(mode: ronoctua_compositor::Mode) -> String {
     format!("{}{}{}", mode.width, tokens::mark::TIMES, mode.height)
 }
 
 /// `59,9 Hz`, with the mark the language writes a decimal with.
 #[must_use]
-pub fn rate_said(mode: ronoctua_niri::Mode, texts: &ronoctua_i18n::Texts) -> String {
+pub fn rate_said(mode: ronoctua_compositor::Mode, texts: &ronoctua_i18n::Texts) -> String {
     // ONE DECIMAL, because that is what tells 143,9 from 144,0 — and the
     // rounding is `Mode::hertz`'s, never `rate`'s: this is for reading.
     let hz = format!("{:.1}", mode.hertz()).replace('.', &texts.decimal_mark().to_string());
@@ -1341,7 +1335,7 @@ pub fn rate_said(mode: ronoctua_niri::Mode, texts: &ronoctua_i18n::Texts) -> Str
 ///
 /// Because they are two different facts and the row used to show one while the
 /// arrow moved the other. The SETTING is what `←`/`→` step through and what is
-/// written down; the PICTURE is what niri resolved, which is the setting when
+/// written down; the PICTURE is what the compositor resolved, which is the setting when
 /// there is one and its own choice when there is not. `turn_said` was given
 /// this treatment a round earlier and the scale did not: it showed the picture
 /// alone, so on a panel nobody has configured the row read "100%" over a
@@ -1351,7 +1345,7 @@ pub fn rate_said(mode: ronoctua_niri::Mode, texts: &ronoctua_i18n::Texts) -> Str
 #[must_use]
 pub fn scale_said(set: Option<f64>, picture: Option<f64>, texts: &ronoctua_i18n::Texts) -> String {
     let percent = |v: f64| {
-        // THE NUMBER IS niri's AND THE PERCENTAGE IS OURS: 1.25 reads as 125%,
+        // THE NUMBER IS THE COMPOSITOR'S AND THE PERCENTAGE IS OURS: 1.25 reads as 125%,
         // which is the word a person uses. Rounded to whole percent because a
         // scale of 1.333 is a number nobody typed.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -1387,7 +1381,7 @@ pub fn scale_said(set: Option<f64>, picture: Option<f64>, texts: &ronoctua_i18n:
 ///
 /// Because they are two different facts and the row used to show one while the
 /// arrow moved the other. `Screen::turn` is the PICTURE's transform, which
-/// niri composes from ours and the panel's own (and forces one of its own on
+/// the compositor composes from ours and the panel's own (and forces one of its own on
 /// the nested backend); `Wanted::transform` is the setting, which is what the
 /// arrows step through and what gets written down. On a panel that declares an
 /// orientation the row read "a quarter turn" while the ring stood at index 0,
@@ -1479,7 +1473,7 @@ fn write_the(w: &mut ronoctua_display::fragment::Wanted, ask: Ask) {
         Ask::Mode(None) => w.mode = None,
         // THE MODE THAT WAS ASKED FOR, like every arm around it. Reading it
         // back looks safer and is not: `Screen::current` is an `Option`, so a
-        // reading that has not caught up — or one where niri reports no
+        // reading that has not caught up — or one where the compositor reports no
         // current mode — wrote down the mode the person had just changed AWAY
         // from, or "the compositor chooses".
         Ask::Mode(Some(m)) => {
@@ -1497,13 +1491,7 @@ fn write_the(w: &mut ronoctua_display::fragment::Wanted, ask: Ask) {
         Ask::Position(spot) => {
             w.position = spot.map(|(x, y)| ronoctua_display::fragment::Spot { x, y });
         }
-        Ask::Vrr { on, on_demand } => {
-            w.vary = on.then_some(if on_demand {
-                ronoctua_display::fragment::Vary::OnDemand
-            } else {
-                ronoctua_display::fragment::Vary::Always
-            });
-        }
+        Ask::Vary(on) => w.vary = on,
     }
 }
 
@@ -1540,10 +1528,9 @@ fn would_move(s: &Screen, ask: Ask) -> bool {
         // rather than answering `true`.
         Ask::Position(None) => s.wanted.position.is_some(),
         Ask::Position(Some((x, y))) => s.logical.is_none_or(|l| l.x != x || l.y != y),
-        // NOT ASKED PROVISIONALLY EITHER — varying a refresh rate cannot blind
-        // a screen. Answering `true` keeps this exhaustive without claiming to
-        // know a comparison nobody makes.
-        Ask::Vrr { .. } => true,
+        // NOT ASKED PROVISIONALLY EITHER — varying a refresh rate cannot
+        // blind a screen, so there is nothing to compare and nothing to undo.
+        Ask::Vary(_) => true,
     }
 }
 
@@ -1583,35 +1570,84 @@ pub fn can_be_arranged(now: &Snapshot) -> bool {
 }
 
 /// A LADDER AND NOT A SLIDER, because a scale is not a continuum to a person:
-/// it is "the same", "half again", "twice". niri accepts anything in
-/// `0.1..=10` and the ones between these are not sizes anybody asks for by
-/// name.
+/// it is "the same", "half again", "twice". The compositor accepts any
+/// positive float at all, and the ones between these are not sizes anybody asks
+/// for by name.
 ///
 /// # Why this is a constant here and the TEXT size is a token
 ///
 /// They scale different things, and the difference is not that one belongs to
-/// a protocol — niri takes anything in `0.1..=10`, so these seven rungs are as
-/// much a choice as `font.scale`'s three numbers are. It is WHOSE choice.
-/// `font.scale` moves the size of OUR design, which is what invariant 9 is
-/// about: a value the design system owns and a token is where it lives. This
-/// moves the COMPOSITOR's output, and what it does to a pixel is the
-/// monitor's business — the list is which of the compositor's numbers are
-/// worth offering by name, which is the same kind of decision `power`'s charge
-/// presets are, and they sit in the same place.
+/// a protocol — the compositor's `output scale` is a bare `strtof` with no
+/// range, so these seven rungs are as much a choice as `font.scale`'s three
+/// numbers are. It is WHOSE choice. `font.scale` moves the size of OUR design,
+/// which is what invariant 9 is about: a value the design system owns and a
+/// token is where it lives. This moves the COMPOSITOR's output, and what it
+/// does to a pixel is the monitor's business — the list is which of the
+/// compositor's numbers are worth offering by name, which is the same kind of
+/// decision `power`'s charge presets are, and they sit in the same place.
 pub const LADDER: [f64; 7] = [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
-/// The next scale up or down the ladder. `None` is the compositor's choice,
-/// and it sits BELOW the bottom rung: stepping down from the smallest hands
-/// the decision back rather than stopping.
+/// The rungs THIS screen can actually stand on.
+///
+/// # Why a screen decides, and not the list
+///
+/// Because the compositor SNAPS a scale that does not divide the panel into
+/// whole logical pixels, and it does it in silence. `verify_good_scale`
+/// (`sway/config/output.c`) takes the asked-for number, finds the nearest
+/// 120th that gives an integer width AND an integer height, and applies that
+/// one instead — the only notice is a nag window, which invariant 14 refuses
+/// (`scrollnag_command -`, `nix/modules/scroll.nix`), and a log line.
+///
+/// So an unfiltered ladder is a step that lands somewhere else than it says:
+/// on the owner's 1920×1200 panel, 1.75 is not clean (1200/1.75 = 685.71) and
+/// becomes 1.7. The row would then show 1.7 after the reading — correct, and a
+/// number nobody asked for, appearing for no stated reason.
+///
+/// The measured rungs on that panel are 1.0, 1.25, 1.5 and 2.0; 2.5 gives 480
+/// and 768, and 3.0 gives 640 and 400, so both are clean there too. What drops
+/// out is exactly the one the plan named.
+///
+/// A screen with no mode yet keeps the whole ladder: filtering against a size
+/// nobody reported would hide rungs for a reason that is not about this
+/// monitor.
 #[must_use]
-pub fn next_scale(now: Option<f64>, up: bool) -> Option<Option<f64>> {
+pub fn ladder_for(size: Option<(u16, u16)>) -> Vec<f64> {
+    let Some((w, h)) = size else {
+        return LADDER.to_vec();
+    };
+    if w == 0 || h == 0 {
+        return LADDER.to_vec();
+    }
+    LADDER
+        .iter()
+        .copied()
+        .filter(|s| whole_pixels(f64::from(w), *s) && whole_pixels(f64::from(h), *s))
+        .collect()
+}
+
+/// The compositor's own test, in one line: does this side divide cleanly?
+fn whole_pixels(side: f64, scale: f64) -> bool {
+    let logical = side / scale;
+    // THE SAME COMPARISON THE COMPOSITOR MAKES — `logical == floor(logical)`
+    // on a double — and not an epsilon of ours. A rung we call clean and it
+    // calls fractional is a rung that snaps, which is the whole thing this
+    // exists to stop.
+    (logical - logical.floor()).abs() < f64::EPSILON * logical.max(1.0)
+}
+
+/// The next scale up or down the ladder THIS screen can stand on. `None` is the
+/// compositor's choice, and it sits BELOW the bottom rung: stepping down from
+/// the smallest hands the decision back rather than stopping.
+#[must_use]
+pub fn next_scale_on(size: Option<(u16, u16)>, now: Option<f64>, up: bool) -> Option<Option<f64>> {
+    let rungs = ladder_for(size);
     let Some(s) = now else {
         // ALREADY AT THE COMPOSITOR'S CHOICE: down is where one already is.
-        return up.then(|| Some(LADDER[0]));
+        return up.then(|| Some(rungs[0]));
     };
     // THE NEXT RUNG PAST WHERE ONE IS STANDING, and not "the rung one is on,
     // plus one". The difference is every value the ladder does not carry, and
-    // niri's own choice for a panel is routinely one of those — 1,6 on a
+    // the compositor's own choice for a panel is routinely one of those — 1,6 on a
     // 13-inch 4K. `position(…).unwrap_or(0)` filed all of them at the BOTTOM,
     // so "more" from 1,6 answered 1,25, which is less.
     //
@@ -1625,12 +1661,25 @@ pub fn next_scale(now: Option<f64>, up: bool) -> Option<Option<f64>> {
     // answer the CURRENT scale at the top rung — a question about a change
     // that had not happened. See `step`, which carries the same fix.
     if up {
-        return LADDER.iter().copied().find(|r| *r > s + CLOSE).map(Some);
+        return rungs.iter().copied().find(|r| *r > s + CLOSE).map(Some);
     }
     // AND BELOW THE BOTTOM RUNG IS THE COMPOSITOR'S CHOICE, which is what
     // makes this a ladder somebody can climb all the way off. Below THAT there
     // is nothing, which is the outer `None`.
-    Some(LADDER.iter().copied().rev().find(|r| *r < s - CLOSE))
+    Some(rungs.iter().copied().rev().find(|r| *r < s - CLOSE))
+}
+
+/// The ladder unfiltered — every rung, whatever the panel does with it.
+///
+/// `#[cfg(test)]`, and that is the point rather than an economy: every DOOR
+/// has a screen in its hand, so a door that asked this would be asking about a
+/// panel it is not looking at. Only a test has a reason to want the ladder
+/// with nothing filtering it, and putting the attribute here is what stops the
+/// convenient answer from becoming the usual one.
+#[cfg(test)]
+#[must_use]
+pub fn next_scale(now: Option<f64>, up: bool) -> Option<Option<f64>> {
+    next_scale_on(None, now, up)
 }
 
 /// The distinct sizes a monitor offers, largest first.
@@ -1649,8 +1698,8 @@ pub fn sizes_of(screen: &Screen) -> Vec<(u16, u16)> {
 
 /// The rates that one size offers, highest first.
 #[must_use]
-pub fn rates_of(screen: &Screen, size: (u16, u16)) -> Vec<ronoctua_niri::Mode> {
-    let mut out: Vec<ronoctua_niri::Mode> = screen
+pub fn rates_of(screen: &Screen, size: (u16, u16)) -> Vec<ronoctua_compositor::Mode> {
+    let mut out: Vec<ronoctua_compositor::Mode> = screen
         .modes
         .iter()
         .filter(|m| (m.width, m.height) == size)
@@ -1787,7 +1836,7 @@ impl View {
             // THE THREAD AND THE COMPOSITOR ARE DIFFERENT FACTS. Both used to
             // say "there is no compositor to ask": the reading thread failing
             // to start (a door that will never show anything) read the same
-            // as niri not answering (a door that would work if it did).
+            // as the compositor not answering (a door that would work if it did).
             b.note(ronoctua_i18n::key::DISPLAY_NO_THREAD);
         } else if !self.looked {
             // AND SO IS "NOT ASKED YET" — see [`View::looked`]. This one is
@@ -1798,16 +1847,17 @@ impl View {
         } else if now.screens.is_empty() {
             b.note(ronoctua_i18n::key::DISPLAY_NOTHING_HERE);
         }
-        if now.config_failed {
-            b.told(b.texts.t(ronoctua_i18n::key::DISPLAY_CONFIG_FAILED));
-        }
-        // AND OUR OWN FILE, WHICH IS A DIFFERENT FACT. When `display.json`
-        // will not parse the reading falls back to the default, so every row
-        // below draws as if nothing had ever been chosen — the settings LOOK
-        // gone. They are not: the file is intact and the crate refuses to
-        // write over it. Without this line the person sees the loss and not
-        // the reason, which is the silent failure the line above exists to
-        // prevent, one file over.
+        // OUR OWN FILE. When `display.json` will not parse the reading falls
+        // back to the default, so every row below draws as if nothing had ever
+        // been chosen — the settings LOOK gone. They are not: the file is
+        // intact and the crate refuses to write over it. Without this line the
+        // person sees the loss and not the reason.
+        //
+        // THERE USED TO BE A SENTENCE ABOVE IT for the COMPOSITOR's config,
+        // and it is gone because nothing can make it true any more: this
+        // compositor answers `success` to a `reload` whatever parsed, and
+        // publishes no event about it. `ronoctua_display::Snapshot` carries
+        // the measurement and what replaced it.
         if now.settings_failed {
             b.told(b.texts.t(ronoctua_i18n::key::DISPLAY_SETTINGS_FAILED));
         }
@@ -2097,35 +2147,6 @@ impl View {
             ),
             None => b.note(ronoctua_i18n::key::DISPLAY_LIGHT_ON_ITS_BUTTONS),
         }
-
-        b.heading(ronoctua_i18n::key::DISPLAY_HEADING_SESSION);
-        b.pair(
-            b.texts.t(ronoctua_i18n::key::DISPLAY_FIRST),
-            // THE VALUE FOLLOWS THE SAME TEST THE REFUSAL DOES. It read
-            // `dark`, so a lid-shut monitor's row said "the compositor is not
-            // drawing on it" over a `focus-at-startup` the file really
-            // carries — a setting hidden from the one screen it is about.
-            b.texts.t(if s.wanted.off {
-                ronoctua_i18n::key::DISPLAY_SCREEN_IS_DARK
-            } else if s.wanted.first {
-                ronoctua_i18n::key::DISPLAY_VALUE_YES
-            } else {
-                ronoctua_i18n::key::DISPLAY_VALUE_NO
-            }),
-            Target::First,
-            // AND A SCREEN THIS VIEW TURNED OFF CANNOT BE THE ONE THE SESSION
-            // OPENS ON. `fragment::kdl_of` short-circuits a monitor whose
-            // `off` is written down before it reaches `focus-at-startup`, so
-            // the row would read "yes" over a file that says nothing of the
-            // kind.
-            //
-            // `wanted.off` AND NOT `dark`, which is the picture. A docked
-            // laptop with the lid shut is dark with `off == false`, so the
-            // file DOES carry `focus-at-startup` for it — the row refused
-            // over a setting that was in force, and would not say what it
-            // was.
-            s.wanted.off,
-        );
     }
 
     /// Where the screens sit relative to each other.
@@ -2188,13 +2209,13 @@ pub fn summary_of(s: &Screen, texts: &ronoctua_i18n::Texts) -> String {
 #[must_use]
 pub fn filed_said(s: &Screen, texts: &ronoctua_i18n::Texts) -> String {
     let why = match &s.naming {
-        ronoctua_niri::Naming::Description(_) => ronoctua_i18n::key::DISPLAY_FILED_BY_ITSELF,
-        ronoctua_niri::Naming::Connector {
-            why: ronoctua_niri::Anonymous::Silent,
+        ronoctua_compositor::Naming::Description(_) => ronoctua_i18n::key::DISPLAY_FILED_BY_ITSELF,
+        ronoctua_compositor::Naming::Connector {
+            why: ronoctua_compositor::Anonymous::Silent,
             ..
         } => ronoctua_i18n::key::DISPLAY_FILED_SILENT,
-        ronoctua_niri::Naming::Connector {
-            why: ronoctua_niri::Anonymous::NoSerial,
+        ronoctua_compositor::Naming::Connector {
+            why: ronoctua_compositor::Anonymous::NoSerial,
             ..
         } => ronoctua_i18n::key::DISPLAY_FILED_NO_SERIAL,
     };
@@ -2207,12 +2228,10 @@ pub fn vary_said(s: &Screen, texts: &ronoctua_i18n::Texts) -> String {
     if !s.vrr_supported {
         return texts.t(ronoctua_i18n::key::DISPLAY_VARY_CANNOT);
     }
-    texts.t(match s.wanted.vary {
-        Some(ronoctua_display::fragment::Vary::Always) => ronoctua_i18n::key::DISPLAY_VARY_ALWAYS,
-        Some(ronoctua_display::fragment::Vary::OnDemand) => {
-            ronoctua_i18n::key::DISPLAY_VARY_ON_DEMAND
-        }
-        None => ronoctua_i18n::key::DISPLAY_VALUE_NO,
+    texts.t(if s.wanted.vary {
+        ronoctua_i18n::key::DISPLAY_VARY_ALWAYS
+    } else {
+        ronoctua_i18n::key::DISPLAY_VALUE_NO
     })
 }
 
@@ -2328,7 +2347,6 @@ impl View {
                 | Target::Resolution
                 | Target::Rate
                 | Target::Vary
-                | Target::First
                 | Target::Place(_)
         )
     }
@@ -2345,7 +2363,7 @@ impl View {
                 // the ceiling the answer is where one already is — and a key
                 // held down there wrote `display.json` on every repeat and
                 // forced a full reading (a walk of `/sys/class/drm` and two
-                // connections to niri) for a value that cannot move.
+                // connections to the compositor) for a value that cannot move.
                 if want == from {
                     return Errand::Nothing;
                 }
@@ -2448,7 +2466,7 @@ impl View {
                 // FROM THE SETTING WHEN THERE IS ONE, and from the glass when
                 // there is not. The step used to start from `wanted.scale`
                 // alone, and on a panel nobody has configured that is `None`
-                // while the picture is the 200% niri chose: "more" answered
+                // while the picture is the 200% the compositor chose: "more" answered
                 // 100%, and the picture halved.
                 //
                 // The row says both (`scale_said`), so the arrow starting at
@@ -2456,7 +2474,16 @@ impl View {
                 // parenthesis is there for the case where they differ, which
                 // is the case this `or_else` exists for.
                 let from = s.wanted.scale.or_else(|| s.logical.map(|l| l.scale));
-                let Some(next) = next_scale(from, up) else {
+                // AND THE RUNGS ARE THIS PANEL'S. A scale that does not divide
+                // it into whole logical pixels is snapped by the compositor
+                // without a word, so offering one is offering a step that
+                // lands somewhere else — see `ladder_for`.
+                let size = s
+                    .wanted
+                    .mode
+                    .map(|m| (m.width, m.height))
+                    .or_else(|| s.mode().map(|m| (m.width, m.height)));
+                let Some(next) = next_scale_on(size, from, up) else {
                     return Errand::Nothing;
                 };
                 self.provisional(
@@ -2518,27 +2545,14 @@ impl View {
                 // make a screen unreadable; it costs battery, which is a thing
                 // one notices later and undoes at leisure.
                 //
-                // AND THE STATE IS OURS, NOT THE READING'S. `Screen::vrr_enabled`
-                // says whether the rate is varying RIGHT NOW, which is not the
-                // same question: `on_demand` reads `false` whenever no window
-                // has asked for it, so a three-state control driven from the
-                // reading would fall out of `on-demand` by itself. `Ask::Vrr`'s
-                // own doc carries the whole of it. The cost is that VRR turned
-                // on outside our fragment reads here as "no".
+                // A PLAIN TOGGLE, and it reads back. The state used to be
+                // ours rather than the reading's, because there were three of
+                // them and the middle one was indistinguishable from `off`
+                // whenever no window had asked for it. Here the compositor
+                // reports `enabled` or `disabled` and nothing else, so the
+                // control is driven from what is true.
                 let was = s.wanted.vary;
-                let next = match (s.wanted.vary, up) {
-                    (None, true) => Some(ronoctua_display::fragment::Vary::OnDemand),
-                    (Some(ronoctua_display::fragment::Vary::OnDemand), true) => {
-                        Some(ronoctua_display::fragment::Vary::Always)
-                    }
-                    (Some(ronoctua_display::fragment::Vary::Always), true) => {
-                        Some(ronoctua_display::fragment::Vary::Always)
-                    }
-                    (Some(ronoctua_display::fragment::Vary::Always), false) => {
-                        Some(ronoctua_display::fragment::Vary::OnDemand)
-                    }
-                    (_, false) => None,
-                };
+                let next = up;
                 // AT EITHER END, NOTHING. `Order::Keep` is not free: it costs
                 // a reading to file the screen by name, a write of the file,
                 // and then six IPC calls saying what the file says — per
@@ -2549,64 +2563,6 @@ impl View {
                     return Errand::Nothing;
                 }
                 self.keep(now, |w| w.vary = next)
-            }
-            Target::First => {
-                let Some(s) = self.here(now) else {
-                    return Errand::Nothing;
-                };
-                // AND THE DIRECTION DECIDES HERE TOO. This is the view's other
-                // yes/no row, and it was left a toggle when the power row
-                // stopped being one — so `→ more` on a screen that already
-                // opens the session turned that OFF, and `← less` on one that
-                // does not turned it ON and swept the flag off every other
-                // screen. Right is yes, on both rows.
-                if up == s.wanted.first {
-                    return Errand::Nothing;
-                }
-                let want = up;
-                // NO GUARD IS NEEDED HERE and it is worth saying why: a toggle
-                // always moves, so `would_move`'s job is done by the `!`.
-                // What holding the key costs is one write per repeat, which is
-                // what a toggle held down means anywhere.
-                // AND ONLY ONE SCREEN CAN BE IT. Nothing downstream enforces
-                // that — `kdl_of` writes `focus-at-startup` for every screen
-                // whose `Wanted` says so, and niri takes the last — so two
-                // screens could both be turned on here and both rows would
-                // read "yes" while only one of them was true.
-                //
-                // Turning one ON turns the others off; turning one OFF leaves
-                // the rest alone, because "none of them" is a state the
-                // compositor already has an answer for.
-                let mine = s.at.clone();
-                if want {
-                    let others: Vec<Errand> = now
-                        .screens
-                        .iter()
-                        .filter(|o| o.at != mine && o.wanted.first)
-                        .map(|o| {
-                            let at = o.at.clone();
-                            self.keep_for(&at, now, |w| w.first = false)
-                        })
-                        .collect();
-                    // THE ORDERS GO OUT AS ONE ERRAND CANNOT CARRY TWO, so
-                    // the others are sent through `Errand::Orders` — the door
-                    // hands them over in the order they were made, and the
-                    // last one is the screen being turned on.
-                    if !others.is_empty() {
-                        let mut all: Vec<ronoctua_display::Order> = others
-                            .into_iter()
-                            .filter_map(|e| match e {
-                                Errand::Order(o) => Some(*o),
-                                _ => None,
-                            })
-                            .collect();
-                        if let Errand::Order(o) = self.keep(now, move |w| w.first = want) {
-                            all.push(*o);
-                        }
-                        return Errand::Orders(all);
-                    }
-                }
-                self.keep(now, move |w| w.first = want)
             }
             Target::Place(at) => {
                 let Some(s) = now.screen(at) else {
@@ -2819,8 +2775,8 @@ impl View {
                     Deciding::Preview(ask) => ask,
                     // FORGETTING IS WRITING THE DEFAULT, which is what every
                     // field of `Wanted` means by "let the compositor decide" —
-                    // and `say_what_the_file_says` then tells niri all six,
-                    // which is what actually puts the screen back.
+                    // and a re-read then applies the file from scratch, which
+                    // is what actually puts the screen back.
                     Deciding::Whether => {
                         return Errand::Order(Box::new(ronoctua_display::Order::Keep {
                             at: asking.at,
@@ -2854,21 +2810,21 @@ impl View {
                 // invent one: the reason already has a place on the screen,
                 // and it is the place a person looks after a toggle does not
                 // take.
-                if matches!(ask, ronoctua_niri::Ask::Off)
+                if matches!(ask, ronoctua_compositor::Ask::Off)
                     && now.screens.iter().filter(|o| o.lit()).count() < 2
                 {
                     return Errand::Order(Box::new(ronoctua_display::Order::Undo));
                 }
                 // ONE KNOB, THE ONE THAT WAS ASKED ABOUT. Writing the scale,
                 // the position and the mode on every keep — which is what
-                // this did — opts somebody out of niri's own choice of all
+                // this did — opts somebody out of the compositor's own choice of all
                 // three the first time they nudge any one of them, and
                 // nothing on the screen says so.
                 //
                 // AND WHAT WAS ASKED, not only what is on the glass. The two
                 // differ in the case the ladder is built around: stepping off
                 // the bottom asks `Scale(None)` — "you choose" — and the
-                // reading afterwards is the number niri chose. Writing that
+                // reading afterwards is the number the compositor chose. Writing that
                 // number down would keep a different change from the one that
                 // was previewed and confirmed.
                 //
@@ -3027,8 +2983,8 @@ impl View {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ronoctua_compositor::{Logical, Mode, Naming};
     use ronoctua_display::connector::Wiring;
-    use ronoctua_niri::{Logical, Mode, Naming};
 
     fn texts() -> ronoctua_i18n::Texts {
         ronoctua_i18n::Texts::fresh("en-GB").unwrap()
@@ -3039,7 +2995,6 @@ mod tests {
             width: w,
             height: h,
             refresh_rate: mhz,
-            is_preferred: false,
         }
     }
 
@@ -3052,7 +3007,7 @@ mod tests {
     /// A panel's size names its model as surely as the model does.
     ///
     /// So they are round numbers that no panel has, chosen the way
-    /// `ronoctua_niri`'s fixture chooses them and for the same written reason.
+    /// the contract's fixture chooses them and for the same written reason.
     /// Nothing in this module reads them: they are here because `Screen` has
     /// the field.
     fn screen(at: &str, lit: bool) -> Screen {
@@ -3092,7 +3047,6 @@ mod tests {
             focused: screens.first().map(|s| s.at.clone()),
             screens,
             compositor: true,
-            config_failed: false,
             settings_failed: false,
         }
     }
@@ -3494,79 +3448,6 @@ mod tests {
     }
 
     #[test]
-    fn the_session_opens_on_one_screen_and_the_others_lose_it() {
-        // `Errand::Orders` EXISTED IN NO TEST. niri takes the LAST
-        // `focus-at-startup` it reads, so two screens both carrying it is a
-        // file that says one thing and a session that does another — and the
-        // rows would both read "yes". This is the one gesture in the view that
-        // is about more than one screen.
-        let mut screens = vec![screen("eDP-1", true), screen("DP-1", true)];
-        screens[0].wanted.first = true;
-        let now = snapshot(screens);
-        let moment = Instant::now();
-        // THE SHEET OF THE ONE THAT DOES NOT HAVE IT, which `on_the_row`
-        // cannot reach: it opens the first screen of the list.
-        let mut v = View::fresh();
-        v.go_to(Level::Monitor("DP-1".to_owned()));
-        v.at = Some(Target::First);
-        let rows = v.rows(&now, DECIDING_WIDTH, moment, &texts());
-        v.settle(&now, &rows);
-        assert_eq!(rows[v.cursor].target, Target::First);
-
-        // `→` IS YES, and this screen does not have it.
-        assert_eq!(
-            v.key(Press::Less, &now, DECIDING_WIDTH, moment, &texts()),
-            Errand::Nothing,
-            "`less` on a screen that does not have it did something",
-        );
-        let out = v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts());
-        let Errand::Orders(orders) = out else {
-            panic!("not a batch of orders: {out:?}");
-        };
-        assert_eq!(orders.len(), 2, "{orders:?}");
-        // IN THE ORDER THEY WERE MADE, and the LAST is the one the person
-        // asked for — the others are the ones losing it.
-        let took: Vec<(String, bool)> = orders
-            .iter()
-            .map(|o| match o {
-                ronoctua_display::Order::Keep { at, wanted } => (at.clone(), wanted.first),
-                other => panic!("not a keep: {other:?}"),
-            })
-            .collect();
-        assert_eq!(
-            took,
-            vec![("eDP-1".to_owned(), false), ("DP-1".to_owned(), true)],
-        );
-
-        // AND ASKING FOR THE ONE THAT ALREADY HAS IT WRITES NOTHING.
-        let mut v = View::fresh();
-        v.go_to(Level::Monitor("eDP-1".to_owned()));
-        v.at = Some(Target::First);
-        let rows = v.rows(&now, DECIDING_WIDTH, moment, &texts());
-        v.settle(&now, &rows);
-        assert_eq!(rows[v.cursor].target, Target::First);
-        // AND THE DIRECTION DECIDES, as it does on the power row: right is
-        // yes. `→` on the screen that already has it writes nothing; `←` takes
-        // it away, and takes it from nobody else.
-        assert_eq!(
-            v.key(Press::More, &now, DECIDING_WIDTH, moment, &texts()),
-            Errand::Nothing,
-            "`more` on the screen the session already opens on did something",
-        );
-        let out = v.key(Press::Less, &now, DECIDING_WIDTH, moment, &texts());
-        let Errand::Order(o) = out else {
-            panic!("turning the flag off should be one order: {out:?}");
-        };
-        match *o {
-            ronoctua_display::Order::Keep { at, wanted } => {
-                assert_eq!(at, "eDP-1");
-                assert!(!wanted.first);
-            }
-            other => panic!("not a keep: {other:?}"),
-        }
-    }
-
-    #[test]
     fn the_vary_knob_writes_nothing_at_its_ends() {
         // `Order::Keep` costs a reading to file the screen by name, a write,
         // and six IPC calls saying what the file says — per keyboard repeat.
@@ -3574,7 +3455,7 @@ mod tests {
         // anyway; every other knob in the view already refuses.
         let mut screens = vec![screen("eDP-1", true)];
         screens[0].vrr_supported = true;
-        screens[0].wanted.vary = Some(ronoctua_display::fragment::Vary::Always);
+        screens[0].wanted.vary = true;
         let now = snapshot(screens);
         let moment = Instant::now();
         let mut v = on_the_row(&now, &Target::Vary);
@@ -3586,7 +3467,7 @@ mod tests {
 
         let mut screens = vec![screen("eDP-1", true)];
         screens[0].vrr_supported = true;
-        screens[0].wanted.vary = None;
+        screens[0].wanted.vary = false;
         let bottom = snapshot(screens);
         let mut v = on_the_row(&bottom, &Target::Vary);
         assert_eq!(
@@ -3767,91 +3648,6 @@ mod tests {
             !line.contains(&t.t(ronoctua_i18n::key::DISPLAY_AUTOMATIC)),
             "nothing is written down for this screen, and `a` is taught anyway: {line}",
         );
-    }
-
-    #[test]
-    fn the_arrows_are_not_taught_where_nothing_turns() {
-        // `WhileNothingIsAsked` hid them under a question and covered only
-        // that. On an orphan sheet the only row is a sentence, and both arrows
-        // fall to `Errand::Nothing` — a laptop leaving a dock is the everyday
-        // way to get there.
-        let t = texts();
-        let two = snapshot(vec![screen("eDP-1", true), screen("DP-1", true)]);
-        let said = |v: &View, now: &Snapshot| {
-            v.hint(now, DECIDING_WIDTH, Instant::now(), &t)
-                .iter()
-                .map(|p| p.text.clone())
-                .collect::<Vec<_>>()
-                .join(" ")
-        };
-        let mut orphan = View::fresh();
-        orphan.level = Level::Monitor("gone".to_owned());
-        let line = said(&orphan, &two);
-        assert!(
-            !line.contains(&t.t(ronoctua_i18n::key::DISPLAY_LESS)),
-            "{line}"
-        );
-        assert!(
-            !line.contains(&t.t(ronoctua_i18n::key::DISPLAY_MORE)),
-            "{line}"
-        );
-
-        // AND ON A SHEET THAT IS ABOUT A SCREEN, they are taught.
-        let mut here = View::fresh();
-        here.level = Level::Monitor("eDP-1".to_owned());
-        assert!(said(&here, &two).contains(&t.t(ronoctua_i18n::key::DISPLAY_MORE)));
-
-        // AND ON A DARK SHEET THEY ARE STILL TAUGHT, because one row there
-        // still answers — and this assertion used to say the opposite.
-        //
-        // The claim it made was that on a screen the compositor is not driving
-        // "both arrows do nothing on every row". That is true of every PICTURE
-        // row and of the power toggle, and false of "opens focused here",
-        // which is disabled on `wanted.off` and deliberately NOT on dark: a
-        // docked laptop with the lid shut is dark with `off == false`, and the
-        // file does carry `focus-at-startup` for it. So `→` there returns an
-        // `Order` and rewrites `display.json` and the fragment.
-        //
-        // It passed because it only asserted the ABSENCE of `less` — and `←`
-        // genuinely does nothing, since the row is already `first == false`.
-        // One arrow of a pair is not the pair, and the two share one gate.
-        let lid = snapshot(vec![screen("eDP-1", true), screen("DP-1", false)]);
-        let mut shut = View::fresh();
-        shut.level = Level::Monitor("DP-1".to_owned());
-        let line = said(&shut, &lid);
-        assert!(
-            line.contains(&t.t(ronoctua_i18n::key::DISPLAY_MORE)),
-            "a key that rewrites the file is taught nowhere: {line}"
-        );
-        // AND IT IS THAT ROW THAT TAKES THEM — asserted by pressing, so the
-        // line above cannot go on being right for the wrong reason.
-        let mut pressing = View::fresh();
-        pressing.level = Level::Monitor("DP-1".to_owned());
-        let rows = pressing.rows(&lid, DECIDING_WIDTH, Instant::now(), &t);
-        let at = rows
-            .iter()
-            .position(|r| r.target == Target::First)
-            .expect("the sheet has no row for what opens focused here");
-        pressing.cursor = at;
-        // AND THE REMEMBERED TARGET WITH IT. `key` runs `settle` first, and
-        // `settle` finds the cursor again by `View::at` — so planting only the
-        // index leaves the press landing wherever the view last was, which is
-        // how the sibling test below passed while testing nothing.
-        pressing.at = Some(Target::First);
-        assert!(
-            !matches!(
-                pressing.key(Press::More, &lid, DECIDING_WIDTH, Instant::now(), &t),
-                Errand::Nothing
-            ),
-            "the row the hint promises does nothing",
-        );
-
-        // AND ON ONE THIS VIEW TURNED OFF THEY ARE, because the power row
-        // answers them.
-        let mut ours = vec![screen("eDP-1", true), screen("DP-1", false)];
-        ours[1].wanted.off = true;
-        let ours = snapshot(ours);
-        assert!(said(&shut, &ours).contains(&t.t(ronoctua_i18n::key::DISPLAY_MORE)));
     }
 
     #[test]
@@ -4338,7 +4134,7 @@ mod tests {
         // IT WROTE THREE OF THEM, whatever the question was. A person who
         // nudged the scale on a laptop that had never been configured came out
         // of it with the mode AND the position pinned as well — opted out of
-        // niri's own arrangement for that monitor, silently.
+        // the compositor's own arrangement for that monitor, silently.
         let now = snapshot(vec![screen("eDP-1", true)]);
         let moment = Instant::now();
         let mut v = on_the_row(&now, &Target::Scale);
@@ -4362,7 +4158,7 @@ mod tests {
     #[test]
     fn keeping_a_turn_writes_the_turn() {
         // IT WROTE NOTHING AT ALL. `Keep` carried `wanted.transform` straight
-        // from the clone, so `asks_for` then asked niri for `Normal` and the
+        // from the clone, so what was written down said `Normal` and the
         // picture snapped back the moment somebody said "keep it". No gesture
         // in the view could write a rotation.
         let now = snapshot(vec![screen("eDP-1", true)]);
@@ -4381,7 +4177,7 @@ mod tests {
     #[test]
     fn keeping_the_compositors_choice_keeps_the_choice() {
         // THE LADDER HANDS THE DECISION BACK at the bottom (`Scale(None)`),
-        // and `Keep` used to write down the number niri picked instead — so
+        // and `Keep` used to write down the number the compositor picked instead — so
         // the change confirmed was never the change previewed.
         let mut screens = vec![screen("eDP-1", true)];
         screens[0].wanted.scale = Some(LADDER[0]);
@@ -4416,9 +4212,52 @@ mod tests {
     }
 
     #[test]
+    fn a_rung_the_panel_would_snap_is_not_offered() {
+        // THE DEFECT: the compositor takes a scale that does not divide the
+        // panel into whole logical pixels, finds the nearest 120th that does,
+        // and applies THAT — with no notice at all now that the nag window is
+        // refused. So a rung we offer and it will not honour is a step that
+        // lands somewhere the person did not ask for, and the only way they
+        // would learn is by reading the number afterwards.
+        //
+        // 1920x1200 is the owner's panel. 1200/1.75 = 685.714…, so 1.75 is the
+        // one rung of the seven it cannot stand on; every other one divides
+        // both sides whole.
+        let his = ladder_for(Some((1920, 1200)));
+        assert!(!his.contains(&1.75), "1.75 survived: {his:?}");
+        for clean in [1.0, 1.25, 1.5, 2.0, 2.5, 3.0] {
+            assert!(his.contains(&clean), "{clean} was dropped: {his:?}");
+        }
+        // AND THE STEP SKIPS IT rather than stopping there.
+        assert_eq!(
+            next_scale_on(Some((1920, 1200)), Some(1.5), true),
+            Some(Some(2.0))
+        );
+        assert_eq!(
+            next_scale_on(Some((1920, 1200)), Some(2.0), false),
+            Some(Some(1.5))
+        );
+
+        // A PANEL WHERE 1.75 IS CLEAN KEEPS IT: 3360/1.75 = 1920 and
+        // 2100/1.75 = 1200. The filter is about the monitor, not about the
+        // number.
+        let other = ladder_for(Some((3360, 2100)));
+        assert!(
+            other.contains(&1.75),
+            "1.75 was dropped from a panel that divides by it: {other:?}"
+        );
+
+        // AND A SCREEN THAT HAS NOT SAID ITS SIZE KEEPS THE WHOLE LADDER:
+        // hiding rungs for a reason that is not about this monitor would be
+        // worse than offering one that snaps.
+        assert_eq!(ladder_for(None), LADDER.to_vec());
+        assert_eq!(ladder_for(Some((0, 0))), LADDER.to_vec());
+    }
+
+    #[test]
     fn a_scale_between_two_rungs_steps_the_way_it_was_asked_to() {
         // `position(…).unwrap_or(0)` put every value the ladder does not carry
-        // at the BOTTOM, and niri's own choice for a 13-inch 4K panel is one
+        // at the BOTTOM, and the compositor's own choice for a 13-inch 4K panel is one
         // of those. "More" from 1,6 answered 1,25.
         assert_eq!(next_scale(Some(1.6), true), Some(Some(1.75)));
         assert_eq!(next_scale(Some(1.6), false), Some(Some(1.5)));
@@ -4515,13 +4354,16 @@ mod tests {
             ronoctua_i18n::key::DISPLAY_READING
         ));
 
+        // AND OUR OWN FILE'S, which is the one of the two that survived — see
+        // `ronoctua_display::Snapshot::settings_failed` for why the
+        // compositor's twin could not.
         let mut broken = snapshot(vec![screen("eDP-1", true)]);
-        broken.config_failed = true;
+        broken.settings_failed = true;
         let fresh = View::fresh();
         assert!(!standable(
             &fresh,
             &broken,
-            ronoctua_i18n::key::DISPLAY_CONFIG_FAILED
+            ronoctua_i18n::key::DISPLAY_SETTINGS_FAILED
         ));
         // AND THE CURSOR DOES NOT OPEN ON IT. `fresh` starts at row 1, which
         // is where that sentence is drawn.
@@ -4529,7 +4371,7 @@ mod tests {
         assert!(
             !rows[fresh.cursor()].fields.iter().any(|f| f
                 .text
-                .contains(&t.t(ronoctua_i18n::key::DISPLAY_CONFIG_FAILED))),
+                .contains(&t.t(ronoctua_i18n::key::DISPLAY_SETTINGS_FAILED))),
             "the view opens with its own error message under the cursor",
         );
 
@@ -4799,12 +4641,12 @@ mod tests {
         let by_itself = filed_said(&s, &t);
         s.naming = Naming::Connector {
             name: "eDP-1".to_owned(),
-            why: ronoctua_niri::Anonymous::NoSerial,
+            why: ronoctua_compositor::Anonymous::NoSerial,
         };
         let no_serial = filed_said(&s, &t);
         s.naming = Naming::Connector {
             name: "eDP-1".to_owned(),
-            why: ronoctua_niri::Anonymous::Silent,
+            why: ronoctua_compositor::Anonymous::Silent,
         };
         let silent = filed_said(&s, &t);
         assert_ne!(by_itself, no_serial);

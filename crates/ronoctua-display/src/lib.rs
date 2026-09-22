@@ -1,43 +1,53 @@
 //! The one boundary with the screens — section 4.2.
 //!
 //! Three sources, one reading. The COMPOSITOR says what a monitor can do and
-//! what it is doing (through `ronoctua-niri`, the only crate allowed to speak
+//! what it is doing (through `ronoctua-scroll`, the only crate allowed to speak
 //! its protocol); the KERNEL says how bright a built-in panel is; and the
 //! MONITOR ITSELF answers, over DDC/CI, when it is one on a cable.
 //!
-//! What joins them is the connector's name: niri's `eDP-1` is the kernel's
-//! `card1-eDP-1`, and inside that directory are both the backlight and the
-//! I2C adapter. See [`connector`].
+//! What joins them is the connector's name: the compositor's `eDP-1` is the
+//! kernel's `card1-eDP-1`, and inside that directory are both the backlight and
+//! the I2C adapter. See [`connector`].
 //!
-//! # Two halves of remembering, and why BOTH have to be said
+//! # Two halves of remembering, and how the second one is said
 //!
-//! A change made over niri's IPC is **transient**: it lives in the running
-//! configuration and does not reach any file. So [`Order::Try`] is the
-//! preview, and [`Order::Keep`] writes [`fragment`] — the file niri includes
-//! and watches — which is what makes it survive a restart.
+//! A change made over the IPC lives in the RUNNING configuration and reaches
+//! no file. So [`Order::Try`] is the preview, and [`Order::Keep`] writes
+//! [`fragment`] — the file the compositor `include`s — which is what makes it
+//! survive a restart.
 //!
-//! THE RELOAD DOES NOT UNDO THE PREVIEW, and believing it did was the first
-//! version of this crate. niri drops transient output changes only when the
-//! configuration it re-reads DIFFERS from the last disk load; when the file
-//! it parses is unchanged it takes the other branch and puts the transient
-//! ones back (`src/niri.rs`: "Output config did not change from the last disk
-//! load, so we need to preserve the transient changes"). Cancelling by
-//! rewriting the same bytes therefore preserved exactly what it meant to
-//! discard, for ever.
+//! AND A RE-READ IS THE WHOLE OF UNDO, which is a property of this compositor
+//! and not a rule we invented. `load_main_config` frees
+//! `config->output_configs` and builds it again from the files
+//! (`sway/config.c`), so every `output` command sent at run time stops
+//! existing and the file applies from scratch. One command, for all of them,
+//! whatever the preview touched.
 //!
-//! So the rule here is blunter and does not depend on that logic at all:
-//! after writing the file, this crate SAYS OUT LOUD, over the IPC, what the
-//! file now means — every knob, including the ones nobody set, because "not
-//! chosen" is the instruction `Automatic` and not the absence of one. The
-//! file is what survives a restart; the IPC is what is true right now; and
-//! [`Order::Undo`] is the second of those alone.
+//! It is worth writing down what this replaced, because it was a whole class
+//! of defect: the previous compositor PRESERVED a transient output change when
+//! the configuration it re-read was unchanged from the last disk load, so
+//! cancelling by rewriting the same bytes preserved exactly what it meant to
+//! discard — for ever. Undo had to be six explicit knobs per screen, including
+//! the ones nobody had set, because "not chosen" was an instruction and not an
+//! absence. None of that is needed here.
+//!
+//! The file is still what survives a restart, and the IPC is still what is
+//! true right now. [`Order::Undo`] is now a single [`ronoctua_compositor::Compositor::reread`].
+//!
+//! AND WRITING THE FILE DOES NOTHING ON ITS OWN. This compositor does not
+//! watch the files it includes — there is no inotify anywhere in it — so
+//! nothing happens until something asks, which is the other half of why undo
+//! is one call. [`Order::Keep`] writes and then asks.
 //!
 //! # `Ok` is not "it happened"
 //!
-//! niri answers `Applied` to a mode the monitor does not have, and falls back
-//! to the preferred one with a warning nobody reads. So every order here is
-//! followed by a fresh [`Snapshot`], and what confirms a change is the
-//! reading, never the answer.
+//! A mode the monitor does not have is matched to the NEAREST one it does
+//! have (`set_mode`, `sway/config/output.c`: the smallest
+//! `abs(mode->refresh - mhz)`, and the preferred mode when no size matches),
+//! and a scale that would not give whole logical pixels is snapped by
+//! `verify_good_scale`. Both answer success. So every order here is followed
+//! by a fresh [`Snapshot`], and what confirms a change is the reading, never
+//! the answer.
 
 pub mod backlight;
 pub mod connector;
@@ -50,7 +60,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use anyhow::{Context as _, Result};
-use ronoctua_niri::{Ask, Logical, Mode, ModeAsked, Naming, Niri, Output, Transform};
+use ronoctua_compositor::{Ask, Logical, Mode, Naming, Output, Transform};
 
 use fragment::Wanted;
 use prefs::Preferences;
@@ -90,11 +100,11 @@ impl Light {
 /// One screen, joined from everything that knows something about it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Screen {
-    /// The connector, which is niri's name for it.
+    /// The connector, which is the compositor's name for it.
     pub at: String,
     /// The name its settings are filed under, and why it is that one.
     ///
-    /// It is [`ronoctua_niri::Output::naming`]: the monitor's description
+    /// It is [`ronoctua_compositor::Output::naming`]: the monitor's description
     /// when that can only be this monitor, and the connector otherwise.
     pub naming: Naming,
     /// `"<make> <model> <serial>"`, always — for SHOWING, and every part of
@@ -112,7 +122,7 @@ pub struct Screen {
     pub millimetres: Option<(u32, u32)>,
     /// Every mode it offers.
     pub modes: Vec<Mode>,
-    /// Which of them is running. See [`ronoctua_niri::Output::current_mode`]
+    /// Which of them is running. See [`ronoctua_compositor::Output::current_mode`]
     /// — `None` does not mean dark.
     pub current: Option<usize>,
     /// Where it sits and at what scale. `None` while it is off.
@@ -125,7 +135,7 @@ pub struct Screen {
     pub internal: bool,
     /// Its brightness, when anything here can move it.
     pub light: Option<Light>,
-    /// Where the kernel keeps the two things niri cannot answer.
+    /// Where the kernel keeps the two things the compositor cannot answer.
     pub wiring: connector::Wiring,
     /// What somebody chose for it.
     pub wanted: Wanted,
@@ -161,9 +171,9 @@ impl Screen {
 
     /// The turn the picture has now.
     ///
-    /// It is the PICTURE's, not the setting's: niri adds the panel's own
-    /// orientation, and forces one on the nested backend. See
-    /// [`ronoctua_niri::Logical::transform`].
+    /// It is the PICTURE's, not the setting's: the compositor adds the panel's
+    /// own orientation, and forces one on the nested backend. See
+    /// [`ronoctua_compositor::Logical::transform`].
     #[must_use]
     pub fn turn(&self) -> Transform {
         self.logical.map_or(Transform::Normal, |l| l.transform)
@@ -184,23 +194,45 @@ pub struct Snapshot {
     /// The connector the keyboard is on.
     pub focused: Option<String>,
     /// Whether the compositor answered at all. False is a machine where the
-    /// shell is running without niri, and the view says so instead of
+    /// shell is running without a compositor, and the view says so instead of
     /// drawing an empty list that looks like "no monitors".
     pub compositor: bool,
-    /// Whether the last configuration niri read failed to parse.
-    ///
-    /// It is how a fragment of ours that will not parse becomes a sentence
-    /// rather than a change that silently did nothing.
-    pub config_failed: bool,
     /// Whether OUR OWN `display.json` failed to parse.
     ///
-    /// Not the same fact as [`Snapshot::config_failed`], which is niri's. When
-    /// this is true the reading fell back to the default, so every screen in
-    /// the list draws as though nothing had ever been chosen for it — the
+    /// When this is true the reading fell back to the default, so every screen
+    /// in the list draws as though nothing had ever been chosen for it — the
     /// person's settings LOOK lost. They are not: the file is intact and this
-    /// crate refuses to write over it. But a view that shows the loss and not
-    /// the reason is the same silent failure the niri flag beside it exists to
-    /// prevent, so it is said out loud on the same terms.
+    /// crate refuses to write over it. A view that shows the loss and not the
+    /// reason is a silent failure, so it is said out loud.
+    ///
+    /// # There is no twin for the COMPOSITOR's config, and there cannot be
+    ///
+    /// There used to be, and it was the same shape: the previous compositor
+    /// published an event saying its last load had failed, and a fragment of
+    /// ours that would not parse became a sentence instead of a change that
+    /// quietly did nothing.
+    ///
+    /// This compositor reports it NOWHERE a client can hear. Measured against
+    /// a live one, with a deliberately broken fragment and then a deliberately
+    /// broken main file: `reload` answered `{"success": true}` both times. The
+    /// reason is in `load_config` — it returns
+    /// `config->active || !config->validating || config_load_success`, and
+    /// `config->active` is true for every reload of a running session, so the
+    /// result never depends on whether anything parsed. `--validate` does
+    /// answer, but only for the MAIN file: `load_include_configs` returns
+    /// `void` and throws away every include's result. The error goes to the
+    /// compositor's own log and to a nag window this distro refuses
+    /// (invariant 14).
+    ///
+    /// So the answer moved to where it can be true. The GRAMMAR is proved at
+    /// BUILD time — `display-fragment-validates` puts the exact text
+    /// [`crate::fragment::text_of`] emits in front of a real compositor, and
+    /// refuses a broken one beside it — and the one runtime value that could
+    /// be nonsense is refused before it is written
+    /// ([`crate::fragment::readable_scale`]). What is left is covered by the
+    /// rule this crate already has: `Ok` is not "it happened", so every order
+    /// is followed by a fresh reading, and a setting that did not take shows
+    /// as a setting that did not take.
     pub settings_failed: bool,
 }
 
@@ -214,7 +246,7 @@ impl Snapshot {
     /// The screen the keyboard is on, or the only one there is.
     ///
     /// The fallback matters: between a monitor going away and the next taking
-    /// focus, niri answers `None`, and a brightness key pressed in that
+    /// focus, the compositor answers `None`, and a brightness key pressed in that
     /// second should still dim the screen the person is looking at.
     #[must_use]
     pub fn focused_screen(&self) -> Option<&Screen> {
@@ -244,7 +276,7 @@ pub enum Order {
     Try {
         /// The connector.
         at: String,
-        /// What to ask niri for.
+        /// What to ask the compositor for.
         ask: Ask,
     },
     /// Write it down, and then say what it means.
@@ -304,17 +336,22 @@ pub enum Order {
     ///
     /// It is written to the file and nothing else: the doors hear the file.
     Text(u16),
-    /// The compositor read its configuration — niri's `ConfigLoaded`, which
-    /// only the shell receives, forwarded here.
-    ///
-    /// It is the ONLY way this crate can learn that the fragment it wrote was
-    /// read, and whether it parsed. Without it a fragment that will not parse
-    /// is a change that silently did nothing, which is the whole class of
-    /// defect this crate exists to remove.
-    Reloaded {
-        /// Whether niri failed to read it.
-        failed: bool,
-    },
+}
+
+/// Opens a connection, or says there is nobody to talk to.
+///
+/// # THE ONE PLACE IN THIS CRATE THAT NAMES AN ADAPTER
+///
+/// Everything else here holds a `dyn Compositor` and asks it things, which is
+/// what makes "this crate does not know which compositor it is" a fact about
+/// the code rather than a sentence in a document. There were TWO of these, and
+/// a second one is how a crate drifts back into naming a product: the day a
+/// second adapter exists, one of the two gets updated.
+///
+/// `only-the-composition-root-names-the-compositor` counts them.
+fn open_the_compositor() -> Result<Box<dyn ronoctua_compositor::Compositor>, Refused> {
+    ronoctua_scroll::Scroll::open()
+        .map_err(|e| Refused::of(Refusal::NoCompositor, format!("{e:#}")))
 }
 
 /// A refusal, with the words that go beside it.
@@ -420,8 +457,8 @@ pub struct Handle {
     /// before it is scheduled.
     ///
     /// A CHANNEL AND NOT A `JoinHandle`, because a join cannot be given a
-    /// deadline and this one needs one: `Niri::request` has no read timeout on
-    /// the ordinary path, so a compositor that accepts a connection and never
+    /// deadline and this one needs one: the adapter's request has no read
+    /// timeout on the ordinary path, so a compositor that accepts a connection and never
     /// answers would hold the thread — and a join would hold the DOOR, which
     /// is a window that will not close. `recv_timeout` gives up instead.
     over: mpsc::Receiver<Beat>,
@@ -444,15 +481,15 @@ impl Handle {
     ///
     /// # Why a door needs this to close
     ///
-    /// Because a preview is a TRANSIENT change over niri's IPC, and the only
-    /// thing that takes one down is this thread saying the file's own numbers
-    /// back — `Order::Undo`. A door that set `quit` and returned dropped the
-    /// sender, ended `main`, and the process took the thread with it: the
-    /// queued `Undo` was never carried out, and the change stood until niri
-    /// restarted. WORSE than not undoing it, because `previewed` is this
-    /// thread's own set — a door opened afterwards has an empty one, so its
-    /// `Undo` sends nothing and there is no way back from inside the shell
-    /// at all.
+    /// Because a preview lives only in the compositor's RUNNING
+    /// configuration, and the only thing that takes one down is this thread
+    /// asking for a re-read — `Order::Undo`. A door that set `quit` and
+    /// returned dropped the sender, ended `main`, and the process took the
+    /// thread with it: the queued `Undo` was never carried out, and the change
+    /// stood until the compositor restarted. WORSE than not undoing it,
+    /// because `previewed` is this thread's own set — a door opened afterwards
+    /// has an empty one, so its `Undo` sends nothing and there is no way back
+    /// from inside the shell at all.
     ///
     /// The channel delivers what is queued before it reports the sender gone,
     /// so sending and then joining is enough; the join is what the process
@@ -509,10 +546,12 @@ impl Handle {
 
 /// Starts watching the screens.
 ///
-/// ONE thread, and not the three `ronoctua-power` has, because there is
-/// nothing to subscribe to: niri publishes no event about outputs at all. The
-/// signal comes from Wayland, which the shell already receives — it turns
-/// into an [`Order::Look`].
+/// ONE thread, and not the three `ronoctua-power` has, because nothing here
+/// has to listen: the compositor DOES publish an `output` event, and the
+/// shell's own daemon is already subscribed to it (it arrives as
+/// [`ronoctua_compositor::Event::ScreensChanged`]). A second subscription
+/// would be a second connection to the same socket for the same fact. The
+/// signal turns into an [`Order::Look`], which is what this thread serves.
 ///
 /// # Errors
 ///
@@ -608,9 +647,6 @@ struct Eyes {
     /// The screens a preview is standing on, since the last time anything
     /// said out loud what the file means.
     previewed: BTreeSet<String>,
-    /// Whether the last configuration niri read failed to parse. It survives
-    /// between readings because a reading cannot tell — only the event can.
-    config_failed: bool,
     /// Whether the last read of `display.json` fell back to the default.
     settings_failed: bool,
     /// Whether the size of the text in `self.prefs` is one an order of ours
@@ -642,7 +678,7 @@ struct Eyes {
     /// - A DIFFERENT SCREEN. The other door keeps a scale on `DP-1`; this one
     ///   finishes a `Keep` for `HDMI-1` whose reading began before that write,
     ///   and `DP-1`'s scale is gone — from `display.json` and, because the
-    ///   fragment is derived from the same map, from what niri loads too.
+    ///   fragment is derived from the same map, from what the compositor loads too.
     /// - THE SAME SCREEN. The record travelling in the order is a whole
     ///   `Wanted`, cloned from the door's own snapshot and one field changed.
     ///   Every OTHER field is that snapshot's, so keeping a rotation puts the
@@ -728,61 +764,20 @@ fn one_of_each(
         transform: mine_if_moved!(transform),
         position: mine_if_moved!(position),
         vary: mine_if_moved!(vary),
-        first: mine_if_moved!(first),
     }
 }
 
-/// The asks that make the running compositor agree with one written record.
-///
-/// SIX, ALWAYS, and every one is sent even where nothing was chosen: "not
-/// chosen" is the instruction `Automatic`, not the absence of an instruction.
-/// Sending only what changed would leave a previewed knob standing, because a
-/// reload does not take it down — see the module's header.
-///
-/// `focus-at-startup` is not among them and cannot be: niri has no action for
-/// it. It is a configuration-only knob and takes effect on the next start,
-/// which is what its name says.
-fn asks_for(w: &Wanted) -> [Ask; 6] {
-    // AN OFF SCREEN IS ASKED FOR NOTHING ELSE, and this is not a shortcut: it
-    // is what `fragment::kdl_of` writes, for the reason recorded there — an
-    // off screen has no picture, so a mode or a place for it describes
-    // nothing. Sending them anyway would make the running compositor hold
-    // knobs the file does not carry, and a restart would drop them: the two
-    // would disagree, which is the one thing this crate promises they cannot.
-    let dark = Wanted {
-        off: true,
-        ..Wanted::default()
-    };
-    let w = if w.off { &dark } else { w };
-    [
-        if w.off { Ask::Off } else { Ask::On },
-        Ask::Mode(w.mode.map(|m| ModeAsked {
-            width: m.width,
-            height: m.height,
-            refresh: m.rate,
-        })),
-        // THROUGH THE SAME SIEVE the file goes through. They agreed before
-        // only because niri happens to clamp to the same two numbers, which
-        // is a coincidence and not an agreement.
-        Ask::Scale(fragment::readable_scale(w.scale)),
-        Ask::Transform(w.transform),
-        Ask::Position(w.position.map(|p| (p.x, p.y))),
-        match w.vary {
-            Some(fragment::Vary::Always) => Ask::Vrr {
-                on: true,
-                on_demand: false,
-            },
-            Some(fragment::Vary::OnDemand) => Ask::Vrr {
-                on: true,
-                on_demand: true,
-            },
-            None => Ask::Vrr {
-                on: false,
-                on_demand: false,
-            },
-        },
-    ]
-}
+// THERE IS NO `asks_for` ANY MORE, and its absence is the point.
+//
+// It turned one written record into the six commands that would make the
+// running compositor agree with it, and it existed because a re-read did NOT
+// discard a transient change: settling a screen meant saying every knob out
+// loud, and undoing a preview meant saying them again.
+//
+// Here a re-read frees every output setting the compositor was told at run
+// time and applies the file from scratch. So `Keep` is "write the file, then
+// re-read" and `Undo` is "re-read" — and the only place a single knob is sent
+// on its own is the preview, which sends the one knob the gesture moved.
 
 impl Eyes {
     /// Everything this thread remembers, with the roots to read given.
@@ -805,7 +800,6 @@ impl Eyes {
             prefs: prefs::store().read(),
             monitors: BTreeMap::new(),
             previewed: BTreeSet::new(),
-            config_failed: false,
             settings_failed: false,
             wrote_the_text: false,
             wrote_the_screens: BTreeMap::new(),
@@ -835,18 +829,18 @@ impl Eyes {
         self.prefs = understood.unwrap_or_default();
         let wiring = connector::read(&self.places);
 
-        let (outputs, focused, compositor) = match Niri::connect() {
-            Ok(mut n) => {
-                let outs = n.outputs().unwrap_or_else(|e| {
-                    tracing::warn!(error = %e, "niri did not answer about its outputs");
+        let (outputs, focused, compositor) = match open_the_compositor() {
+            Ok(mut wm) => {
+                let outs = wm.outputs().unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "the compositor did not answer about its outputs");
                     BTreeMap::new()
                 });
-                let focused = n.focused_output().ok().flatten().map(|o| o.name);
+                let focused = wm.focused_output().ok().flatten().map(|o| o.name);
                 (outs, focused, true)
             }
             Err(e) => {
-                // NOT AN ERROR. The shell runs under niri, but the tests and
-                // the tools do not, and an empty list is honest there.
+                // NOT AN ERROR. The shell runs under a compositor, but the
+                // tests and the tools do not, and an empty list is honest.
                 tracing::debug!(error = %e, "no compositor to ask about the screens");
                 (BTreeMap::new(), None, false)
             }
@@ -888,7 +882,6 @@ impl Eyes {
             screens,
             focused,
             compositor,
-            config_failed: self.config_failed,
             settings_failed: self.settings_failed,
         }
     }
@@ -904,7 +897,7 @@ impl Eyes {
             make: o.make.clone(),
             model: o.model.clone(),
             serial: o.serial.clone(),
-            millimetres: o.physical_size,
+            millimetres: wiring.millimetres,
             modes: o.modes.clone(),
             current: o.current_mode,
             logical: o.logical,
@@ -954,17 +947,13 @@ impl Eyes {
     fn obey(&mut self, order: &Order) -> Result<(), Refused> {
         match order {
             Order::Look { .. } => Ok(()),
-            Order::Reloaded { failed } => {
-                self.config_failed = *failed;
-                Ok(())
-            }
             Order::Text(percent) => {
                 self.prefs.text = ronoctua_tokens::text::allowed(*percent);
                 self.wrote_the_text = true;
                 self.write()
             }
             Order::Try { at, ask } => {
-                self.ask_niri(at, *ask)?;
+                self.ask_the_compositor(at, *ask)?;
                 self.previewed.insert(at.clone());
                 Ok(())
             }
@@ -985,11 +974,11 @@ impl Eyes {
                     .or_insert(base);
                 self.prefs.set(&filed_as, (**wanted).clone());
                 self.write()?;
-                self.say_what_the_file_says(std::slice::from_ref(at))
+                self.put_the_file_back(std::slice::from_ref(at))
             }
             Order::Undo => {
                 let standing: Vec<String> = self.previewed.iter().cloned().collect();
-                self.say_what_the_file_says(&standing)
+                self.put_the_file_back(&standing)
             }
             // ONE READING, and the one `watch` takes afterwards is the
             // other. A held brightness key repeats, and a reading walks
@@ -1013,78 +1002,26 @@ impl Eyes {
         }
     }
 
-    /// Tells the compositor, knob by knob, what the file now says.
+    /// Puts the file back in charge, which is the whole of undo.
     ///
-    /// It is what actually discards a preview: a reload will not, because
-    /// niri preserves transient output changes whenever the configuration it
-    /// re-reads is unchanged from the last disk load.
-    fn say_what_the_file_says(&mut self, screens: &[String]) -> Result<(), Refused> {
+    /// ONE COMMAND, for all of them. A re-read frees every output setting the
+    /// compositor was told at run time and applies the file from scratch — so
+    /// a preview is not "undone" knob by knob, it stops existing.
+    ///
+    /// And a refusal comes back here, from the compositor's own mouth: a
+    /// fragment that will not parse is reported at the gesture instead of
+    /// being a change that quietly did nothing.
+    fn put_the_file_back(&mut self, screens: &[String]) -> Result<(), Refused> {
         if screens.is_empty() {
             return Ok(());
         }
-        let now = self.look(false);
-        // ONE CONNECTION FOR ALL OF IT. Six asks through `ask_niri` would be
-        // six connections and six `Outputs` queries — eighteen requests for
-        // one `Keep` — and every one of those queries would be asking again
-        // what the snapshot above already proves.
-        let mut niri =
-            Niri::connect().map_err(|e| Refused::of(Refusal::NoCompositor, format!("{e:#}")))?;
-
-        // EVERY SCREEN IS SETTLED EVEN IF ONE REFUSES. Stopping at the first
-        // would leave that screen half put back — some knobs restored and
-        // others still previewed, with nothing recording which — and would
-        // skip the ones after it entirely. The refusal is carried out and
-        // reported at the end.
-        let mut trouble: Option<Refused> = None;
+        let mut wm = open_the_compositor()?;
+        wm.reread()
+            .map_err(|e| Refused::of(Refusal::NoCompositor, format!("{e:#}")))?;
         for at in screens {
-            let Some(screen) = now.screen(at) else {
-                // Unplugged mid-gesture. Nothing is standing on a screen that
-                // is gone, so it stops being remembered as previewed — which
-                // is what keeps that set from growing for the life of the
-                // process.
-                self.previewed.remove(at);
-                continue;
-            };
-            let wanted = self.prefs.of(screen.filed_as());
-            let mut settled = true;
-            for ask in asks_for(&wanted) {
-                // THE ANSWER IS READ, and `OutputWasMissing` is a failure
-                // here even though it is not an error anywhere. The snapshot
-                // above proved the screen was there; between it and the last
-                // of six asks it can go away, and then niri KEEPS every one
-                // of them for a screen that is gone. Counting that as settled
-                // would report success for nothing applied, and would leave
-                // the junk section behind — the hazard the `Try` path has a
-                // guard against, coming back through the path where the guard
-                // was deliberately removed as redundant.
-                match niri.output_action(at, ask) {
-                    Ok(ronoctua_niri::Change::Applied) => {}
-                    Ok(ronoctua_niri::Change::OutputWasMissing) => {
-                        settled = false;
-                        trouble.get_or_insert_with(|| {
-                            Refused::of(
-                                Refusal::NoSuchScreen,
-                                format!("{at} went away while it was being put back"),
-                            )
-                        });
-                    }
-                    // WITH ONE CONNECTION HELD OPEN, an error here is the
-                    // socket and not a refusal about this screen. Calling it
-                    // `Other` would throw away the one refusal in this crate
-                    // that names its own fix.
-                    Err(e) => {
-                        settled = false;
-                        trouble.get_or_insert_with(|| {
-                            Refused::of(Refusal::NoCompositor, format!("{e:#}"))
-                        });
-                    }
-                }
-            }
-            if settled {
-                self.previewed.remove(at);
-            }
+            self.previewed.remove(at);
         }
-        trouble.map_or(Ok(()), Err)
+        Ok(())
     }
 
     fn filed_as(&mut self, at: &str) -> Result<String, Refused> {
@@ -1105,14 +1042,13 @@ impl Eyes {
             })
     }
 
-    fn ask_niri(&mut self, at: &str, ask: Ask) -> Result<(), Refused> {
-        let mut n =
-            Niri::connect().map_err(|e| Refused::of(Refusal::NoCompositor, format!("{e:#}")))?;
-        // ASK FIRST WHETHER IT IS THERE. For a name it does not know, niri
-        // pushes a fresh output section into its RUNNING configuration and
-        // keeps it — so a connector unplugged mid-gesture would leave junk
-        // behind that outlives the gesture.
-        let outputs = n
+    fn ask_the_compositor(&mut self, at: &str, ask: Ask) -> Result<(), Refused> {
+        let mut wm = open_the_compositor()?;
+        // ASK FIRST WHETHER IT IS THERE. For a name it does not know, the
+        // compositor stores a fresh output section in its RUNNING
+        // configuration and keeps it — so a connector unplugged mid-gesture
+        // would leave junk behind that outlives the gesture.
+        let outputs = wm
             .outputs()
             .map_err(|e| Refused::of(Refusal::NoCompositor, format!("{e:#}")))?;
         if !outputs.contains_key(at) {
@@ -1121,24 +1057,12 @@ impl Eyes {
                 format!("there is no screen called {at} any more"),
             ));
         }
-        // THE ANSWER IS NOT PROOF THAT IT WORKED — `Applied` comes back for
-        // a mode the monitor does not have, and what confirms that is the
-        // reading which follows. But it IS proof of which screen was touched,
-        // and the guard above can go stale in the round trip between them.
-        // NAMED, and not left to the catch-all. It is the same socket the
-        // settle path holds, already connected and already answered once by
-        // `outputs()` above — so a failure here is the compositor going away,
-        // and two adjacent doors calling one failure by two names is what
-        // `Refused` exists to prevent.
-        let answer = n
-            .output_action(at, ask)
+        // SUCCESS IS NOT PROOF THAT IT WORKED. A mode the monitor does not
+        // have is matched to the nearest one it does, and a scale that would
+        // not give whole pixels is snapped — both answer success. What
+        // confirms a change is the READING that follows it, never the answer.
+        wm.ask(at, ask)
             .map_err(|e| Refused::of(Refusal::NoCompositor, format!("{e:#}")))?;
-        if answer == ronoctua_niri::Change::OutputWasMissing {
-            return Err(Refused::of(
-                Refusal::NoSuchScreen,
-                format!("there is no screen called {at} any more"),
-            ));
-        }
         Ok(())
     }
 
@@ -1256,9 +1180,9 @@ impl Eyes {
         // `on_disk.screens` empty, and then the very next order writes that
         // emptiness back: `display.json` becomes `{"screens":{},"text":N}` and
         // the fragment, which is DERIVED from the same map, becomes its header
-        // alone. niri reloads it and every kept mode, scale, rotation and
-        // position reverts — from one press of the text-size key, on a file
-        // this crate's own doc invites a person to edit by hand.
+        // alone. The next re-read applies that, and every kept mode, scale,
+        // rotation and position reverts — from one press of the text-size key,
+        // on a file this crate's own doc invites a person to edit by hand.
         //
         // Refusing costs the order and keeps the file, which is the trade the
         // store's promise names: one feature, not the contents.
@@ -1280,21 +1204,25 @@ impl Eyes {
         );
         self.wrote_the_text = false;
         self.wrote_the_screens.clear();
-        // AND THE FRAGMENT IS WRITTEN ONLY WHEN ITS BYTES MOVE. Every write
-        // through `write_atomically` is a rename, which is what niri's include
-        // watcher sees — so rewriting the same bytes was a full configuration
-        // reload, and each reload is a `ConfigLoaded` that both doors turn into
-        // a fresh reading (a walk of `/sys/class/drm` and two connections to
-        // niri, in each). Stepping the size of the text has nothing to do with
-        // the compositor and paid that per keystroke.
+        // AND THE FRAGMENT IS WRITTEN ONLY WHEN ITS BYTES MOVE, which is now
+        // about what FOLLOWS the write rather than about the write.
+        //
+        // This compositor watches nothing — there is no inotify in it — so
+        // rewriting the same bytes costs a rename and no more. What costs is
+        // the re-read `Order::Keep` sends afterwards to make the compositor
+        // agree with the file: that is a full configuration load, and it frees
+        // and rebuilds every output setting. Skipping the write is what skips
+        // that. Under the previous compositor the same line paid for the
+        // opposite reason — it DID watch its includes, so the rename alone was
+        // the reload — and the comparison earns its place either way.
         //
         // COMPARED AND NOT REASONED ABOUT: the fragment is a few hundred bytes
         // and reading it back is exact, which a flag would not be — a hand
         // edit of `display.json` has to reach the fragment too.
-        let kdl = fragment::kdl_of(&self.prefs.screens);
-        let same = std::fs::read(dir.join(fragment::FILE)).is_ok_and(|had| had == kdl.as_bytes());
+        let conf = fragment::text_of(&self.prefs.screens);
+        let same = std::fs::read(dir.join(fragment::FILE)).is_ok_and(|had| had == conf.as_bytes());
         if !same {
-            ronoctua_store::write_atomically(&dir, fragment::FILE, kdl.as_bytes())
+            ronoctua_store::write_atomically(&dir, fragment::FILE, conf.as_bytes())
                 .map_err(|e| Refused::of(Refusal::NoPlaceToWrite, e.to_string()))?;
         }
         prefs::store()
@@ -1317,7 +1245,7 @@ mod tests {
     /// A panel's size names its model as surely as the model does.
     ///
     /// So they are round numbers that no panel has, chosen the way
-    /// `ronoctua_niri`'s fixture chooses them and for the same written reason.
+    /// the contract's fixture chooses them and for the same written reason.
     fn screen(at: &str, logical: Option<Logical>) -> Screen {
         Screen {
             at: at.to_owned(),
@@ -1331,7 +1259,6 @@ mod tests {
                 width: 1920,
                 height: 1200,
                 refresh_rate: 59_951,
-                is_preferred: true,
             }],
             current: Some(0),
             logical,
@@ -1353,90 +1280,6 @@ mod tests {
             scale: 1.0,
             transform: Transform::Normal,
         }
-    }
-
-    #[test]
-    fn cancelling_says_every_knob_and_not_only_the_changed_one() {
-        // THE DEFECT THIS REPLACES: cancelling used to be "rewrite the file
-        // and let the reload drop the preview". niri does not drop it — when
-        // the configuration it re-reads is unchanged from the last disk load
-        // it takes the other branch and puts the transient changes BACK. So a
-        // preview of a rotation survived Escape, for ever.
-        //
-        // The fix is to say what the file means, knob by knob, and "nothing
-        // chosen" has to be said too: it is the instruction `Automatic`.
-        let quiet = asks_for(&Wanted::default());
-        assert_eq!(
-            quiet,
-            [
-                Ask::On,
-                Ask::Mode(None),
-                Ask::Scale(None),
-                Ask::Transform(Transform::Normal),
-                Ask::Position(None),
-                Ask::Vrr {
-                    on: false,
-                    on_demand: false
-                },
-            ]
-        );
-
-        // And a record that says something says all of it.
-        let full = Wanted {
-            off: false,
-            mode: Some(fragment::Chosen {
-                width: 1920,
-                height: 1200,
-                rate: Some(59.951),
-            }),
-            scale: Some(1.5),
-            transform: Transform::R270,
-            position: Some(fragment::Spot { x: -1920, y: 120 }),
-            vary: Some(fragment::Vary::OnDemand),
-            first: true,
-        };
-        let said = asks_for(&full);
-        assert_eq!(
-            said[1],
-            Ask::Mode(Some(ModeAsked {
-                width: 1920,
-                height: 1200,
-                refresh: Some(59.951)
-            }))
-        );
-        assert_eq!(said[2], Ask::Scale(Some(1.5)));
-        assert_eq!(said[3], Ask::Transform(Transform::R270));
-        assert_eq!(said[4], Ask::Position(Some((-1920, 120))));
-        assert_eq!(
-            said[5],
-            Ask::Vrr {
-                on: true,
-                on_demand: true
-            }
-        );
-        // `first` is `focus-at-startup`, which niri has no action for. It is
-        // in the file and NOT in this list, and that is not an omission.
-        assert_eq!(said.len(), 6);
-
-        // Off is the whole of what an off screen is asked for at index 0.
-        assert_eq!(
-            asks_for(&Wanted {
-                off: true,
-                ..Wanted::default()
-            })[0],
-            Ask::Off
-        );
-        // And "always varying" is not the same ask as "on demand".
-        assert_eq!(
-            asks_for(&Wanted {
-                vary: Some(fragment::Vary::Always),
-                ..Wanted::default()
-            })[5],
-            Ask::Vrr {
-                on: true,
-                on_demand: false
-            }
-        );
     }
 
     #[test]
@@ -1484,15 +1327,14 @@ mod tests {
     }
 
     #[test]
-    fn the_only_screen_is_the_focused_one_even_when_niri_says_nothing() {
-        // Between a monitor going away and the next taking focus, niri
+    fn the_only_screen_is_the_focused_one_even_when_nothing_is_named() {
+        // Between a monitor going away and the next taking focus, the compositor
         // answers `None`. A brightness key pressed in that second still has
         // to dim the screen the person is looking at.
         let one = Snapshot {
             screens: vec![screen("eDP-1", Some(place()))],
             focused: None,
             compositor: true,
-            config_failed: false,
             settings_failed: false,
         };
         assert_eq!(one.focused_screen().map(|s| s.at.as_str()), Some("eDP-1"));
@@ -1505,7 +1347,7 @@ mod tests {
             ..one
         };
         assert!(two.focused_screen().is_none());
-        // And what niri names wins over the fallback.
+        // And what the compositor names wins over the fallback.
         let named = Snapshot {
             focused: Some("DP-1".to_owned()),
             ..two
@@ -1565,7 +1407,7 @@ mod tests {
         );
 
         assert!(!Order::Undo.deep());
-        assert!(!Order::Reloaded { failed: true }.deep());
+        assert!(!Order::Text(120).deep());
         assert!(
             !Order::Try {
                 at: "DP-1".to_owned(),
@@ -1576,89 +1418,34 @@ mod tests {
     }
 
     #[test]
-    fn an_off_screen_is_asked_for_nothing_but_off() {
-        // THE FILE AND THE VOICE HAVE TO SAY THE SAME THING. `kdl_of` writes
-        // `off` and nothing else, on the grounds that an off screen has no
-        // picture to describe. Sending a mode and a place along with `Off`
-        // would leave the compositor holding knobs the file does not carry,
-        // and a restart would drop them — the two disagreeing, which is the
-        // one thing this crate promises cannot happen.
-        let loud = Wanted {
+    fn an_off_screen_is_written_as_nothing_but_off() {
+        // A monitor that is off has no mode, no place and no scale; writing
+        // them would describe a picture nobody is drawing, and the running
+        // compositor would then hold knobs the file does not carry.
+        let dark = fragment::Wanted {
             off: true,
-            mode: Some(fragment::Chosen {
-                width: 800,
-                height: 600,
-                rate: None,
-            }),
-            scale: Some(3.0),
+            scale: Some(2.0),
             transform: Transform::R90,
-            position: Some(fragment::Spot { x: 77, y: 88 }),
-            vary: Some(fragment::Vary::Always),
-            first: true,
+            ..fragment::Wanted::default()
         };
-        assert_eq!(
-            asks_for(&loud),
-            [
-                Ask::Off,
-                Ask::Mode(None),
-                Ask::Scale(None),
-                Ask::Transform(Transform::Normal),
-                Ask::Position(None),
-                Ask::Vrr {
-                    on: false,
-                    on_demand: false
-                },
-            ]
-        );
-        // And what the fragment writes for it agrees, node for node.
-        let written = fragment::kdl_of(&std::collections::BTreeMap::from([("X".to_owned(), loud)]));
-        // SCOPED TO THE BLOCK, not the whole file: the header is prose, and
-        // asserting over it would fire the day that prose gains one of these
-        // words for an unrelated reason.
-        let body = &written[written.find("output ").unwrap()..];
-        assert!(body.contains("    off\n"), "{body}");
-        for knob in ["mode", "scale", "transform", "position", "variable"] {
-            assert!(!body.contains(knob), "{knob} in: {body}");
-        }
+        let said = fragment::text_of(&BTreeMap::from([("Maker M1 S1".to_owned(), dark)]));
+        assert!(said.contains("disable"), "{said}");
+        assert!(!said.contains("scale"), "and nothing else: {said}");
+        assert!(!said.contains("transform"), "{said}");
     }
 
     #[test]
-    fn a_scale_that_is_not_a_number_is_never_asked_for_either() {
-        // The file sieves it; the voice has to sieve it too, or the two say
-        // different things about the same record.
-        let mad = Wanted {
+    fn a_scale_that_is_not_a_number_is_never_written() {
+        // A NaN written out is the literal `NaN`, which fails the number
+        // parse and takes the WHOLE load down — every other monitor's
+        // settings with it.
+        let mad = fragment::Wanted {
             scale: Some(f64::NAN),
-            ..Wanted::default()
+            ..fragment::Wanted::default()
         };
-        assert_eq!(asks_for(&mad)[2], Ask::Scale(None));
-        let big = Wanted {
-            scale: Some(400.0),
-            ..Wanted::default()
-        };
-        assert_eq!(asks_for(&big)[2], Ask::Scale(Some(10.0)));
-    }
-
-    #[test]
-    fn a_reload_that_failed_is_remembered_across_readings() {
-        // A reading cannot tell: niri answers about its outputs whether or
-        // not the last config parsed. Only the event says, and it arrives
-        // once — so it has to survive until the next one.
-        let mut eyes = Eyes {
-            places: ronoctua_memory::Places::default(),
-            prefs: Preferences::default(),
-            monitors: BTreeMap::new(),
-            previewed: BTreeSet::new(),
-            config_failed: false,
-            settings_failed: false,
-            wrote_the_text: false,
-            wrote_the_screens: BTreeMap::new(),
-        };
-        eyes.obey(&Order::Reloaded { failed: true }).unwrap();
-        assert!(eyes.config_failed);
-        eyes.obey(&Order::Look { deep: false }).unwrap();
-        assert!(eyes.config_failed, "a plain look forgot the failure");
-        eyes.obey(&Order::Reloaded { failed: false }).unwrap();
-        assert!(!eyes.config_failed);
+        assert_eq!(fragment::readable_scale(mad.scale), None);
+        let said = fragment::text_of(&BTreeMap::from([("Maker M1 S1".to_owned(), mad)]));
+        assert!(!said.contains("NaN"), "{said}");
     }
 
     #[test]
@@ -1667,7 +1454,7 @@ mod tests {
         // that quits with a question standing has to get its `Undo` carried
         // out, and the channel delivers what is queued before it reports the
         // sender gone — so sending and then waiting is enough. What the wait
-        // must not do is last for ever: `Niri::request` has no read timeout,
+        // must not do is last for ever: the adapter's request has no read timeout,
         // and a join would turn a compositor that never answers into a window
         // that will not close.
         let counted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1824,7 +1611,6 @@ mod tests {
         let base = crate::fragment::Wanted {
             scale: Some(1.5),
             transform: Transform::R90,
-            first: true,
             ..crate::fragment::Wanted::default()
         };
         let mut on_disk = Preferences::default();
@@ -1852,7 +1638,7 @@ mod tests {
     fn the_running_mode_is_the_one_the_index_names() {
         let s = screen("eDP-1", Some(place()));
         assert_eq!(s.mode().map(|m| m.refresh_rate), Some(59_951));
-        // An index niri could not fill in is not a panic.
+        // An index the compositor could not fill in is not a panic.
         let mut interlaced = s.clone();
         interlaced.current = None;
         assert!(interlaced.mode().is_none());
@@ -1869,7 +1655,7 @@ mod tests {
         // nothing had ever been chosen for it. That is the person's settings
         // apparently gone — and the file is intact, and this crate refuses to
         // write over it. Showing the loss without the reason is the silent
-        // failure `config_failed` exists to prevent, one file over.
+        // failure a view owes the person, one file over.
         //
         // `parsed` is what tells the two empty answers apart: no file yet
         // (every machine's first morning) against a file nobody can read.

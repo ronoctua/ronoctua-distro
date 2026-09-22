@@ -19,7 +19,7 @@
 //! buffer of logical size and the compositor stretched it over twice as many
 //! pixels.
 //!
-//! MEASURED, on a niri output configured `scale 2` under Xvfb, over the power
+//! MEASURED, on an output configured `scale 2` under Xvfb, over the power
 //! window's own column (200x700 px at +30+40), the same picture with and
 //! without the fix:
 //!
@@ -248,7 +248,7 @@ pub fn resized(gpu: &mut ronoctua_render::gpu::Gpu, logical: (u32, u32), scale: 
 ///
 /// The attach and the commit are issued by mesa's Vulkan WSI and not by us —
 /// so "presenting is the attach and the commit" is a claim about somebody
-/// else's code. Under `WAYLAND_DEBUG=client`, on a niri output configured
+/// else's code. Under `WAYLAND_DEBUG=client`, on an output configured
 /// `scale 2`, the power window's own wire (the `{…}` tag is the event queue's
 /// name, which is what `wl_event_queue_set_name` puts there):
 ///
@@ -350,8 +350,9 @@ pub fn followed(
     // re-rasterised, so refusing there left two of the three moved and the
     // surface at the old scale — a door twice the size it was configured to
     // be. Not following at all is the only answer that keeps them together,
-    // and it is the answer this module exists to give. niri offers v6, which
-    // is what makes this a guard rather than a path anybody walks.
+    // and it is the answer this module exists to give. wlroots offers v6
+    // (`COMPOSITOR_VERSION`), which is what makes this a guard rather than a
+    // path anybody walks.
     if surface.version() < 3 {
         tracing::warn!(
             version = surface.version(),

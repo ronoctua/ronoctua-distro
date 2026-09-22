@@ -7,7 +7,7 @@
 # That the compositor sees a WINDOW, and not a region drawn by us. The
 # difference matters: invariant 4 says the shell never reimplements window
 # layout, and drawing buffers inside a surface of ours would be exactly that.
-# We ask niri — the IPC's `Windows` lists the windows, and the buffer's has to
+# We ask the compositor — the IPC's `Windows` lists the windows, and the buffer's has to
 # be there, with our `app_id`.
 #
 # And the content has to be ON SCREEN: the component produces a `DisplayList`
@@ -16,7 +16,7 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
   bufferExample,
@@ -25,7 +25,7 @@
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-buffer";
@@ -35,7 +35,7 @@ pkgs.testers.runNixOSTest {
     virtualisation.cores = 2;
 
     environment.systemPackages = [
-      niri
+      scroll
       ronoctua-shell
       pkgs.imagemagick
       pkgs.tesseract
@@ -69,8 +69,8 @@ pkgs.testers.runNixOSTest {
     machine.start()
     machine.wait_for_unit("multi-user.target")
     start_xvfb()
-    start_niri("niri", "${niri}")
-    sock = socket_of("niri")
+    start_compositor("compositor", "${scroll}")
+    sock = socket_of("compositor")
 
     with subtest("the buffer comes up and the component renders"):
         machine.succeed(
@@ -84,7 +84,7 @@ pkgs.testers.runNixOSTest {
         )
         try:
             machine.wait_until_succeeds(
-                "journalctl -u buffer --no-pager | grep -q 'component rendered'",
+                "journalctl -u buffer --no-pager | grep 'component rendered' > /dev/null",
                 timeout=60,
             )
         except Exception:
@@ -101,17 +101,23 @@ pkgs.testers.runNixOSTest {
     with subtest("the COMPOSITOR sees a window, not a region of ours"):
         # The proof of invariant 4. A buffer drawn inside our surface would not
         # show up here.
-        machine.wait_until_succeeds(
-            f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'windows: 1'",
-            timeout=30,
-        )
-        out_text = machine.succeed(f"${ronoctua-shell}/bin/niri-contract {sock}")
-        print(out_text)
-        assert "focused: Some" in out_text, out_text
+        await_windows(sock, 1, timeout=30)
+        # AND IT HAS THE FOCUS.
+        #
+        # READ, never `ronoctua-contract`: that binary EXERCISES the compositor
+        # (it turns outputs off and on and reloads the configuration), so using
+        # it to ask a question makes the question change the answer — and in
+        # this VM it exits non-zero doing it. The assertion also used to look
+        # for the word `Some`, which is how the previous adapter spelt an
+        # `Option` and which this one never prints: it would have passed on a
+        # compositor focusing nothing at all, for ever.
+        who = focused_now(sock)
+        assert who is not None, "the compositor focuses no window at all"
+        print(f"focused: {who}")
 
     with subtest("the buffer drew in the window"):
         machine.wait_until_succeeds(
-            "journalctl -u buffer --no-pager | grep -q 'buffer drawn on the xdg_toplevel'",
+            "journalctl -u buffer --no-pager | grep 'buffer drawn on the xdg_toplevel' > /dev/null",
             timeout=60,
         )
         journal = machine.succeed("journalctl -u buffer --no-pager")
@@ -122,13 +128,16 @@ pkgs.testers.runNixOSTest {
         # The whole chain: component -> DisplayList -> i18n -> tokens -> wgpu ->
         # pixel. The component sends `cmd-mx-open`; in pt-BR that is
         # "Executar comando…", and that is what the OCR has to read.
-        w, h, x, y = niri_geometry()
+        w, h, x, y = window_box(sock, "br.ronoctua.example")
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
-        # THE WHOLE WINDOW, and not a crop at the top: whoever decides where the
-        # window goes is niri (invariant 4), and it does not put it at (0,0) —
-        # its column has a width of its own and the window is centered in it.
-        # Cropping by an assumed position is assuming layout, which is precisely
-        # what the invariant forbids the shell to do.
+        # THE WINDOW'S OWN RECTANGLE, asked of the compositor.
+        #
+        # Whoever decides where a window goes is the compositor (invariant 4),
+        # so a test may not assume it either. Cropping the whole OUTPUT was the
+        # old way of not assuming, and it stopped working when a layout put the
+        # window in a column: half the crop became empty desk and
+        # `tesseract --psm 6`, which wants one uniform block of text, read
+        # nothing. `window_box` reads the rectangle instead — see the prelude.
         machine.succeed(
             f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
             "-colorspace gray -negate -resize 200% /tmp/buffer.png"
@@ -162,12 +171,12 @@ pkgs.testers.runNixOSTest {
             "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm"
         )
         machine.wait_until_succeeds(
-            "journalctl -u glyphs --no-pager | grep -q 'buffer drawn on the xdg_toplevel'",
+            "journalctl -u glyphs --no-pager | grep 'buffer drawn on the xdg_toplevel' > /dev/null",
             timeout=90,
         )
 
         # With no WM on Xvfb nobody has input focus, and the key would be lost.
-        focus_niri()
+        focus_compositor()
         machine.sleep(1)
         # The FIRST Enter opens the sheet; the SECOND copies the selected option,
         # which is the first of the list — the glyph's NAME.
@@ -177,7 +186,7 @@ pkgs.testers.runNixOSTest {
 
         try:
             machine.wait_until_succeeds(
-                "journalctl -u glyphs --no-pager | grep -q 'copied'", timeout=30
+                "journalctl -u glyphs --no-pager | grep 'copied' > /dev/null", timeout=30
             )
         except Exception:
             print(machine.execute("journalctl -u glyphs --no-pager | tail -40")[1])
@@ -243,14 +252,14 @@ pkgs.testers.runNixOSTest {
             "${bufferFormat}/lib/ronoctua_buffer_format.wasm"
         )
         machine.wait_until_succeeds(
-            "journalctl -u format --no-pager | grep -q 'buffer drawn on the xdg_toplevel'",
+            "journalctl -u format --no-pager | grep 'buffer drawn on the xdg_toplevel' > /dev/null",
             timeout=60,
         )
         # The rack has to have crossed. Before it does, the screen legitimately
         # says it has nothing — so waiting for the DRAW alone would measure the
         # empty state and pass.
         machine.wait_until_succeeds(
-            "journalctl -u format --no-pager | grep -q 'input=Rack'",
+            "journalctl -u format --no-pager | grep 'input=Rack' > /dev/null",
             timeout=60,
         )
         machine.sleep(2)
@@ -303,7 +312,7 @@ pkgs.testers.runNixOSTest {
             f"a device of zero bytes is in the list:\n{last}"
         )
 
-        w, h, x, y = niri_geometry()
+        w, h, x, y = compositor_geometry()
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/fmt.xwd")
         machine.succeed(
             f"${pkgs.imagemagick}/bin/magick /tmp/fmt.xwd -crop {w}x{h}+{x}+{y} +repage "
@@ -339,7 +348,7 @@ pkgs.testers.runNixOSTest {
         #
         # Moving the cursor swaps WHICH row is unreadable, so the union of two
         # readings covers both. It also proves the arrow reached the component
-        # through niri, which nothing else here does.
+        # through the compositor, which nothing else here does.
         def nodes_on_screen(tag):
             machine.succeed(f"${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/{tag}.xwd")
             machine.succeed(

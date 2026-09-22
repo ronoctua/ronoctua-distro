@@ -25,7 +25,8 @@ path = "src/bin/rescue.rs"
 ronoctua-i18n = { path = "../ronoctua-i18n" }
 ronoctua-tokens = { path = "../ronoctua-tokens" }
 # The compositor's border, to list and close a window (invariant 3).
-ronoctua-niri = { path = "../ronoctua-niri" }
+ronoctua-compositor = { path = "../ronoctua-compositor" }
+ronoctua-scroll = { path = "../ronoctua-scroll" }
 # The machine's border, to read memory and stop what is eating it. The only
 # crate that touches `/proc`, and this app does not become a second one.
 ronoctua-memory = { path = "../ronoctua-memory" }

@@ -5,18 +5,24 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
     # --- compositor -----------------------------------------------------
-    # Invariant 3: NO FORK, NO PATCH. Consumed as upstream, pinned to a
-    # tagged release. Upstream moved from YaLTeR/niri to niri-wm/niri and
-    # today uses calendar versioning.
-    niri = {
-      url = "github:niri-wm/niri/v26.04";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    # Section 7.3: a second input running the SAME contract test, to
-    # discover IPC drift before the release becomes mandatory.
-    niri-next = {
-      url = "github:niri-wm/niri";
-      inputs.nixpkgs.follows = "nixpkgs";
+    # Invariant 3: NO FORK, NO PATCH — neither of the compositor nor of the
+    # wlroots it carries inside `subprojects/`. Consumed as upstream, pinned
+    # to a tagged release.
+    #
+    # `flake = false`: upstream ships no `flake.nix`. What builds it is
+    # `nix/scroll.nix`, against THIS project's nixpkgs — the header there
+    # carries why not the third-party flake (it brings a second nixpkgs, and
+    # the whole delta turned out to be one patch release of libdrm) and where
+    # wlroots is.
+    #
+    # THERE IS NO SECOND INPUT FOR DRIFT, and that is a decision. Half of the
+    # IPC surface is i3's, frozen by compatibility for a decade; the drift
+    # risk that a calendar-versioned compositor carried is not the same size,
+    # and the generator already refuses at build time a command the pinned
+    # source does not have.
+    scroll-src = {
+      url = "github:dawsers/scroll?ref=refs/tags/1.12.21";
+      flake = false;
     };
 
     # --- system and installation ----------------------------------------
@@ -364,12 +370,14 @@
         mimeTableFile = ./assets/icons/mime-glyphs.nix;
       };
 
-      # The compositor's 141 actions, extracted from the PINNED niri (section 13).
-      niriActions = pkgs.callPackage ./nix/niri-actions.nix {
-        niri = inputs.niri.packages.${system}.niri;
-        # The pinned niri's TREE, for the `default-config.kdl`: it is the
-        # authoritative list of the shortcuts the compositor ships.
-        niriSrc = inputs.niri;
+      # The compositor's commands, DECLARED by us (section 13).
+      #
+      # Not extracted from a binary: the commands are free text and the only
+      # list of them is in the compositor's source, which this generator reads
+      # to refuse a verb that does not exist. See `nix/compositor-deeds.nix`.
+      compositorDeeds = pkgs.callPackage ./nix/compositor-deeds.nix {
+        deedsFile = ./assets/compositor-deeds.nix;
+        scrollSrc = inputs.scroll-src;
       };
 
       # The Rust workspace, built by crane (section 7.12).
@@ -389,7 +397,7 @@
       # it. `nix run .#png` draws with wgpu and needs an ICD; taking it from
       # here instead of writing the path again means a Mesa that renames the
       # file breaks both at once, and is fixed once.
-      xvfbIcd = (import ./tests/niri-xvfb.nix { inherit pkgs lib; }).icd;
+      xvfbIcd = (import ./nix/software-gpu.nix { inherit pkgs lib; }).icd;
 
       # The native buffers, for `wasm32-wasip2`. After `rustToolchain`
       # because they use the SAME toolchain — the wasm target is already in it.
@@ -454,7 +462,7 @@
           updatesRs
           cacheRs
           syntaxRs
-          niriActions
+          compositorDeeds
           ;
         inherit (pkgs) xkeyboard_config;
         bufferGlyphs = buffers.glyphs;
@@ -481,7 +489,6 @@
           worldRs
           ;
         primaryFontFile = "${primaryFont}/NoctuaIosevkaNerdFontMono-Regular.ttf";
-        niri = inputs.niri.packages.${system}.niri;
         src = ./.;
       };
 
@@ -490,7 +497,7 @@
       # path `dev` does not use.
       graphicsHost = pkgs.callPackage ./nix/graphics-host.nix { };
 
-      # `nix run .#dev` — nested niri (section 7.12, speed 1).
+      # `nix run .#dev` — the nested compositor (section 7.12, speed 1).
       # Hot reload's watcher. A package of its own so it can be TESTED —
       # see the header of nix/reload.nix.
       reloadApp = pkgs.callPackage ./nix/reload.nix { };
@@ -507,7 +514,7 @@
       # The snapshot for when the shortcuts freeze — see the header of
       # nix/diagnostics.nix.
       diagnostics = pkgs.callPackage ./nix/diagnostics.nix {
-        niri = inputs.niri.packages.${system}.niri;
+        inherit scroll;
       };
 
       # THE UPDATE TABLE, generated from `assets/updates.nix` — the same shape
@@ -541,15 +548,19 @@
       };
       syntaxRs = syntaxTable.table;
 
+      # The compositor. See `nix/scroll.nix` for why it is an override of
+      # sway's derivation and where wlroots is.
+      scroll = pkgs.callPackage ./nix/scroll.nix { scrollSrc = inputs.scroll-src; };
+
       devApp = pkgs.callPackage ./nix/dev.nix {
         inherit
           atlasData
           graphicsHost
           reloadApp
+          scroll
           singleFooter
           rustToolchain
           ;
-        niri = inputs.niri.packages.${system}.niri;
         # `rust.loopShell` AND NOT `rust.shell`: the nested loop is where one
         # LOOKS at the interface, never where one measures it, and it is the
         # most-run command in the project. Measured on this machine, the same
@@ -571,7 +582,7 @@
       # Section 5.2's FRAME targets. Outside `nix flake check` on purpose:
       # section 9.3 forbids measuring them under lavapipe, and a check has no GPU.
       benchFrames = pkgs.callPackage ./nix/bench-frames.nix {
-        niri = inputs.niri.packages.${system}.niri;
+        inherit scroll;
         ronoctua-shell = rust.shell;
         inherit graphicsHost;
       };
@@ -720,7 +731,7 @@
         ./nix/modules/aria2.nix
         ./nix/modules/browser-extension.nix
         ./nix/modules/fonts.nix
-        ./nix/modules/niri.nix
+        ./nix/modules/scroll.nix
         ./nix/modules/keyboard.nix
         ./nix/modules/icons.nix
         ./nix/modules/foreign.nix
@@ -755,12 +766,18 @@
           _module.args = {
             ronoctua = {
               inherit fonts fontconfigConf iconSuperpack;
-              inherit (inputs) niri;
+              # THE COMPOSITOR ITSELF, for the one line that needs the binary:
+              # the unit's `ExecStart`. The config FILE it is given never names
+              # it, which is exactly why this was missing and nothing said so —
+              # building `/etc/scroll/config` forces the text and not the
+              # program, so the gap only showed when a check evaluated a whole
+              # system. `the-session-reaches-its-target` now forces the unit.
+              inherit scroll;
               # THE THEMES: the list (the option's enum) and the solved
               # palettes (files the modules splice or point at; never read at
               # evaluation).
               inherit themes themed defaultTheme;
-              # The shell's binary: the niri module generates the chord
+              # The shell's binary: the compositor module generates the chord
               # binds from its command table.
               #
               # `rust.shell` and not `rust.workspace`: it is the wrapped one that
@@ -844,6 +861,12 @@
         # `docs/PENDING.md`, item 1.
         ghostty-vt = ghosttyVt;
 
+        # THE COMPOSITOR UNDER EVALUATION, exposed so it can be built and run on
+        # its own — `nix run .#scroll -- --config <file>` — without bringing up
+        # the footer. It is exposed so it can be built and run on its own —
+        # `nix run .#scroll -- -c <file>` — without bringing up the footer.
+        inherit scroll;
+
         # The shim, buildable and inspectable on its own: it carries the
         # `sizeof` table the layout check compares the Rust against.
         torrent-shim = torrentShim;
@@ -868,7 +891,7 @@
         tor-options-rs = torOptionsRs;
         atuin-options-rs = atuinOptionsRs;
         keyboards-rs = keyboardsRs;
-        niri-actions = niriActions;
+        compositor-deeds = compositorDeeds;
         # THE SEVEN COMPONENTS, each buildable on its own.
         #
         # Three of them used to be missing here, and it showed the day the
@@ -910,12 +933,12 @@
         # script on somebody's machine.
         shots = pkgs.callPackage ./nix/shots.nix {
           inherit
+            scroll
             fonts
             themed
             themes
             defaultTheme
             ;
-          niri = inputs.niri.packages.${system}.niri;
           ronoctua-shell = rust.shell;
           # The daemon, so the brain's line can be photographed. It is the only
           # region of the footer that no buffer draws, so `nix run .#png`
@@ -944,13 +967,13 @@
           name = "shots-${scene}";
           value = pkgs.callPackage ./nix/shots.nix {
             inherit
+              scroll
               fonts
               themed
               themes
               defaultTheme
               ;
             only = [ scene ];
-            niri = inputs.niri.packages.${system}.niri;
             ronoctua-shell = rust.shell;
             ronoctua-brain = rust.brain;
             ronoctua-transfers = rust.transfers;
@@ -993,7 +1016,7 @@
                 # Most of a NixOS closure arrives prebuilt from
                 # `cache.nixos.org`; what this project makes does not exist
                 # there, and that is what the target machine was compiling every
-                # time — the shell, niri from the pinned input, `libghostty-vt`
+                # time — the shell, the compositor, `libghostty-vt`
                 # and its Zig toolchain, the five wasm buffers. They are the
                 # compilations this host's own `earlyoom` kills for weight.
                 #
@@ -1004,9 +1027,19 @@
                 # only this repository can produce, and the target downloads the
                 # rest instead of compiling it.
                 seed = [
+                  # THE COMPOSITOR, said out loud.
+                  #
+                  # The line below used to claim it arrived "by baked store
+                  # path" with the workspace. It does not, and it did not:
+                  # nothing in the shell references the compositor's binary —
+                  # what names it is the UNIT, which is `/etc` and not a
+                  # closure the ISO carries. So a full install would have
+                  # BUILT a compositor and its vendored wlroots on the target
+                  # machine, which is the afternoon this whole list exists to
+                  # prevent. `iso-carries-the-seed` is what said so, by name.
+                  scroll
                   # The workspace, and with it — by baked store path —
-                  # `libghostty-vt` and niri itself. 1,97 GiB of closure that no
-                  # cache has.
+                  # `libghostty-vt`. 1,97 GiB of closure that no cache has.
                   #
                   # `rust.shell` and NOT `rust.workspace`: the five wasm buffers
                   # used to arrive by carriage, exactly as the superpack below
@@ -1041,7 +1074,7 @@
                 #
                 # To build the machine's own top — `etc`, the initrd, the
                 # hostname, the disk — Nix has to EVALUATE the flake, and
-                # evaluation needs nixpkgs, disko and niri, which `flake.lock`
+                # evaluation needs nixpkgs, disko and the compositor's source, which `flake.lock`
                 # names but does not contain.
                 ++ builtins.filter (p: p != null) (map (i: i.outPath or null) (builtins.attrValues inputs));
                 # The flake's own tree, for the ISO to carry in
@@ -1117,6 +1150,7 @@
       # are stubs that pass, so the plumbing exists from day one.
       # =================================================================
       checks.${system} = import ./tests/checks.nix {
+        inherit scroll;
         inherit
           languages
           themes
@@ -1156,7 +1190,7 @@
           torOptionsRs
           atuinOptionsRs
           keyboardsRs
-          niriActions
+          compositorDeeds
           torrentShim
           extension
           potProvider
@@ -1168,13 +1202,13 @@
       # apps — section 8. Flake apps, never a justfile or a Makefile.
       # =================================================================
       apps.${system} = {
-        # Nested niri + footer. The loop where 90% of the UI work happens
-        # (section 7.12, speed 1).
+        # The nested compositor + footer. The loop where 90% of the UI work
+        # happens (section 7.12, speed 1).
         dev = {
           type = "app";
           program = "${devApp}/bin/ronoctua-dev";
           meta = {
-            description = "nested niri + footer, for the UI working loop";
+            description = "the nested compositor + footer, for the UI working loop";
             platforms = [ system ];
           };
         };
@@ -1288,8 +1322,53 @@
         '';
 
         # A complete system in a VM.
+        #
+        # THE RUNNER IS NAMED AFTER THE HOST, and this line said `run-nixos-vm`
+        # from the first commit onward — a path that has never existed here.
+        # NixOS builds `bin/run-''${networking.hostName}-vm`, and this system is
+        # called `noctua-vm`, so `nix run .#vm` answered `No such file or
+        # directory` and nothing else. Taking the name from the same option
+        # that decides it is what stops the two from disagreeing again.
         vm = mkScriptApp "ronoctua-vm" "brings the whole system up in a VM" ''
-          exec ${self.nixosConfigurations.vm.config.system.build.vm}/bin/run-nixos-vm "$@"
+          # THE GUEST GETS THIS MACHINE'S PANEL, and not QEMU's default.
+          #
+          # `-device virtio-gpu-pci` with no size gives the guest 1280x800 —
+          # measured, by dumping the guest's own framebuffer over QMP — while
+          # the screen it is shown on is 1920x1200. So the VM never showed
+          # what the installed system looks like: a smaller desktop, scaled
+          # into a window. "It does not open at the production size" is
+          # exactly that, and the number was written down nowhere.
+          #
+          # `-global` AND NOT A SECOND `-device`: `nix/modules/vm.nix` already
+          # adds the GPU, and a second one would give the guest two.
+          # `-global driver.property=value` sets the property on the one that
+          # is there.
+          #
+          # BY THE PROTOCOL, as `nix run .#dev` does it: `wl_output`'s mode is
+          # what the panel really is. BY STORE PATH, because a flake app's
+          # script does not get to assume a `PATH`.
+          if [ -n "''${WAYLAND_DISPLAY:-}" ]; then
+            # BY THE LABEL, never by a field number: the line reads
+            # `width: 1920 px, height: 1200 px, refresh: …`, so the height is
+            # the fifth field and not the fourth — and it moves the day the
+            # line gains a word.
+            panel=$(${pkgs.wayland-utils}/bin/wayland-info -i wl_output 2>/dev/null \
+              | awk '/width: [0-9]+ px/ {
+                       for (i = 1; i <= NF; i++) {
+                         if ($i == "width:") w = $(i + 1)
+                         if ($i == "height:") h = $(i + 1)
+                       }
+                       gsub(/[^0-9]/, "", w); gsub(/[^0-9]/, "", h)
+                       if (w != "" && h != "") { print w "x" h; exit }
+                     }') || true
+            case "''${panel:-}" in
+              [0-9]*x[0-9]*)
+                echo "vm: the guest gets this screen's own $panel"
+                export QEMU_OPTS="''${QEMU_OPTS:-} -global virtio-gpu-pci.xres=''${panel%x*} -global virtio-gpu-pci.yres=''${panel#*x}"
+                ;;
+            esac
+          fi
+          exec ${self.nixosConfigurations.vm.config.system.build.vm}/bin/run-${self.nixosConfigurations.vm.config.networking.hostName}-vm "$@"
         '';
 
         # Packs the fonts for a GitHub Release — the free way to publish 4,1 GB.
@@ -1431,8 +1510,9 @@
         #
         # The owner's rule is that green is not proof: what appears on the
         # screen is opened on the screen before anybody says it is done. Until
-        # this existed, obeying that rule cost a whole NixOS VM — boot, niri
-        # under Xvfb, screenshot the X root, crop by the geometry niri reported.
+        # this existed, obeying that rule cost a whole NixOS VM — boot the
+        # compositor under Xvfb, screenshot the X root, crop by the geometry it
+        # reported.
         # Three minutes to see whether a rule was touching a title's descenders,
         # and a rule that expensive is a rule that gets skipped: the title that
         # prompted this went months at twice the body's size with every check

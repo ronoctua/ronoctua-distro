@@ -3,9 +3,10 @@
 # WHY A VM, AND NOT A SCRIPT ON THE DEVELOPER'S MACHINE
 # -----------------------------------------------------
 # Because a screenshot is only worth something if it shows what the SYSTEM
-# does, and the system is a layer-shell surface under niri. The path here is
-# the one `tests/notify-vm.nix` already uses — Xvfb, niri on winit, `xwd` for
-# the pixels — so what comes out is what a check would have measured.
+# does, and the system is a layer-shell surface under the compositor. The path
+# here is the one `tests/notify-vm.nix` already uses — Xvfb, the compositor on
+# its X11 backend, `xwd` for the pixels — so what comes out is what a check
+# would have measured.
 #
 # It is a package and not an app: `nix build .#shots` leaves the PNGs in the
 # store, and there is nothing to install, nothing to clean up and nothing that
@@ -13,7 +14,7 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   # WHICH SCENES TO PHOTOGRAPH. `null` is every one of them, which is what
   # `nix build .#shots` asks for; the flake also exposes one package per scene,
   # and that is what a delivery that changed one screen should run. See
@@ -65,7 +66,11 @@ let
         closure only
       else
         throw "shots: no such scene: ${lib.concatStringsSep ", " unknown}";
-  xvfb = import ../tests/niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ../tests/compositor-xvfb.nix { inherit pkgs lib; };
+  # WHERE A CAPTURE LANDS, from the same entry `nix/modules/scroll.nix` reads.
+  # Two spellings of one directory would be a scene that looks for a file
+  # somewhere the system does not write it.
+  screenshotDir = (import ./user-dirs.nix).screenshot;
   typography = import ../assets/tokens/typography.nix;
   linePx = builtins.ceil (typography.size.base * typography.lineHeight);
   footerPx = linePx * 2;
@@ -174,7 +179,7 @@ pkgs.testers.runNixOSTest {
     virtualisation.cores = 2;
 
     environment.systemPackages = [
-      niri
+      scroll
       ronoctua-shell
       ronoctua-brain
       pkgs.imagemagick
@@ -296,9 +301,9 @@ pkgs.testers.runNixOSTest {
         """Crops the footer's region and saves it as a PNG.
 
         `lines` is how many lines from the bottom to keep; `None` takes the
-        whole niri window, which is what the manager's screenshots want.
+        whole compositor window, which is what the manager's screenshots want.
         """
-        w, h, x, y = niri_geometry()
+        w, h, x, y = compositor_geometry()
         machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
         if lines is None:
             crop = f"{w}x{h}+{x}+{y}"
@@ -422,8 +427,8 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("multi-user.target")
     # THE ONE TEST THAT NEEDS THE BRAIN TO SPEAK: it photographs its line.
     start_xvfb(brain=True)
-    start_niri("niri", "${niri}")
-    sock = socket_of("niri")
+    start_compositor("compositor", "${scroll}")
+    sock = socket_of("compositor")
 
     machine.succeed(
         "systemd-run --unit=bus "
@@ -435,10 +440,19 @@ pkgs.testers.runNixOSTest {
         "systemd-run --unit=footer ${xvfb.env} "
         "--setenv=WAYLAND_DISPLAY=wayland-1 "
         "--setenv=HOME=/root "
-        f"--setenv=NIRI_SOCKET={sock} "
+        f"--setenv=SCROLLSOCK={sock} "
+        f"--setenv=SWAYSOCK={sock} "
         "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
         "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_notify=debug "
         "--setenv=RONOCTUA_SWAPPY=${pkgs.swappy}/bin/swappy "
+        # AND WHAT TAKES A CAPTURE, with where it lands — the two
+        # `nix/modules/scroll.nix` puts on this unit in production. The
+        # compositor has no screenshot of its own, so without these the
+        # `screen-capture` command echoes "nothing to do" and the scene that
+        # photographs the capture's notification photographs an empty band.
+        "--setenv=RONOCTUA_GRIM=${pkgs.grim}/bin/grim "
+        "--setenv=RONOCTUA_SLURP=${pkgs.slurp}/bin/slurp "
+        "--setenv=RONOCTUA_SCREENSHOTS=${screenshotDir} "
         # AND THE TAG READER, which `nix/modules/media.nix` puts on the footer's
         # unit in production. Without it `ronoctua-inspect` answers
         # `Refusal::Missing` for every photograph, so a file with GPS in it
@@ -458,22 +472,6 @@ pkgs.testers.runNixOSTest {
 
     if wanted("clipboard"):
         with subtest("the clipboard with an EMPTY history — the photographed defect"):
-            # -----------------------------------------------------------------
-            # THIS IS THE STATE THE OWNER SENT A PHOTOGRAPH OF. The panel used to
-            # reserve three lines and draw them at `end - 3`, `end - 2` and
-            # `end - 1`, where `end` is the top of the region plus the number of
-            # rows — and with no history that number is ONE. Nothing clamped them,
-            # so `ClipCascade: not integrated` landed on the MINIBUFFER's line and
-            # the actions strip landed on the row that says the history is empty.
-            #
-            # An empty history is the FIRST state to photograph and was the only
-            # one nobody had: there was no layout test of the clipboard at all.
-            #
-            # IT RUNS FIRST, before anything opens a WINDOW: it gives the region
-            # back with `Escape`, and an `Escape` with a window focused closes that
-            # window — which took the file manager out from under the theme
-            # chooser's subtest when this sat in the middle.
-            # -----------------------------------------------------------------
             control("clipboard-open")
             shot("30-clipboard-empty", lines=10)
             # THE REGION CARRIES MORE THAN ONE LINE OF INK, and that is the
@@ -486,38 +484,23 @@ pkgs.testers.runNixOSTest {
             # region itself held one inked row while the screen showed four lines
             # of clipboard. Now every one of them is a ROW, and the region is as
             # tall as they are.
-            w, h, x, y = niri_geometry()
+            w, h, x, y = compositor_geometry()
             region = f"{w}x{10 * LINE}+{x}+{y + h - 10 * LINE}"
             inked = rows_with_ink(region)
             assert inked > LINE, (
                 f"the clipboard's region has {inked} rows of ink with an empty "
                 "history; the sections were drawn somewhere else"
             )
-            focus_niri()
+            focus_compositor()
             machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
 
     if wanted("history"):
         with subtest("the shell history, and the row the keyboard is on"):
-            # -----------------------------------------------------------------
-            # WHAT THE OWNER READ ON THE SCREEN: nothing said which line the
-            # cursor was on. `Row::focused` is set by the view and read by NO door
-            # in this system — neither the footer nor the window draws a band
-            # behind the cursor — so the colour IS the cursor, and this view was
-            # the one that never set it. Nine others have carried it since
-            # `network.rs` arrived at the split: the label takes `state.accent`
-            # ("the keyboard is here") and the value goes on saying whether the
-            # answer can be changed.
-            #
-            # THE ASSERTION IS A COLOUR, because the report was. A count of rows
-            # or a word on screen would have passed the whole time the defect
-            # existed.
-            #
             # `atuin` itself is a store path baked into the shell
             # (`RONOCTUA_ATUIN`), so this machine has it without installing
             # anything, and it is not logged in — which is the state a fresh
             # machine is in and the one worth photographing.
-            # -----------------------------------------------------------------
             control("atuin-open")
             shot("32-shell-history", lines=12)
             has_colour(
@@ -525,18 +508,17 @@ pkgs.testers.runNixOSTest {
                 at_least=20,
                 of="/tmp/32-shell-history.png",
             )
-            focus_niri()
+            focus_compositor()
             machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
 
     if wanted("tor"):
         with subtest("Tor: the section exists with the daemon STOPPED"):
             # -----------------------------------------------------------------
-            # THE OTHER HALF OF WHAT THE OWNER REPORTED: he could not find a way — see `nix/shots-scenes.nix`.
             control("network-open")
             machine.sleep(1)
             shot("31a-network-list", lines=12)
-            focus_niri()
+            focus_compositor()
             machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
 
@@ -556,12 +538,12 @@ pkgs.testers.runNixOSTest {
             # — the service, the path, the bridges, the onion services and the
             # drawer — so nearly every line of it carries ink, which a view that
             # opened on nothing would not.
-            w, h, x, y = niri_geometry()
+            w, h, x, y = compositor_geometry()
             tall = LINE * 12
             assert rows_with_ink(f"{w}x{tall}+{x}+{y + h - tall}") > tall // 2, (
                 "the Tor sheet came out mostly blank"
             )
-            focus_niri()
+            focus_compositor()
             machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
 
@@ -579,7 +561,7 @@ pkgs.testers.runNixOSTest {
             # `Esc` closes one level, so a view several deep needs several. The
             # X focus first, because under Xvfb nobody has it by default and a
             # key with nowhere to go is a key that changes nothing.
-            focus_niri()
+            focus_compositor()
             for _ in range(8):
                 machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
@@ -604,7 +586,7 @@ pkgs.testers.runNixOSTest {
                 ).strip()
                 return int(said.rsplit("=", 1)[1])
 
-            w_f, h_f, x_f, y_f = niri_geometry()
+            w_f, h_f, x_f, y_f = compositor_geometry()
             at_rest = footer_height()
             # AIMED FROM THE FOOTER'S TOP, and in LINES — see
             # `nix/shots-scenes.nix`.
@@ -709,49 +691,14 @@ pkgs.testers.runNixOSTest {
 
     if wanted("screenshot"):
         with subtest("the screenshot: the font's own glyph, and the actions"):
-            # THE WHOLE SCREENSHOT PATH, as the compositor drives it.
-            #
-            # niri sends `app_name = "niri"`, the English summary, and the file's
-            # path in the ICON field as a `file://` URL — which is where the actions
-            # get the image from. Here the URL is real, so the actions survive
-            # `usable_actions`.
-            #
-            # And the glyph is `md-monitor_screenshot`, named in
-            # `assets/notifications.nix` as a NerdFonts glyph rather than a design
-            # system token: nothing in the design system says "screen capture".
-            machine.succeed("mkdir -p /root/Pictures")
-            machine.succeed(
-                "magick -size 320x200 canvas:gray30 "
-                "'/root/Pictures/Screenshot 2026-08-22.png'"
-            )
             for _ in range(8):
                 control("notif-dismiss")
-            # THE RAW `Notify`, exactly as the compositor sends it.
-            #
-            # `notify-send` is the wrong tool here and the log said so: libnotify
-            # loads the file and sends the standard `image-path` hint, leaving
-            # `app_icon` empty. niri does neither — it calls the method itself with
-            # the `file://` URL IN the icon field (`utils/mod.rs`), and that is the
-            # path the `screenshot` entry reads.
-            #
-            # Reproducing it by hand is the only way this scene shows what actually
-            # happens on the machine rather than what libnotify would have done.
-            machine.succeed(
-                "XDG_RUNTIME_DIR=/run/user/0 "
-                "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
-                "${pkgs.glib}/bin/gdbus call --session "
-                "--dest org.freedesktop.Notifications "
-                "--object-path /org/freedesktop/Notifications "
-                "--method org.freedesktop.Notifications.Notify "
-                # EVERY ARGUMENT TYPED, and the last one especially: `-1` on its
-                # own is read by GOption as a FLAG, and `gdbus` answers with its
-                # usage instead of sending anything. `int32 -1` is one GVariant
-                # literal that does not begin with a dash.
-                "'niri' 'uint32 0' 'file:///root/Pictures/Screenshot%202026-08-22.png' "
-                "'Screenshot captured' 'You can paste the image from the clipboard.' "
-                "'@as []' \"{'urgency': <byte 1>}\" 'int32 -1'"
-            )
-            machine.sleep(1)
+            control("screen-capture")
+            machine.sleep(2)
+            # THE FILE IS ON DISK, with the name `capture_path` builds: the
+            # directory from `nix/user-dirs.nix` and the moment down to the
+            # second, with no space in it.
+            machine.succeed("ls /root/${screenshotDir}/screenshot-*.png")
             decided = machine.succeed(
                 "journalctl -u footer --no-pager | grep 'notification decided' | tail -1"
             ).strip()
@@ -769,7 +716,7 @@ pkgs.testers.runNixOSTest {
             # X INPUT FOCUS FIRST. With no window manager nobody calls
             # `XSetInputFocus`, so the focus stays on `PointerRoot` and every key
             # `xdotool` injects is lost — no error, no log, nowhere.
-            focus_niri()
+            focus_compositor()
             # TAB twice: what happened, what was suppressed, what is configured.
             for _ in (1, 2):
                 machine.succeed("DISPLAY=:99 xdotool key Tab")
@@ -801,7 +748,7 @@ pkgs.testers.runNixOSTest {
                 # air below it then reads as forty pixels that are not there.
                 "gradient:'#7AA2F7'-'#E0AF68' /root/shots/test-picture.png"
             )
-            focus_niri()
+            focus_compositor()
             control("files-open")
             # THE LETTER IS QUERY in this view, which is what makes this
             # deterministic: typing narrows to the one file rather than depending on
@@ -824,7 +771,7 @@ pkgs.testers.runNixOSTest {
             # THE POINTER ON A ROW, because the band only exists under it — and the
             # band's left edge is the thing the owner keeps photographing. A shot
             # with the pointer parked outside cannot show it at all.
-            w_g, h_g, x_g, y_g = niri_geometry()
+            w_g, h_g, x_g, y_g = compositor_geometry()
             machine.succeed(
                 "DISPLAY=:99 xdotool mousemove "
                 f"{x_g + 300} {y_g + h_g - 3 * LINE}"
@@ -908,7 +855,7 @@ pkgs.testers.runNixOSTest {
             machine.succeed("DISPLAY=:99 xdotool key Return")
             machine.sleep(2)
             # SAME REASON as the footer's: the band needs the pointer.
-            w_w, h_w, x_w, y_w = niri_geometry()
+            w_w, h_w, x_w, y_w = compositor_geometry()
             machine.succeed(
                 "DISPLAY=:99 xdotool mousemove "
                 f"{x_w + 300} {y_w + 4 * LINE}"
@@ -920,8 +867,8 @@ pkgs.testers.runNixOSTest {
             # photographed. Down in the strip the facts have a `top` of their own,
             # and a band that forgot it lit the listing's row of the same number.
             #
-            # THE WINDOW'S OWN HALF, and not the output's: niri tiles this window
-            # into the left half of the screen, so `w_w` — which is the whole
+            # THE WINDOW'S OWN HALF, and not the output's: the compositor tiles
+            # this window into the left half of the screen, so `w_w` — which is the whole
             # output — put the pointer on the desktop and nothing was hovered.
             # The facts sit to the right of the strip's rule; the third of them is
             # three lines below the strip's top.
@@ -1095,7 +1042,7 @@ pkgs.testers.runNixOSTest {
             #
             # The panels sit in the right-hand half of the window from
             # `space.files.panelsFrom` on, and the preview is the left of the two.
-            w_t, h_t, x_t, y_t = niri_geometry()
+            w_t, h_t, x_t, y_t = compositor_geometry()
             # SAFELY INSIDE THE PREVIEW, and narrower than the panel it sits in.
             #
             # A quarter of the width was the first box, and the two panels are not
@@ -1214,7 +1161,7 @@ pkgs.testers.runNixOSTest {
 
             # AND THE EXECUTE BIT COLOURS THE GLYPH, in BOTH states — see
             # `nix/shots-scenes.nix`.
-            w_x, h_x, x_x, y_x = niri_geometry()
+            w_x, h_x, x_x, y_x = compositor_geometry()
             listing = f"{w_x}x{h_x - 2 * LINE}+{x_x}+{y_x + 2 * LINE}"
             green = "#" + token_hex("state.success")
             machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
@@ -1261,7 +1208,7 @@ pkgs.testers.runNixOSTest {
             machine.sleep(3)
             shot("33-preview-of-a-document")
 
-            w_d, h_d, x_d, y_d = niri_geometry()
+            w_d, h_d, x_d, y_d = compositor_geometry()
             # THE SAME BOX THE TEXT PREVIEW IS MEASURED IN, and for its reasons.
             paper = f"{w_d // 4 - 70}x{h_d - 4 * LINE}+{w_d // 2 + 10}+{2 * LINE}"
             machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
@@ -1301,7 +1248,7 @@ pkgs.testers.runNixOSTest {
             machine.sleep(3)
             shot("22-miniplayer")
 
-            w_m, h_m, x_m, y_m = niri_geometry()
+            w_m, h_m, x_m, y_m = compositor_geometry()
             # THE SAME BOX THE TEXT PREVIEW USES, and for the reason written there:
             # a quarter of the width reaches past the rule into the facts.
             pane = f"{w_m // 4 - 70}x{h_m - 4 * LINE}+{w_m // 2 + 10}+{2 * LINE}"
@@ -1700,7 +1647,7 @@ pkgs.testers.runNixOSTest {
             # for a round, and the owner photographed exactly this window with a
             # coordinate, an atlas, a panel and no globe.
             shot("41-the-globe-in-the-strip")
-            w_s, h_s, x_s, y_s = niri_geometry()
+            w_s, h_s, x_s, y_s = compositor_geometry()
             crop(f"{w_s}x{8 * LINE}+{x_s}+{y_s + h_s - 8 * LINE}", into="/tmp/strip.png")
             # THE SEA, AND A THOUSAND PIXELS OF IT.
             #
@@ -1722,7 +1669,7 @@ pkgs.testers.runNixOSTest {
             # layout and the disc gets the room to be a disc.
             control("window-maximize")
             machine.sleep(3)
-            w_g, h_g, x_g, y_g = niri_geometry()
+            w_g, h_g, x_g, y_g = compositor_geometry()
             machine.succeed(
                 "DISPLAY=:99 xdotool mousemove "
                 f"{x_g + 300} {y_g + 4 * LINE}"
@@ -1873,7 +1820,7 @@ pkgs.testers.runNixOSTest {
             # LONG ENOUGH FOR EXIFTOOL, which is a child process per file.
             machine.sleep(6)
 
-            w_f, h_f, x_f, y_f = niri_geometry()
+            w_f, h_f, x_f, y_f = compositor_geometry()
             # THE POINTER IN THE FACTS' OWN CORNER, and that cell is EMPTY.
             #
             # It is where the button is drawn and it is the one the owner could
@@ -2068,7 +2015,7 @@ pkgs.testers.runNixOSTest {
             machine.succeed("DISPLAY=:99 xdotool key Return")
             machine.sleep(4)
 
-            w_t, h_t, x_t, y_t = niri_geometry()
+            w_t, h_t, x_t, y_t = compositor_geometry()
             # THE LISTING'S OWN COLUMN, which is where a thumbnail may appear
             # and the panels beside it may not: the preview draws the SAME
             # picture, and a crop that held both would pass with the grid
@@ -2143,7 +2090,7 @@ pkgs.testers.runNixOSTest {
             # AND A ROW THAT ACTS WEARS THE INK THAT SAYS SO. Every catalogue
             # row is a door, so `text.answer` is most of this picture; a screen
             # of facts would have none of it.
-            w_r, h_r, x_r, y_r = niri_geometry()
+            w_r, h_r, x_r, y_r = compositor_geometry()
             crop(f"{w_r}x{12 * LINE}+{x_r}+{y_r + h_r - 12 * LINE}", into="/tmp/geo.png")
             has_colour("#" + token_hex("text.answer"), at_least=20, of="/tmp/geo.png")
 
@@ -2243,20 +2190,6 @@ pkgs.testers.runNixOSTest {
 
     if wanted("theme"):
         with subtest("the theme chooser, and the file that is the broadcast"):
-            # -----------------------------------------------------------------
-            # Three things are proved on screen, and none of them by a buffer
-            # (`nix run .#png` cannot reach a footer view). One: the list opens
-            # on the theme in force, its focused row in that theme's accent. Two:
-            # moving the cursor PREVIEWS — the second theme's accent is on the
-            # footer and the first's is gone — while the file manager's window,
-            # opened beforehand, is untouched. Three: `RET` writes the file, and
-            # the window follows the FILE: its focused row is now in the second
-            # theme's accent with no restart; and the footer copied the two
-            # fragments beside the file. The two accents are far more than the
-            # twelve per cent apart; the window is measured on its top half BELOW
-            # its own hint line, so neither the footer's lines nor the hint's
-            # registers enter the count.
-            # -----------------------------------------------------------------
             if THEMES > 1:
                 # The region is as tall as the LONGER of the chooser's two lists:
                 # the themes, or the desk option's header and its answers — the
@@ -2267,7 +2200,7 @@ pkgs.testers.runNixOSTest {
                 second_accent = "#" + token_hex("state.accent", SECOND)
                 control("files-window")
                 machine.sleep(2)
-                w, h, x, y = niri_geometry()
+                w, h, x, y = compositor_geometry()
                 upper = f"{w}x{h // 2 - LINE}+{x}+{y + LINE}"
 
                 control("theme-open")
@@ -2294,25 +2227,27 @@ pkgs.testers.runNixOSTest {
                 lacks_colour(first_accent, of="/tmp/window-after.png")
                 second_desk_on_apply = "#" + token_hex("surface.backdrop", SECOND)
                 # And the fragments beside the file, for the compositor and the terminal.
-                machine.succeed("test -s /root/.config/ronoctua/niri-theme.kdl")
+                machine.succeed("test -s /root/.config/ronoctua/scroll-theme.conf")
                 machine.succeed("test -s /root/.config/ronoctua/ghostty-theme.conf")
-                machine.succeed("grep -q 'active-color' /root/.config/ronoctua/niri-theme.kdl")
+                machine.succeed(
+                    "grep -q 'client.focused ' /root/.config/ronoctua/scroll-theme.conf"
+                )
                 # A FILE THAT NEVER SAID A DESK IS ON THE THEME'S OWN, and the
                 # fragment says so. It was black until the owner made the theme's
                 # desk the default — every theme solves one and every gate holds
                 # it apart from the content's black, so a fresh machine shows it
                 # rather than having to be asked.
                 machine.succeed(
-                    f"grep -q 'background-color \"{second_desk_on_apply}\"' "
-                    "/root/.config/ronoctua/niri-theme.kdl"
+                    f"grep -q 'output \\* bg {second_desk_on_apply} solid_color' "
+                    "/root/.config/ronoctua/scroll-theme.conf"
                 )
 
                 # THE SECOND COLUMN: the desk. `<right>` crosses to it, `<down>`
                 # lands on the theme's own colour and the compositor is shown it
                 # at once — the fragment is the preview — and `RET` writes the
                 # pair. The desk itself is not on this screen (the window fills
-                # it); what is proved is the file niri watches, and the check
-                # `themes-have-fragments` proves niri accepts and merges it.
+                # it); what is proved is the file the compositor includes, and the
+                # check `themes-have-fragments` proves it accepts and merges it.
                 second_desk = "#" + token_hex("surface.backdrop", SECOND)
                 control("theme-open")
                 machine.succeed("DISPLAY=:99 xdotool key Right")
@@ -2323,7 +2258,10 @@ pkgs.testers.runNixOSTest {
                 # force, and that is the theme's own desk — so what this proves is
                 # the OTHER one: `<up>` lands on black and the compositor is shown
                 # it at once, because the fragment IS the preview.
-                machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
+                machine.succeed(
+                    "grep -q 'output \\* bg #000000 solid_color' "
+                    "/root/.config/ronoctua/scroll-theme.conf"
+                )
                 # AND THE FILE ALREADY SAYS IT, which is the documented PRICE of
                 # the preview being the broadcast: `theme::show_everywhere` writes
                 # the whole pair, because that file is the channel the other doors
@@ -2340,8 +2278,8 @@ pkgs.testers.runNixOSTest {
                 machine.sleep(2)
                 machine.succeed("grep -q '\"backdrop\":\"theme\"' /root/.config/ronoctua/theme.json")
                 machine.succeed(
-                    f"grep -q 'background-color \"{second_desk}\"' "
-                    "/root/.config/ronoctua/niri-theme.kdl"
+                    f"grep -q 'output \\* bg {second_desk} solid_color' "
+                    "/root/.config/ronoctua/scroll-theme.conf"
                 )
                 # AND NOW FOR REAL: the same three keys, and `RET` at the end.
                 control("theme-open")
@@ -2350,7 +2288,10 @@ pkgs.testers.runNixOSTest {
                 machine.succeed("DISPLAY=:99 xdotool key Return")
                 machine.sleep(2)
                 machine.succeed("grep -q '\"backdrop\":\"black\"' /root/.config/ronoctua/theme.json")
-                machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
+                machine.succeed(
+                    "grep -q 'output \\* bg #000000 solid_color' "
+                    "/root/.config/ronoctua/scroll-theme.conf"
+                )
     if wanted("glance"):
         with subtest("the glance line: the grounds' air, and the countdown at the border"):
             # WHY: `nix/shots-scenes.nix`, beside the id.
@@ -2358,7 +2299,7 @@ pkgs.testers.runNixOSTest {
                 machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
             control("world-glance")
-            w_g, h_g, x_g, y_g = niri_geometry()
+            w_g, h_g, x_g, y_g = compositor_geometry()
             # THE POINTER HOLDS THE CLOCK — `world::Showing::hold`.
             machine.succeed(
                 f"DISPLAY=:99 xdotool mousemove {x_g + w_g // 2} {y_g + h_g - 2 * LINE - 8}"
@@ -2454,7 +2395,7 @@ pkgs.testers.runNixOSTest {
             machine.succeed("DISPLAY=:99 xdotool key ctrl+g")
             machine.sleep(8)
 
-            w_s, h_s, x_s, y_s = niri_geometry()
+            w_s, h_s, x_s, y_s = compositor_geometry()
             listing = f"{w_s // 2}x{h_s - 4 * LINE}+{x_s}+{y_s + 2 * LINE}"
             accent = "#" + token_hex("state.accent")
 
@@ -2541,7 +2482,7 @@ pkgs.testers.runNixOSTest {
             machine.succeed("DISPLAY=:99 xdotool key Return")
             machine.sleep(3)
 
-            w_d, h_d, x_d, y_d = niri_geometry()
+            w_d, h_d, x_d, y_d = compositor_geometry()
             # `..`, `into`, `moved.txt`: directories first, then the sort.
             # AND PAST THE SIDEBAR — `+300`, as the manager's own scene aims.
             row = lambda n: y_d + (2 + n) * LINE + LINE // 2
@@ -2576,11 +2517,11 @@ pkgs.testers.runNixOSTest {
                 timeout=60,
             )
             machine.sleep(2)
-            _, _, x_h, y_h = niri_geometry()
+            _, _, x_h, y_h = compositor_geometry()
             shot("37-the-header-shut", lines=None)
 
-            # THE WINDOW'S OWN EDGES, MEASURED. niri gives a single window a
-            # COLUMN and not the output, so the screen's right border is the
+            # THE WINDOW'S OWN EDGES, MEASURED. The compositor gives a single
+            # window a COLUMN and not the output, so the screen's right border is the
             # desktop — and an assertion aimed there is answered by it. A
             # window clears with `surface.chrome` (`gpu::Gpu::frame`), so its
             # first row says where it starts and stops.
@@ -2642,7 +2583,7 @@ pkgs.testers.runNixOSTest {
             machine.sleep(1)
             control("files-open")
             machine.sleep(2)
-            w_p, h_p, x_p, y_p = niri_geometry()
+            w_p, h_p, x_p, y_p = compositor_geometry()
             for n in range(1, 16):
                 machine.succeed(
                     "DISPLAY=:99 xdotool mousemove "
@@ -2679,7 +2620,8 @@ pkgs.testers.runNixOSTest {
                 "systemd-run --unit=lifeline ${xvfb.env} "
                 "--setenv=WAYLAND_DISPLAY=wayland-1 "
                 "--setenv=HOME=/root "
-                f"--setenv=NIRI_SOCKET={sock} "
+                f"--setenv=SCROLLSOCK={sock} "
+        f"--setenv=SWAYSOCK={sock} "
                 "--setenv=RONOCTUA_THEME=${defaultTheme} "
                 "--setenv=RONOCTUA_THEMES=${themed} "
                 "${ronoctua-shell}/bin/ronoctua-shell lifeline footer.service"
@@ -2689,7 +2631,7 @@ pkgs.testers.runNixOSTest {
 
             # AND IT IS MEASURED. Two rows of ink where the footer used to be — with
             # the footer gone there is nothing else down there that could draw them.
-            w_l, h_l, x_l, y_l = niri_geometry()
+            w_l, h_l, x_l, y_l = compositor_geometry()
             machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             band = f"{w_l}x{2 * LINE}+{x_l}+{y_l + h_l - 2 * LINE}"
             drawn = rows_with_ink(band)

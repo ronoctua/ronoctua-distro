@@ -75,8 +75,8 @@ pub struct Minibuffer {
     /// Emacs does with an interactive command that reads an argument.
     ///
     /// Without this, either those actions would disappear from the list — and "all the OS's
-    /// actions" would stop being true — or they would be called with no argument and niri
-    /// would answer with an error the user did not ask for.
+    /// actions" would stop being true — or they would be called with no argument
+    /// and the compositor would answer with an error the user did not ask for.
     asking_for: Option<String>,
     /// Is what is being asked for a SECRET?
     ///
@@ -230,7 +230,7 @@ impl Minibuffer {
     /// # Fuzzy, and deterministic
     ///
     /// The search is by **subsequence**: `jme` finds `window-move-left`, and
-    /// `fcl` finds `niri-focus-column-left`. With 170 commands, requiring the
+    /// `fl` finds `wm-focus-left`. With a hundred and fifty commands, requiring the
     /// prefix forces one to remember how the name starts — and the locator exists
     /// precisely for whoever does not remember.
     ///
@@ -494,14 +494,10 @@ pub enum Action {
 
 /// Does the command require a positional argument?
 ///
-/// Only the compositor's mirrored actions do, and what knows that is its generated
+/// Only the compositor's deeds do, and what knows that is the generated
 /// table — not a list of ours that would age silently.
 fn requires_argument(id: &str) -> bool {
-    id.strip_prefix("niri-").is_some_and(|name| {
-        ronoctua_niri::NIRI_ACTIONS
-            .iter()
-            .any(|a| a.name == name && a.argument)
-    })
+    ronoctua_scroll::deeds::spoken_of(id).is_some_and(|s| s.deed.argument.is_some())
 }
 
 /// Scores a candidate against the query. `None` = no match.
@@ -559,7 +555,7 @@ pub fn rank(query: &str, items: &[&[&str]]) -> Vec<usize> {
             let principal = keys.first().copied().unwrap_or_default();
             // WITH NO QUERY, the length does NOT break ties: the open list is
             // alphabetical, which is the registry's order and the one muscle
-            // memory uses. Sorting by size would put `niri-quit` at the top and
+            // memory uses. Sorting by size would put the shortest id at the top and
             // would make the list look different on every opening.
             let size = if query.is_empty() { 0 } else { principal.len() };
             Some((best, size, principal, i))
@@ -828,36 +824,31 @@ mod tests {
 
     #[test]
     fn an_action_with_an_argument_asks_instead_of_running() {
-        // THE DEFECT THIS PREVENTS: `focus-workspace` requires a number, and
-        // running it without one makes niri answer "error parsing request" —
-        // an error the user did not cause and does not understand.
+        // THE DEFECT THIS PREVENTS: going to a workspace requires a number, and
+        // running the command without one makes the compositor answer
+        // `Invalid workspace command (expected at least 1 argument, got 0)` —
+        // an error the user did not cause and does not understand. It comes
+        // back in the REPLY, which is the shape of every refusal there.
         let r = registry();
         let mut m = Minibuffer::default();
         m.open(&r);
-        type_in(&mut m, &r, "niri-focus-workspace");
-        assert_eq!(
-            m.chosen().map(|i| i.id.as_str()),
-            Some("niri-focus-workspace")
-        );
+        type_in(&mut m, &r, "wm-workspace-go");
+        assert_eq!(m.chosen().map(|i| i.id.as_str()), Some("wm-workspace-go"));
 
         assert_eq!(
             m.key(t(Sym::Enter), &r),
             Action::Changed,
             "it ran straight away"
         );
-        assert_eq!(m.asking_for(), Some("niri-focus-workspace"));
+        assert_eq!(m.asking_for(), Some("wm-workspace-go"));
         assert!(m.active(), "it closed instead of asking");
         // The prompt becomes the command's NAME: whoever got here has already chosen.
-        assert!(
-            m.prompt().starts_with("niri-focus-workspace:"),
-            "{}",
-            m.prompt()
-        );
+        assert!(m.prompt().starts_with("wm-workspace-go:"), "{}", m.prompt());
 
         type_in(&mut m, &r, "3");
         assert_eq!(
             m.key(t(Sym::Enter), &r),
-            Action::RunWith("niri-focus-workspace".to_owned(), "3".to_owned())
+            Action::RunWith("wm-workspace-go".to_owned(), "3".to_owned())
         );
         assert!(!m.active());
     }
@@ -869,10 +860,10 @@ mod tests {
         let r = registry();
         let mut m = Minibuffer::default();
         m.open(&r);
-        type_in(&mut m, &r, "niri-focus-column-left");
+        type_in(&mut m, &r, "wm-focus-left");
         assert_eq!(
             m.key(t(Sym::Enter), &r),
-            Action::Run("niri-focus-column-left".to_owned())
+            Action::Run("wm-focus-left".to_owned())
         );
     }
 
@@ -884,19 +875,19 @@ mod tests {
         let r = registry();
         let mut m = Minibuffer::default();
         m.open(&r);
-        type_in(&mut m, &r, "niri-focus-column-left");
+        type_in(&mut m, &r, "wm-focus-left");
         assert_eq!(
             m.choose(0, &r),
-            Action::Run("niri-focus-column-left".to_owned()),
+            Action::Run("wm-focus-left".to_owned()),
             "clicking the first one did not run the first one"
         );
 
         // And the one that requires an argument ASKS, through the mouse too.
         let mut m = Minibuffer::default();
         m.open(&r);
-        type_in(&mut m, &r, "niri-focus-workspace");
+        type_in(&mut m, &r, "wm-workspace-go");
         assert_eq!(m.choose(0, &r), Action::Changed);
-        assert_eq!(m.asking_for(), Some("niri-focus-workspace"));
+        assert_eq!(m.asking_for(), Some("wm-workspace-go"));
     }
 
     #[test]

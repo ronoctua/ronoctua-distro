@@ -181,48 +181,6 @@
         "type": "github"
       }
     },
-    "niri": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "rust-overlay": "rust-overlay_2"
-      },
-      "locked": {
-        "lastModified": 1777115961,
-        "narHash": "sha256-ehSMsSpE+0k8r+2Vseu8kangsYxToZv3vinynsDp9zs=",
-        "owner": "niri-wm",
-        "repo": "niri",
-        "rev": "8ed0da44d974c32c6877d2f4630c314da0717ecb",
-        "type": "github"
-      },
-      "original": {
-        "owner": "niri-wm",
-        "ref": "v26.04",
-        "repo": "niri",
-        "type": "github"
-      }
-    },
-    "niri-next": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1784570726,
-        "narHash": "sha256-9EMn69JBcFWFgUM7f0VBAX+jBby5b9H3M59U75+5yI4=",
-        "owner": "niri-wm",
-        "repo": "niri",
-        "rev": "7f26c3ee804fb6ed458ef7fb0e3c794f14e0b3bc",
-        "type": "github"
-      },
-      "original": {
-        "owner": "niri-wm",
-        "repo": "niri",
-        "type": "github"
-      }
-    },
     "nixos-facter-modules": {
       "locked": {
         "lastModified": 1773858690,
@@ -318,12 +276,11 @@
         "fonts-woff2-nerdfonts": "fonts-woff2-nerdfonts",
         "home-manager": "home-manager",
         "lanzaboote": "lanzaboote",
-        "niri": "niri",
-        "niri-next": "niri-next",
         "nixos-facter-modules": "nixos-facter-modules",
         "nixos-hardware": "nixos-hardware",
         "nixpkgs": "nixpkgs_2",
-        "rust-overlay": "rust-overlay_3",
+        "rust-overlay": "rust-overlay_2",
+        "scroll-src": "scroll-src",
         "sops-nix": "sops-nix"
       }
     },
@@ -351,27 +308,6 @@
     "rust-overlay_2": {
       "inputs": {
         "nixpkgs": [
-          "niri",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1757989933,
-        "narHash": "sha256-9cpKYWWPCFhgwQTww8S94rTXgg8Q8ydFv9fXM6I8xQM=",
-        "owner": "oxalica",
-        "repo": "rust-overlay",
-        "rev": "8249aa3442fb9b45e615a35f39eca2fe5510d7c3",
-        "type": "github"
-      },
-      "original": {
-        "owner": "oxalica",
-        "repo": "rust-overlay",
-        "type": "github"
-      }
-    },
-    "rust-overlay_3": {
-      "inputs": {
-        "nixpkgs": [
           "nixpkgs"
         ]
       },
@@ -386,6 +322,23 @@
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "scroll-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787305355,
+        "narHash": "sha256-WlCM+g2fY3Kr5B5zf+TVpPHCJpflO/fmAKz9yuoCAsI=",
+        "owner": "dawsers",
+        "repo": "scroll",
+        "rev": "f80c5820c0eebaad586f0008faecfe3ae62c307a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "dawsers",
+        "ref": "refs/tags/1.12.21",
+        "repo": "scroll",
         "type": "github"
       }
     },

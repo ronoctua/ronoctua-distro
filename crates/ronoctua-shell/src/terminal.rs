@@ -19,7 +19,7 @@
 //!
 //! The same reason as the native buffer: invariant 4 says the shell never
 //! reimplements window layout. A terminal is a window, and whoever positions
-//! it is niri.
+//! it is the compositor.
 //!
 //! # Why the drawing goes through the protocol
 //!
@@ -65,7 +65,7 @@ use wayland_client::{
 ///
 /// Distinct from the native buffer's on purpose: it is by it that the modeline
 /// and the test know which window is which, and an equal `app_id` would make
-/// the two look like the same thing in niri's IPC.
+/// the two look like the same thing in the compositor's IPC.
 pub const APP_ID: &str = "br.ronoctua.terminal";
 
 /// The MONITOR window's `app_id` — the same terminal, another identity.
@@ -73,7 +73,7 @@ pub const APP_ID: &str = "br.ronoctua.terminal";
 /// # Why a second one, and not the same
 ///
 /// `Ctrl+Alt+Esc`, `LEADER+Esc` and `LEADER+S-Esc` open a FLOATING window, and
-/// what floats it is a niri `window-rule` matched on this string. The shell
+/// what floats it is a `for_window` rule matched on this string. The shell
 /// does not place windows (invariant 4): it says WHAT the window is, and the
 /// compositor decides where. With a single `app_id` the rule would float every
 /// terminal, including `LEADER w o`.
@@ -87,19 +87,20 @@ pub const APP_ID_MONITOR: &str = "br.ronoctua.monitor";
 /// with the log cut off.
 pub const APP_ID_RESCUE: &str = "br.ronoctua.rescue";
 
-/// The `window-rule` that makes the monitor window float, in niri's KDL.
+/// The rule that makes the monitor window float.
 ///
 /// # Why it is generated from here, and not written in the two configs
 ///
 /// The `app_id` above and the rule's regex have to be the same string, and it
-/// would exist in THREE places — this file, `nix/modules/niri.nix` and
+/// would exist in THREE places — this file, `nix/modules/scroll.nix` and
 /// `nix/dev.nix`. A string that crosses a border needs a check (`AGENTS.md`),
-/// and generating it is the check that cannot go stale: `export-niri-window-rules`
+/// and generating it is the check that cannot go stale: `export-window-rules`
 /// prints this, and both configs take it in — the same arrangement as the
-/// chords in `nix/niri-binds.nix`.
+/// chords in `nix/compositor-binds.nix`.
 ///
-/// `r#"…"#` and not plain quotes: `\.` is not a valid escape in KDL, and niri's
-/// own configuration writes its regexes in raw strings for that reason.
+/// `r#"…"#` and not plain quotes: the criterion's value is a regex with a
+/// backslash in it (`^br\.ronoctua\.monitor$`), and writing it in a raw string
+/// is what keeps Rust's escapes out of a string the compositor parses.
 ///
 /// The proportions are the compositor's geometry, like `gaps` and the border's
 /// width in the same file — invariant 9's tokens are the design system's, and
@@ -109,18 +110,24 @@ pub fn floating_rules() -> String {
     // The rescue console is WIDER, and that is the only difference: it is read
     // while something is wrong, and a list with the log cut off is a diagnosis
     // one has to scroll for.
-    [(APP_ID_MONITOR, "0.7"), (APP_ID_RESCUE, "0.9")]
+    [(APP_ID_MONITOR, 70), (APP_ID_RESCUE, 90)]
         .into_iter()
-        .map(|(app_id, size)| {
+        .map(|(app_id, percent)| {
             let regex = app_id.replace('.', r"\.");
+            // `ppt` IS NOT OPTIONAL: a floating container is sized in PIXELS
+            // unless the unit says otherwise, so `resize set width 70` would
+            // make a seventy-pixel window — which reads as the monitor having
+            // failed to open rather than as a unit that was left out.
+            //
+            // And `move position center`, because a new floating window is
+            // not centred on its own. There is no equivalent of asking for it
+            // to open focused; one does, and that is the compositor's own
+            // behaviour rather than something to spell.
             format!(
-                "window-rule {{\n\
-                 \x20   match app-id=r#\"^{regex}$\"#\n\
-                 \x20   open-floating true\n\
-                 \x20   open-focused true\n\
-                 \x20   default-column-width {{ proportion {size}; }}\n\
-                 \x20   default-window-height {{ proportion {size}; }}\n\
-                 }}\n"
+                "for_window [app_id=\"^{regex}$\"] \
+                 floating enable, \
+                 resize set width {percent} ppt height {percent} ppt, \
+                 move position center\n"
             )
         })
         .collect()
@@ -142,7 +149,7 @@ pub fn host_it(program: Option<&str>, args: &[String]) -> Result<()> {
     host_as(APP_ID, "ronoctua: terminal", program, args)
 }
 
-/// The same terminal, under the monitor's `app_id` — so niri floats it.
+/// The same terminal, under the monitor's `app_id` — so the compositor floats it.
 ///
 /// # Errors
 ///
@@ -943,14 +950,13 @@ mod tests {
         // The dots are escaped: `br.ronoctua.monitor` as a regex would also
         // match `brXronoctuaYmonitor`, and — worse — is not what one reads.
         assert!(rule.contains(r"^br\.ronoctua\.monitor$"), "{rule}");
-        // A RAW string. `"^br\.ronoctua\.monitor$"` in KDL is an invalid escape,
-        // and niri REFUSES the whole config — which is the compositor falling
-        // back to its own default, with none of our shortcuts.
-        assert!(
-            rule.contains("r#\""),
-            "the regex has to be a raw string:\n{rule}"
-        );
-        assert!(rule.contains("open-floating true"), "{rule}");
+        assert!(rule.contains("floating enable"), "{rule}");
+        // `ppt` IS NOT OPTIONAL. A floating container is sized in PIXELS
+        // unless the unit says so, and a seventy-pixel window reads as the
+        // monitor having failed to open rather than as a missing unit.
+        assert!(rule.contains("ppt"), "the size has no unit:\n{rule}");
+        // AND IT IS CENTRED, because a new floating window is not.
+        assert!(rule.contains("move position center"), "{rule}");
     }
 
     #[test]

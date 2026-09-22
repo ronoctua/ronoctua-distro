@@ -3,7 +3,7 @@
 //!
 //! # Why a crate of its own
 //!
-//! The same reason `ronoctua-niri` is the only one that speaks `niri-ipc` and
+//! The same reason `ronoctua-scroll` is the only one that speaks the compositor's IPC and
 //! `ronoctua-network` the only one that speaks NetworkManager: one border, one
 //! crate. Nothing here knows Wayland, wgpu or the display list, and that is
 //! what lets the whole grammar of `/proc/meminfo` be tested without a `/proc`.

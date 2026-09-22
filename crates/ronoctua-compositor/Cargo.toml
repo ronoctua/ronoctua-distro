@@ -1,0 +1,26 @@
+[package]
+name = "ronoctua-compositor"
+version = "0.1.0"
+description = "The contract with the compositor: vocabulary and traits, no protocol"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# NO PROTOCOL HERE, AND THE DEPENDENCY LIST IS WHERE THAT IS ENFORCED.
+#
+# `serde_json` is deliberately absent: the day it appears, somebody is
+# building a message in the crate that exists so that nobody has to. What is
+# here is `serde` alone, for the types that are PERSISTED — a transform and a
+# mode go into `display.json`, which is ours and has nothing to do with any
+# compositor.
+[dependencies]
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+
+# And in the tests it IS allowed, for exactly one job: proving that a
+# transform is written with the one spelling it claims to have.
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

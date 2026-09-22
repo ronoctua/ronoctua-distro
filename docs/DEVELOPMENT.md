@@ -176,7 +176,7 @@ instalada (`docs/PENDING.md`, item 3).
 
 Boot, TPM, hibernação e desempenho gráfico não se provam em VM. E instalar costumava custar uma
 tarde: o `nixos-install` **constrói** o sistema na máquina alvo, e o que este repositório produz não
-existe em cache público nenhum — o shell, o niri do input pinado, o `libghostty-vt` e os buffers wasm
+existe em cache público nenhum — o shell, o compositor do input pinado, o `libghostty-vt` e os buffers wasm
 eram compilados do zero, toda vez.
 
 Duas coisas mudaram isso, e elas se somam:

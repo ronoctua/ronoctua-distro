@@ -18,20 +18,14 @@ path = "src/main.rs"
 name = "ronoctua-render-png"
 path = "src/bin/render-png.rs"
 
-[[bin]]
-# It walks the action table against a actual niri. It is a binary, and not a
-# `#[test]`, because the Nix check needs a command that talks to a live
-# compositor.
-name = "ronoctua-niri-actions"
-path = "src/bin/niri-actions.rs"
-
 [dependencies]
 ronoctua-tokens = { path = "../ronoctua-tokens" }
 ronoctua-xdg = { path = "../ronoctua-xdg" }
 ronoctua-render = { path = "../ronoctua-render" }
-ronoctua-niri = { path = "../ronoctua-niri" }
+ronoctua-compositor = { path = "../ronoctua-compositor" }
+ronoctua-scroll = { path = "../ronoctua-scroll" }
 # The ONLY border with NetworkManager. The shell does not speak network D-Bus
-# directly, for the same reason it does not speak `niri-ipc` directly.
+# directly, for the same reason it does not speak the compositor's IPC directly.
 ronoctua-network = { path = "../ronoctua-network" }
 ronoctua-cmd = { path = "../ronoctua-cmd" }
 ronoctua-keymap = { path = "../ronoctua-keymap" }

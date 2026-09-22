@@ -19,7 +19,7 @@
 //! # What it does NOT do
 //!
 //! - **It does not read `/proc`.** [`ronoctua_memory`] is the only crate that
-//!   does, exactly as `ronoctua-niri` is the only one that speaks to the
+//!   does, exactly as `ronoctua-scroll` is the only one that speaks to the
 //!   compositor. The pulse arrives through [`pulse::Meter`], already read.
 //! - **It reimplements no Nix logic** (invariant 5). It does not know what an
 //!   update IS; it names a unit and reads what the unit reported.

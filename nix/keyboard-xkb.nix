@@ -1,6 +1,6 @@
 # THE KEYBOARD LAYOUT, in a single place.
 #
-# It is read by the production config (`nix/modules/niri.nix`), by the nested
+# It is read by the production config (`nix/modules/scroll.nix`), by the nested
 # loop (`nix/dev.nix`) and by the TTY console. Written in each of them, one day
 # they would diverge — and the symptom would be the right key producing a
 # different character depending on where you type.

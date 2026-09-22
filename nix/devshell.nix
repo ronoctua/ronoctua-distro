@@ -154,7 +154,7 @@ pkgs.mkShell {
     echo "  nix run .#quick    ten chosen ones (~1 min) — a subset, not a category"
     echo "  nix run .#most     the ones that do not build an installation — before committing"
     echo "  nix run .#gate     everything, by the machine's RAM — only it closes invariant 7"
-    echo "  nix run .#dev      nested niri + footer (leader = Ctrl+Alt+Space)"
+    echo "  nix run .#dev      nested compositor + footer (leader = Ctrl+Alt+Space)"
     echo "  nix run .#vm       the whole system in a VM"
     echo "  nix run .#bench    measures the frame's CPU work"
     echo "  nix run .#install  installs (rehearses without --execute)"

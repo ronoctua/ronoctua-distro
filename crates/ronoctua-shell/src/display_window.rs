@@ -12,7 +12,7 @@
 //!
 //! # Where its data comes from
 //!
-//! From niri and the kernel, on a thread of its own
+//! From the compositor and the kernel, on a thread of its own
 //! (`ronoctua_display::watch`), and orders go to it directly: a mode, a scale,
 //! a brightness are the same call from any process.
 //!
@@ -168,7 +168,7 @@ pub fn host_it() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("could not hang the text size channel: {e}"))?;
 
     // THE READER, on a thread of this process. It is the same `watch` the
-    // footer starts: niri over the IPC, the backlights out of `/sys`, and the
+    // footer starts: the compositor over the IPC, the backlights out of `/sys`, and the
     // monitors over DDC/CI when a reading asks deeply.
     let (screens_sender, screens_events) = channel::channel::<ronoctua_display::Event>();
     let screens = match ronoctua_display::watch(move |e| {
@@ -190,29 +190,32 @@ pub fn host_it() -> Result<()> {
 
     // AND WHAT THE COMPOSITOR SAYS ABOUT ITS OWN CONFIGURATION.
     //
-    // `Order::Reloaded` is the ONLY thing that sets `config_failed`, and it
-    // only ever arrives from niri's event stream — a reading cannot tell,
-    // because niri keeps running on the configuration it had. The footer
-    // forwards it; without the same thread here, the door that WROTE the
-    // fragment is the one door that could never say the compositor refused
-    // it. The same listener, on this process's own connection.
-    let (niri_sender, niri_events) = channel::channel::<ronoctua_niri::Event>();
-    crate::daemon::listen_to_niri(niri_sender);
+    // THE SCREENS MOVING IS THE ONE THING THIS WINDOW MUST HEAR.
+    //
+    // A refusal no longer arrives as an event: a re-read is something this
+    // door ASKS for, and the compositor's answer comes back on the same call
+    // — so the door that wrote the fragment is the door that is told it would
+    // not parse, at the moment of the gesture.
+    //
+    // What does arrive unasked is a monitor moving, and that is worth a
+    // thread: it catches a change NOBODY HERE MADE — a command typed in a
+    // terminal, a lid, a cable.
+    let (wm_sender, wm_events) = channel::channel::<ronoctua_compositor::Event>();
+    crate::daemon::listen_to_the_compositor(wm_sender);
     handle
-        .insert_source(niri_events, |event, (), state: &mut DisplayWindow| {
-            if let channel::Event::Msg(ronoctua_niri::Event::ConfigLoaded { failed }) = event
+        .insert_source(wm_events, |event, (), state: &mut DisplayWindow| {
+            if let channel::Event::Msg(ronoctua_compositor::Event::ScreensChanged) = event
                 && let Some(h) = state.screens.as_ref()
             {
                 // NOT THROUGH `order`, which says "the screens cannot be read"
-                // when there is no reader. Nobody asked for this — it is
-                // niri talking — so a window with no reader has nothing to
-                // report and should not replace whatever is on the message
-                // line with a complaint about an event the person did not
-                // cause. The footer's twin guards the same way.
-                h.send(ronoctua_display::Order::Reloaded { failed });
+                // when there is no reader. Nobody asked for this, so a window
+                // with no reader has nothing to report and should not replace
+                // whatever is on the message line with a complaint about an
+                // event the person did not cause.
+                h.send(ronoctua_display::Order::Look { deep: false });
             }
         })
-        .map_err(|e| anyhow::anyhow!("could not hang the niri channel: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("could not hang the compositor's channel: {e}"))?;
 
     // AND THE COUNTDOWN'S OWN SECOND. Four siblings keep a clock too; what is
     // different here is that it is armed only while there is something to
@@ -539,12 +542,12 @@ impl DisplayWindow {
     ///
     /// # Why it waits, and why the guard is not "is a question standing"
     ///
-    /// A preview is a TRANSIENT change over niri's IPC, and the only thing
-    /// that takes one down is this process's own thread saying the file back.
-    /// Setting `quit` and returning dropped the sender and let `main` end, so
-    /// a queued order was never carried out — and no door opened afterwards
-    /// can help, because `previewed` is per-thread. The change stood until
-    /// niri restarted.
+    /// A preview lives in the compositor's RUNNING configuration, and the only
+    /// thing that takes one down is this process's own thread asking for a
+    /// re-read. Setting `quit` and returning dropped the sender and let `main`
+    /// end, so a queued order was never carried out — and no door opened
+    /// afterwards can help, because `previewed` is per-thread. The change stood
+    /// until the compositor restarted.
     ///
     /// THE FIRST VERSION OF THIS GUARDED ON A STANDING QUESTION, and that is
     /// exactly the case that is already safe. The dangerous one is a question
@@ -597,13 +600,6 @@ impl DisplayWindow {
                 }
             }
             Errand::Order(order) => self.order(*order),
-            // IN THE ORDER THEY WERE MADE, because the last one is the change
-            // the person actually asked for — see `display::Target::First`.
-            Errand::Orders(orders) => {
-                for order in orders {
-                    self.order(order);
-                }
-            }
         }
         // AND THE CLOCK IS ARMED IF A QUESTION WENT UP. Every gesture that
         // raises one comes through here, so this is the one place that has to
@@ -1076,14 +1072,14 @@ impl WindowHandler for DisplayWindow {
     /// The compositor asked this window to go away.
     ///
     /// A STANDING PREVIEW GOES BACK FIRST, and it took the final gate to find
-    /// this. A change that can blind a screen is applied over niri's IPC and
-    /// held up by a question; the thing that takes it down is this process's
-    /// own thread saying the file back (`Order::Undo`). Setting `quit` and
+    /// this. A change that can blind a screen is applied over the IPC and held
+    /// up by a question; the thing that takes it down is this process's own
+    /// thread asking for a re-read (`Order::Undo`). Setting `quit` and
     /// returning dropped the sender and let `main` end, so the queued order
     /// was never carried out — and a door opened afterwards cannot help,
     /// because `previewed` is per-thread and a fresh one's is empty. The
-    /// change stood until niri restarted, with `Ctrl+Alt+Del` as the only way
-    /// out of a screen nobody can read.
+    /// change stood until the compositor restarted, with `Ctrl+Alt+Del` as the
+    /// only way out of a screen nobody can read.
     ///
     /// `Handle::finish` is what waits; the door cannot, because the answer
     /// comes back through a `calloop` source this function is inside of.
@@ -1527,11 +1523,18 @@ impl CompositorHandler for DisplayWindow {
 impl DisplayWindow {
     /// A monitor arrived or left, and Wayland is the one that said so.
     ///
-    /// niri publishes NO event about outputs — the footer's own note says so —
-    /// and `ronoctua_display::watch` reads again only when an order arrives.
-    /// So without this the window never saw a second monitor appear, and kept
-    /// drawing a row for one that had been unplugged: `RET` on it opened a
-    /// sheet whose only content was that the screen was gone.
+    /// It is this window's SECOND signal: the compositor's own `output` event
+    /// is the other, and this door subscribes to it too (see the
+    /// `Event::ScreensChanged` arm above). `ronoctua_display::watch` reads
+    /// again only when an order arrives, so without a signal the window never
+    /// saw a second monitor appear, and kept drawing a row for one that had
+    /// been unplugged: `RET` on it opened a sheet whose only content was that
+    /// the screen was gone.
+    ///
+    /// Both are kept because they answer at different moments — Wayland's
+    /// global for a hotplug, the compositor's event for a mode, a scale or a
+    /// re-read — and both land on the same shallow reading, so a duplicate
+    /// costs one reading and never a wrong one.
     ///
     /// SHALLOW, for the reason the footer gives: asking every monitor over
     /// DDC/CI on a hotplug is a fifth of a second per port.
@@ -1554,12 +1557,13 @@ impl OutputHandler for DisplayWindow {
     // AND NOT ON `update_output`, which the footer also leaves empty.
     //
     // It looks like the event this view most wants — a mode or a scale
-    // changed. It is also the event OUR OWN writes produce: every `Keep` and
-    // every `Undo` sends six `output_action`s, each of which makes niri emit a
-    // `wl_output` batch, and each batch would cost a whole reading here — a
-    // walk of `/sys/class/drm` and two connections to niri, several times per
-    // keypress, on a machine with seven connectors. The reading that follows
-    // an order is already sent by the crate.
+    // changed. It is also the event OUR OWN writes produce: every `Try`, every
+    // `Keep` and every `Undo` moves an output, each of which makes the
+    // compositor emit a `wl_output` batch, and each batch would cost a whole
+    // reading here — a walk of `/sys/class/drm` and two connections to the
+    // compositor, several times per keypress, on a machine with seven
+    // connectors. The reading that follows an order is already sent by the
+    // crate.
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
         self.screens_changed();

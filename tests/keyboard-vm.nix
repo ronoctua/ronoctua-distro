@@ -9,7 +9,7 @@
 #
 # An evaluation test would prove that `settings.main.leftmeta` is written as
 # expected. That is not what matters: what matters is the service COMING UP,
-# `keyd` ACCEPTING the file we generate and niri having the bind for the key
+# `keyd` ACCEPTING the file we generate and the compositor having the bind for the key
 # it emits. All three can fail with a perfect config.
 #
 # WHAT IT DOES NOT PROVE
@@ -17,7 +17,7 @@
 # That really touching Super fires the leader. That would require injecting
 # an event into evdev below keyd — and what would be under test there would
 # be keyd, not our system. The contract that is ours is: the service is
-# standing, the remapping is what we asked for, and niri listens for the key
+# standing, the remapping is what we asked for, and the compositor listens for the key
 # that comes out of it.
 {
   pkgs,
@@ -32,7 +32,7 @@ pkgs.testers.runNixOSTest {
     { config, ... }:
     {
       # ALL THREE modules: the test checks both ends of the same contract — the
-      # key keyd emits and the one niri listens for. With only one, each half
+      # key keyd emits and the one the compositor listens for. With only one, each half
       # would pass on its own while the pair was broken.
       #
       # The `base.nix` goes in because the safety net depends on it: the polkit
@@ -41,7 +41,7 @@ pkgs.testers.runNixOSTest {
       imports = [
         ../nix/modules/base.nix
         ../nix/modules/keyboard.nix
-        ../nix/modules/niri.nix
+        ../nix/modules/scroll.nix
       ];
       _module.args.ronoctua = ronoctua;
       virtualisation.memorySize = 2048;
@@ -145,14 +145,20 @@ pkgs.testers.runNixOSTest {
           lines = [l.strip() for l in main.splitlines() if l.strip() and "=" in l]
           assert len(lines) == 1, f"keyd remaps more than one key: {lines}"
 
-      with subtest("niri listens for the key keyd emits"):
-          # The two ends of the same contract: keyd emits `f13`, niri binds `F13` to
+      with subtest("the compositor listens for the key keyd emits"):
+          # The two ends of the same contract: keyd emits `f13`, the compositor binds `F13` to
           # the leader. If one changes without the other, touching Super does nothing
           # — with no error, anywhere.
-          kdl = machine.succeed("cat /etc/niri/config.kdl")
-          assert "F13 repeat=false { spawn" in kdl, kdl
+          conf = machine.succeed("cat /etc/scroll/config")
+          assert "bindsym --no-repeat F13 exec " in conf, conf
           # And a HELD Super goes on being a modifier in the chords.
-          assert "Mod+Left { focus-column-left; }" in kdl, kdl
+          #
+          # `Super` and not `Mod`: the modifier table here is
+          # `Shift Lock Control Ctrl Mod1 Alt Mod2 Mod3 Mod4 Super Mod5`, and
+          # anything else is refused line by line — every chord dead while the
+          # leader still works. `compositor-config-valid` is the gate;
+          # this is the same fact from the booted side.
+          assert "bindsym Super+Left focus left" in conf, conf
 
       with subtest("the xkb options reach the SESSION's compositor"):
           # `keyboard-options-do-what-they-say` compiles that same string and
@@ -161,8 +167,8 @@ pkgs.testers.runNixOSTest {
           # built from `ronoctua.keyboard.compose` plus what the system adds,
           # and an option that never reaches the config is an accent key that
           # does not accent, with the keymap perfectly correct one layer below.
-          assert 'options "${nodes.machine.ronoctua.keyboard.options}"' in kdl, (
-              "the xkb options did not reach niri's config:\n" + kdl
+          assert 'xkb_options "${nodes.machine.ronoctua.keyboard.options}"' in conf, (
+              "the xkb options did not reach the compositor's config:\n" + conf
           )
 
       with subtest("the footer comes up as a session service, by store path"):
@@ -181,18 +187,21 @@ pkgs.testers.runNixOSTest {
           print(unit)
           assert "/nix/store/" in unit, unit
           assert "bin/ronoctua-shell" in unit, unit
-          assert 'spawn "/nix/store/' in kdl, (
-              "the leader's bind spawns a NAME; a unit's PATH is minimal "
-              f"and the name does not resolve:\n{kdl}"
+          assert 'exec "/nix/store/' in conf, (
+              "the leader's bind runs a NAME; a unit's PATH is minimal "
+              f"and the name does not resolve:\n{conf}"
           )
 
       with subtest("the emergency binds exist, and OUTSIDE the leader"):
           # They only serve for when the leader does not answer. With `Mod+` in
           # front, they would be the key locked inside the safe.
-          for press_key in ["Ctrl+Alt+L", "Ctrl+Shift+L", "Ctrl+Alt+Delete"]:
-              assert f"\n    {press_key} " in kdl, f"the bind {press_key} is missing:\n{kdl}"
-              assert f"Mod+{press_key}" not in kdl, f"{press_key} came out with the leader's prefix"
-          assert "keyboard-restore" in kdl, kdl
+          # LOWERCASE `l`, and that is the bind's own spelling: a bind matches
+          # a KEYSYM, and `L` is the one Shift produces — `Ctrl+Alt+L` would
+          # need a Shift nobody is holding and would never fire.
+          for press_key in ["Ctrl+Alt+l", "Ctrl+Shift+l", "Ctrl+Alt+Delete"]:
+              assert f" {press_key} " in conf, f"the bind {press_key} is missing:\n{conf}"
+              assert f"Super+{press_key}" not in conf, f"{press_key} came out with the leader's prefix"
+          assert "keyboard-restore" in conf, conf
 
       with subtest("with keyd BROUGHT DOWN, the USER brings it back up"):
           # THE DESTRUCTIVE TEST. It is the only proof that the net catches: without

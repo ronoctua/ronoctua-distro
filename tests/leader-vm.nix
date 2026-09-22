@@ -12,26 +12,28 @@
 # pixels before and after — at rest it is two lines, with the leader active it
 # is two plus one per which-key entry.
 #
-# The keyboard grab is verified through niri's IPC, which exposes each layer's
-# `keyboard_interactivity`. That is better than inferring from behavior: it
-# says literally what the compositor understood of our request.
+# The keyboard grab is verified from the side that ASKS for it, and then by
+# TYPING. Nothing in this compositor's IPC enumerates layer surfaces or their
+# `keyboard_interactivity`, so the literal question cannot be put to it — see
+# `last_keyboard_ask` for what is read instead and why a key that reaches the
+# footer and changes the screen is the stronger half of the evidence.
 #
 # HOW THE KEY IS SENT
 # -------------------
-# By `xdotool`, on Xvfb. niri runs on the winit backend over X (see
-# `niri-xvfb.nix`), so a key injected into the X window reaches the compositor
+# By `xdotool`, on Xvfb. The compositor runs on the wlroots X11 backend over X
+# (see `compositor-xvfb.nix`), so a key injected into the X window reaches it
 # as a real key and follows the normal path to our surface. There is no
 # shortcut: it is the same route as the physical keyboard.
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
 
   # THE HEIGHT COMES FROM THE TOKENS, not from a number nailed down here.
   #
@@ -51,7 +53,7 @@ pkgs.testers.runNixOSTest {
     virtualisation.cores = 2;
 
     environment.systemPackages = [
-      niri
+      scroll
       ronoctua-shell
       pkgs.imagemagick
       pkgs.tesseract
@@ -82,7 +84,7 @@ pkgs.testers.runNixOSTest {
         narrows to one file and one that narrows to none leave the region
         exactly as tall.
         """
-        w, h, x, y = niri_geometry()
+        w, h, x, y = compositor_geometry()
         alt = footer_height()
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         machine.succeed(
@@ -115,14 +117,14 @@ pkgs.testers.runNixOSTest {
         return seen
 
     def footer_height():
-        """How many px from the bottom up differ from niri's background.
+        """How many px from the bottom up differ from the compositor's backdrop.
 
         The compositor's background is a flat color (`#404040` by default);
         our surface is another. Counting the lines that differ from it
         measures the surface's REAL height on screen, which is the only proof
         that the expansion was accepted — the log only proves it was asked for.
         """
-        w, h, x, y = niri_geometry()
+        w, h, x, y = compositor_geometry()
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         # A column of pixels well to the left, from the top to the end of the window.
         raw = machine.succeed(
@@ -146,7 +148,7 @@ pkgs.testers.runNixOSTest {
 
         Two lessons in one helper: `assert x == y` with no message hides the
         value that actually came, and measuring right after the paint log runs
-        ahead of the COMPOSITOR — the footer has drawn, niri has not composed yet.
+        ahead of the COMPOSITOR — the footer has drawn, it has not composed yet.
         """
         seen_now = None
         for _ in range(attempts):
@@ -161,29 +163,77 @@ pkgs.testers.runNixOSTest {
 
 
 
+    def a_dotfile_is_drawn(text):
+        """Does the listing draw an entry whose name begins with a dot?
+
+        OCR, so the question has to survive a mangled glyph in the type
+        column: what is looked for is a dot followed by a letter, with space
+        in front of it. `..` does not match — the second character is a dot —
+        and neither does an extension, which has no space before it.
+        """
+        import re
+
+        return bool(re.search(r"\s\.[a-zA-Z]", text))
+
+
     def press_key(item_name):
         machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key {item_name}")
         machine.sleep(1)
 
 
-    def layers():
-        """What the COMPOSITOR says about our layer surfaces.
+    def last_keyboard_ask(unit="footer"):
+        """What keyboard interactivity the footer last ASKED for.
 
-        Asking for `exclusive` and getting `exclusive` are different things;
-        only its side answers the second one.
+        ASKED, and not granted — the distinction is the whole comment. The
+        milestone's literal criterion was that the COMPOSITOR reports the
+        surface as `exclusive`, and this compositor answers no such question:
+        nothing in its IPC enumerates layer surfaces, let alone their keyboard
+        interactivity. That is a real loss and it is written down here rather
+        than papered over.
+
+        What is left is the request, read from the side that makes it
+        (`the footer asked for a geometry`, `surface.rs`). The subtests that
+        use it go on to TYPE, and a key that reaches the footer and changes
+        the screen is end-to-end evidence that the request was granted —
+        stronger than the introspection it replaces, and it needs nobody's
+        cooperation.
         """
-        out_text = machine.succeed(f"${ronoctua-shell}/bin/niri-contract {sock}")
-        for line in out_text.splitlines():
-            if line.startswith("layers:"):
-                return line
-        raise AssertionError(f"niri-contract did not list layers:\n{out_text}")
+        import re
+
+        said = machine.succeed(f"journalctl -u {unit} --no-pager")
+        asks = re.findall(r"the footer asked for a geometry.*?keyboard=(\w+)", said)
+        assert asks, (
+            "the footer has not asked for a geometry at all\n" + said[-2000:]
+        )
+        return asks[-1]
+
+
+    def surfaces(unit="footer"):
+        """How many layer surfaces the footer has created — from ITS journal.
+
+        # Why the footer is counted and not the compositor asked
+
+        Because this compositor has no request that enumerates layer surfaces:
+        `get_tree` is toplevels, and nothing in its IPC answers "what is on the
+        layer shell". The previous one did, and this helper used to read a
+        `layers:` line out of `ronoctua-contract` — a line that can no longer
+        exist, so the helper could only ever raise.
+
+        What the invariant actually forbids is the FOOTER creating a second
+        surface when the band or the expansion grows, and the footer is the
+        only thing that can do that. It now says so once per surface
+        (`a layer surface created`, `surface.rs`), so counting those lines
+        answers the same question from the side that owns it.
+        """
+        said = machine.succeed(f"journalctl -u {unit} --no-pager")
+        return said.count("a layer surface created")
 
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
     start_xvfb()
-    start_niri("niri", "${niri}")
-    sock = socket_of("niri")
+    start_compositor("compositor", "${scroll}")
+    sock = socket_of("compositor")
 
     with subtest("the footer comes up at rest, with two lines"):
         machine.succeed(
@@ -199,7 +249,7 @@ pkgs.testers.runNixOSTest {
             # proves the whole chain of invariant 8 — `.ftl` -> generator ->
             # constant -> Fluent -> pixel — in the language that is NOT the fallback.
             "--setenv=LANG=pt_BR.UTF-8 "
-            f"--setenv=NIRI_SOCKET={sock} "
+            f"--setenv=SCROLLSOCK={sock} "
             "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_render=debug "
             # THE LEADER'S LABEL comes from the environment, put there by whoever
             # defines the bind. Here it is the test that defines it, and that is why
@@ -215,11 +265,11 @@ pkgs.testers.runNixOSTest {
         # WASM runtime. Measuring the height right after the socket measured a
         # surface that had not received a `configure` yet: zero pixels, with no error.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'footer layout resolved'",
+            "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null",
             timeout=90,
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'control socket opened'",
+            "journalctl -u footer --no-pager | grep 'control socket opened' > /dev/null",
             timeout=30,
         )
         at_rest = wait_for_height(FOOTER)
@@ -227,7 +277,7 @@ pkgs.testers.runNixOSTest {
 
     with subtest("the leader captures the keyboard and expands"):
         # Without this, `xdotool` injects keys that reach nowhere at all.
-        focus_niri()
+        focus_compositor()
 
         # THE POINTER TO A CORNER THAT DOES NOT GET IN THE WAY — and there are TWO nuisances.
         #
@@ -243,20 +293,20 @@ pkgs.testers.runNixOSTest {
         #
         # The upper RIGHT corner, inside the window: far from the sampled column and
         # far from the footer.
-        w0, h0, x0, y0 = niri_geometry()
+        w0, h0, x0, y0 = compositor_geometry()
         machine.succeed(
             "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
             f"{x0 + w0 - 5} {y0 + 5}"
         )
 
         # `ronoctua-shell leader` does NOT bring a footer up: it notifies the one
-        # already running. It is the path niri's bind uses (`nix/modules/niri.nix`).
+        # already running. It is the path the compositor's bind uses (`nix/modules/scroll.nix`).
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
         )
 
         expanded = footer_height_above(FOOTER)
@@ -280,13 +330,20 @@ pkgs.testers.runNixOSTest {
         assert n and n[0] > 0, f"the leader opened with no entries: {n}"
         top_px = n[0]
 
-        # The milestone's literal criterion: the COMPOSITOR reports `exclusive`.
-        c = layers()
-        print(c)
-        assert "ronoctua-footer@Top/Exclusive" in c, c
+        # THE FOOTER ASKED FOR THE KEYBOARD — see `last_keyboard_ask` for why
+        # this is the request and not the compositor's confirmation, and for
+        # what makes that acceptable. The subtest below types into it, which is
+        # the confirmation that matters.
+        asked = last_keyboard_ask()
+        print(f"the footer asked for: {asked}")
+        assert asked == "Exclusive", asked
+        # AND IT IS STILL ONE SURFACE per output (invariant 14).
+        assert surfaces() == 1, (
+            f"the leader created a SECOND layer surface: {surfaces()}"
+        )
 
     with subtest("the which-key list appears on screen"):
-        w, h, x, y = niri_geometry()
+        w, h, x, y = compositor_geometry()
         alt = footer_height()
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         machine.succeed(
@@ -350,7 +407,7 @@ pkgs.testers.runNixOSTest {
         # opposite.
         assert "LEADER h-" in journal, journal
 
-        w, h, x, y = niri_geometry()
+        w, h, x, y = compositor_geometry()
         # POLLED, like every other read of a height that has just changed:
         # `press_key` returns before the compositor has composed, and a 0 here
         # would put the crop's origin off the window and fail inside magick.
@@ -381,7 +438,7 @@ pkgs.testers.runNixOSTest {
         # combination does not exist" from "the key did not arrive".
         press_key("z")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'echo area'", timeout=30
+            "journalctl -u footer --no-pager | grep 'echo area' > /dev/null", timeout=30
         )
         journal = machine.succeed("journalctl -u footer --no-pager")
         echo_line = [l for l in journal.splitlines() if "echo area" in l][-1]
@@ -398,13 +455,15 @@ pkgs.testers.runNixOSTest {
     with subtest("Esc goes back to rest, two lines tall"):
         press_key("Escape")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader closed'", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader closed' > /dev/null", timeout=30
         )
         # And it gives the keyboard back: without this no buffer would receive a key
         # again, and the system would go mute after the first leader.
-        c = layers()
-        print(c)
-        assert "ronoctua-footer@Top/None" in c, c
+        # AND IT GAVE THE KEYBOARD BACK. At rest the footer must not hold it,
+        # or no buffer would receive a key at all.
+        asked = last_keyboard_ask()
+        print(f"the footer asked for: {asked}")
+        assert asked == "None", asked
 
         came_back = wait_for_height(FOOTER)
         print(f"height after the Esc: {came_back} px")
@@ -422,17 +481,26 @@ pkgs.testers.runNixOSTest {
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
+        # `shift+semicolon` AND NOT `colon`, which is the same keystroke asked
+        # for in the only way that survives two keymaps.
+        #
+        # `xdotool key colon` looks up the keysym in the X SERVER's map and,
+        # when no key carries it unmodified, binds a spare keycode to it and
+        # presses that. The compositor reads the keycode from Xvfb and
+        # translates it with ITS OWN xkb keymap, where that spare keycode means
+        # nothing — so the key arrives and is dropped, with no error in either
+        # of them. Seven subtests above type happily, because every key they
+        # press exists unmodified on both sides.
+        #
+        # `semicolon` is such a key, and the Shift is a real modifier rather
+        # than a remap. The key under test is still `:` — Doom's `M-x` one;
+        # `x` there is the scratch buffer.
+        press_key("shift+semicolon")  # the finder: the longest list in the system
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
-        )
-        # `colon` is the name of the `:` keysym in xdotool. The key changed from `x`
-        # to `:` — Doom's `M-x` one —, and `x` there is the scratch buffer.
-        press_key("colon")  # the finder: the longest list in the system
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'command=\"mx-open\"'",
+            "journalctl -u footer --no-pager | grep 'command=\"mx-open\"' > /dev/null",
             timeout=30,
         )
-        _, h, _, _ = niri_geometry()
+        _, h, _, _ = compositor_geometry()
         with_mx = footer_height_above(FOOTER)
         print(f"height with M-x open: {with_mx} px of {h} px of screen")
         assert with_mx > FOOTER, "M-x did not expand"
@@ -460,7 +528,7 @@ pkgs.testers.runNixOSTest {
         # parked in the upper right corner (see the comment up there, about
         # `footer_height`). Without moving it, the wheel would scroll the buffer
         # behind and the test would start measuring something else — or nothing.
-        wv, hv, xv, yv = niri_geometry()
+        wv, hv, xv, yv = compositor_geometry()
         footer_band = footer_height()
         machine.succeed(
             "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
@@ -509,7 +577,7 @@ pkgs.testers.runNixOSTest {
         # The unit tests cannot answer this one. They press a `Key` straight
         # into `View::key` and prove the view does the right thing WITH the
         # key; what is asked here is whether the key ARRIVES — through Xvfb,
-        # through niri, through the layer surface, with the leader's own
+        # through the compositor, through the layer surface, with the leader's own
         # modifiers discounted. That is three of the causes `AGENTS.md` lists
         # under "nenhum atalho funciona", and they all look the same on screen.
         # FEW FILES, ON PURPOSE. The region has a ceiling in lines, and a
@@ -527,7 +595,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
         )
         # TWICE, because `.` is a GROUP now and not a command.
         #
@@ -545,7 +613,7 @@ pkgs.testers.runNixOSTest {
 
         # THE LIST IS ON SCREEN when the region is taller than the two lines at
         # rest. Measured and not assumed: the log proves it was asked for, and
-        # the pixels prove niri agreed.
+        # the pixels prove the compositor agreed.
         opened = footer_height_above(FOOTER)
         assert opened is not None and opened > FOOTER, (
             f"the manager did not expand: {opened} px, at rest it is {FOOTER}"
@@ -645,12 +713,19 @@ pkgs.testers.runNixOSTest {
         # the dotfiles were doing when the manager opened, and the question is
         # whether the key ARRIVED. Naming the direction here would make this
         # test a second declaration of the default.
-        was_there = "hidden" in before.lower()
-        is_there = "hidden" in after.lower()
+        #
+        # AND THE SENTINEL IS "any name that starts with a dot", not one name.
+        # It used to be `.hidden-test`, which is a FILE: the listing draws the
+        # directories first, so with the panels holding the region at its
+        # ceiling it sorts below the fold and is never on screen. A probe that
+        # names something never drawn answers the same whatever the key did —
+        # it read `C-h` working as `C-h` doing nothing.
+        was_there = a_dotfile_is_drawn(before)
+        is_there = a_dotfile_is_drawn(after)
         if was_there == is_there:
             print("ls -a:", machine.execute("ls -a /root | tr '\n' ' '")[1])
         assert was_there != is_there, (
-            f"`C-h` did nothing: `.hidden-test` {'stayed' if was_there else 'stayed out'} "
+            f"`C-h` did nothing: the dotfiles {'stayed' if was_there else 'stayed out'} "
             f"on screen. Either the Ctrl was discounted, or the key became a filter letter: {after!r}"
         )
         # AND WITH NOTHING TYPED, `Esc` closes — a query on screen it would
@@ -667,7 +742,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
         )
         # `m i n`, and not `i n`: the three browsers moved under MISCELLANEOUS
         # and `i` stopped being a top-level prefix. The old sequence reached
@@ -678,7 +753,7 @@ pkgs.testers.runNixOSTest {
         # The QUOTES are part of it: `tracing` formats a `Debug` value between
         # quotes, and `command=glyphs-nerd-fonts` matches nothing.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'command=\"glyphs-nerd-fonts\"'",
+            "journalctl -u footer --no-pager | grep 'command=\"glyphs-nerd-fonts\"' > /dev/null",
             timeout=30,
         )
         # And the keyboard goes back to the buffers on its own after running.
@@ -687,20 +762,17 @@ pkgs.testers.runNixOSTest {
         # measures by counting pixels that differ from the background, and from here
         # on there is a WINDOW covering the screen — the "background" it samples
         # becomes the buffer, and the arithmetic gives zero. The question that
-        # matters is another one: did the keyboard come back? Only niri answers that.
-        c = layers()
-        print(c)
-        assert "ronoctua-footer@Top/None" in c, c
+        # matters is another one: did the keyboard come back? Only the compositor answers that.
+        asked = last_keyboard_ask()
+        print(f"the footer asked for: {asked}")
+        assert asked == "None", asked
 
     with subtest("the command really OPENS the glyph browser"):
         # THE DEFECT THIS CATCHES: five commands showed up in which-key, "ran", and
         # fell into a log `warn`. On screen, nothing. Firing the command proves
         # nothing — what proves it is the WINDOW existing.
         try:
-            machine.wait_until_succeeds(
-                f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'windows: 1'",
-                timeout=90,
-            )
+            await_windows(sock, 1, timeout=90)
         except Exception:
             print(machine.execute("journalctl -u footer --no-pager | tail -30")[1])
             print(machine.execute("systemctl list-units 'ronoctua-buffer-*' --no-pager")[1])
@@ -724,7 +796,7 @@ pkgs.testers.runNixOSTest {
         # a buffer WINDOW: doing it there would mean that VM growing a GPU stack
         # to assert something this one is already set up for.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'id=\"state\"'",
+            "journalctl -u footer --no-pager | grep 'id=\"state\"' > /dev/null",
             timeout=60,
         )
         journal = machine.succeed("journalctl -u footer --no-pager")
@@ -769,14 +841,11 @@ pkgs.testers.runNixOSTest {
         # thirty seconds for a line that had already gone past.
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager "
-            "| grep -q 'command through the control socket command=unicode-symbols'",
+            "| grep 'command through the control socket command=unicode-symbols' > /dev/null",
             timeout=30,
         )
         try:
-            machine.wait_until_succeeds(
-                f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'windows: 2'",
-                timeout=90,
-            )
+            await_windows(sock, 2, timeout=90)
         except Exception:
             print(machine.execute("journalctl -u footer --no-pager | tail -30")[1])
             raise
@@ -791,7 +860,7 @@ pkgs.testers.runNixOSTest {
         # with the modifier along, nothing matched, and the screen said
         # `CTRL ALT SPC M-n is not bound` — which names the consequence and hides the
         # cause. The same state happens WITHOUT the hand: leaving for a host shortcut
-        # and coming back makes the nested niri miss the Alt release and announce it
+        # and coming back makes the nested the compositor miss the Alt release and announce it
         # forever.
         #
         # The normal `press_key()` does not catch this: `xdotool key` releases the key,
@@ -805,7 +874,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed("journalctl --rotate && journalctl --vacuum-time=1s")
         # AND THE FOCUS ONCE MORE, BEFORE THE LEADER, for the reason written
         # above the second browser sequence — including the order.
-        focus_niri()
+        focus_compositor()
         xdo("keydown", "alt")
         try:
             machine.succeed(
@@ -813,7 +882,7 @@ pkgs.testers.runNixOSTest {
                 "${ronoctua-shell}/bin/ronoctua-shell leader"
             )
             machine.wait_until_succeeds(
-                "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
+                "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
             )
             # `h` AND NOT `m`, for the collision written above the subtest
             # before this one: two buffer windows are open by now, and at the

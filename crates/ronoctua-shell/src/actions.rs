@@ -2,18 +2,21 @@
 //!
 //! # One table, two consumers
 //!
-//! `surface::run_command` dispatches through it, and the `ronoctua-niri-actions` binary
-//! walks all of it against a actual niri. Two copies would diverge —
+//! `surface::run_command` dispatches through it, and the contract test
+//! walks all of it against an actual compositor. Two copies would diverge —
 //! and the one that diverges silently is always the one nobody runs.
 //!
-//! # Why the action's name travels as JSON
+//! # Why the deed's text is declared and not written here
 //!
-//! niri has 142 actions. Mirroring them in an enum would give a table that breaks on the
-//! first new version of the compositor, and breaking here means a shortcut that
-//! disappears with nobody noticing. The name crosses as it is; what guarantees it
-//! exists is the `niri-contract` check.
+//! This compositor's commands are free text, spread across four tables in C
+//! with no enumeration anywhere. So the table is OURS:
+//! `assets/compositor-deeds.nix` declares every one, the generator refuses a
+//! verb the pinned compositor does not have, and what crosses the wire is
+//! built by `ronoctua_scroll::wire::spoken`, which validates the argument. A
+//! deed that does not exist is a build failure rather than a key that answers
+//! nothing.
 
-/// `(command id, action in niri's protocol)`.
+/// `(command id, the deed it speaks)`.
 ///
 /// A function and not a `static`: a `serde_json::Value` has to allocate, and there is no
 /// allocation at compile time. Building it costs microseconds and happens
@@ -21,82 +24,61 @@
 ///
 /// The ids are the same as the keymap's in `leader::default_of`. The
 /// `keymap-consistente` check guarantees that every binding points at a command that
-/// exists; `niri-contract` guarantees that every command reaches an action the
-/// compositor accepts.
+/// exists; the generator refuses at BUILD time a deed the compositor does
+/// not have.
 #[must_use]
-pub fn all_of() -> Vec<(&'static str, serde_json::Value)> {
-    use serde_json::json;
+pub fn all_of() -> Vec<(&'static str, &'static str)> {
     vec![
-        ("window-left", json!({ "FocusColumnLeft": {} })),
-        ("window-right", json!({ "FocusColumnRight": {} })),
-        ("window-up", json!({ "FocusWindowUp": {} })),
-        ("window-down", json!({ "FocusWindowDown": {} })),
-        ("window-move-left", json!({ "MoveColumnLeft": {} })),
-        ("window-move-right", json!({ "MoveColumnRight": {} })),
-        ("window-move-up", json!({ "MoveWindowUp": {} })),
-        ("window-move-down", json!({ "MoveWindowDown": {} })),
-        ("window-maximize", json!({ "MaximizeColumn": {} })),
-        ("window-screen-full", json!({ "FullscreenWindow": {} })),
-        ("window-center", json!({ "CenterColumn": {} })),
-        // TOGGLE FLOATING was only a chord, with the KDL written by hand
-        // by hand — the only shortcut in the system with no command behind it.
-        // It came in here because "nothing key-only" (section 13), and the
-        // `only_a_chord_with_an_argument_escapes_the_action_table` test stops another from using the same hole.
-        ("window-float", json!({ "ToggleWindowFloating": {} })),
-        ("window-consume", json!({ "ConsumeOrExpelWindowRight": {} })),
-        ("window-expel", json!({ "ConsumeOrExpelWindowLeft": {} })),
-        // The two BUFFER ones are here too. They had a method of their own
-        // in `ronoctua-niri` and a branch of their own in `run_command`; with the chord
-        // needing the same action, keeping both paths would give two
-        // truths for the same key.
-        ("buffer-close", json!({ "CloseWindow": { "id": null } })),
-        ("buffer-next", json!({ "FocusWindowDown": {} })),
-        ("workspace-next", json!({ "FocusWorkspaceDown": {} })),
-        // THE OVERVIEW: the view of all the workspaces at once. It belongs to the
-        // compositor, like everything else here.
-        ("workspace-overview", json!({ "ToggleOverview": {} })),
-        ("workspace-previous", json!({ "FocusWorkspaceUp": {} })),
-        // The ONLY one with an argument. Without `focus`, niri answers "error
-        // parsing request" — and a refused action is a shortcut that does
-        // nothing.
-        (
-            "workspace-move-next",
-            json!({ "MoveWindowToWorkspaceDown": { "focus": true } }),
-        ),
-        (
-            "workspace-move-previous",
-            json!({ "MoveWindowToWorkspaceUp": { "focus": true } }),
-        ),
-        // `Screenshot` ALSO requires an argument, and `{}` gives "error parsing
-        // request" — the same error as a non-existent name. It was the
-        // `niri-contract` check that caught it: in the hand probe the answer got lost in a
-        // socket timeout, and I had concluded that it passed.
-        (
-            "screen-capture",
-            json!({ "Screenshot": { "show_pointer": true } }),
-        ),
+        ("window-left", "wm-focus-left"),
+        ("window-right", "wm-focus-right"),
+        ("window-up", "wm-focus-up"),
+        ("window-down", "wm-focus-down"),
+        ("window-move-left", "wm-move-left"),
+        ("window-move-right", "wm-move-right"),
+        ("window-move-up", "wm-move-up"),
+        ("window-move-down", "wm-move-down"),
+        ("window-maximize", "wm-maximise"),
+        ("window-screen-full", "wm-full-screen"),
+        ("window-center", "wm-align-centre"),
+        ("window-float", "wm-float"),
+        // CONSUME AND EXPEL, in this compositor's words. `nomode` moves the
+        // WINDOW and leaves its column alone, so left and right take it out
+        // of the column it is in and put it into the one beside it.
+        ("window-consume", "wm-move-out-right"),
+        ("window-expel", "wm-move-out-left"),
+        ("buffer-close", "wm-close"),
+        ("buffer-next", "wm-focus-down"),
+        ("workspace-next", "wm-workspace-next"),
+        ("workspace-overview", "wm-overview"),
+        ("workspace-previous", "wm-workspace-previous"),
+        ("workspace-move-next", "wm-workspace-move-next"),
+        ("workspace-move-previous", "wm-workspace-move-previous"),
+        ("workspace-go", "wm-workspace-go"),
+        ("workspace-move", "wm-workspace-move"),
     ]
 }
 
-/// The commands that require an ARGUMENT, and the compositor action that serves them.
+/// The deed a keymap command performs, if it performs one.
 ///
-/// # Why a separate table
+/// It is the join between the two vocabularies: ours, which the keymap and
+/// the text keys use, and the compositor's, which the generated table holds.
+#[must_use]
+pub fn deed_of(id: &str) -> Option<&'static ronoctua_scroll::deeds::Spoken> {
+    all_of()
+        .into_iter()
+        .find(|(ours, _)| *ours == id)
+        .and_then(|(_, deed)| ronoctua_scroll::deeds::spoken_of(deed))
+}
+
+/// Whether this command needs something typed after it.
 ///
-/// `all_of()` holds **null** actions, assembled as JSON here. These cannot
-/// be: `focus-workspace` takes a workspace reference, and its form in
-/// the JSON is niri's — assembling it by hand would bring back the mistake `Screenshot`
-/// cost, with the aggravation of the argument varying.
-///
-/// They go through the compositor's own client (`niri msg action <name> <n>`),
-/// which is the path of the 141 mirrored ones and for the same reason: whoever fills in
-/// the argument's form is whoever defines it.
+/// The answer comes from the DEED, which carries its own arity — not from a
+/// list here that would age the day a command grew or lost an argument.
 #[must_use]
 pub fn with_argument(id: &str) -> Option<&'static str> {
-    match id {
-        "workspace-go" => Some("focus-workspace"),
-        "workspace-move" => Some("move-window-to-workspace"),
-        _ => None,
-    }
+    deed_of(id)
+        .filter(|s| s.deed.argument.is_some())
+        .map(|s| s.deed.id)
 }
 
 /// A chord: the leader **held** plus a key.
@@ -105,14 +87,15 @@ pub fn with_argument(id: &str) -> Option<&'static str> {
 ///
 /// The footer only receives the keyboard after the leader is released — it is the compositor
 /// that sees the key and tells the daemon (§7.4). A chord, by definition, never
-/// gets there: what resolves it is niri, and that is why holding the leader **does
+/// gets there: what resolves it is the compositor, and that is why holding the leader **does
 /// not open the list nor take focus from the window**. They are two mechanisms, and it is
 /// deliberate that they are.
 ///
 /// # And why that does not recreate two truths
 ///
-/// niri's bind is GENERATED from here, and which-key also READS from here. What the
-/// chord does and how it appears on screen come from a single place.
+/// The compositor's bind is GENERATED from here, and which-key also READS from
+/// here. What the chord does and how it appears on screen come from a single
+/// place.
 pub struct Chord {
     /// How it appears in the list: `←`, `1…9`, `S-f`.
     ///
@@ -125,7 +108,7 @@ pub struct Chord {
     /// has no way of showing one command's text and doing another's — which is
     /// exactly what the `Registry` came to refuse.
     pub command: &'static str,
-    /// `(key in niri, action in KDL)`, already expanded.
+    /// `(key, the command text the compositor is given)`, already expanded.
     pub binds: Vec<(String, String)>,
 }
 
@@ -139,18 +122,17 @@ impl Chord {
 
 /// A chord that reuses a keymap COMMAND's action.
 ///
-/// The KDL comes from the same action `run_command` sends over IPC — the two spellings
-/// of the same name, one derived from the other. It is what keeps `LEADER w h` and
-/// `LEADER+←` from diverging.
+/// The bind's text comes from the same deed `run_command` sends over IPC — the
+/// two spellings of one name, one derived from the other. It is what keeps
+/// `LEADER w h` and `LEADER+←` from diverging.
 fn of_command(shows: &'static str, key: &str, id: &'static str) -> Chord {
-    let kdl = kdl_of(id)
-        .as_ref()
-        .and_then(config_name)
-        .unwrap_or_else(|| panic!("the chord `{key}` points at `{id}`, which does not exist"));
+    let said = deed_of(id)
+        .unwrap_or_else(|| panic!("the chord `{key}` points at `{id}`, which does not exist"))
+        .text;
     Chord {
         shows,
         command: id,
-        binds: vec![(key.to_owned(), kdl)],
+        binds: vec![(key.to_owned(), said.to_owned())],
     }
 }
 
@@ -158,7 +140,7 @@ fn of_command(shows: &'static str, key: &str, id: &'static str) -> Chord {
 ///
 /// # Why it goes through our binary
 ///
-/// Opening a terminal is not a niri action: what does it is `run_command`, which puts the
+/// Opening a terminal is not a deed of the compositor's: what does it is `run_command`, which puts the
 /// process in a systemd scope of its own so §7.5's PID → cgroup correlation
 /// works. The bind sends `ronoctua-shell command <id>`, the same
 /// path as the sequence — before it spawned the terminal directly, with no scope, and
@@ -169,35 +151,44 @@ fn through_shell(shows: &'static str, key: &str, id: &'static str) -> Chord {
         command: id,
         binds: vec![(
             key.to_owned(),
-            format!("spawn \"{}\" \"command\" \"{id}\"", shell_path()),
+            format!("exec \"{}\" command {id}", shell_path()),
         )],
     }
 }
 
 /// A range from 1 to 9: nine binds, one line in the list.
 ///
-/// These are the only chords whose action requires an **argument**, and that is why
-/// the KDL does not come from `all_of()` — there is no equivalent null action. The action's name is
-/// checked against the actual niri by `niri-contract`.
+/// These are the only chords whose deed requires an **argument**, and that is
+/// why the text does not come from the plain table — a number has to go into
+/// it. `wire::spoken` is what puts it there, and it refuses anything that is
+/// not one; `compositor-contract` walks the result against a real compositor.
 fn range_of(shows: &'static str, command: &'static str, prefix: &str) -> Chord {
-    // THE ACTION COMES FROM THE TABLE, and not from a string here. It was written by hand, and
-    // it was the last KDL in the system with nothing checking that the action exists.
-    let action = with_argument(command).unwrap_or_else(|| {
-        panic!("the band `{shows}` points at `{command}`, which takes no argument")
+    // THE TEXT COMES FROM THE TABLE, and the number goes in through the
+    // deed's own validation — so a bind cannot carry something the socket
+    // would refuse, and a placeholder that moved is a panic here rather than
+    // nine keys that do nothing.
+    let spoken = deed_of(command).unwrap_or_else(|| {
+        panic!("the band `{shows}` points at `{command}`, which does not exist")
     });
     Chord {
         shows,
         command,
         binds: (1..=9)
-            .map(|n| (format!("{prefix}{n}"), format!("{action} {n}")))
+            .map(|n| {
+                let said =
+                    ronoctua_scroll::wire::spoken(&spoken.deed, spoken.text, Some(&n.to_string()))
+                        .unwrap_or_else(|e| panic!("the band `{shows}` cannot say {n}: {e}"));
+                (format!("{prefix}{n}"), said)
+            })
             .collect(),
     }
 }
 
-/// This binary's path, so niri spawns the SAME one that generated the bind.
+/// This binary's path, so the compositor spawns the SAME one that generated the bind.
 ///
-/// A bare name will not do: in the nested loop the shell is not in niri's `PATH`, and a
-/// systemd unit has a minimal `PATH` — the symptom shows up far from the cause.
+/// A bare name will not do: in the nested loop the shell is not in the
+/// compositor's `PATH`, and a systemd unit has a minimal `PATH` — the symptom
+/// shows up far from the cause.
 fn shell_path() -> String {
     std::env::current_exe()
         .map(|p| p.to_string_lossy().into_owned())
@@ -246,45 +237,57 @@ pub fn chords() -> Vec<Chord> {
         // other chord's `shows` is a key notation, which is language-free,
         // and a wheel has one too — the angle brackets this system already
         // uses for `<down>` and `<up>`.
-        of_command("<wheel-down>", "WheelScrollDown", "workspace-next"),
-        of_command("<wheel-up>", "WheelScrollUp", "workspace-previous"),
+        //
+        // `button5` AND `button4`, which is what this compositor calls the
+        // wheel: `get_mouse_bindsym` maps `button1..9` onto the X11 numbering,
+        // and 4 and 5 are `SWAY_SCROLL_UP` and `SWAY_SCROLL_DOWN`
+        // (`sway/input/cursor.c`). The previous compositor's spelling —
+        // `WheelScrollDown` — is refused with `Unknown key or button`, one
+        // line at a time, which leaves every OTHER bind working and these two
+        // silently gone.
+        of_command("<wheel-down>", "button5", "workspace-next"),
+        of_command("<wheel-up>", "button4", "workspace-previous"),
         // --- opening ---
         through_shell("RET", "Return", "buffer-terminal"),
         // THE MONITOR, held-leader plus `Esc` — and `Ctrl+Alt+Esc` in
         // `emergency()` does the same thing without the leader.
         //
-        // It TAKES the key from niri's own default: upstream binds
-        // `Mod+Escape` to `toggle-keyboard-shortcuts-inhibit`, and ours comes
-        // first, so the deduplication in `full_chords` drops that one. The
-        // action is not lost — like the other 140, it is reachable by name
-        // (`LEADER :`), which is what that exception exists for.
+        // NOTHING COMPETES FOR IT any more: we pass `-c`, the compositor's
+        // own shipped configuration is never read, and every bind in the
+        // session comes from this table. It used to take the key from an
+        // upstream default and rely on the deduplication in `full_chords` to
+        // drop that one.
         through_shell("ESC", "Escape", "monitor-btop"),
         through_shell("S-ESC", "Shift+Escape", "monitor-bottom"),
     ]
 }
 
-/// All the chords: ours PLUS the ones niri ships by default.
+/// All the chords, and every one of them is ours.
 ///
-/// # Why both, and in this order
+/// # Why there is nothing to merge
 ///
-/// Ours come first because **they win**: `LEADER+S-←` moves the column
-/// here and focuses the left monitor in niri, and whoever decides is whoever wrote the
-/// keymap. niri's come in wherever there is room — and that is how `LEADER+=` comes to
-/// widen the column without anyone having typed that line.
+/// The compositor is started with `-c <path in the store>`, so the
+/// configuration it ships is never read and there are no defaults of its own to
+/// collide with. This used to fold in a table generated from that shipped file,
+/// with ours winning wherever the two met.
 ///
-/// The compositor's list is **generated** from the pinned commit's
-/// `default-config.kdl`: written by hand, a shortcut upstream adds would never
-/// appear, and one it removes would become a key that answers "error
-/// parsing request" — a `warn` in the log and nothing on screen.
+/// What is left to do here is reserve the emergency binds, which come out
+/// WITHOUT the leader's prefix and so are not protected by being in the same
+/// list.
 /// The key in a form that does not depend on how it was written.
 ///
 /// # Why this exists
 ///
-/// `Alt+Ctrl+L` and `Ctrl+Alt+L` are the SAME key and two different strings.
-/// The deduplication compared strings, so niri's default `Ctrl+L`
-/// sailed right past the emergency `Ctrl+Alt+L` — and niri refused the whole config
-/// with "duplicate keybind". A refused config is the compositor falling back to
-/// its own default: none of our shortcuts, not even the leader.
+/// `Alt+Ctrl+L` and `Ctrl+Alt+L` are the SAME key and two different strings, so
+/// a deduplication that compares strings lets a collision straight through.
+///
+/// What a collision costs HERE is quieter than it used to be, and that is the
+/// argument for keeping this. The previous compositor refused the whole file
+/// over a duplicate keybind, which took every shortcut down at once and was at
+/// least loud. This one OVERWRITES: `bindsym` logs "Overwriting binding" at
+/// `SWAY_INFO` and carries on, so the first of the two simply stops existing —
+/// and with the nag window refused (`scrollnag_command -`,
+/// `nix/modules/scroll.nix`) a log line is the only trace there is.
 fn canonical_key(key: &str) -> String {
     let mut parts: Vec<String> = key.split('+').map(str::to_lowercase).collect();
     // The LAST one is the key; the rest are modifiers, and their order means
@@ -304,7 +307,7 @@ const PREFIXES: [&str; 2] = ["Mod", "Alt"];
 
 #[must_use]
 pub fn full_chords() -> Vec<Chord> {
-    let mut out = chords();
+    let out = chords();
     let mut used: std::collections::BTreeSet<String> = out
         .iter()
         .flat_map(|a| a.binds.iter().map(|(t, _)| canonical_key(t)))
@@ -327,19 +330,18 @@ pub fn full_chords() -> Vec<Chord> {
         }
     }
 
-    for b in ronoctua_niri::DEFAULT_BINDS {
-        // COLLISION: ours stays. Two lines on the same key in the KDL make
-        // niri REFUSE the config — and a refused config is the compositor falling back
-        // to its own default, with none of our shortcuts.
-        if !used.insert(canonical_key(b.key)) {
-            continue;
-        }
-        out.push(Chord {
-            shows: b.key,
-            command: b.command,
-            binds: vec![(b.key.to_owned(), b.kdl.to_owned())],
-        });
-    }
+    // THE COMPOSITOR'S OWN DEFAULTS ARE NOT FOLDED IN, and that is a change
+    // worth stating rather than leaving as an absence.
+    //
+    // They used to be, out of a table generated from the compositor's shipped
+    // configuration, so that a chord of ours and one of its own could not land
+    // on the same key. That is gone because the premise is: we pass `-c` and
+    // its shipped configuration is never read, so there are no defaults to
+    // collide with. Every bind in this session is ours.
+    //
+    // What that does NOT change is `canonical_key` above: two lines of OURS on
+    // one key would still make the compositor refuse the whole file, and a
+    // refused file is a session with no shortcuts at all.
     out
 }
 
@@ -376,7 +378,7 @@ pub fn full_chords() -> Vec<Chord> {
 /// The last three go to `playerctl`, and its absence is a SENTENCE rather
 /// than silence — see `Footer::media`.
 ///
-/// It returns `(key in niri, action in KDL, command)`, like [`emergency`].
+/// It returns `(key, the command text, our command's id)`, like [`emergency`].
 #[must_use]
 pub fn media() -> Vec<(&'static str, String, &'static str)> {
     let shell = shell_path();
@@ -390,7 +392,7 @@ pub fn media() -> Vec<(&'static str, String, &'static str)> {
         ("XF86AudioPrev", "media-previous"),
     ]
     .into_iter()
-    .map(|(key, id)| (key, format!("spawn \"{shell}\" \"command\" \"{id}\""), id))
+    .map(|(key, id)| (key, format!("exec \"{shell}\" command {id}"), id))
     .collect()
 }
 
@@ -426,23 +428,31 @@ pub fn media() -> Vec<(&'static str, String, &'static str)> {
 /// under pressure, and this one is how the person sees WHAT is eating the
 /// machine.
 ///
-/// It returns `(key in niri, action in KDL, command)`.
+/// It returns `(key, the command text, our command's id)`.
 #[must_use]
 pub fn emergency() -> Vec<(&'static str, String, &'static str)> {
     let shell = shell_path();
     vec![
         // THE ALTERNATIVE LEADER. It is not a command: it is the same trigger as the
         // sequence's through another key, and that is why it sends `leader` and not
-        // `command`. `Ctrl+Alt+L` is an ordinary chord — niri sees it without going
+        // `command`. `Ctrl+Alt+l` is an ordinary chord — the compositor sees it without going
         // through keyd, which is the point.
+        //
+        // AND THE LETTER IS LOWERCASE, which is not cosmetic. A bind here matches
+        // a KEYSYM, and `L` is the keysym Shift produces — so `Ctrl+Alt+L`
+        // would need a Shift nobody is holding and would never fire at all.
+        // The one below is `Ctrl+Shift+l` for the same reason from the other
+        // side: with Shift held the TRANSLATED keysym is `L`, and what a bind
+        // is written against is the RAW one (`state_keysyms_raw`,
+        // `sway/input/keyboard.c`), which stays `l`.
         (
-            "Ctrl+Alt+L",
-            format!("spawn \"{shell}\" \"leader\""),
+            "Ctrl+Alt+l",
+            format!("exec \"{shell}\" leader"),
             LEADER_ALTERNATE,
         ),
         (
-            "Ctrl+Shift+L",
-            format!("spawn \"{shell}\" \"command\" \"keyboard-restore\""),
+            "Ctrl+Shift+l",
+            format!("exec \"{shell}\" command keyboard-restore"),
             "keyboard-restore",
         ),
         // THE PROCESS MONITOR, without the leader. `Escape` and not `Delete`:
@@ -452,7 +462,7 @@ pub fn emergency() -> Vec<(&'static str, String, &'static str)> {
         // console that can restart or roll back.
         (
             "Ctrl+Alt+Escape",
-            format!("spawn \"{shell}\" \"command\" \"monitor-btop\""),
+            format!("exec \"{shell}\" command monitor-btop"),
             "monitor-btop",
         ),
         // THE RESCUE CONSOLE, and the fourth is different from the other three.
@@ -472,7 +482,7 @@ pub fn emergency() -> Vec<(&'static str, String, &'static str)> {
         // door — systemd's — and the two open the same program.
         (
             "Ctrl+Alt+Delete",
-            format!("spawn \"{shell}\" \"command\" \"rescue-open\""),
+            format!("exec \"{shell}\" command rescue-open"),
             "rescue-open",
         ),
     ]
@@ -483,34 +493,6 @@ pub fn emergency() -> Vec<(&'static str, String, &'static str)> {
 /// It exists as a constant so the reachability test can tell the difference: it is the
 /// only emergency bind that does **not** point at a registry id.
 pub const LEADER_ALTERNATE: &str = "";
-
-/// The action's name in niri's CONFIG notation, in `kebab-case`.
-///
-/// The IPC uses `FocusColumnLeft`; the config file uses `focus-column-left`.
-/// They are the same action in two spellings, and deriving one from the other is what stops
-/// a third table from existing.
-#[must_use]
-pub fn config_name(action: &serde_json::Value) -> Option<String> {
-    let name = action.as_object()?.keys().next()?;
-    let mut out = String::with_capacity(name.len() + 4);
-    for (i, c) in name.chars().enumerate() {
-        if c.is_ascii_uppercase() {
-            if i > 0 {
-                out.push('-');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    Some(out)
-}
-
-/// A command's action, if it is a compositor one.
-#[must_use]
-pub fn kdl_of(id: &str) -> Option<serde_json::Value> {
-    all_of().into_iter().find(|(k, _)| *k == id).map(|(_, v)| v)
-}
 
 /// `xdg-open`, baked at BUILD time.
 ///
@@ -579,15 +561,15 @@ mod tests {
     }
 
     #[test]
-    fn each_action_is_an_object_with_a_single_name() {
-        // niri's protocol is `{"Name": {arguments}}`. Two names in the
-        // same object, or none, gives "error parsing request" — which niri
-        // answers without saying which it was.
-        for (id, action) in super::all_of() {
-            let obj = action
-                .as_object()
-                .unwrap_or_else(|| panic!("{id} is not an object"));
-            assert_eq!(obj.len(), 1, "{id} has {} names, expected 1", obj.len());
+    fn every_command_points_at_a_deed_that_exists() {
+        // A command naming a deed the generated table does not have is a key
+        // that does nothing and says nothing. `deed_of` is what every caller
+        // goes through, so asking it here asks the same question they do.
+        for (id, deed) in super::all_of() {
+            assert!(
+                super::deed_of(id).is_some(),
+                "`{id}` points at `{deed}`, which is not in the table"
+            );
         }
     }
 
@@ -610,49 +592,91 @@ mod tests {
                 a.shows,
                 a.label()
             );
-            for (key, kdl) in &a.binds {
+            for (key, said) in &a.binds {
                 assert!(!key.is_empty(), "a bind with no key in `{}`", a.shows);
-                assert!(!kdl.is_empty(), "a bind with no action in `{}`", a.shows);
+                assert!(!said.is_empty(), "a bind with no deed in `{}`", a.shows);
             }
         }
     }
 
     #[test]
-    fn only_a_chord_with_an_argument_escapes_the_action_table() {
-        // `range_of` is the only one that assembles KDL without going through `all_of()`, because
-        // `focus-workspace 3` requires an argument and there is no equivalent null action.
-        // That exception has to stay restricted to it: a null chord with its own KDL
-        // would be the `T` back again, under another name.
+    fn a_chord_says_exactly_what_its_command_says() {
+        // The bind and the command must not diverge: `LEADER w h` and
+        // `LEADER+←` are one feature, and two spellings of it would be two
+        // behaviours the day one moved.
         for a in super::chords() {
-            let null = super::kdl_of(a.command)
-                .as_ref()
-                .and_then(super::config_name);
-            for (key, kdl) in &a.binds {
-                if kdl.starts_with("spawn ") {
-                    continue; // it goes through our binary — see `through_shell`.
+            let Some(spoken) = super::deed_of(a.command) else {
+                continue; // it goes through our binary — see `through_shell`.
+            };
+            for (key, said) in &a.binds {
+                if said.starts_with("exec ") {
+                    continue;
                 }
-                match &null {
-                    Some(n) => assert_eq!(
-                        kdl, n,
-                        "the chord `{key}` diverges from the action of the command `{}`",
+                if spoken.deed.argument.is_some() {
+                    // A band carries the number, so it is the text with the
+                    // placeholder filled in rather than the text itself.
+                    let stem = spoken.text.split("{n}").next().unwrap();
+                    assert!(
+                        said.starts_with(stem),
+                        "the chord `{key}` does not say what `{}` says",
                         a.command
-                    ),
-                    None => assert!(
-                        kdl.split_whitespace().count() > 1,
-                        "the chord `{key}` has KDL of its own (`{kdl}`) with no argument: \
-                 either the command `{}` goes into `every()`, or it should not \
-                 exist as a key alone",
+                    );
+                } else {
+                    assert_eq!(
+                        said, spoken.text,
+                        "the chord `{key}` diverges from the command `{}`",
                         a.command
-                    ),
+                    );
                 }
             }
         }
+    }
+
+    #[test]
+    fn every_curated_id_reaches_a_deed() {
+        // THE DEFECT: the dispatch asked the GENERATED table with OUR id.
+        //
+        // There are two vocabularies — `window-left` is the keymap's and
+        // `wm-focus-left` is the compositor's — and `deeds::spoken_of` only
+        // answers the second. So `LEADER w h` and twelve of its neighbours
+        // drew a row in which-key, echoed "nothing to do", and moved nothing.
+        // `run-command-handles-every-key` named thirteen at once, which is how
+        // it was found.
+        //
+        // This test is the same question asked at the JOIN rather than at the
+        // dispatch, so it fails in a second instead of in a VM.
+        for (ours, theirs) in super::all_of() {
+            let spoken = super::deed_of(ours)
+                .unwrap_or_else(|| panic!("`{ours}` is in the curated table and reaches no deed"));
+            assert_eq!(
+                spoken.deed.id, theirs,
+                "`{ours}` should reach `{theirs}` and reaches `{}`",
+                spoken.deed.id
+            );
+        }
+    }
+
+    #[test]
+    fn a_deed_id_still_answers_on_its_own() {
+        // THE OTHER HALF of the same arm: the compositor's own ids have no key
+        // and are reached by NAME from `LEADER :`, so the fallback has to keep
+        // answering them. Asking only the curated join would take that away
+        // and nothing else would notice — those hundred-odd commands have no
+        // keymap entry for a check to count.
+        let spoken = ronoctua_scroll::deeds::spoken_of("wm-focus-left")
+            .expect("the compositor's own ids answer on their own");
+        assert_eq!(spoken.deed.id, "wm-focus-left");
+        assert!(
+            super::deed_of("wm-focus-left").is_none(),
+            "it is not a curated id"
+        );
     }
 
     #[test]
     fn no_chord_repeats_a_key() {
-        // Two chords on the same key give two identical binds in the KDL: niri
-        // accepts it, the last one wins, and the first disappears with no warning.
+        // Two chords on one key are two `bindsym` lines for it: the compositor
+        // overwrites, the last one wins, and the first disappears with nothing
+        // but a log line to say so.
         let mut keys: Vec<String> = super::full_chords()
             .into_iter()
             .flat_map(|a| a.binds.into_iter().map(|(t, _)| t))
@@ -664,58 +688,12 @@ mod tests {
     }
 
     #[test]
-    fn the_name_in_the_config_is_kebab_case() {
-        // The IPC says `FocusColumnLeft` and the config says `focus-column-left`.
-        // Getting it wrong here gives a config niri REFUSES at startup — noisy,
-        // unlike the IPC error, which is mute.
-        use serde_json::json;
-        assert_eq!(
-            super::config_name(&json!({ "FocusColumnLeft": {} })).as_deref(),
-            Some("focus-column-left")
-        );
-        assert_eq!(
-            super::config_name(&json!({ "ToggleOverview": {} })).as_deref(),
-            Some("toggle-overview")
-        );
-    }
-
-    #[test]
-    fn every_curated_action_exists_in_the_compositor() {
-        // THE TWO TABLES MUST NOT DIVERGE.
-        //
-        // This one here is curated by hand: twenty-odd actions with a shortcut, a translated
-        // label and a fast path over IPC. The other is GENERATED from the pinned
-        // niri, with all 141. If a name from here is not there, it does not
-        // exist in the compositor — and the symptom would be `"error parsing request"`
-        // in a log `warn`, with nothing on screen.
-        //
-        // `niri-contract` proves the same against a LIVE niri, and that is why it
-        // still exists: this test runs with no compositor and catches the error
-        // in `cargo test`; that one catches the case where the generated table is
-        // right and the action is refused anyway (a missing argument).
-        for (id, action) in super::all_of() {
-            let name = super::config_name(&action).expect("an action with a name");
-            assert!(
-                ronoctua_niri::action_exists(&name),
-                "`{id}` sends `{name}`, which is not in the pinned niri's table"
-            );
-        }
-        // And the range chords, which assemble the KDL without going through `all_of()`.
-        for a in super::chords() {
-            for (_, kdl) in &a.binds {
-                let Some(name) = kdl.split_whitespace().next() else {
-                    continue;
-                };
-                if name == "spawn" {
-                    continue;
-                }
-                assert!(
-                    ronoctua_niri::action_exists(name),
-                    "the chord `{}` sends `{name}`, which the pinned niri does not have",
-                    a.shows
-                );
-            }
-        }
+    fn every_chord_names_something_that_exists() {
+        // A chord that points at nothing is a key that does nothing, and the
+        // panic in `of_command` only fires when the chord is BUILT — which
+        // this test is what does.
+        let all = super::chords();
+        assert!(all.len() > 20, "the chord table is there");
     }
 
     #[test]

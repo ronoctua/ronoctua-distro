@@ -3,7 +3,7 @@
 //! # Why a border of its own
 //!
 //! The same reason `ronoctua-files` is the only crate that touches the
-//! filesystem and `ronoctua-niri` the only one that speaks `niri-ipc`: one
+//! filesystem and `ronoctua-scroll` the only one that speaks the compositor's IPC: one
 //! border, one crate. This one is the border with a file's CONTENT, and it is
 //! separate from `ronoctua-files` for a reason that is not tidiness —
 //! `ronoctua-files` builds `ronoctua-files-root`, `nix/rust.nix` extracts that

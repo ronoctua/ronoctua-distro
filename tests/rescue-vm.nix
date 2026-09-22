@@ -117,7 +117,7 @@ pkgs.testers.runNixOSTest {
           # in both languages, so the assertion does not depend on which locale
           # the VM happened to boot with.
           machine.wait_until_succeeds(
-              "tr -d '\\0' < /dev/vcs8 | grep -q Terminal", timeout=30
+              "tr -d '\\0' < /dev/vcs8 | grep Terminal > /dev/null", timeout=30
           )
           screen = machine.succeed("tr -d '\\0' < /dev/vcs8")
           print(screen)

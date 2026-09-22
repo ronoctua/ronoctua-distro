@@ -22,7 +22,7 @@
 # # What `minimal` is NOT
 #
 # It is not a second distro. Everything that makes this system what it is stays:
-# niri, the footer, the renderer's primary face, the keyboard, the network,
+# the compositor, the footer, the renderer's primary face, the keyboard, the network,
 # impermanence, the terminal and `cli.nix`. What leaves is applications — the
 # things one installs to USE, not the things one needs to log in.
 #

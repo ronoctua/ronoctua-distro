@@ -1,0 +1,24 @@
+[package]
+name = "ronoctua-scroll"
+version = "0.1.0"
+description = "The adapter: the compositor's wire protocol, and the only crate that names it"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+# THE CONTRACT TEST. It exercises the trait against a LIVE compositor, which
+# is why it is a binary and not a `#[test]`: a unit test that needs a session
+# is a unit test that cannot run. The VM test starts one and hands it a socket.
+name = "ronoctua-contract"
+path = "src/bin/ronoctua-contract.rs"
+
+[dependencies]
+anyhow.workspace = true
+ronoctua-compositor = { path = "../ronoctua-compositor" }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

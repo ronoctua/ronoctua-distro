@@ -13,9 +13,9 @@
 //!
 //! # Two doors, one screen
 //!
-//! With niri alive, `Ctrl+Alt+Del` opens a floating terminal window — the same
+//! With the compositor alive, `Ctrl+Alt+Del` opens a floating terminal window — the same
 //! mechanism `Ctrl+Alt+Esc` already uses for the process monitor, so the mouse
-//! works. With niri dead, systemd opens the same binary on a VT of its own,
+//! works. With it dead, systemd opens the same binary on a VT of its own,
 //! through `ctrl-alt-del.target`: no Wayland, no GPU, no font atlas, no
 //! compositor. The screen is the same one; what changes is whether a pointer
 //! exists.
@@ -80,7 +80,7 @@ pub enum Run {
     /// `systemctl --user <verb> <units…>`.
     ///
     /// The session's own units. There is no display manager on this system
-    /// (`nix/modules/niri.nix`): the compositor and the footer are USER units,
+    /// (`nix/modules/scroll.nix`): the compositor and the footer are USER units,
     /// so restarting them needs no privilege at all.
     User {
         /// `restart`, `stop`, `start`.
@@ -260,19 +260,19 @@ pub const fn all_of() -> &'static [Action] {
             section: Section::Actions,
         },
         // THE COMPOSITOR. It takes the windows with it, which is why it is not
-        // first — but a frozen niri is a frozen screen, and nothing else fixes it.
+        // first — but a frozen compositor is a frozen screen, and nothing else fixes it.
         Action {
-            id: "restart-niri",
-            label: "rescue-restart-niri",
+            id: "restart-compositor",
+            label: "rescue-restart-compositor",
             run: Run::User {
                 verb: "restart",
-                units: &["niri.service"],
+                units: &["scroll.service"],
             },
             tier: Tier::Free,
             section: Section::Actions,
         },
         // THE WHOLE SESSION, when restarting the two above was not enough.
-        // `bindsTo`/`partOf` in `nix/modules/niri.nix` make everything follow
+        // `bindsTo`/`partOf` in `nix/modules/scroll.nix` make everything follow
         // this target, which is what "the graphical environment" means here —
         // there is no display manager to restart.
         Action {

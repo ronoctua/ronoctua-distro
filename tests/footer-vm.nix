@@ -7,9 +7,9 @@
 # frame is drawn with no error. Compiling proves none of that: all four are
 # runtime things.
 #
-# niri runs on the winit backend over an Xvfb. The why — the DRM backend
-# rejects software EGL and is left with zero outputs — is in
-# `tests/niri-xvfb.nix`, along with the arrangement itself.
+# The compositor runs on the wlroots X11 backend over an Xvfb. The why — the
+# DRM backend finds no device here and is left with zero outputs — is in
+# `tests/compositor-xvfb.nix`, along with the arrangement itself.
 #
 # GPU: `lavapipe`, Mesa's software Vulkan rasterizer.
 # Section 9.3 of the plan decided that — hermetic, deterministic, runs in CI
@@ -19,13 +19,13 @@
 {
   pkgs,
   lib,
-  niri,
+  scroll,
   ronoctua-shell,
   fonts,
 }:
 
 let
-  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+  xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-footer";
@@ -35,7 +35,7 @@ pkgs.testers.runNixOSTest {
     virtualisation.cores = 2;
 
     environment.systemPackages = [
-      niri
+      scroll
       ronoctua-shell
       pkgs.wayland-utils
     ]
@@ -55,9 +55,9 @@ pkgs.testers.runNixOSTest {
     machine.start()
     machine.wait_for_unit("multi-user.target")
 
-    with subtest("niri comes up on the winit backend over Xvfb"):
+    with subtest("the compositor comes up on the X11 backend over Xvfb"):
         start_xvfb()
-        start_niri("niri", "${niri}")
+        start_compositor("compositor", "${scroll}")
 
     with subtest("the footer creates a graphics context and draws"):
         machine.succeed(
@@ -82,13 +82,13 @@ pkgs.testers.runNixOSTest {
                 "footer layout resolved",
             ]:
                 machine.wait_until_succeeds(
-                    f"journalctl -u footer --no-pager | grep -q '{marker}'", timeout=60
+                    f"journalctl -u footer --no-pager | grep '{marker}' > /dev/null", timeout=60
                 )
         except Exception:
             print("--- the footer's journal ---")
             print(machine.execute("journalctl -u footer --no-pager")[1])
-            print("--- niri journal ---")
-            print(machine.execute("journalctl -u niri --no-pager")[1])
+            print("--- the compositor journal ---")
+            print(machine.execute("journalctl -u compositor --no-pager")[1])
             raise
 
         # Do NOT call it `log`: that name is already the NixOS test driver's

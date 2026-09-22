@@ -56,7 +56,7 @@ use wayland_client::{
 ///
 /// Its own, like the terminal's and the monitor's: it is by this that the
 /// modeline and the VM test tell one window from another, and a shared id would
-/// make two different things look like one in niri's IPC.
+/// make two different things look like one in the compositor's IPC.
 pub const APP_ID: &str = "br.ronoctua.files";
 
 /// `BTN_LEFT` and `BTN_RIGHT`, from `linux/input-event-codes.h`.

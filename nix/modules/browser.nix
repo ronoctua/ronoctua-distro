@@ -54,7 +54,7 @@ in
     environment.systemPackages = lib.mkIf config.ronoctua.browser.enable [ chrome ];
 
     # The portal is what a file dialog and a screen share go through on Wayland.
-    # `xdg.portal` is already enabled by nix/modules/niri.nix; this only adds the
+    # `xdg.portal` is already enabled by nix/modules/scroll.nix; this only adds the
     # GTK backend, which is the one Chrome talks to.
     xdg.portal.extraPortals = lib.mkIf config.ronoctua.browser.enable [
       pkgs.xdg-desktop-portal-gtk
