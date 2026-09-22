@@ -6,8 +6,8 @@
 # through a CONTRACT: no crate of ours but the adapter knows which compositor
 # this is.
 #
-# A wrapper that puts `swaybg` and `Xwayland` on the PATH is not a patch; a
-# `.patch` in the source is. If something looks like it requires a fork:
+# Putting `sh` and `swaybg` on the unit's PATH is not a patch; a `.patch` in
+# the source is. If something looks like it requires a fork:
 # STOP AND REPORT, do not work around it.
 #
 # # THE SESSION COMES UP DIFFERENTLY FROM WHAT A READER MAY EXPECT
@@ -214,7 +214,16 @@ let
     # the binary was not even installed: in production the leader did nothing
     # and nothing accused it, because `nix flake check` does not bring up a
     # real session.
-    bindsym --no-repeat F13 exec "${ronoctua.shell}/bin/ronoctua-shell" leader
+    #
+    # `bindcode 191` AND NOT `bindsym F13`. keyd emits the kernel's `KEY_F13`,
+    # which xkb's `evdev` keycodes call `<FK13>` = 191 — and the `inet` symbols
+    # every layout pulls in map `<FK13>` to `XF86Tools`, not to `F13`. A
+    # `bindsym F13` therefore matched nothing: measured in `nix run .#vm` by
+    # subscribing to the compositor's `binding` events, `Ctrl+Alt+l` fired and
+    # neither a tap of Super nor a raw F13 did. The leader had not opened from
+    # Super in production since the compositor changed. The code is what keyd
+    # sends whatever the layout says it means.
+    bindcode --no-repeat 191 exec "${ronoctua.shell}/bin/ronoctua-shell" leader
 
     # The CHORDS go in place of this marker, GENERATED from the shell's
     # command table — see nix/compositor-binds.nix. A chord never reaches the
@@ -415,10 +424,19 @@ in
     # is what `graphical-session.target` waits for.
     systemd.user.targets.scroll-session = {
       description = "Scroll session — reached once the compositor is really up";
-      bindsTo = [ "graphical-session.target" ];
+      # AND IT ENDS WITH THE COMPOSITOR: bound to it, so a compositor that
+      # stops takes the session target — and the footer hanging off it — down
+      # too, which is what the compositor's own `BindsTo=` used to give.
+      bindsTo = [
+        "graphical-session.target"
+        "scroll.service"
+      ];
       before = [ "graphical-session.target" ];
       wants = [ "graphical-session-pre.target" ];
-      after = [ "graphical-session-pre.target" ];
+      after = [
+        "graphical-session-pre.target"
+        "scroll.service"
+      ];
     };
 
     systemd.user.services.scroll = {
@@ -427,10 +445,27 @@ in
       # no outcome worse than that, so there is no ceiling.
       startLimitIntervalSec = 0;
       description = "Scroll — Wayland compositor (upstream, unpatched)";
-      bindsTo = [ "graphical-session.target" ];
-      before = [ "graphical-session.target" ];
+      # NOT BOUND TO `graphical-session.target`, and it was, and that was the
+      # black screen of the first `nix run .#vm`. Bound and ordered `Before=`,
+      # starting this unit pulled the target in and systemd called it reached
+      # the instant the process had exec'd — before the config's `exec` lines
+      # had exported `WAYLAND_DISPLAY`. Every unit hanging off the target (the
+      # footer, the lifeline) then came up with no display, failed, and
+      # restarted into the same answer forever. The target is pulled in by
+      # `scroll-session.target`, which only the config starts, which is the
+      # one moment the environment is known to be there.
       wants = [ "graphical-session-pre.target" ];
       after = [ "graphical-session-pre.target" ];
+      # WHAT THE COMPOSITOR RUNS BY NAME. Every `exec` in its config goes
+      # through `execlp("sh", …)` (`sway/commands/exec_always.c`), and the
+      # background through `execvp("swaybg", …)`; a user unit's PATH has
+      # neither. Without `sh`, the three session lines of the config died on
+      # `execve failed: No such file or directory` and the session never came
+      # up — the second half of the same black screen.
+      path = [
+        pkgs.bash
+        pkgs.swaybg
+      ];
       serviceConfig = {
         # `exec` AND NOT `notify`: this compositor has no `sd_notify` at
         # all, so `Type = "notify"` would sit for the full start timeout and

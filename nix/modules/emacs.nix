@@ -162,11 +162,16 @@ in
     # once and never overwritten. Same arrangement as `~/.shellrc.local`, and the
     # same reason: invariant 13 keeps a name and an e-mail out of the repository.
     system.activationScripts.doomLocal = {
-      deps = [ "users" ];
+      deps = [
+        "users"
+        "configHome"
+      ];
       text = ''
         target=/home/${cfg.user}/.config/doom/local.el
+        if [ ! -d /home/${cfg.user}/.config/doom ]; then
+          install -d -m 0755 -o ${cfg.user} -g users /home/${cfg.user}/.config/doom
+        fi
         if [ ! -e "$target" ]; then
-          mkdir -p "$(dirname "$target")"
           cp ${doomLocalTemplate} "$target"
           chown ${cfg.user}:users "$target"
         fi

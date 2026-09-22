@@ -1936,7 +1936,7 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   `take` só limitava um iterador finito isso era grátis, mas no dia em que a função passou a
   MATERIALIZAR linhas virou pedido de 2⁶⁴ `Row` vazias. Vinte e sete testes crescendo esse `Vec` ao
   mesmo tempo comeram os 14,6 GiB em segundos, e **o `systemd-oomd` mata o cgroup INTEIRO da janela**
-  (`app.slice`, desde a migração do Omarchy 4): o agente morre junto e não sobra rastro na sessão —
+  (`app.slice`, num host que o vigia): o agente morre junto e não sobra rastro na sessão —
   seis vezes em vinte minutos. Processo morto por OOM **não gera core dump**; "o terminal fechou
   sozinho" + `coredumpctl` vazio = suspeite de OOM primeiro (`journalctl -b | grep 'oom-kill'`).
   Bateria pesada vai em jaula: `systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=512M`.

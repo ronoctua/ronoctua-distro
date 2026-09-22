@@ -146,11 +146,11 @@ pkgs.testers.runNixOSTest {
           assert len(lines) == 1, f"keyd remaps more than one key: {lines}"
 
       with subtest("the compositor listens for the key keyd emits"):
-          # The two ends of the same contract: keyd emits `f13`, the compositor binds `F13` to
+          # The two ends of the same contract: keyd emits `f13`, the compositor binds its code (191) to
           # the leader. If one changes without the other, touching Super does nothing
           # — with no error, anywhere.
           conf = machine.succeed("cat /etc/scroll/config")
-          assert "bindsym --no-repeat F13 exec " in conf, conf
+          assert "bindcode --no-repeat 191 exec " in conf, conf
           # And a HELD Super goes on being a modifier in the chords.
           #
           # `Super` and not `Mod`: the modifier table here is

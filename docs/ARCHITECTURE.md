@@ -2503,7 +2503,7 @@ casaria, e a tela diria `CTRL ALT SPC M-n is not bound`. Exigir que se solte o A
 `i` é uma armadilha, e não há nada na tela que a ensine.
 
 O mesmo estado acontece **sem** a mão, e aí é pior porque não há gesto que o desfaça: sair para um
-atalho do host (`Super+Espaço`, no Omarchy) e voltar fazia o compositor aninhado perder a soltura da tecla.
+atalho do host (`Super+Espaço`, por exemplo) e voltar fazia o compositor aninhado perder a soltura da tecla.
 A partir daí ele anuncia o modificador para sempre, toda ligação passa a não casar, e o sintoma é
 "os atalhos pararam de funcionar" sem nada mudar no keymap.
 

@@ -1376,9 +1376,59 @@
               [0-9]*x[0-9]*)
                 echo "vm: the guest gets this screen's own $panel"
                 export QEMU_OPTS="''${QEMU_OPTS:-} -global virtio-gpu-pci.xres=''${panel%x*} -global virtio-gpu-pci.yres=''${panel#*x}"
+                # AND QEMU'S WINDOW DRAWS IN REAL PIXELS, when the host can.
+                #
+                # Under a Wayland host at a FRACTIONAL scale, QEMU's GTK
+                # window is sized in logical pixels (1920 / 1.6 = 1200 wide),
+                # hands that size to the guest as its preferred mode, and the
+                # host then stretches the result back up: everything 1.6×
+                # larger and resampled. Measured: the guest drew 1920x1200 at
+                # scale 1 when asked headless, and 17.5 px per character on
+                # the host's screen against the 10.8 it draws.
+                #
+                # The escape is the one `nix run .#dev` takes (see `the host's
+                # own pixels` in nix/dev.nix): when the host's XWayland serves
+                # REAL pixels — its root is as wide as the panel —, GTK goes
+                # through X11 and one guest pixel is one screen pixel. When it
+                # does not, nothing on this side can undo the host's scaling.
+                x_root=""
+                if [ -n "''${DISPLAY:-}" ]; then
+                  x_root=$(${pkgs.xdpyinfo}/bin/xdpyinfo 2>/dev/null \
+                    | awk '/^[[:space:]]*dimensions:/ { split($2, d, "x"); print d[1]; exit }') || true
+                fi
+                if [ -n "$x_root" ] && [ "$x_root" = "''${panel%x*}" ]; then
+                  echo "vm: the host's X serves real pixels; the window goes through it"
+                  export GDK_BACKEND=x11
+                  # AND AT SCALE ONE, whatever the session exports. A host
+                  # session may set `GDK_SCALE=2` for its own apps, and GTK
+                  # honours it over X11 too: the window then measures itself
+                  # in doubled pixels, hands the guest half the size, and
+                  # stretches it back — the same enlargement by another road,
+                  # measured after the X11 path alone changed nothing.
+                  export GDK_SCALE=1
+                  unset GDK_DPI_SCALE
+                fi
                 ;;
             esac
           fi
+          # QEMU'S OWN WINDOW GETS A FONT CONFIG OF ITS OWN. Its GTK comes from
+          # the store and reads the HOST's `/etc/fonts` unless told otherwise,
+          # and a host with a newer fontconfig writes syntax this
+          # one rejects: forty `Fontconfig warning: … invalid constant used`
+          # lines on every start, about a window menu.
+          #
+          # NOT `makeFontsConf`: the file it writes still includes
+          # `/etc/fonts/conf.d`, which is exactly the host's directory — the
+          # warnings came back unchanged with it. One font directory and a
+          # cache, and nothing of the host's.
+          export FONTCONFIG_FILE=${pkgs.writeText "qemu-window-fonts.conf" ''
+            <?xml version="1.0"?>
+            <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+            <fontconfig>
+              <dir>${pkgs.dejavu_fonts}/share/fonts</dir>
+              <cachedir prefix="xdg">fontconfig</cachedir>
+            </fontconfig>
+          ''}
           exec ${self.nixosConfigurations.vm.config.system.build.vm}/bin/run-${self.nixosConfigurations.vm.config.networking.hostName}-vm "$@"
         '';
 

@@ -194,6 +194,31 @@ in
   # It is the file that holds what belongs to ONE machine. The system must give
   # it a shape, and then get out of the way: rewriting it on every rebuild would
   # eat exactly the token the person put there.
+  # `~/.config` IS THE PERSON'S, and this is the one place that makes it.
+  #
+  # Activation runs as root. Two seed scripts (`atuinConfig`, `doomLocal`)
+  # each did a `mkdir -p` under `~/.config`, which on a fresh home made
+  # `~/.config` itself root's — and home-manager, which runs as the person,
+  # then could not link a single file there. That was the
+  # `[FAILED] Home Manager environment for noctua` of the first `nix run .#vm`.
+  # A seed that writes under `~/.config` lists this in its `deps` and creates
+  # its own folder with `install -d -o`, never `mkdir -p`.
+  system.activationScripts.configHome = {
+    deps = [ "users" ];
+    text = ''
+      if [ ! -d ${home}/.config ]; then
+        install -d -m 0755 -o ${cfg.user} -g users ${home}/.config
+      fi
+      # AND A HOME THAT WENT THROUGH THE DEFECT IS REPAIRED: the folder
+      # itself, never recursively — what is inside may be anybody's.
+      for d in ${home}/.config ${home}/.config/doom ${home}/.config/atuin; do
+        if [ -d "$d" ] && [ "$(stat -c %u "$d")" = 0 ]; then
+          chown ${cfg.user}:users "$d"
+        fi
+      done
+    '';
+  };
+
   system.activationScripts.shellrcLocal = {
     deps = [ "users" ];
     text = ''

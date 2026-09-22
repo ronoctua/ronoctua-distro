@@ -115,6 +115,22 @@ fn kind_of(argv: &[String]) -> Option<Kind> {
     if program != "emacs" {
         return None;
     }
+    // A BATCH EMACS IS NOBODY'S SESSION: no frame, no buffers anyone typed
+    // into, and it exits by itself. The daemon spawns them — native
+    // compilation runs as `emacs --batch -l …` in the first seconds after
+    // start —, and so does any tool that runs Lisp. Counted as standalone,
+    // the watch that runs at login told every fresh session "this Emacs is not
+    // connected to the daemon" while the daemon was the only Emacs there was:
+    // measured in `nix run .#vm`.
+    if argv.iter().skip(1).any(|a| {
+        a == "--batch"
+            || a == "-batch"
+            || a == "--script"
+            || a == "-script"
+            || a.starts_with("--script=")
+    }) {
+        return None;
+    }
     // THE DAEMON SAYS SO IN ITS ARGUMENTS, in one of two spellings, and either
     // may carry a name after an `=`: `--daemon=server`.
     let daemon = argv.iter().skip(1).any(|a| {
@@ -194,6 +210,27 @@ mod tests {
     }
 
     /// The daemon's name does not change what it is.
+    #[test]
+    fn a_batch_emacs_is_nobodys_session() {
+        for flag in ["--batch", "-batch", "--script", "-script"] {
+            assert_eq!(
+                kind_of(&[
+                    "/nix/store/x/bin/emacs".into(),
+                    flag.into(),
+                    "-l".into(),
+                    "x.el".into()
+                ]),
+                None,
+                "{flag} was counted as an Emacs somebody works in"
+            );
+        }
+        // And a plain one still is.
+        assert_eq!(
+            kind_of(&["emacs".into(), "notes.org".into()]),
+            Some(Kind::Standalone)
+        );
+    }
+
     #[test]
     fn a_named_daemon_is_still_a_daemon() {
         assert_eq!(

@@ -197,10 +197,13 @@ in
       # same reason: rewriting it on every rebuild would eat exactly the
       # setting the person changed.
       system.activationScripts.atuinConfig = {
-        deps = [ "users" ];
+        deps = [
+          "users"
+          "configHome"
+        ];
         text = ''
           if [ ! -e ${home}/.config/atuin/config.toml ]; then
-            mkdir -p ${home}/.config/atuin
+            install -d -m 0755 -o ${user} -g users ${home}/.config/atuin
             cp ${template} ${home}/.config/atuin/config.toml
             chown -R ${user}:users ${home}/.config/atuin
             chmod 600 ${home}/.config/atuin/config.toml

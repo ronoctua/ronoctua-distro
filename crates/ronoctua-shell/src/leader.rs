@@ -6,7 +6,7 @@
 //! none`). That is not a detail: if it did, no buffer would receive a key.
 //! Therefore the footer itself **cannot see** the leader's key.
 //!
-//! What sees it is the compositor. `nix/modules/scroll.nix` binds `F13` — the
+//! What sees it is the compositor. `nix/modules/scroll.nix` binds F13 by code (191) — the
 //! key keyd emits when Super is TAPPED — to `exec ronoctua-shell leader`, and
 //! that momentary process tells the daemon over a unix socket. Only then does the
 //! footer ask for the keyboard in `exclusive` mode, and from there it reads the keys
