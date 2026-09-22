@@ -462,6 +462,29 @@ in
       # `RONOCTUA_DCONF` — differ by exactly ONE path, `playerctl` itself, at
       # **480.7 KiB**. Everything under it (glib and below) is already there.
       playerctl
+
+      # THE ENCRYPTED VOLUME'S OWN TOOLS.
+      #
+      # `cryptsetup` was already in the closure and NOT on the PATH, which is
+      # a distinction worth keeping straight: systemd pulls the LIBRARY in for
+      # `systemd-cryptsetup`, which unlocks the disk at boot, and the `bin`
+      # output is a separate one nothing asked for. So a machine that could
+      # unlock a volume had no way to open one — no `luksDump` to read a
+      # header, no `luksAddKey` to add a second key before travelling, no
+      # `benchmark` to find out what this processor costs.
+      #
+      # `argon2` is the CLI for the KDF LUKS2 actually uses, which is what
+      # makes it the companion and not a second tool: `cryptsetup benchmark`
+      # says what this machine costs at the default cost, and this says what a
+      # given `-t/-m/-p` would cost before it is written into a header. In
+      # nixpkgs it lives in `libargon2` — there is no `argon2` attribute to
+      # find it by, which is the whole reason the name is written here.
+      #
+      # MEASURED against the built system, the way `playerctl` above was:
+      # cryptsetup's `bin` adds ONE path at 0.45 MiB and argon2 ONE at
+      # 0.13 MiB. Everything else in both closures is already here.
+      cryptsetup
+      libargon2 # `argon2`
     ];
 
     # AND ITS PATH, for the footer. From the ENVIRONMENT and not baked with

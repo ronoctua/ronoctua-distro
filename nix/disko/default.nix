@@ -67,20 +67,39 @@
               type = "luks";
               name = "cryptroot";
               inherit passwordFile;
-              # Section 7.2: automatic TPM2 unlock against PCR
-              # 7 + 11 + 12 + 15, with a recovery passphrase ALWAYS
-              # enrolled alongside. The enrolment happens in the installer,
-              # after the first boot with the UKI already signed — before
-              # that the PCR 11 measurements do not exist.
+              # THE PASSPHRASE IS THE KEY, AND THE TPM HOLDS NOTHING.
+              #
+              # This asked the TPM to unlock the volume — `tpm2-device=auto`
+              # with `tpm2-measure-pcr=yes`, sealed by the installer against
+              # PCRs 7+11+12+15. It is gone, and the reason is that the
+              # sealing could not do what it said.
+              #
+              # PCR 15 is what makes a sealing refuse a FORGED volume, and it
+              # is extended only when the boot came from a MEASURED UKI
+              # (`ConditionSecurity=measured-uki`) — which needs
+              # `systemd-stub`, which needs lanzaboote, which needs Secure
+              # Boot. That chain is not installed here, so 15 stayed at zero
+              # and so did 11 and 12: the sealing matched every time, for any
+              # volume, and what was left of it was PCR 7. `tests/tpm-vm.nix`
+              # says the same thing from the other side, out of a boot log.
+              #
+              # So the machine had the CONVENIENCE of an automatic unlock and
+              # none of the protection meant to pay for it — and with the
+              # session's autologin, a laptop taken powered off would have
+              # opened straight into the desktop.
+              #
+              # The decision, made deliberately: the disk asks for its
+              # passphrase once, at boot, and nothing is asked after it. The
+              # owner's words — "se eu já preciso digitar a senha para
+              # descriptografar o disco, então nenhuma outra senha é
+              # necessária após isso". Secure Boot and the TPM unlock are
+              # both off, and `docs/ARCHITECTURE.md` carries the argument.
+              #
+              # NOT TO BE CONFUSED WITH THE WI-FI KEY, which IS sealed in the
+              # TPM and stays — a different mechanism (`systemd-creds`,
+              # deliberately with no PCRs) and a different question.
               settings = {
                 allowDiscards = true;
-                # PCR 15 is not optional. The NixOS initrd does not verify
-                # LUKS volume identity; without the measurement in 15, a
-                # forged volume makes the TPM release the key.
-                crypttabExtraOpts = [
-                  "tpm2-device=auto"
-                  "tpm2-measure-pcr=yes"
-                ];
               };
               content = {
                 type = "btrfs";

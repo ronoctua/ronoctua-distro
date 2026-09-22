@@ -271,7 +271,6 @@ inst-step-facter = Detectar o hardware
 inst-step-password = Gravar o hash da senha em /persist
 inst-step-install = Construir e instalar o sistema
 inst-step-zone = Definir o fuso horário desta máquina
-inst-step-tpm = Selar a chave do disco no TPM
 
 ## Installer — the interface
 

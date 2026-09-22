@@ -284,7 +284,6 @@ inst-step-facter = Detect the hardware
 inst-step-password = Write the password hash to /persist
 inst-step-install = Build and install the system
 inst-step-zone = Set this machine's time zone
-inst-step-tpm = Seal the disk key into the TPM
 
 ## Installer — the interface
 

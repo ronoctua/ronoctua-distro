@@ -25,7 +25,7 @@ um compromisso: nada aqui precisa se parecer com nenhum outro programa.
 | Compositor | Scroll upstream, sem fork nem patch, atrás de um contrato | fork com integração direta |
 | Chrome | rodapé de duas linhas, só | barra, dock, popup de canto |
 | Sistema de arquivos | btrfs | ZFS (out-of-tree), bcachefs (fora do mainline na 6.18) |
-| Boot | systemd-boot + lanzaboote | GRUB |
+| Boot | systemd-boot, UKI não assinada — ver *Secure Boot e TPM2* | GRUB; lanzaboote |
 | Renderer | wgpu + cosmic-text + glyphon | vello (não há carga vetorial) |
 | Buffers nativos | WASM Component Model, display list retida | pixels, ou plugins nativos |
 | i18n | Fluent | gettext |
@@ -7450,7 +7450,40 @@ critério.
 
 ---
 
-### Secure Boot e TPM2
+### Secure Boot e TPM2 — e por que a distro NÃO os instala
+
+**A decisão, tomada com o dono e com os números na frente: o disco pergunta a frase-senha uma vez,
+no boot, e nada é perguntado depois.** Secure Boot e destrave por TPM ficam desligados. O que segue
+é o que se aprendeu construindo os dois, e por que o que estava montado era pior que qualquer das
+duas pontas.
+
+**O que existia, e não funcionava.** O layout do disko pedia `tpm2-device=auto` e o instalador
+rodava `systemd-cryptenroll --tpm2-pcrs=7+11+12+15` incondicionalmente — mas o `nix/modules/boot.nix`
+que ligava o lanzaboote **não era importado por sistema nenhum**: as opções `ronoctua.boot.*` não
+existiam em `noctua`, `minimal` nem `vm` (`error: attribute 'boot' missing`), e nenhum teste o usava
+— o `secureboot-vm` monta a própria configuração à mão. Sem a corrente abaixo, os PCRs 11, 12 e 15
+nunca são estendidos; ficam em zero, batem sempre, e o selo vira o PCR 7 sozinho. A máquina abria
+sozinha para qualquer volume, e com o autologin da sessão um laptop levado desligado abriria direto
+na mesa. Conveniência sem a proteção que deveria pagar por ela.
+
+**Por que não ligar o Secure Boot em vez de remover o TPM.** É defensável e quase foi a escolha: ele
+não custa nada no dia a dia (o lanzaboote reassina a cada `nixos-rebuild`) e fecha o ataque que a
+cifra não fecha — trocar o kernel de uma máquina desligada por um que capture a frase-senha. O que
+pesou contra foram os modos de tranca, todos reais: uma geração anterior à mudança não está assinada
+e o rollback do NixOS deixa de funcionar para ela; o ISO deste repositório **não é assinado**, então
+o resgate exige entrar na firmware antes; e perder `/etc/secureboot` ou resetar a firmware tranca a
+máquina até reinscrever. Nenhum é tijolo — desligar o Secure Boot na firmware devolve tudo — mas o
+sintoma é "o laptop não liga", que é o pior do sistema. Contra isso, o modelo de ameaça de um laptop
+que anda com o dono é roubo, e a cifra em repouso já responde.
+
+**A chave do Wi-Fi continua selada no TPM**, e isso não é contradição: é `systemd-creds`,
+deliberadamente **sem PCRs** (com PCR, atualizar o kernel a quebraria). Selar uma credencial e
+segurar a chave do volume são perguntas diferentes.
+
+**O `secureboot-vm` e o `tpm-vm` ficam.** Eles montam as próprias configurações e provam que a
+corrente funciona — são o registro executável de como ligar isto, no dia em que se quiser.
+
+A corrente, para esse dia:
 
 ```
 chaves → UKI assinada → firmware mede (PCR 7 e 11) → measured-uki

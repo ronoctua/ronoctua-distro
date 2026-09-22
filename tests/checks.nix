@@ -15530,10 +15530,19 @@ let
     echo "$out_text" | grep -q '/mnt/persist/etc/shadow/noctua' || {
       echo "ERROR: the plan does not write the password hash" >&2; exit 1; }
 
-    # The four PCRs, including 15. Without it the sealing does not protect against
-    # a disk swap — see nix/modules/boot.nix.
-    echo "$out_text" | grep -q 'tpm2-pcrs=7+11+12+15' || {
-      echo "ERROR: the plan does not seal against all four PCRs" >&2; exit 1; }
+    # AND NOTHING ENROLS THE TPM. This demanded the opposite — the four PCRs,
+    # 15 included — and it was right about the plan and wrong about the
+    # machine: PCRs 11, 12 and 15 are extended only by a MEASURED UKI, which
+    # needs lanzaboote and Secure Boot, and that chain is not installed. The
+    # sealing matched on every boot for any volume, so the disk opened with
+    # nothing asked and the protection meant to pay for that never existed.
+    # `docs/ARCHITECTURE.md` carries the decision; this keeps it.
+    if echo "$out_text" | grep -q 'cryptenroll'; then
+      echo "ERROR: the plan enrols the TPM, which gives the disk away to" >&2
+      echo "       whoever carries the laptop off — the sealing cannot hold" >&2
+      echo "       without a measured UKI, and there is none here." >&2
+      exit 1
+    fi
 
     # And without `--execute` nothing runs. An installer that wipes a disk by
     # default is a dangerous command.

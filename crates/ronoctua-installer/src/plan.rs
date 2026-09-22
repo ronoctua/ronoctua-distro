@@ -473,18 +473,21 @@ pub fn steps(r: &Answers, flake: &str) -> Vec<Step> {
             ],
             destructive: true,
         },
-        Step {
-            label: key::INST_STEP_TPM,
-            // After `nixos-install`: the sealing measures what is already on the
-            // disk, and enrolling before would seal a state that is going to change.
-            command: vec![
-                "systemd-cryptenroll".into(),
-                "--tpm2-device=auto".into(),
-                "--tpm2-pcrs=7+11+12+15".into(),
-                luks_partition(&r.disk),
-            ],
-            destructive: false,
-        },
+        // THERE IS NO TPM STEP, and its absence is the decision rather than
+        // an omission.
+        //
+        // This ran `systemd-cryptenroll --tpm2-pcrs=7+11+12+15` on the LUKS
+        // partition, unconditionally, and it could not deliver what it named:
+        // PCRs 11, 12 and 15 are extended only by a MEASURED UKI, which needs
+        // lanzaboote and Secure Boot, and that chain is not installed. So the
+        // sealing matched on every boot for any volume, the machine unlocked
+        // with nothing asked, and the protection that was supposed to pay for
+        // that never existed. `nix/disko/default.nix` carries the whole
+        // argument beside the option it removed.
+        //
+        // The disk asks for its passphrase, once. The Wi-Fi key IS still
+        // sealed in the TPM — see `SEAL` above, a different mechanism and a
+        // different question.
     ];
     // THE NETWORK STEP ONLY EXISTS WHEN THERE IS A NETWORK.
     //
@@ -738,31 +741,23 @@ mod tests {
         );
     }
 
+    /// NOTHING ENROLS THE TPM, and the test is the one that used to demand it.
+    ///
+    /// Two tests stood here — that the sealing named PCRs 7+11+12+15, and
+    /// that it came after `nixos-install`. Both were right about the plan and
+    /// wrong about the machine: without a measured UKI those PCRs are never
+    /// extended, so the sealing held for any volume at all. The step is gone
+    /// and this is what keeps it gone — a plan that enrols the TPM again
+    /// gives the disk away to whoever carries the laptop off.
     #[test]
-    fn the_tpm_sealing_uses_the_four_pcrs() {
-        // 7 (Secure Boot), 11 (the UKI), 12 (the kernel's parameters) and 15 (the
-        // volume). 15 is what keeps a forged LUKS from unlocking, and it is
-        // milestone 8's criterion — without it the rest is theatre.
+    fn nothing_enrols_the_tpm() {
         let p = steps(&answers(), "/mnt/etc/nixos");
-        let tpm = p.iter().find(|x| x.label == "inst-step-tpm").unwrap();
         assert!(
-            tpm.command.iter().any(|a| a == "--tpm2-pcrs=7+11+12+15"),
-            "{:?}",
-            tpm.command
+            !p.iter()
+                .any(|x| x.command.iter().any(|a| a.contains("cryptenroll"))),
+            "a step enrols the TPM: {:?}",
+            p.iter().map(|x| &x.label).collect::<Vec<_>>()
         );
-    }
-
-    #[test]
-    fn the_sealing_comes_after_the_installation() {
-        // Sealing earlier would measure a state that is still going to change, and the unlock
-        // would fail on the first boot.
-        let p = steps(&answers(), "f");
-        let i = p
-            .iter()
-            .position(|x| x.label == "inst-step-install")
-            .unwrap();
-        let t = p.iter().position(|x| x.label == "inst-step-tpm").unwrap();
-        assert!(t > i, "the TPM was sealed before nixos-install");
     }
 
     #[test]

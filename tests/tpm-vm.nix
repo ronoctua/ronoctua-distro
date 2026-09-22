@@ -25,8 +25,10 @@
 # to another volume; then PCRs 7, 11 and 12 match and only 15 saves it. That
 # proof requires the whole boot chain and is in `tests/secureboot-vm.nix`.
 #
-# What guarantees the right configuration in the meantime is a BUILD assertion
-# in `nix/modules/boot.nix`: `pcrs` without 15 does not evaluate.
+# AND THE DISTRO DOES NOT INSTALL ANY OF THIS. What this VM builds is its own
+# configuration; `docs/ARCHITECTURE.md` carries why the machine asks for its
+# passphrase instead. The test stays as the executable record of how the chain
+# is wired, for the day somebody wants it.
 #
 # The TPM is `swtpm`, a real emulator — the same PCR state machine, the same
 # policy. What it does not prove is the chip's physical resistance, which is
