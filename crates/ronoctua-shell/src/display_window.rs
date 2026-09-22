@@ -422,42 +422,30 @@ impl DisplayWindow {
                 let Some(why) = refused else {
                     return;
                 };
-                // A PREVIEW THAT DID NOT HAPPEN TAKES ITS QUESTION WITH IT —
-                // the footer's door carries the whole reason. The cursor is
-                // settled here because `never_mind` restores the remembered
-                // target and has no rows to look an index up in.
-                if let ronoctua_display::Order::Try { at, ask } = &order {
-                    let ask = *ask;
-                    let at = at.clone();
-                    // AND ONLY WHERE A QUESTION CAME DOWN. A refusal for a
-                    // `Try` whose question was already answered matches
-                    // nothing and changes no row, and settling and following
-                    // there pulled the page back to the cursor while somebody
-                    // was reading the bottom of a sheet.
-                    if self.view.never_mind(&at, ask) {
-                        let rows = self.rows();
-                        self.view.settle(&self.snapshot, &rows);
-                        // AND THE PAGE FOLLOWS. The question is five rows and
-                        // the sheet under it eighteen: settling the cursor
-                        // without moving the page leaves the restored row off
-                        // the glass until the next keypress — and nobody is
-                        // pressing, which is what a refusal arriving by itself
-                        // means. The footer's twin and the countdown beside
-                        // this both do it.
-                        let n = rows.len();
-                        self.follow(n);
-                    }
+                // EVERYTHING A REFUSAL DOES TO THE VIEW is `display::refusal`,
+                // and the footer's door reads the same one — see it for why
+                // it is not written out twice.
+                let moment = std::time::Instant::now();
+                let doing = crate::display::refusal(
+                    &mut self.view,
+                    &order,
+                    &why,
+                    &self.snapshot,
+                    self.columns,
+                    moment,
+                    &self.texts,
+                );
+                // AND THE PAGE FOLLOWS. The question is five rows and the
+                // sheet under it eighteen: settling the cursor without moving
+                // the page leaves the restored row off the glass until the
+                // next keypress — and nobody is pressing, which is what a
+                // refusal arriving by itself means. The countdown beside this
+                // does it too.
+                if doing.follow {
+                    let n = self.rows().len();
+                    self.follow(n);
                 }
-                if matches!(order, ronoctua_display::Order::Text(_)) {
-                    self.view.text_never_landed();
-                }
-                // AND A PLACE THAT NEVER LANDED — the footer's twin carries
-                // the whole reason.
-                if let ronoctua_display::Order::Keep { at, wanted } = &order {
-                    self.view.place_never_landed(at, wanted);
-                }
-                let said = crate::display_words::refused(&why, &self.texts);
-                self.say(said);
+                self.doing(doing);
                 self.ask_paint();
             }
         }
@@ -577,35 +565,35 @@ impl DisplayWindow {
 
     /// Carries out what the view asked for.
     fn apply(&mut self, errand: crate::display::Errand) {
-        use crate::display::Errand;
-        match errand {
-            Errand::Nothing => {}
-            // AN INFORMATIVE ROW COPIES ITSELF — see `chrome::information_of`,
-            // and `chrome::copied` for the one place the doors share.
-            Errand::Copy(text) => {
-                self.say(crate::chrome::copied(&text, &self.texts));
-            }
-            Errand::Close => {
-                self.leave();
-                return;
-            }
-            // THE SCREEN WENT AWAY under a standing question — the footer's
-            // door says the same sentence and sends the same order.
-            Errand::Gone(at, applied) => {
-                let said = crate::display_words::went_away(&at, applied, &self.texts);
-                self.say(said);
-                // AND ONLY WHEN SOMETHING WAS APPLIED — see `Errand::Gone`.
-                if applied {
-                    self.order(ronoctua_display::Order::Undo);
-                }
-            }
-            Errand::Order(order) => self.order(*order),
+        // THE TABLE IS `display::doing`, and it is the same one the footer's
+        // door reads — see it for why it is not written out twice.
+        let doing = crate::display::doing(errand, &self.texts);
+        let closing = doing.close;
+        self.doing(doing);
+        if closing {
+            return;
         }
         // AND THE CLOCK IS ARMED IF A QUESTION WENT UP. Every gesture that
         // raises one comes through here, so this is the one place that has to
         // remember — see `arm_the_clock`.
         self.arm_the_clock();
         self.ask_paint();
+    }
+
+    /// Carry out what the screens view asked of THIS door.
+    ///
+    /// The part that is the window's and not the view's: a sentence goes to
+    /// its own message line, and closing means leaving.
+    fn doing(&mut self, doing: crate::display::Doing) {
+        if let Some(said) = doing.said {
+            self.say(said);
+        }
+        if let Some(order) = doing.order {
+            self.order(order);
+        }
+        if doing.close {
+            self.leave();
+        }
     }
 
     /// Hands one order to the reading thread, or says there is none.

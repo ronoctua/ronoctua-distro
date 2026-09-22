@@ -19495,45 +19495,39 @@ impl Footer {
 
     /// What the view asked for.
     fn display_errand(&mut self, errand: crate::display::Errand) {
-        match errand {
-            crate::display::Errand::Nothing => {}
-            // AN INFORMATIVE ROW COPIES ITSELF — `chrome::information_of`,
-            // and `chrome::copied` for the one sentence the doors share.
-            crate::display::Errand::Copy(what) => {
-                let said = crate::chrome::copied(&what, &self.texts);
-                self.echo_message(said);
-            }
-            // THE SCREEN WENT AWAY under a standing question. The door says
-            // so and puts the rest back where the file says them — see
-            // `display::Target::KeepIt`.
-            crate::display::Errand::Gone(at, applied) => {
-                let said = crate::display_words::went_away(&at, applied, &self.texts);
-                self.echo_message(said);
-                // AND ONLY WHEN SOMETHING WAS APPLIED — see `Errand::Gone`.
-                if applied && let Some(h) = self.display_orders.as_ref() {
-                    h.send(ronoctua_display::Order::Undo);
-                }
-            }
-            crate::display::Errand::Close => {
-                self.display = None;
-                self.first_page();
-                self.apply_geometry(self.interactivity());
-            }
-            // AND WITH NO THREAD IT SAYS SO, which the window's door already
-            // did and this one did not — the module whose whole point is that
-            // the two cannot say a refusal two ways had one of them say
-            // nothing at all. It is unreachable today, because `no_thread`
-            // refuses both rows of the only level one can reach; it is closed
-            // because that is an argument about the view and this is the door.
-            crate::display::Errand::Order(order) => match self.display_orders.as_ref() {
-                Some(h) => h.send(*order),
+        // THE TABLE IS `display::doing`, and it is the same one the window's
+        // door reads — see it for why it is not written out twice.
+        let doing = crate::display::doing(errand, &self.texts);
+        self.display_doing(doing);
+        self.draw_and_paint();
+    }
+
+    /// Carry out what the screens view asked of THIS door.
+    ///
+    /// The part that is the footer's and not the view's: a sentence goes to
+    /// the minibuffer, and closing gives the region back.
+    fn display_doing(&mut self, doing: crate::display::Doing) {
+        if let Some(said) = doing.said {
+            self.echo_message(said);
+        }
+        if let Some(order) = doing.order {
+            match self.display_orders.as_ref() {
+                Some(h) => h.send(order),
+                // AND WITH NO THREAD IT SAYS SO. This door said nothing at
+                // all until the table was shared, while the window's said
+                // `display-no-thread` — one refusal, two answers, in the
+                // module whose whole point is that there cannot be two.
                 None => {
-                    let said = self.texts.t(ronoctua_i18n::key::DISPLAY_NO_THREAD);
+                    let said = crate::display::no_thread(&self.texts);
                     self.echo_message(said);
                 }
-            },
+            }
         }
-        self.draw_and_paint();
+        if doing.close {
+            self.display = None;
+            self.first_page();
+            self.apply_geometry(self.interactivity());
+        }
     }
 
     /// A reading of the screens arrived, or an order finished.
@@ -19569,79 +19563,32 @@ impl Footer {
                 // WHETHER A QUESTION CAME DOWN, which is whether the page has
                 // any reason to move. Set inside the `Try` arm and read after
                 // the message line, because the geometry for both is one call.
-                let mut followed = false;
                 if let Some(why) = refused {
-                    // A PREVIEW THAT DID NOT HAPPEN TAKES ITS QUESTION WITH
-                    // IT. The question is armed the moment `Order::Try` is
-                    // handed over, because the answer to an order is not
-                    // proof that it happened — that is the crate's own rule.
-                    // But a refusal IS proof that it did not, and without
-                    // this the message line said "the screens refused" while
-                    // a question sat above it for fifteen seconds saying the
-                    // scale had changed, ending in an `Undo` for nothing.
-                    if let ronoctua_display::Order::Try { at, ask } = &order
-                        && self.display.is_some()
-                    {
-                        let ask = *ask;
-                        let at = at.clone();
-                        let columns = self.screen_columns();
-                        let moment = std::time::Instant::now();
-                        followed = self.display.as_mut().is_some_and(|v| {
-                            let took = v.never_mind(&at, ask);
-                            // AND THE CURSOR SETTLES ON THE ROWS THAT COME
-                            // BACK. `never_mind` restores what the cursor was
-                            // ON, and only `key` settles that against a list —
-                            // which this path does not go through. Without it
-                            // the sheet came back with the question's index
-                            // still in the cursor: the screen lit the third
-                            // fact while the next arrow moved the scale.
-                            if took {
-                                let rows =
-                                    v.rows(&self.display_snapshot, columns, moment, &self.texts);
-                                v.settle(&self.display_snapshot, &rows);
-                            }
-                            took
-                        });
-                    }
-                    // AND A TEXT SIZE THAT NEVER LANDED IS LET GO OF. The
-                    // row shows what was asked for until the file says it
-                    // arrived; a refusal means it never will, and the row
-                    // would have gone on showing a percentage the shell is
-                    // not drawing at for the life of the view.
-                    if matches!(order, ronoctua_display::Order::Text(_))
-                        && let Some(v) = self.display.as_mut()
-                    {
-                        v.text_never_landed();
-                    }
-                    // AND A PLACE THAT NEVER LANDED, for the same reason: the
-                    // arrangement's row shows what was asked for until the
-                    // reading says it arrived, and a refusal means it never
-                    // will — the row would hold a place the file does not have
-                    // for the life of the view, and the next arrow would step
-                    // from it.
-                    if let ronoctua_display::Order::Keep { at, wanted } = &order
-                        && let Some(v) = self.display.as_mut()
-                    {
-                        v.place_never_landed(at, wanted);
-                    }
-                    let said = crate::display_words::refused(&why, &self.texts);
-                    self.echo_message(said);
-                    // ONE GEOMETRY FOR THE WHOLE ARM. The message line is a
-                    // row too, so this branch asks for a size whether a
-                    // question came down or not — and it used to ask twice,
-                    // once for the rows and once for the message.
-                    self.display_resized();
-                    // AND THE PAGE FOLLOWS — but only where a question
-                    // actually came down, which is the only way the rows
-                    // change here. A refusal for a `Try` whose question was
-                    // already answered matches nothing, and following there
-                    // pulled the page back to the cursor while somebody was
-                    // reading the bottom of a sheet: a daemon's arrival does
-                    // NOT follow the cursor, which `display_tick` guards the
-                    // same way. AFTER the resize, which is what it measures
-                    // against — see `display_resized`.
-                    if followed {
-                        self.follow_cursor();
+                    // EVERYTHING A REFUSAL DOES TO THE VIEW is
+                    // `display::refusal`, and the window's door reads the
+                    // same one — see it for why it is not written out twice.
+                    let columns = self.screen_columns();
+                    let moment = std::time::Instant::now();
+                    let snapshot = self.display_snapshot.clone();
+                    let texts = std::rc::Rc::clone(&self.texts);
+                    let doing = self.display.as_mut().map(|v| {
+                        crate::display::refusal(v, &order, &why, &snapshot, columns, moment, &texts)
+                    });
+                    if let Some(doing) = doing {
+                        let follow = doing.follow;
+                        self.display_doing(doing);
+                        // ONE GEOMETRY FOR THE WHOLE ARM. The message line is
+                        // a row too, so this asks for a size whether a
+                        // question came down or not — it used to ask twice,
+                        // once for the rows and once for the message.
+                        self.display_resized();
+                        // AND THE PAGE FOLLOWS, after the resize, which is
+                        // what it measures against — see `display_resized`.
+                        // A daemon's arrival does NOT follow the cursor, and
+                        // `display_tick` guards that the same way.
+                        if follow {
+                            self.follow_cursor();
+                        }
                     }
                 }
             }

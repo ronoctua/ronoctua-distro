@@ -361,6 +361,145 @@ pub enum Errand {
     Gone(String, bool),
 }
 
+/// What an [`Errand`] leaves for the DOOR to do.
+///
+/// # Why the table is here and not in the doors
+///
+/// Because there were TWO of it. `s d d` is a region of the footer and
+/// `s d w` is a window of its own, and each one had its own `match` over
+/// `Errand` — the same five arms, the same sentences, the same orders, in two
+/// files four thousand lines apart. The comments in the second said so in as
+/// many words ("the footer's twin carries the whole reason"), which is the
+/// shape of the defect: the REASON existed once and the CODE twice.
+///
+/// And it had already drifted. `Errand::Order` with no thread behind it says
+/// `display-no-thread` in the window and said NOTHING in the footer — a
+/// refusal that one door spoke and the other swallowed, in the module whose
+/// whole point is that the two cannot answer differently. The fix registered
+/// at the time was to copy the arm across, which is the same fix this
+/// replaces.
+///
+/// # What stays in the door
+///
+/// What the two genuinely do differently: WHERE a sentence goes (the
+/// minibuffer against the window's own message line), what a close means
+/// (giving the region back against leaving), and how a frame is asked for.
+/// None of those is a decision about the view — they are how a door is built.
+/// So this says WHAT, and the door does it.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Doing {
+    /// A sentence for the door's message line, if the errand carries one.
+    pub said: Option<String>,
+    /// An order for the screens thread, if the errand carries one.
+    pub order: Option<ronoctua_display::Order>,
+    /// Whether the view is over.
+    pub close: bool,
+    /// Whether a question came DOWN, and so whether the page has to move.
+    ///
+    /// Only where one did: a refusal for a `Try` whose question was already
+    /// answered matches nothing and changes no row, and following there pulls
+    /// the page back to the cursor while somebody is reading the bottom of a
+    /// sheet. An errand never sets it — a key that raises or answers a
+    /// question goes through `View::key`, which settles its own cursor.
+    pub follow: bool,
+}
+
+/// The errand table, and there is one.
+#[must_use]
+pub fn doing(errand: Errand, texts: &ronoctua_i18n::Texts) -> Doing {
+    match errand {
+        Errand::Nothing => Doing::default(),
+        // AN INFORMATIVE ROW COPIES ITSELF — `chrome::information_of` picks
+        // the text and `chrome::copied` is the one sentence both doors say.
+        Errand::Copy(what) => Doing {
+            said: Some(crate::chrome::copied(&what, texts)),
+            ..Doing::default()
+        },
+        Errand::Close => Doing {
+            close: true,
+            ..Doing::default()
+        },
+        Errand::Order(order) => Doing {
+            order: Some(*order),
+            ..Doing::default()
+        },
+        // THE SCREEN WENT AWAY under a standing question: the door names it,
+        // and undoes only what was applied. A confirmation leaves nothing on
+        // the other screens; a preview leaves a transient change, and `Undo`
+        // is what discards it.
+        Errand::Gone(at, applied) => Doing {
+            said: Some(crate::display_words::went_away(&at, applied, texts)),
+            order: applied.then_some(ronoctua_display::Order::Undo),
+            ..Doing::default()
+        },
+    }
+}
+
+/// The sentence for an order with no thread behind it.
+///
+/// A DOOR'S QUESTION, because whether there is a thread is the door's own
+/// fact — the footer can be up before the reader is, the window builds its
+/// own. What must not be the door's is the WORDING, which is why it is here.
+#[must_use]
+pub fn no_thread(texts: &ronoctua_i18n::Texts) -> String {
+    texts.t(ronoctua_i18n::key::DISPLAY_NO_THREAD)
+}
+
+/// Everything a refusal does to the VIEW, and what it leaves for the door.
+///
+/// The twin of [`doing`], and the same argument: this was written out in both
+/// doors, three `if let`s and a sentence each, with the second pointing at the
+/// first for its reasons.
+pub fn refusal(
+    view: &mut View,
+    order: &ronoctua_display::Order,
+    why: &ronoctua_display::Refused,
+    now: &Snapshot,
+    columns: u16,
+    moment: Instant,
+    texts: &ronoctua_i18n::Texts,
+) -> Doing {
+    let mut follow = false;
+    // A PREVIEW THAT DID NOT HAPPEN TAKES ITS QUESTION WITH IT.
+    //
+    // The question is armed the moment `Order::Try` is handed over, because
+    // the answer to an order is not proof that it happened — that is the
+    // crate's own rule. But a refusal IS proof that it did not, and without
+    // this the message line said "the screens refused" while a question sat
+    // above it for fifteen seconds saying the scale had changed, ending in an
+    // `Undo` for nothing.
+    if let ronoctua_display::Order::Try { at, ask } = order
+        && view.never_mind(at, *ask)
+    {
+        // AND THE CURSOR SETTLES ON THE ROWS THAT COME BACK. `never_mind`
+        // restores what the cursor was ON, and only `key` settles that
+        // against a list — which this path does not go through. Without it
+        // the sheet came back with the question's index still in the cursor:
+        // the screen lit the third fact while the next arrow moved the scale.
+        let rows = view.rows(now, columns, moment, texts);
+        view.settle(now, &rows);
+        follow = true;
+    }
+    // AND A TEXT SIZE THAT NEVER LANDED IS LET GO OF. The row shows what was
+    // asked for until the file says it arrived; a refusal means it never
+    // will, and the row would go on showing a percentage the shell is not
+    // drawing at for the life of the view.
+    if matches!(order, ronoctua_display::Order::Text(_)) {
+        view.text_never_landed();
+    }
+    // AND A PLACE THAT NEVER LANDED, for the same reason: the arrangement's
+    // row shows what was asked for until the reading says it arrived, and the
+    // next arrow would step from a place the file does not have.
+    if let ronoctua_display::Order::Keep { at, wanted } = order {
+        view.place_never_landed(at, wanted);
+    }
+    Doing {
+        said: Some(crate::display_words::refused(why, texts)),
+        follow,
+        ..Doing::default()
+    }
+}
+
 /// The view's own state. Everything else is read from the snapshot.
 #[derive(Debug, Clone, Default)]
 pub struct View {
@@ -3040,6 +3179,199 @@ mod tests {
             wiring: Wiring::default(),
             wanted: ronoctua_display::fragment::Wanted::default(),
         }
+    }
+
+    /// THE TWO DOORS CANNOT ANSWER DIFFERENTLY, and this is where that stops
+    /// being a claim about two files.
+    ///
+    /// `s d d` is a region of the footer and `s d w` is a window of its own,
+    /// and each used to carry its own `match` over `Errand` — the same five
+    /// arms in two files four thousand lines apart, one of them pointing at
+    /// the other for its reasons. They had already drifted once: an order
+    /// with no thread behind it said `display-no-thread` in the window and
+    /// nothing at all in the footer.
+    ///
+    /// Now there is one table, and it is a function, so it can be asked
+    /// without a compositor, a socket or a door. What each door still owns is
+    /// WHERE the sentence goes and what closing means — and neither of those
+    /// is a decision about the view.
+    #[test]
+    fn one_errand_table_answers_for_both_doors() {
+        let t = texts();
+        assert_eq!(doing(Errand::Nothing, &t), Doing::default());
+
+        let copied = doing(Errand::Copy("1920x1200".to_owned()), &t);
+        assert!(copied.said.is_some(), "a fact that copies itself says so");
+        assert!(copied.order.is_none() && !copied.close && !copied.follow);
+
+        let closed = doing(Errand::Close, &t);
+        assert!(closed.close, "`Close` closes");
+        assert!(closed.said.is_none() && closed.order.is_none());
+
+        let sent = doing(Errand::Order(Box::new(ronoctua_display::Order::Undo)), &t);
+        assert_eq!(sent.order, Some(ronoctua_display::Order::Undo));
+        assert!(sent.said.is_none() && !sent.close);
+    }
+
+    /// AND A SCREEN THAT WENT AWAY UNDOES ONLY WHAT WAS APPLIED.
+    ///
+    /// The flag is the whole of `Errand::Gone`: a confirmation leaves nothing
+    /// on the other screens and a preview leaves a transient change, so one
+    /// of the two has an `Undo` to send and the other does not. Both say
+    /// something, and the sentence differs — `display_words::went_away` has
+    /// two of them.
+    #[test]
+    fn a_screen_that_went_away_undoes_only_what_it_applied() {
+        let t = texts();
+        let applied = doing(Errand::Gone("DP-1".to_owned(), true), &t);
+        assert_eq!(applied.order, Some(ronoctua_display::Order::Undo));
+        assert!(applied.said.is_some());
+
+        let nothing = doing(Errand::Gone("DP-1".to_owned(), false), &t);
+        assert_eq!(
+            nothing.order, None,
+            "a question that applied nothing has nothing to put back"
+        );
+        assert!(nothing.said.is_some(), "and it is still named");
+        assert_ne!(
+            applied.said, nothing.said,
+            "the two cases do not read the same"
+        );
+    }
+
+    /// A REFUSED `Keep` LETS GO OF THE PLACE IT WAS SHOWING — AND ONLY OF
+    /// THAT ONE.
+    ///
+    /// This is the arm that answers "does the WINDOW write the fragment": the
+    /// keep path is driven through the footer in `tests/display-vm.nix`, and
+    /// what makes that cover the window too is that there is one of it.
+    ///
+    /// THE SECOND HALF IS THE RULE THAT TOOK A ROUND TO GET RIGHT. Every knob
+    /// that writes straight down emits an `Order::Keep` — the power toggle,
+    /// the varying refresh, the session's screen, forgetting — so a refusal
+    /// for any of those used to drop a place that was still legitimately in
+    /// flight. A refusal answers the change it was about and no other.
+    ///
+    /// THE FIELD IS READ DIRECTLY, which this test may do and nothing outside
+    /// the module can: asserting on the sentence alone would pass over a
+    /// `refusal` that had stopped calling `place_never_landed` at all, which
+    /// is the defect the arm exists to prevent.
+    #[test]
+    fn a_refused_keep_lets_go_of_the_place_it_was_showing() {
+        let t = texts();
+        let now = snapshot(vec![screen("DP-1", true)]);
+        let at = |x: i32, y: i32| ronoctua_display::Order::Keep {
+            at: "DP-1".to_owned(),
+            wanted: Box::new(ronoctua_display::fragment::Wanted {
+                position: Some(ronoctua_display::fragment::Spot { x, y }),
+                ..ronoctua_display::fragment::Wanted::default()
+            }),
+        };
+        // BY THE LITERAL, not by `Refused::of`, which is private: the two
+        // fields are public and widening a crate's API for a test is the
+        // test changing the thing it measures.
+        let why = ronoctua_display::Refused {
+            why: ronoctua_display::Refusal::NoSuchScreen,
+            words: "no such screen".to_owned(),
+        };
+
+        let mut view = View {
+            place_pending: Some(("DP-1".to_owned(), 1920, 0)),
+            ..View::default()
+        };
+        let out = refusal(&mut view, &at(1920, 0), &why, &now, 120, Instant::now(), &t);
+        assert!(
+            view.place_pending.is_none(),
+            "the row went on showing a place the file never took"
+        );
+        assert!(out.said.is_some(), "a refusal is named");
+        assert!(
+            !out.follow,
+            "no question came down, so the page has no reason to move"
+        );
+
+        // AND A REFUSAL FOR ANOTHER PLACE LEAVES IT ALONE.
+        let mut view = View {
+            place_pending: Some(("DP-1".to_owned(), 1920, 0)),
+            ..View::default()
+        };
+        refusal(
+            &mut view,
+            &at(-1920, 0),
+            &why,
+            &now,
+            120,
+            Instant::now(),
+            &t,
+        );
+        assert_eq!(
+            view.place_pending,
+            Some(("DP-1".to_owned(), 1920, 0)),
+            "a refusal answered a change it was not about"
+        );
+    }
+
+    /// AND A REFUSED TEXT SIZE IS LET GO OF TOO.
+    ///
+    /// The row shows what was asked for until the file says it arrived; a
+    /// refusal means it never will, and without this the row would go on
+    /// showing a percentage the shell is not drawing at for the life of the
+    /// view.
+    #[test]
+    fn a_refused_text_size_is_let_go_of() {
+        let t = texts();
+        let now = snapshot(vec![screen("DP-1", true)]);
+        let why = ronoctua_display::Refused {
+            why: ronoctua_display::Refusal::NoSuchScreen,
+            words: "no such screen".to_owned(),
+        };
+        let mut view = View {
+            text_pending: Some(125),
+            ..View::default()
+        };
+        refusal(
+            &mut view,
+            &ronoctua_display::Order::Text(125),
+            &why,
+            &now,
+            120,
+            Instant::now(),
+            &t,
+        );
+        assert_eq!(
+            view.text_pending, None,
+            "the row kept a size the shell is not drawing at"
+        );
+    }
+
+    /// AND A REFUSED `Try` TAKES ITS QUESTION WITH IT, page and all.
+    ///
+    /// The question is armed the moment the order is handed over, because an
+    /// answer is not proof that anything happened. A refusal IS proof that it
+    /// did not — without this the message line said "the screens refused"
+    /// while a question sat above it for fifteen seconds saying the scale had
+    /// changed, ending in an `Undo` for nothing.
+    #[test]
+    fn a_refused_try_takes_its_question_with_it() {
+        let t = texts();
+        let now = snapshot(vec![screen("DP-1", true)]);
+        let mut view = View::default();
+        let order = ronoctua_display::Order::Try {
+            at: "DP-1".to_owned(),
+            ask: Ask::Scale(Some(1.5)),
+        };
+        // BY THE LITERAL, not by `Refused::of`, which is private: the two
+        // fields are public and widening a crate's API for a test is the
+        // test changing the thing it measures.
+        let why = ronoctua_display::Refused {
+            why: ronoctua_display::Refusal::NoSuchScreen,
+            words: "no such screen".to_owned(),
+        };
+        // With no question standing, `never_mind` matches nothing and the
+        // page stays where the reader left it.
+        let quiet = refusal(&mut view, &order, &why, &now, 120, Instant::now(), &t);
+        assert!(!quiet.follow, "nothing came down, so nothing follows");
+        assert!(quiet.said.is_some());
     }
 
     fn snapshot(screens: Vec<Screen>) -> Snapshot {
