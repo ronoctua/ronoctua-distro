@@ -38,6 +38,8 @@
   # The solved palettes and the list of themes, so the nested compositor wears
   # the default theme's three colours (see `nix/themes.nix`).
   atlasData,
+  # Roots the flake's downloads before anything builds (nix/kept-sources.nix).
+  keepSources,
   themed,
   themes,
   defaultTheme,
@@ -528,6 +530,7 @@ let
     text = ''
       echo "ronoctua-dev — the nested compositor + footer"
       echo
+      ${keepSources}
 
       ${graphicsHost.prelude}
 

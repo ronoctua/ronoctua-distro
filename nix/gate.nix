@@ -60,6 +60,8 @@
   left ? [ ],
   # The downloader that resumes, or `null`. See `nix/prefetch.nix`.
   prefetch ? null,
+  # Roots the flake's downloads first, or `null`. See `nix/kept-sources.nix`.
+  keepSources ? null,
 }:
 
 let
@@ -113,6 +115,7 @@ writeShellApplication {
     gnugrep
   ];
   text = ''
+    ${lib.optionalString (keepSources != null) keepSources}
     ${lib.optionalString (prefetch != null) ''
       # THE SOURCES NO CACHE HAS COME FIRST.
       #

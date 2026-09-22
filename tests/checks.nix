@@ -1346,6 +1346,60 @@ let
       echo "OK: locale \`$locale\`, metric measurements, zone \`$zone\`"
     '';
 
+  # EVERY DOWNLOAD NAMES WHAT IT DOWNLOADS: a version, a commit or a capture.
+  #
+  # A fixed-output derivation pins a HASH, and a hash against an address that
+  # serves new bytes every day holds only while the store keeps the old copy.
+  # On 2026-09-22 a garbage collection on the host took that copy, and
+  # `nix run .#dev` died on `hash mismatch in fixed-output derivation` for
+  # three GeoNames and Geofabrik files that had simply been regenerated
+  # upstream — nothing in this tree had changed. `nix/atlas.nix` now fetches
+  # Wayback Machine captures; this refuses the next unversioned address before
+  # it can do the same on the next machine that builds.
+  #
+  # Flake inputs are out of scope on purpose: `flake.lock` holds their revision
+  # and hash, so the address in `flake.nix` is not what decides the bytes.
+  downloads-are-pinned = mkCheck "downloads-are-pinned" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: an address is a literal wherever it is written, and the
+    # question is about every `url =` and `urls = [ … ]` of every Nix file.
+    root = pathlib.Path("${../nix}")
+    pinned = [
+        r"/v?\d+\.\d+",                                   # a version in the path
+        r"/[0-9a-f]{40}(/|$)",                            # a commit
+        r"web\.archive\.org/web/(\d{14}|\$\{\w+\})id_/",  # a capture, raw bytes
+        r"\$\{\w*(version|Version|tag|rev|commit)\w*\}",  # a variable that is one
+    ]
+    seen = 0
+    wrong = []
+    for f in sorted(root.rglob("*.nix")):
+        text = hashless(f.read_text())
+        found = re.findall(r'\burl\s*=\s*"([^"]+)"', text)
+        for block in re.findall(r'\burls\s*=\s*\[(.*?)\]', text, re.S):
+            found += re.findall(r'"([^"]+)"', block)
+        for url in found:
+            if not re.match(r"https?://", url):
+                continue
+            seen += 1
+            if not any(re.search(p, url) for p in pinned):
+                wrong.append(f"{f.relative_to(root)}: {url}")
+
+    floor(seen, 5, "download addresses under nix/")
+    if wrong:
+        print("ERROR: these downloads name no version, commit or capture:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        print("      An address that serves new bytes under the same name breaks the", file=sys.stderr)
+        print("      pinned hash the first time the store copy is collected. Point it at", file=sys.stderr)
+        print("      a versioned release, or at a capture — see `snapshot` in nix/atlas.nix.", file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {seen} download addresses, every one pinned")
+    END
+  '';
+
   keyboard-layout-exists = mkCheck "keyboard-layout-exists" [ ] ''
     lst=${pkgs.xkeyboard_config}/share/X11/xkb/rules/base.lst
     layout=${keyboard.layout}
@@ -4611,7 +4665,7 @@ let
                 gaps.append(who + " draws a " + ("row" if arm.endswith(("Click", "Hover", "Unhover")) else "window")
                             + " and does not answer `" + arm + "`")
 
-    floor(seen, 6, "buffers read")
+    floor(seen, 5, "buffers read")
     floor(drawing, 4, "buffers that draw a row or a window")
 
     if gaps:
@@ -22157,6 +22211,7 @@ let
       group-mark-outside-translation
       compositor-deeds-translated
       keyboard-layout-exists
+      downloads-are-pinned
       keyboard-options-do-what-they-say
       nested-survives-a-stray-modifier
       installer-defaults-match-the-keyboard

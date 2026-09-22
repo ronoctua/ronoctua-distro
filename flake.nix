@@ -206,6 +206,15 @@
       # and `assets/atlas.nix` for the sources and their licences.
       atlasData = pkgs.callPackage ./nix/atlas.nix { };
 
+      # THE DOWNLOADS, held by a root so a garbage collection cannot take what
+      # the internet may no longer give back. See nix/kept-sources.nix.
+      keepSources = "${
+        pkgs.callPackage ./nix/kept-sources.nix {
+          inherit inputs;
+          downloads = atlasData.sources;
+        }
+      }/bin/ronoctua-keep-sources";
+
       # The glance's places (`LEADER d`). One declaration, and the build
       # refuses a zone `zone1970.tab` does not know — see nix/world.nix.
       worldRs = pkgs.callPackage ./nix/world.nix {
@@ -555,6 +564,7 @@
       devApp = pkgs.callPackage ./nix/dev.nix {
         inherit
           atlasData
+          keepSources
           graphicsHost
           reloadApp
           scroll
@@ -666,7 +676,7 @@
       # The gate that sizes itself to the machine. See `nix/gate.nix` for the
       # arithmetic and where its numbers were measured.
       gateApp = pkgs.callPackage ./nix/gate.nix {
-        inherit system;
+        inherit system keepSources;
         prefetch = "${prefetchApp}/bin/ronoctua-prefetch";
       };
 
@@ -681,7 +691,7 @@
       # joins on its own.
       slowNames = import ./tests/slow.nix;
       mostApp = pkgs.callPackage ./nix/gate.nix {
-        inherit system;
+        inherit system keepSources;
         name = "ronoctua-most";
         what = "targets";
         targets = lib.subtractLists slowNames (builtins.attrNames self.checks.${system});
@@ -1299,6 +1309,7 @@
         # believe the work is finished is worse than no short lane.
         quick = mkScriptApp "ronoctua-quick" "the checks that bring up no VM — the short loop" ''
           echo "== the short loop: a chosen subset =="
+          ${keepSources}
           # THE LIST COMES FROM `tests/quick.nix`, not from here.
           #
           # Written here it would be the only copy, and nothing could check it.

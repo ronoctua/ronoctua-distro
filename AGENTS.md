@@ -1800,6 +1800,13 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   `numeric-selectors-get-numbers`, que lê as chaves com ramo numérico dos `.ftl` e recusa
   `t_with`/`t_marked` sobre elas.
 - **Chave de texto tem SETE derivados**, só um é o `.ftl`; **pergunta do instalador tem 13** — os dois no ARCHITECTURE. **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 × fonte**; **caixa 1,25 em** contra entrelinha 1,45. `tiny-skia` entrega RGBA PRÉ-MULTIPLICADO. **Uma run ocupa `heights.of(escala)` CÉLULAS, e a escala alarga tanto quanto sobe**: `Large` são DUAS, e a régua em `line+1` virava sublinhado. Título é do tamanho do CORPO — hierarquia é cor e ar, nunca tamanho nem régua; os dois `DisplayList::nothing_*` cobram isso em TODO buffer, em TODO estado.
+- **Download sem versão é hash com prazo de validade.** GeoNames e Geofabrik regeneram os arquivos
+  TODO DIA sob o mesmo endereço, e o hash fixado só valia enquanto o store guardava a cópia: uma
+  coleta de lixo no host (2026-09-22) a levou e o `.#dev` morreu em `hash mismatch` sem nada ter
+  mudado aqui. Endereço vivo vira CAPTURA (`snapshot` no `nix/atlas.nix`, `id_` = bytes
+  originais), e o `downloads-are-pinned` recusa o resto. E o store não é a única cópia de nada:
+  `nix/kept-sources.nix` é uma RAIZ de GC com todo input do flake e todo download, registrada
+  pelo `.#dev` e pelas baterias — as fontes apontam para uma release que ainda não existe.
 - **Fallback silencioso precisa de check**: a tabela de tray era validada no build e não chegava ao
   Rust. **Há DUAS réguas de célula, e elas respondem a perguntas diferentes**:
   `ronoctua_protocol::cells` conta CLUSTERES — reserva, confere e corta, uma definição para os dois
