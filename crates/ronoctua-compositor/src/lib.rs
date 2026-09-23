@@ -513,6 +513,13 @@ pub enum Event {
     /// It is the difference between a clean end and a stream that simply
     /// stops: with it, whoever is holding a preview can put it back.
     Leaving,
+    /// The compositor's key MODE changed: `Some(name)` while one is on,
+    /// `None` back in the default.
+    ///
+    /// A mode switches every other key to a small table of its own, and a
+    /// compositor with no bar says so nowhere — so the footer does, and this
+    /// is how it hears.
+    ModeChanged(Option<String>),
     /// Any other event. See the comment at the top of the module.
     Ignored,
 }
@@ -983,7 +990,11 @@ impl State {
             // A MONITOR MOVING SAYS NOTHING ABOUT THE WINDOWS, and neither
             // does the session ending: both are listened to elsewhere, and
             // here they have to be as inert as an unknown event.
-            Event::ScreensChanged | Event::DevicesChanged | Event::Leaving | Event::Ignored => {}
+            Event::ScreensChanged
+            | Event::DevicesChanged
+            | Event::Leaving
+            | Event::ModeChanged(_)
+            | Event::Ignored => {}
         }
     }
 

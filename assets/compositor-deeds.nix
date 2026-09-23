@@ -422,4 +422,335 @@
   keep-shortcuts = {
     text = "shortcuts_inhibitor toggle";
   };
+
+  # --- every shortcut of the compositor's own configuration ----------
+  # The pinned compositor ships a configuration with some three hundred binds
+  # and fifteen modes. The session never reads it (`-c`), so what those binds
+  # do is declared here, and `actions.rs` binds them. See `actions::scroll_chords`.
+  close-all = {
+    text = "kill all";
+  };
+  reload = {
+    text = "reload";
+  };
+  move-out-beginning = {
+    text = "move beginning nomode";
+  };
+  move-out-end = {
+    text = "move end nomode";
+  };
+  workspace-swap-name = {
+    text = "workspace swap number {n} name_only";
+    argument = "number";
+  };
+  workspace-split-v = {
+    text = "workspace split v {n} 10";
+    argument = "number";
+  };
+  workspace-split-h = {
+    text = "workspace split h {n} 10";
+    argument = "number";
+  };
+  jump-tiling-all = {
+    text = "jump tiling all";
+  };
+  jump-floating-all = {
+    text = "jump floating all";
+  };
+  jump-everywhere-all = {
+    text = "jump all all";
+  };
+  jump-trailmark = {
+    text = "jump trailmark";
+  };
+  jump-trailmark-all = {
+    text = "jump trailmark all";
+  };
+  filter-tiling = {
+    text = "filter active tiling";
+  };
+  filter-tiling-all = {
+    text = "filter all tiling";
+  };
+  filter-tiling-only = {
+    text = "filter active_only tiling";
+  };
+  filter-container = {
+    text = "filter active container";
+  };
+  filter-container-all = {
+    text = "filter all container";
+  };
+  filter-container-only = {
+    text = "filter active_only container";
+  };
+  filter-floating = {
+    text = "filter active floating";
+  };
+  filter-floating-all = {
+    text = "filter all floating";
+  };
+  filter-floating-only = {
+    text = "filter active_only floating";
+  };
+  filter-trailmark = {
+    text = "filter active trailmark";
+  };
+  filter-trailmark-all = {
+    text = "filter all trailmark";
+  };
+  filter-trailmark-only = {
+    text = "filter active_only trailmark";
+  };
+  filter-visible = {
+    text = "filter active visible";
+  };
+  filter-visible-all = {
+    text = "filter all visible";
+  };
+  filter-visible-only = {
+    text = "filter active_only visible";
+  };
+  filter-reset = {
+    text = "filter reset";
+  };
+  placement-after = {
+    text = "set_mode after";
+  };
+  placement-before = {
+    text = "set_mode before";
+  };
+  placement-beginning = {
+    text = "set_mode beginning";
+  };
+  placement-end = {
+    text = "set_mode end";
+  };
+  placement-focus = {
+    text = "set_mode focus";
+  };
+  placement-no-focus = {
+    text = "set_mode nofocus";
+  };
+  centre-horizontal = {
+    text = "set_mode center_horiz";
+  };
+  no-centre-horizontal = {
+    text = "set_mode nocenter_horiz";
+  };
+  centre-vertical = {
+    text = "set_mode center_vert";
+  };
+  no-centre-vertical = {
+    text = "set_mode nocenter_vert";
+  };
+  reorder-auto = {
+    text = "set_mode reorder_auto";
+  };
+  no-reorder-auto = {
+    text = "set_mode noreorder_auto";
+  };
+  fit-fraction = {
+    text = "set_mode fitfraction";
+  };
+  fit-split = {
+    text = "set_mode fitsplit";
+  };
+  no-fit = {
+    text = "set_mode nofit";
+  };
+  resize-narrower = {
+    text = "resize shrink width {n}px";
+    argument = "number";
+  };
+  resize-wider = {
+    text = "resize grow width {n}px";
+    argument = "number";
+  };
+  resize-shorter = {
+    text = "resize shrink height {n}px";
+    argument = "number";
+  };
+  resize-taller = {
+    text = "resize grow height {n}px";
+    argument = "number";
+  };
+  resize-shrink-right = {
+    text = "resize shrink right {n}px";
+    argument = "number";
+  };
+  resize-grow-right = {
+    text = "resize grow right {n}px";
+    argument = "number";
+  };
+  resize-shrink-down = {
+    text = "resize shrink down {n}px";
+    argument = "number";
+  };
+  resize-grow-down = {
+    text = "resize grow down {n}px";
+    argument = "number";
+  };
+  resize-shrink-left = {
+    text = "resize shrink left {n}px";
+    argument = "number";
+  };
+  resize-grow-left = {
+    text = "resize grow left {n}px";
+    argument = "number";
+  };
+  resize-shrink-up = {
+    text = "resize shrink up {n}px";
+    argument = "number";
+  };
+  resize-grow-up = {
+    text = "resize grow up {n}px";
+    argument = "number";
+  };
+  nudge-left = {
+    text = "move left {n}px";
+    argument = "number";
+  };
+  nudge-right = {
+    text = "move right {n}px";
+    argument = "number";
+  };
+  nudge-up = {
+    text = "move up {n}px";
+    argument = "number";
+  };
+  nudge-down = {
+    text = "move down {n}px";
+    argument = "number";
+  };
+  toggle-size-this = {
+    text = "toggle_size this 1.0 1.0";
+  };
+  toggle-size-active = {
+    text = "toggle_size active 1.0 1.0";
+  };
+  toggle-size-width = {
+    text = "toggle_size all {n} 1.0";
+    argument = "number";
+  };
+  toggle-size-height = {
+    text = "toggle_size all 1.0 {n}";
+    argument = "number";
+  };
+  toggle-size-reset = {
+    text = "toggle_size reset";
+  };
+  fit-rows-visible = {
+    text = "fit_size v visible proportional";
+  };
+  fit-columns-visible-equal = {
+    text = "fit_size h visible equal";
+  };
+  fit-rows-visible-equal = {
+    text = "fit_size v visible equal";
+  };
+  fit-columns-to-end = {
+    text = "fit_size h toend proportional";
+  };
+  fit-rows-to-end = {
+    text = "fit_size v toend proportional";
+  };
+  fit-columns-to-end-equal = {
+    text = "fit_size h toend equal";
+  };
+  fit-rows-to-end-equal = {
+    text = "fit_size v toend equal";
+  };
+  fit-columns-to-start = {
+    text = "fit_size h tobeg proportional";
+  };
+  fit-rows-to-start = {
+    text = "fit_size v tobeg proportional";
+  };
+  fit-columns-to-start-equal = {
+    text = "fit_size h tobeg equal";
+  };
+  fit-rows-to-start-equal = {
+    text = "fit_size v tobeg equal";
+  };
+  fit-rows-active = {
+    text = "fit_size v active proportional";
+  };
+  fit-columns-all = {
+    text = "fit_size h all proportional";
+  };
+  fit-rows-all = {
+    text = "fit_size v all proportional";
+  };
+  trail-number = {
+    text = "trail number {n}";
+    argument = "number";
+  };
+  trail-to-selection = {
+    text = "trail to_selection";
+  };
+  space-load = {
+    text = "space load {n}";
+    argument = "number";
+  };
+  space-save = {
+    text = "space save {n}";
+    argument = "number";
+  };
+  space-restore-hide = {
+    text = "space restore_hide {n}";
+    argument = "number";
+  };
+  space-restore = {
+    text = "space restore {n}";
+    argument = "number";
+  };
+  mode-split = {
+    text = "mode \"split\"";
+  };
+  mode-jump = {
+    text = "mode \"jump\"";
+  };
+  mode-filter = {
+    text = "mode \"filter\"";
+  };
+  mode-placement = {
+    text = "mode \"placement\"";
+  };
+  mode-width = {
+    text = "mode \"width\"";
+  };
+  mode-height = {
+    text = "mode \"height\"";
+  };
+  mode-resize = {
+    text = "mode \"resize\"";
+  };
+  mode-floating = {
+    text = "mode \"floating\"";
+  };
+  mode-toggle-width = {
+    text = "mode \"toggle-width\"";
+  };
+  mode-toggle-height = {
+    text = "mode \"toggle-height\"";
+  };
+  mode-align = {
+    text = "mode \"align\"";
+  };
+  mode-fit = {
+    text = "mode \"fit\"";
+  };
+  mode-trailmark = {
+    text = "mode \"trailmark\"";
+  };
+  mode-trail = {
+    text = "mode \"trail\"";
+  };
+  mode-spaces = {
+    text = "mode \"spaces\"";
+  };
+  mode-default = {
+    text = "mode \"default\"";
+  };
 }

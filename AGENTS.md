@@ -80,6 +80,17 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   Quem a vê é o compositor, que roda `ronoctua-shell leader` no socket de controle
   (`$XDG_RUNTIME_DIR/ronoctua-<display>.sock`); só então a superfície expande e pede exclusividade.
   `ronoctua-shell command <id>` roda qualquer id — é por onde entram os QUATRO binds SEM leader.
+- **Todo atalho do config que o Scroll traz existe aqui** (`actions::scroll_chords` e
+  `actions::modes`): a sessão passa `-c` e aquele arquivo nunca é lido, então os ~380 atalhos (os
+  15 modos inclusos) são gerados da nossa tabela, na MESMA tecla. Onde um acorde nosso já tinha a tecla,
+  o nosso fica (regra do dono) e o do Scroll que ficou sem tecla ganha outra (`S-h/j/k/l`, `i`,
+  `m`, `s`, `C--`/`C-=`); `Super+Alt+…` ganha substituto no `.#dev` (`C-S-…`), porque lá o prefixo
+  É o Alt. `button8` pede o prefixo (nu, tomaria o Voltar de todo navegador), `floating_modifier`
+  é o prefixo (arrastar com Super, ou Alt no `.#dev`), e os programas que o arquivo chama viram os
+  nossos (lançador, gerenciador, sair, captura, brilho). **Modo não se vê sem barra**, então o
+  rodapé ouve o evento `mode` (`Event::ModeChanged`): marca na modeline (clique sai) e as teclas
+  do modo na linha de dicas, da mesma tabela. Cobra o `every-compositor-shortcut-is-bound`, que lê
+  o `config.in` PINADO e acusa atalho que falte — inclusive o próximo que o upstream acrescentar.
 - **`Ctrl+Alt+Del` é o RESGATE** (7 toques em 2 s ainda forçam): janela flutuante, ou VT 8 sem
   compositor.
 - **Rodapé morto tem uma LINHA que sobrevive a ele** (`ronoctua-shell lifeline <unidade>`): uma
@@ -129,7 +140,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   dizer sobre si é LEMBRADO onde foi medido (`region_can_spare_a_row`, escrito no `grid`), nunca
   perguntado de dentro da soma. Cobra o `the-footer-does-not-ask-itself`, que também recusa qualquer
   ciclo novo entre os métodos do `Footer` — as cinco recursões que existem são declaradas.
-- **Todo comando é `kebab-case`, e a chave é `cmd-<id>`**; o registro recusa divergirem. Os 112
+- **Todo comando é `kebab-case`, e a chave é `cmd-<id>`**; o registro recusa divergirem. Os 212
   feitos do compositor entram como `wm-<nome>`, DECLARADOS em `assets/compositor-deeds.nix` e
   GERADOS de lá — este compositor não enumera nada, seus comandos são texto livre espalhado por
   quatro tabelas em C, então a tabela é NOSSA e o gerador recusa um verbo que a fonte pinada não

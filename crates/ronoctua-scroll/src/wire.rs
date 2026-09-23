@@ -59,6 +59,8 @@ pub const EVENT_OUTPUT: u32 = EVENT_BIT | 1;
 pub const EVENT_SHUTDOWN: u32 = EVENT_BIT | 6;
 /// A device was added, removed or reconfigured.
 pub const EVENT_INPUT: u32 = EVENT_BIT | 21;
+/// A key mode was entered or left.
+pub const EVENT_MODE: u32 = EVENT_BIT | 2;
 
 /// Writes one message.
 pub fn send(to: &mut UnixStream, kind: Kind, payload: &str) -> Result<()> {

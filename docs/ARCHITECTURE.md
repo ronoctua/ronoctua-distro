@@ -7059,6 +7059,30 @@ própria vista carrega.
 
 ---
 
+### Os atalhos do compositor
+
+**A distro não lê o config que o compositor traz** (`-c`), e por um tempo isso significou que os
+atalhos dele não existiam aqui: os feitos eram alcançáveis só pelo nome, e a razão escrita era que
+cem atalhos custariam cem teclas. O dono pediu o contrário, e o custo real é menor do que a frase
+dizia: as teclas do Scroll moram quase todas atrás do Super segurado, e a leader é o Super TOCADO.
+Então todo bind e todo modo do arquivo pinado é gerado da nossa tabela, e o check lê o arquivo de
+verdade, então um atalho novo do upstream não fica de fora em silêncio.
+
+**Onde as duas tabelas se encontram a distro fica com a tecla** (nove: `S-setas`, `f`, `S-f`, `c`,
+`t`, `g`, `,`, `.` e a roda), e o que do Scroll ficaria sem tecla nenhuma ganha outra — escolha do
+dono, porque as duas alternativas eram tirar do dono uma tecla que ele já usa ou deixar uma ação sem
+tecla. **No `.#dev` o prefixo é o Alt e o teclado aninhado não tem Super**, então os dez
+`Super+Alt+…` virariam `Alt+Alt+…`, que é a tecla sem o Alt: ganham `C-S-` e uma letra ali, e um
+teste recusa qualquer bind do aninhado com um segundo Alt. **Dois desvios, e são de propósito**: o
+`button8` com a janela inteira tomaria o botão Voltar de todo navegador, então pede o prefixo; e o
+`jump criteria [app_id="firefox"]` nomeia um programa, que a regra dos feitos não aceita.
+
+**Um modo precisa ser dito**, e sem barra nada o diz — uma pessoa num modo sem saber está com o
+teclado quebrado. O evento `mode` do compositor entra no contrato (`ModeChanged`) e o rodapé o
+desenha duas vezes: uma marca na modeline cujo clique é o `Esc`, e as teclas do modo na linha de
+dicas, lidas da mesma tabela que gera o bloco `mode { }` — a faixa de dígitos sobre o mesmo feito
+contada uma vez só.
+
 ### A câmera e o estúdio
 
 **Por que um daemon.** Um dispositivo V4L2 transmite para UM leitor. Se o app abrisse a câmera,

@@ -831,6 +831,8 @@ struct Footer {
     studio: Option<ronoctua_studio::wire::State>,
     /// Which programs have a camera open, from `/proc` every two seconds.
     camera_holders: Vec<String>,
+    /// The compositor's key mode, while one is on (`actions::modes`).
+    compositor_mode: Option<String>,
     /// Whether the modeline may draw the camera mark (`studio.json`'s
     /// `mark`), refreshed when the studio rereads its settings.
     camera_mark_allowed: bool,
@@ -2404,6 +2406,7 @@ pub fn run() -> Result<()> {
         _camera_watch: None,
         studio: None,
         camera_holders: Vec::new(),
+        compositor_mode: None,
         camera_mark_allowed: ronoctua_studio::prefs::store().read().mark
             == ronoctua_studio::prefs::Mark::WhenInUse,
         keys: crate::keys_link::Keys {
@@ -2802,6 +2805,10 @@ pub fn run() -> Result<()> {
                     && let Some(h) = state.display_orders.as_ref()
                 {
                     h.send(ronoctua_display::Order::Look { deep: false });
+                }
+                // A KEY MODE, which nothing else on screen would say.
+                if let ronoctua_compositor::Event::ModeChanged(m) = &e {
+                    state.compositor_mode.clone_from(m);
                 }
                 state.windows.apply_to(&e);
                 state.states_arrived();
@@ -3700,6 +3707,10 @@ impl Footer {
         // THE POOL, RESOLVED ONCE: it is a `Vec`, so it is bound before the
         // call rather than borrowed inside the struct literal.
         let devices = crate::bluetooth::modeline(&self.bluetooth_scene);
+        let mode = self
+            .compositor_mode
+            .as_deref()
+            .map(|m| self.texts.t(&format!("compositor-mode-{m}")));
         let state = self
             .state_now()
             .map(|id| self.texts.t(&format!("state-{id}")))
@@ -3748,6 +3759,7 @@ impl Footer {
                 // program with a camera open, ours included.
                 camera: self.camera_in_use(),
                 recording: self.studio_rolling(),
+                compositor_mode: mode.as_deref(),
                 // SYNCTHING, and it is the only mark that may draw while all
                 // is WELL. That is the owner's choice and it is theirs to
                 // make; the default is the house rule — nothing at rest.
@@ -4084,6 +4096,11 @@ impl Footer {
             self.run_command("camera-settings-open");
             return;
         }
+        // THE KEY MODE: a click is its `Esc`.
+        if id == "compositor-mode" {
+            self.run_command("wm-mode-default");
+            return;
+        }
         // AND SYNCTHING'S, by the same command the key runs — the mouse
         // reaches no door the keyboard lacks.
         if id == "syncthing" {
@@ -4300,6 +4317,7 @@ impl Footer {
                 &[("programs", &self.camera_holders.join(", "))],
             )),
             "recording" => Some(self.texts.t(ronoctua_i18n::key::HINT_RECORDING)),
+            "compositor-mode" => Some(self.texts.t(ronoctua_i18n::key::HINT_COMPOSITOR_MODE)),
             // AND SYNCTHING'S SAYS WHICH OF THE TWO IT IS. One glyph means
             // "everything is travelling" and the other means "nothing is",
             // and which of them is drawn depends on a preference — so the
@@ -6699,7 +6717,21 @@ impl Footer {
             "volume-down" => self.volume_by(false),
             "volume-mute" => self.silence(ronoctua_audio::Kind::Sink),
             "mic-mute" => self.silence(ronoctua_audio::Kind::Source),
-            "media-play" | "media-next" | "media-previous" => self.media(id),
+            "media-play" | "media-next" | "media-previous" | "media-stop" => self.media(id),
+            // THE BRIGHTNESS KEYS, on whichever screen has the focus — the
+            // meaning `Order::Bright { at: None }` was written for.
+            "brightness-up" | "brightness-down" => {
+                if let Some(h) = self.display_orders.as_ref() {
+                    h.send(ronoctua_display::Order::Bright {
+                        at: None,
+                        by: if id == "brightness-up" {
+                            crate::display::STEP
+                        } else {
+                            -crate::display::STEP
+                        },
+                    });
+                }
+            }
             "locale-window" => {
                 if let Ok(me) = std::env::current_exe() {
                     self.open_foreign(&me.to_string_lossy(), &["locale".to_owned()], None);
@@ -15419,6 +15451,7 @@ impl Footer {
         // and the line above it taught another's keys. A pairing question
         // arriving over the power view was enough.
         let showing = self.view();
+        let compositor_mode = self.compositor_mode.as_deref();
         // THE WIDTH THE HINT'S VIEWS DECIDE AT, taken with the rest before the
         // closure borrows: which keys a line teaches comes from the row under
         // the cursor, and which row that is follows the width.
@@ -15494,6 +15527,12 @@ impl Footer {
                 // THE SHELL'S HISTORY: `s` syncs and `S-<arrows>` turn a
                 // value, and nothing on a row says so.
                 ViewState::History => history.as_ref().map(|v| v.hint(texts)),
+                // A COMPOSITOR KEY MODE, with nothing of ours open: the line
+                // teaches the mode's keys, because nothing else on screen
+                // says the keys changed meaning.
+                ViewState::NoneOf => {
+                    compositor_mode.and_then(|m| crate::actions::mode_hint(m, texts))
+                }
                 _ => None,
             }
             .filter(|h| !h.is_empty())
@@ -18723,6 +18762,7 @@ impl Footer {
         let verb = match id {
             "media-next" => "next",
             "media-previous" => "previous",
+            "media-stop" => "stop",
             _ => "play-pause",
         };
         let Some(program) = std::env::var("RONOCTUA_PLAYERCTL")
@@ -20867,6 +20907,8 @@ fn segment_color(
         "battery" if battery_danger => tokens::color::STATE_ERROR,
         // RECORDING OR STREAMING is a warning as much as a mark.
         "recording" => tokens::color::STATE_ERROR,
+        // A KEY MODE IS ON: every key means something else until it ends.
+        "compositor-mode" => tokens::color::STATE_ACCENT,
         // THE KIND OF BUFFER. It used to carry the accent, from when it was the
         // only thing next to the name; now the state sits beside it saying what
         // is HAPPENING, and between "this is an icon browser" and "it is showing

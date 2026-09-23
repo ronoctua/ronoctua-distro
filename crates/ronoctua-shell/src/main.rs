@@ -251,13 +251,13 @@ fn main() -> Result<()> {
                 .nth(2)
                 .context("usage: ronoctua-shell export-binds <prefix>")?;
             for chord in actions::full_chords() {
-                for (key, said) in chord.binds {
+                for (key, said) in chord.binds_for(&prefix) {
                     // `Shift+1` becomes `Mod+Shift+1`: the prefix goes in
                     // front, and the Shift already came with the key.
                     println!(
                         "bindsym{}{} {prefix}+{key} {said}",
-                        repeat_of(&said),
-                        region_of(&key)
+                        repeat_of(said),
+                        region_of(key)
                     );
                 }
             }
@@ -275,6 +275,20 @@ fn main() -> Result<()> {
             // key that one day differs between them.
             for (key, said, _) in actions::media() {
                 println!("bindsym{}{} {key} {said}", repeat_of(&said), region_of(key));
+            }
+            // THE COMPOSITOR'S MODES, from the same table the footer draws
+            // their keys from — see `actions::modes`. Inside one the keys are
+            // bare, and `Esc` always leaves.
+            for mode in actions::modes() {
+                println!("mode \"{}\" {{", mode.name);
+                for k in &mode.keys {
+                    println!("    bindsym {} {}", k.key, k.said);
+                }
+                println!("    bindsym Escape mode \"default\"");
+                println!("}}");
+            }
+            for line in actions::gestures(&prefix) {
+                println!("{line}");
             }
             return Ok(());
         }
@@ -654,6 +668,8 @@ pub struct Marks<'a> {
     pub camera: bool,
     /// The studio is recording or streaming.
     pub recording: bool,
+    /// The compositor's key mode, by its name, while one is on.
+    pub compositor_mode: Option<&'a str>,
     /// SYNCTHING, and it is the only mark whose very existence is a choice.
     ///
     /// `None` draws nothing, which is what an ordinary day looks like: the
@@ -921,6 +937,21 @@ pub fn segments(
             removable: true,
         });
     }
+    // A KEY MODE, at the top rung: while it is on every key means something
+    // else, and a person who does not know that is a person whose keys have
+    // stopped working.
+    if let Some(name) = marks.compositor_mode {
+        let text = format!("{} {name}", tokens::icon::KEYBOARD);
+        out.push(Segment {
+            id: "compositor-mode",
+            min_cols: ronoctua_protocol::cells(&text),
+            text,
+            priority: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
     // AND RECORDING, one rung above: a recording that nobody remembers is
     // running fills a disk and films a room.
     if marks.recording {
@@ -1159,6 +1190,9 @@ mod tests {
                         listening: true,
                         camera: true,
                         recording: true,
+                        // AND A KEY MODE, the longest of their names: the
+                        // fullest line has to survive it beside the rest.
+                        compositor_mode: Some("alternar largura"),
                         // AND SYNCTHING'S, which the fullest line has to
                         // carry too: it is a mark somebody chose to have, so
                         // the worst case is a line that has it AND everything

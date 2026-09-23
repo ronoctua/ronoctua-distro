@@ -288,10 +288,11 @@ impl Watching {
         wire::send(
             &mut stream,
             wire::Kind::Subscribe,
-            // WINDOW, OUTPUT AND SHUTDOWN, AND NOTHING ELSE. Every other
-            // subscription is a wake and a repaint for something no part of
-            // this shell reads.
-            r#"["window","output","shutdown","input"]"#,
+            // WINDOW, OUTPUT, SHUTDOWN, INPUT AND MODE, AND NOTHING ELSE.
+            // Every other subscription is a wake and a repaint for something
+            // no part of this shell reads. `mode` is how the footer knows a
+            // key mode is on, which nothing else on screen says.
+            r#"["window","output","shutdown","input","mode"]"#,
         )?;
         let mut waiting = std::collections::VecDeque::new();
         // The subscribe's own reply, and anything that raced it.
@@ -382,6 +383,13 @@ fn event_of(kind: u32, body: &str) -> Option<Event> {
     match kind {
         wire::EVENT_OUTPUT => Some(Event::ScreensChanged),
         wire::EVENT_SHUTDOWN => Some(Event::Leaving),
+        // `default` is the absence of a mode, and is said as one.
+        wire::EVENT_MODE => {
+            let name = said.get("change").and_then(Value::as_str)?;
+            Some(Event::ModeChanged(
+                (name != "default").then(|| name.to_owned()),
+            ))
+        }
         // ADDED, REMOVED OR RECONFIGURED, and all three mean the same thing
         // to a reader: read the devices again. The keymap changes that ride
         // the same event are a keyboard's business, and a keyboard is not
@@ -489,6 +497,20 @@ mod tests {
         // A compositor adds events. Breaking the desktop over one nobody
         // reads is the failure this arm exists to prevent.
         assert_eq!(event_of(wire::EVENT_BIT | 99, "{}"), Some(Event::Ignored));
+        assert_eq!(
+            event_of(
+                wire::EVENT_MODE,
+                r#"{"change":"resize","pango_markup":false}"#
+            ),
+            Some(Event::ModeChanged(Some("resize".to_owned())))
+        );
+        assert_eq!(
+            event_of(
+                wire::EVENT_MODE,
+                r#"{"change":"default","pango_markup":false}"#
+            ),
+            Some(Event::ModeChanged(None))
+        );
         // And a change we have no branch for still says "this window is now
         // like this", which is true of every one of them.
         let odd = event_of(

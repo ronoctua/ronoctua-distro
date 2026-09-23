@@ -1189,6 +1189,18 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             label: key::CMD_MEDIA_NEXT,
         },
         Command {
+            id: "media-stop",
+            label: key::CMD_MEDIA_STOP,
+        },
+        Command {
+            id: "brightness-up",
+            label: key::CMD_BRIGHTNESS_UP,
+        },
+        Command {
+            id: "brightness-down",
+            label: key::CMD_BRIGHTNESS_DOWN,
+        },
+        Command {
             id: "media-previous",
             label: key::CMD_MEDIA_PREVIOUS,
         },
@@ -2558,10 +2570,11 @@ pub fn default_of() -> Result<(Tree, Registry)> {
     // table does not have — so a verb that goes away is a build failure rather
     // than a key that answers a parse error nobody sees.
     //
-    // They do NOT get keys, and that is the design: a hundred shortcuts would
-    // be a hundred keys fewer for what actually gets used. They are reachable
-    // by NAME, which is exactly what section 13 asks for — and the ones used
-    // every day have, besides the name, a chord of ours with its own label.
+    // Every one is reachable by NAME, which is what section 13 asks for. And
+    // since the owner asked for it, every one the compositor's OWN shipped
+    // configuration binds has that key here too — as a chord, or inside one
+    // of its modes (`actions::scroll_chords`, `actions::modes`), with the
+    // distro's older chords keeping their keys where the two tables met.
     for d in ronoctua_scroll::deeds::DEEDS.iter() {
         registry.register(Command {
             id: d.id,
@@ -3453,6 +3466,9 @@ mod tests {
             "media-play",
             "media-next",
             "media-previous",
+            "media-stop",
+            "brightness-up",
+            "brightness-down",
             "power-open",
             "power-window",
             "power-profile-performance",

@@ -110,6 +110,16 @@ pub struct Chord {
     pub command: &'static str,
     /// `(key, the command text the compositor is given)`, already expanded.
     pub binds: Vec<(String, String)>,
+    /// The same binds in the NESTED loop, when they cannot be the same there.
+    ///
+    /// The nested prefix is `Alt` and the nested keymap has no Super (it is
+    /// the host's), so a chord the compositor's own configuration puts on
+    /// `Super+Alt+…` would come out `Alt+Alt+…` — which is the chord without
+    /// the Alt, and a collision. Those few get another key in the nested loop
+    /// and say which in [`Chord::nested_shows`].
+    pub nested: Option<Vec<(String, String)>>,
+    /// How [`Chord::nested`] appears in the list.
+    pub nested_shows: Option<&'static str>,
 }
 
 impl Chord {
@@ -118,6 +128,45 @@ impl Chord {
     pub fn label(&self) -> String {
         format!("{}{}", ronoctua_cmd::KEY_PREFIX_OF, self.command)
     }
+
+    /// The binds under `prefix`: the nested ones when it is the nested loop's.
+    #[must_use]
+    pub fn binds_for(&self, prefix: &str) -> &[(String, String)] {
+        match &self.nested {
+            Some(n) if prefix == NESTED_PREFIX => n,
+            _ => &self.binds,
+        }
+    }
+
+    /// How it appears, in the nested loop or not.
+    #[must_use]
+    pub fn shows_for(&self, nested: bool) -> &'static str {
+        match self.nested_shows {
+            Some(s) if nested => s,
+            _ => self.shows,
+        }
+    }
+
+    /// The same chord with another key in the nested loop.
+    fn nested(mut self, shows: &'static str, key: &str) -> Self {
+        let said = self
+            .binds
+            .first()
+            .map(|(_, s)| s.clone())
+            .unwrap_or_default();
+        self.nested = Some(vec![(key.to_owned(), said)]);
+        self.nested_shows = Some(shows);
+        self
+    }
+}
+
+/// The nested loop's prefix — what `nix/dev.nix` hands to `export-binds`.
+pub const NESTED_PREFIX: &str = "Alt";
+
+/// Whether this process is the nested loop's.
+#[must_use]
+pub fn nested() -> bool {
+    std::env::var_os("RONOCTUA_NESTED").is_some()
 }
 
 /// A chord that reuses a keymap COMMAND's action.
@@ -133,6 +182,8 @@ fn of_command(shows: &'static str, key: &str, id: &'static str) -> Chord {
         shows,
         command: id,
         binds: vec![(key.to_owned(), said.to_owned())],
+        nested: None,
+        nested_shows: None,
     }
 }
 
@@ -153,6 +204,8 @@ fn through_shell(shows: &'static str, key: &str, id: &'static str) -> Chord {
             key.to_owned(),
             format!("exec \"{}\" command {id}", shell_path()),
         )],
+        nested: None,
+        nested_shows: None,
     }
 }
 
@@ -173,14 +226,59 @@ fn range_of(shows: &'static str, command: &'static str, prefix: &str) -> Chord {
     Chord {
         shows,
         command,
-        binds: (1..=9)
+        // TEN, and the tenth is on `0` — the compositor's own configuration
+        // puts workspace 10 there, which is the keyboard's convention.
+        binds: (1..=10)
             .map(|n| {
                 let said =
                     ronoctua_scroll::wire::spoken(&spoken.deed, spoken.text, Some(&n.to_string()))
                         .unwrap_or_else(|e| panic!("the band `{shows}` cannot say {n}: {e}"));
-                (format!("{prefix}{n}"), said)
+                (format!("{prefix}{}", n % 10), said)
             })
             .collect(),
+        nested: None,
+        nested_shows: None,
+    }
+}
+
+/// A chord straight onto one of the compositor's deeds (`wm-<id>`), whose
+/// label is the deed's own sentence.
+fn of_deed(shows: &'static str, key: &str, deed: &'static str) -> Chord {
+    of_deed_with(shows, key, deed, None)
+}
+
+/// The same, with the deed's argument.
+fn of_deed_with(shows: &'static str, key: &str, deed: &'static str, n: Option<&str>) -> Chord {
+    let spoken = ronoctua_scroll::deeds::spoken_of(deed)
+        .unwrap_or_else(|| panic!("the chord `{key}` points at `{deed}`, which is not declared"));
+    let said = ronoctua_scroll::wire::spoken(&spoken.deed, spoken.text, n)
+        .unwrap_or_else(|e| panic!("the chord `{key}` cannot say `{deed}`: {e}"));
+    Chord {
+        shows,
+        command: spoken.deed.id,
+        binds: vec![(key.to_owned(), said)],
+        nested: None,
+        nested_shows: None,
+    }
+}
+
+/// A band of digits onto a deed with a number, `1…0` meaning 1 to 10.
+fn digits_of(shows: &'static str, deed: &'static str, prefix: &str) -> Chord {
+    let spoken = ronoctua_scroll::deeds::spoken_of(deed)
+        .unwrap_or_else(|| panic!("the band `{shows}` points at `{deed}`, which is not declared"));
+    Chord {
+        shows,
+        command: spoken.deed.id,
+        binds: (1..=10)
+            .map(|n| {
+                let said =
+                    ronoctua_scroll::wire::spoken(&spoken.deed, spoken.text, Some(&n.to_string()))
+                        .unwrap_or_else(|e| panic!("the band `{shows}` cannot say {n}: {e}"));
+                (format!("{prefix}{}", n % 10), said)
+            })
+            .collect(),
+        nested: None,
+        nested_shows: None,
     }
 }
 
@@ -224,8 +322,8 @@ pub fn chords() -> Vec<Chord> {
         of_command("t", "T", "window-float"),
         // --- workspaces ---
         of_command("g", "G", "workspace-overview"),
-        range_of("1…9", "workspace-go", ""),
-        range_of("S-1…9", "workspace-move", "Shift+"),
+        range_of("1…0", "workspace-go", ""),
+        range_of("S-1…0", "workspace-move", "Shift+"),
         of_command(",", "Comma", "window-consume"),
         of_command(".", "Period", "window-expel"),
         // THE MOUSE WHEEL is a chord too: with the leader held, scrolling
@@ -259,6 +357,624 @@ pub fn chords() -> Vec<Chord> {
         // drop that one.
         through_shell("ESC", "Escape", "monitor-btop"),
         through_shell("S-ESC", "Shift+Escape", "monitor-bottom"),
+    ]
+    .into_iter()
+    .chain(scroll_chords())
+    .collect()
+}
+
+/// EVERY SHORTCUT OF THE COMPOSITOR'S OWN CONFIGURATION, and the few that
+/// could not keep their key.
+///
+/// The session starts the compositor with `-c`, so the configuration it ships
+/// — some three hundred binds and fifteen modes — is never read. Everything it
+/// binds is here instead, on the key it uses, with the owner's rules for where
+/// the two tables meet:
+///
+/// - **Where a chord of ours already has the key, ours keeps it.** Nine keys:
+///   `S-arrows`, `f`, `S-f`, `c`, `t`, `g`, `,`, `.` and the wheel.
+/// - **What loses its key and has no other one gets another**, written
+///   `RELOCATED` beside it: the other screens' focus (`S-h/j/k/l`), the align
+///   mode (`i`), maximising in place (`m`), the saved layouts (`s`), and the
+///   content's zoom (`C--`, `C-=` and `C-` wheel). What already had a key of
+///   ours — full screen, float, overview — needs none.
+/// - **`Super+Alt+…` has another key in the nested loop**, where the prefix
+///   IS Alt and the keymap has no Super: `C-S-` and a letter, see
+///   [`Chord::nested`].
+/// - **The mouse's back button is not taken bare.** The shipped
+///   configuration binds `button8` to the overview on the WHOLE window, which
+///   takes Back away from every browser and file manager; here it wants the
+///   prefix like every other chord.
+/// - **One is left out**: `jump criteria [app_id="firefox"]` names a program,
+///   and a deed with criteria is outside `assets/compositor-deeds.nix`'s rule.
+/// - **What the shipped file hands to programs we do not ship** (`wmenu-run`,
+///   a terminal, a file manager, `scrollnag`, `grim`, `brightnessctl`) goes to
+///   ours: the launcher, the file manager, leaving the session, the capture,
+///   the screens' brightness.
+fn scroll_chords() -> Vec<Chord> {
+    let d = of_deed;
+    let mut out = vec![
+        // --- closing, reading, leaving ---
+        d("BS", "BackSpace", "wm-close"),
+        d("S-BS", "Shift+BackSpace", "wm-close-others"),
+        d("C-BS", "Ctrl+BackSpace", "wm-close-all"),
+        through_shell("r", "r", "apps-open"),
+        through_shell("e", "e", "files-window"),
+        d("S-c", "Shift+c", "wm-reload"),
+        through_shell("S-x", "Shift+x", "session-quit"),
+        // --- the scroll's direction ---
+        d("[", "bracketleft", "wm-columns"),
+        d("]", "bracketright", "wm-rows"),
+        // --- focus and moving ---
+        d("HOME", "Home", "wm-focus-beginning"),
+        d("END", "End", "wm-focus-end"),
+        d("C-←", "Ctrl+Left", "wm-move-left"),
+        d("C-↓", "Ctrl+Down", "wm-move-down"),
+        d("C-↑", "Ctrl+Up", "wm-move-up"),
+        d("C-→", "Ctrl+Right", "wm-move-right"),
+        d("C-HOME", "Ctrl+Home", "wm-move-beginning"),
+        d("C-END", "Ctrl+End", "wm-move-end"),
+        d("M-←", "Alt+Left", "wm-move-out-left").nested("C-S-h", "Ctrl+Shift+h"),
+        d("M-↓", "Alt+Down", "wm-move-out-down").nested("C-S-j", "Ctrl+Shift+j"),
+        d("M-↑", "Alt+Up", "wm-move-out-up").nested("C-S-k", "Ctrl+Shift+k"),
+        d("M-→", "Alt+Right", "wm-move-out-right").nested("C-S-l", "Ctrl+Shift+l"),
+        d("M-HOME", "Alt+Home", "wm-move-out-beginning").nested("C-S-HOME", "Ctrl+Shift+Home"),
+        d("M-END", "Alt+End", "wm-move-out-end").nested("C-S-END", "Ctrl+Shift+End"),
+        // RELOCATED: the shipped file has these on `S-arrows`, which move a
+        // window here.
+        d("S-h", "Shift+h", "wm-focus-screen-left"),
+        d("S-j", "Shift+j", "wm-focus-screen-down"),
+        d("S-k", "Shift+k", "wm-focus-screen-up"),
+        d("S-l", "Shift+l", "wm-focus-screen-right"),
+        // --- workspaces ---
+        d("C-S-←", "Ctrl+Shift+Left", "wm-workspace-to-screen-left"),
+        d("C-S-→", "Ctrl+Shift+Right", "wm-workspace-to-screen-right"),
+        digits_of("C-1…0", "wm-workspace-swap", "Ctrl+"),
+        digits_of("C-S-1…0", "wm-workspace-swap-name", "Ctrl+Shift+"),
+        // THE NAMES ARE THE OTHER WAY ROUND from what they look like:
+        // `wm-workspace-next` is `next_on_output` (it is what the wheel
+        // chord has always meant), and `-screen` is the one that crosses to
+        // other screens. `every-compositor-shortcut-is-bound` caught these
+        // four the right way round only after they were bound wrong.
+        d("S-PGUP", "Shift+Prior", "wm-workspace-previous-screen"),
+        d("S-PGDN", "Shift+Next", "wm-workspace-next-screen"),
+        d("PGUP", "Prior", "wm-workspace-previous"),
+        d("PGDN", "Next", "wm-workspace-next"),
+        d("C-z", "Ctrl+z", "wm-workspace-back"),
+        // --- the zoom of the workspace, and of the content ---
+        d("S-,", "Shift+comma", "wm-zoom-out"),
+        d("S-.", "Shift+period", "wm-zoom-in"),
+        d("C-S-.", "Ctrl+Shift+period", "wm-zoom-reset"),
+        d("S-<wheel-up>", "Shift+button4", "wm-zoom-out"),
+        d("S-<wheel-down>", "Shift+button5", "wm-zoom-in"),
+        // RELOCATED: the shipped file has these on `,`, `.` and the wheel,
+        // which are ours.
+        d("C--", "Ctrl+minus", "wm-content-smaller"),
+        d("C-=", "Ctrl+equal", "wm-content-bigger"),
+        d("C-.", "Ctrl+period", "wm-content-reset"),
+        d("C-<wheel-up>", "Ctrl+button4", "wm-content-smaller"),
+        d("C-<wheel-down>", "Ctrl+button5", "wm-content-bigger"),
+        // --- the overview ---
+        d("TAB", "Tab", "wm-overview"),
+        d("S-TAB", "Shift+Tab", "wm-overview-all"),
+        d("<back>", "button8", "wm-overview"),
+        // --- full screen and floating ---
+        d("C-f", "Ctrl+f", "wm-full-layout"),
+        d("M-f", "Alt+f", "wm-full-application").nested("C-S-f", "Ctrl+Shift+f"),
+        d("C-M-f", "Ctrl+Alt+f", "wm-full-global").nested("C-S-g", "Ctrl+Shift+g"),
+        d("y", "y", "wm-focus-either"),
+        d("S-y", "Shift+y", "wm-transpose"),
+        d("C-S-a", "Ctrl+Shift+a", "wm-stick"),
+        d("a", "a", "wm-pin-beginning"),
+        d("S-a", "Shift+a", "wm-pin-end"),
+        // --- the selection ---
+        d("INS", "Insert", "wm-select"),
+        d("C-INS", "Ctrl+Insert", "wm-select-none"),
+        d("S-INS", "Shift+Insert", "wm-select-move"),
+        d("C-S-INS", "Ctrl+Shift+Insert", "wm-select-workspace"),
+        d("M-INS", "Alt+Insert", "wm-select-to-trail").nested("C-S-DEL", "Ctrl+Shift+Delete"),
+        // --- the scratchpad ---
+        d("S-z", "Shift+z", "wm-scratchpad-put"),
+        d("z", "z", "wm-scratchpad-show"),
+        d("M-z", "Alt+z", "wm-scratchpad-jump").nested("C-S-z", "Ctrl+Shift+z"),
+        // --- the focus ring ---
+        d("S-[", "Shift+bracketleft", "wm-ring-previous"),
+        d("S-]", "Shift+bracketright", "wm-ring-next"),
+        d("S-RET", "Shift+Return", "wm-ring-set"),
+        d("S-DEL", "Shift+Delete", "wm-ring-remove"),
+        d("S-HOME", "Shift+Home", "wm-ring-first"),
+        d("S-END", "Shift+End", "wm-ring-last"),
+        // --- sizes ---
+        d("-", "minus", "wm-width-previous"),
+        d("=", "equal", "wm-width-next"),
+        d("S--", "Shift+minus", "wm-height-previous"),
+        d("S-=", "Shift+equal", "wm-height-next"),
+        d("S-t", "Shift+t", "wm-toggle-size-active"),
+        // RELOCATED: `t` floats a window here.
+        d("m", "m", "wm-toggle-size-this"),
+    ];
+    // --- and the doors to the fifteen modes ---
+    out.extend(modes().into_iter().map(|m| {
+        let spoken = ronoctua_scroll::deeds::spoken_of(m.deed)
+            .unwrap_or_else(|| panic!("the mode `{}` has no deed", m.name));
+        Chord {
+            shows: m.shows,
+            command: spoken.deed.id,
+            binds: vec![(m.key.to_owned(), spoken.text.to_owned())],
+            nested: None,
+            nested_shows: None,
+        }
+    }));
+    out
+}
+
+/// One of the compositor's MODES: a key that switches every other key to a
+/// small table of its own until `Esc` (or one of them) switches back.
+///
+/// The compositor has no bar here to say a mode is on, so the footer does:
+/// it hears the mode change over IPC and draws the mode's keys on the hint
+/// line (`Footer::compositor_mode`), from THIS table.
+pub struct Mode {
+    /// The name the compositor knows it by, which is also its text key's
+    /// tail (`compositor-mode-<name>`).
+    pub name: &'static str,
+    /// The deed that enters it (`wm-mode-<name>`).
+    pub deed: &'static str,
+    /// Its entry chord's notation.
+    pub shows: &'static str,
+    /// Its entry chord's key, without the prefix.
+    pub key: &'static str,
+    /// The keys inside it.
+    pub keys: Vec<ModeKey>,
+}
+
+/// A key inside a mode. Bare: a mode's whole point is that the prefix is
+/// no longer needed.
+pub struct ModeKey {
+    /// How it appears on the hint line.
+    pub shows: String,
+    /// The key as the compositor spells it.
+    pub key: String,
+    /// The deed it runs, which is also its label.
+    pub command: &'static str,
+    /// The text the compositor is given — with `; mode default` when the key
+    /// leaves the mode.
+    pub said: String,
+}
+
+/// A mode key that runs `deed` (with `n`) and, when `leaves`, goes back to the
+/// default mode.
+fn mode_key(shows: &str, key: &str, deed: &'static str, n: Option<&str>, leaves: bool) -> ModeKey {
+    let spoken = ronoctua_scroll::deeds::spoken_of(deed).unwrap_or_else(|| {
+        panic!("the mode key `{key}` points at `{deed}`, which is not declared")
+    });
+    let mut said = ronoctua_scroll::wire::spoken(&spoken.deed, spoken.text, n)
+        .unwrap_or_else(|e| panic!("the mode key `{key}` cannot say `{deed}`: {e}"));
+    if leaves {
+        said.push_str("; mode default");
+    }
+    ModeKey {
+        shows: shows.to_owned(),
+        key: key.to_owned(),
+        command: spoken.deed.id,
+        said,
+    }
+}
+
+/// The fractions the size modes offer, on `1` to `0`, `-` and `=` — the
+/// shipped file's own numbers.
+const FRACTIONS: [(&str, &str, &str); 12] = [
+    ("1", "1", "0.125"),
+    ("2", "2", "0.1666666667"),
+    ("3", "3", "0.25"),
+    ("4", "4", "0.333333333"),
+    ("5", "5", "0.375"),
+    ("6", "6", "0.5"),
+    ("7", "7", "0.625"),
+    ("8", "8", "0.6666666667"),
+    ("9", "9", "0.75"),
+    ("0", "0", "0.833333333"),
+    ("-", "minus", "0.875"),
+    ("=", "equal", "1.0"),
+];
+
+/// The five splits of a workspace, on `1` to `5` — top and bottom…
+const SPLITS: [&str; 5] = ["0.25", "0.333333333", "0.5", "0.66666667", "0.75"];
+/// …and side by side, whose two thirds the shipped file writes with one
+/// digit fewer. Kept as it is: the point is the same keys doing the same.
+const SPLITS_ACROSS: [&str; 5] = ["0.25", "0.333333333", "0.5", "0.6666667", "0.75"];
+
+/// All fifteen modes.
+#[must_use]
+pub fn modes() -> Vec<Mode> {
+    let k = mode_key;
+    let digits = |deed: &'static str, shift: &str, notation: &str| -> Vec<ModeKey> {
+        (0..=9)
+            .map(|n| {
+                let d = n.to_string();
+                k(
+                    &format!("{notation}{d}"),
+                    &format!("{shift}{d}"),
+                    deed,
+                    Some(&d),
+                    true,
+                )
+            })
+            .collect()
+    };
+    let fractions = |deed: &'static str| -> Vec<ModeKey> {
+        FRACTIONS
+            .iter()
+            .map(|(shows, key, n)| k(shows, key, deed, Some(n), true))
+            .collect()
+    };
+    let resize = |by: &str, moves: bool| -> Vec<ModeKey> {
+        let mut v = Vec::new();
+        if moves {
+            v.extend([
+                k("←", "Left", "wm-nudge-left", Some(by), false),
+                k("↓", "Down", "wm-nudge-down", Some(by), false),
+                k("↑", "Up", "wm-nudge-up", Some(by), false),
+                k("→", "Right", "wm-nudge-right", Some(by), false),
+            ]);
+        } else {
+            v.extend([
+                k("←", "Left", "wm-resize-narrower", Some(by), false),
+                k("↓", "Down", "wm-resize-taller", Some(by), false),
+                k("↑", "Up", "wm-resize-shorter", Some(by), false),
+                k("→", "Right", "wm-resize-wider", Some(by), false),
+            ]);
+        }
+        v.extend([
+            k(
+                "S-←",
+                "Shift+Left",
+                "wm-resize-shrink-right",
+                Some(by),
+                false,
+            ),
+            k("S-↓", "Shift+Down", "wm-resize-grow-down", Some(by), false),
+            k("S-↑", "Shift+Up", "wm-resize-shrink-down", Some(by), false),
+            k(
+                "S-→",
+                "Shift+Right",
+                "wm-resize-grow-right",
+                Some(by),
+                false,
+            ),
+            k("C-←", "Ctrl+Left", "wm-resize-grow-left", Some(by), false),
+            k("C-↓", "Ctrl+Down", "wm-resize-shrink-up", Some(by), false),
+            k("C-↑", "Ctrl+Up", "wm-resize-grow-up", Some(by), false),
+            k(
+                "C-→",
+                "Ctrl+Right",
+                "wm-resize-shrink-left",
+                Some(by),
+                false,
+            ),
+        ]);
+        v
+    };
+    let mode = |name: &'static str,
+                deed: &'static str,
+                shows: &'static str,
+                key: &'static str,
+                keys: Vec<ModeKey>| Mode {
+        name,
+        deed,
+        shows,
+        key,
+        keys,
+    };
+    vec![
+        mode("split", "wm-mode-split", "S-\\", "Shift+backslash", {
+            let mut v: Vec<ModeKey> = SPLITS
+                .iter()
+                .enumerate()
+                .map(|(i, n)| {
+                    let d = (i + 1).to_string();
+                    k(&d, &d, "wm-workspace-split-v", Some(n), true)
+                })
+                .collect();
+            v.extend(SPLITS_ACROSS.iter().enumerate().map(|(i, n)| {
+                let d = (i + 1).to_string();
+                k(
+                    &format!("S-{d}"),
+                    &format!("Shift+{d}"),
+                    "wm-workspace-split-h",
+                    Some(n),
+                    true,
+                )
+            }));
+            v.push(k("r", "r", "wm-workspace-split-reset", None, true));
+            v
+        }),
+        mode(
+            "jump",
+            "wm-mode-jump",
+            "/",
+            "slash",
+            vec![
+                k("/", "slash", "wm-jump-tiling", None, true),
+                k("S-/", "Shift+slash", "wm-jump-tiling-all", None, true),
+                k("c", "c", "wm-jump-container", None, true),
+                k("w", "w", "wm-jump-workspaces", None, true),
+                k("f", "f", "wm-jump-floating", None, true),
+                k("S-f", "Shift+f", "wm-jump-floating-all", None, true),
+                k("a", "a", "wm-jump-everywhere", None, true),
+                k("S-a", "Shift+a", "wm-jump-everywhere-all", None, true),
+                k("s", "s", "wm-scratchpad-jump", None, true),
+                k("t", "t", "wm-jump-trailmark", None, true),
+                k("S-t", "Shift+t", "wm-jump-trailmark-all", None, true),
+                k("v", "v", "wm-jump", None, true),
+            ],
+        ),
+        mode("filter", "wm-mode-filter", "S-/", "Shift+slash", {
+            let mut v = Vec::new();
+            for (letter, key, what) in [
+                ("/", "slash", "tiling"),
+                ("c", "c", "container"),
+                ("f", "f", "floating"),
+                ("t", "t", "trailmark"),
+                ("v", "v", "visible"),
+            ] {
+                let deed = |tail: &str| -> &'static str {
+                    ronoctua_scroll::deeds::spoken_of(&format!("wm-filter-{what}{tail}"))
+                        .map(|s| s.deed.id)
+                        .unwrap_or_else(|| panic!("no filter deed for `{what}{tail}`"))
+                };
+                v.push(k(letter, key, deed(""), None, true));
+                v.push(k(
+                    &format!("S-{letter}"),
+                    &format!("Shift+{key}"),
+                    deed("-all"),
+                    None,
+                    true,
+                ));
+                v.push(k(
+                    &format!("C-{letter}"),
+                    &format!("Ctrl+{key}"),
+                    deed("-only"),
+                    None,
+                    true,
+                ));
+            }
+            v.push(k("r", "r", "wm-filter-reset", None, true));
+            v
+        }),
+        mode(
+            "placement",
+            "wm-mode-placement",
+            "\\",
+            "backslash",
+            vec![
+                k("→", "Right", "wm-placement-after", None, true),
+                k("←", "Left", "wm-placement-before", None, true),
+                k("HOME", "Home", "wm-placement-beginning", None, true),
+                k("END", "End", "wm-placement-end", None, true),
+                k("↑", "Up", "wm-placement-focus", None, true),
+                k("↓", "Down", "wm-placement-no-focus", None, true),
+                k("h", "h", "wm-centre-horizontal", None, true),
+                k("S-h", "Shift+h", "wm-no-centre-horizontal", None, true),
+                k("v", "v", "wm-centre-vertical", None, true),
+                k("S-v", "Shift+v", "wm-no-centre-vertical", None, true),
+                k("r", "r", "wm-reorder-auto", None, true),
+                k("S-r", "Shift+r", "wm-no-reorder-auto", None, true),
+                k("w", "w", "wm-fit-fraction", None, true),
+                k("S-w", "Shift+w", "wm-fit-split", None, true),
+                k("C-w", "Ctrl+w", "wm-no-fit", None, true),
+            ],
+        ),
+        mode(
+            "width",
+            "wm-mode-width",
+            "b",
+            "b",
+            fractions("wm-width-set"),
+        ),
+        mode(
+            "height",
+            "wm-mode-height",
+            "S-b",
+            "Shift+b",
+            fractions("wm-height-set"),
+        ),
+        mode(
+            "resize",
+            "wm-mode-resize",
+            "S-r",
+            "Shift+r",
+            resize("100", false),
+        ),
+        mode(
+            "floating",
+            "wm-mode-floating",
+            "C-r",
+            "Ctrl+r",
+            resize("50", true),
+        ),
+        mode("toggle-width", "wm-mode-toggle-width", "C-t", "Ctrl+t", {
+            let mut v = fractions("wm-toggle-size-width");
+            v.push(k("r", "r", "wm-toggle-size-reset", None, true));
+            v
+        }),
+        mode(
+            "toggle-height",
+            "wm-mode-toggle-height",
+            "C-S-t",
+            "Ctrl+Shift+t",
+            {
+                let mut v = fractions("wm-toggle-size-height");
+                v.push(k("r", "r", "wm-toggle-size-reset", None, true));
+                v
+            },
+        ),
+        // RELOCATED: the shipped file opens this on `c`, which centres here.
+        mode(
+            "align",
+            "wm-mode-align",
+            "i",
+            "i",
+            vec![
+                k("c", "c", "wm-align-centre", None, true),
+                k("m", "m", "wm-align-middle", None, true),
+                k("r", "r", "wm-align-auto", None, true),
+                k("←", "Left", "wm-align-left", None, true),
+                k("→", "Right", "wm-align-right", None, true),
+                k("↑", "Up", "wm-align-top", None, true),
+                k("↓", "Down", "wm-align-bottom", None, true),
+            ],
+        ),
+        mode(
+            "fit",
+            "wm-mode-fit",
+            "w",
+            "w",
+            vec![
+                k("w", "w", "wm-fit-visible", None, true),
+                k("S-w", "Shift+w", "wm-fit-rows-visible", None, true),
+                k("C-w", "Ctrl+w", "wm-fit-columns-visible-equal", None, true),
+                k(
+                    "C-S-w",
+                    "Ctrl+Shift+w",
+                    "wm-fit-rows-visible-equal",
+                    None,
+                    true,
+                ),
+                k("→", "Right", "wm-fit-columns-to-end", None, true),
+                k("S-→", "Shift+Right", "wm-fit-rows-to-end", None, true),
+                k(
+                    "C-→",
+                    "Ctrl+Right",
+                    "wm-fit-columns-to-end-equal",
+                    None,
+                    true,
+                ),
+                k(
+                    "C-S-→",
+                    "Ctrl+Shift+Right",
+                    "wm-fit-rows-to-end-equal",
+                    None,
+                    true,
+                ),
+                k("←", "Left", "wm-fit-columns-to-start", None, true),
+                k("S-←", "Shift+Left", "wm-fit-rows-to-start", None, true),
+                k(
+                    "C-←",
+                    "Ctrl+Left",
+                    "wm-fit-columns-to-start-equal",
+                    None,
+                    true,
+                ),
+                k(
+                    "C-S-←",
+                    "Ctrl+Shift+Left",
+                    "wm-fit-rows-to-start-equal",
+                    None,
+                    true,
+                ),
+                k("↑", "Up", "wm-maximise", None, true),
+                k("S-↑", "Shift+Up", "wm-fit-rows-active", None, true),
+                k("↓", "Down", "wm-fit-columns-all", None, true),
+                k("S-↓", "Shift+Down", "wm-fit-rows-all", None, true),
+                k("C-↓", "Ctrl+Down", "wm-fit-columns", None, true),
+                k("C-S-↓", "Ctrl+Shift+Down", "wm-fit-rows", None, true),
+            ],
+        ),
+        mode(
+            "trailmark",
+            "wm-mode-trailmark",
+            ";",
+            "semicolon",
+            vec![
+                k("]", "bracketright", "wm-trailmark-next", None, false),
+                k("[", "bracketleft", "wm-trailmark-previous", None, false),
+                k(";", "semicolon", "wm-trailmark", None, true),
+                k("/", "slash", "wm-trailmark-jump", None, true),
+            ],
+        ),
+        mode("trail", "wm-mode-trail", "S-;", "Shift+semicolon", {
+            let mut v = vec![
+                k("]", "bracketright", "wm-trail-next", None, false),
+                k("[", "bracketleft", "wm-trail-previous", None, false),
+            ];
+            v.extend(digits("wm-trail-number", "", ""));
+            v.extend([
+                k(";", "semicolon", "wm-trail-new", None, true),
+                k("d", "d", "wm-trail-delete", None, true),
+                k("c", "c", "wm-trail-clear", None, true),
+                k("INS", "Insert", "wm-trail-to-selection", None, true),
+            ]);
+            v
+        }),
+        // RELOCATED: the shipped file opens this on `g`, the overview here.
+        mode("spaces", "wm-mode-spaces", "s", "s", {
+            let mut v = digits("wm-space-load", "", "");
+            v.extend(digits("wm-space-save", "Shift+", "S-"));
+            v.extend(digits("wm-space-restore-hide", "Ctrl+", "C-"));
+            v.extend(digits("wm-space-restore", "Ctrl+Shift+", "C-S-"));
+            v
+        }),
+    ]
+}
+
+/// The hint line while the compositor's mode `name` is on: every key of it,
+/// a band of digits on the same deed told once (`1…0`), and `Esc`.
+#[must_use]
+pub fn mode_hint(name: &str, texts: &ronoctua_i18n::Texts) -> Option<Vec<crate::chrome::Piece>> {
+    use crate::chrome::Piece;
+    let mode = modes().into_iter().find(|m| m.name == name)?;
+    let mut out: Vec<Piece> = Vec::new();
+    let mut i = 0;
+    while i < mode.keys.len() {
+        let first = &mode.keys[i];
+        let mut last = i;
+        while last + 1 < mode.keys.len() && mode.keys[last + 1].command == first.command {
+            last += 1;
+        }
+        let shows = if last > i {
+            format!("{}…{}", first.shows, mode.keys[last].shows)
+        } else {
+            first.shows.clone()
+        };
+        if !out.is_empty() {
+            out.push(Piece::separator());
+        }
+        out.push(Piece::key(shows, false).about(first.command));
+        out.push(
+            Piece::prose(format!(
+                " {}",
+                texts.t(&format!("{}{}", ronoctua_cmd::KEY_PREFIX_OF, first.command))
+            ))
+            .about(first.command),
+        );
+        i = last + 1;
+    }
+    out.push(Piece::separator());
+    out.push(Piece::key("ESC", false).about("wm-mode-default"));
+    out.push(
+        Piece::prose(format!(
+            " {}",
+            texts.t(&format!("{}wm-mode-default", ronoctua_cmd::KEY_PREFIX_OF))
+        ))
+        .about("wm-mode-default"),
+    );
+    Some(out)
+}
+
+/// The compositor's other two ways in besides a key: dragging with the prefix
+/// held, and four fingers on a touchpad — both as the shipped file has them.
+///
+/// `floating_modifier` makes the prefix plus the LEFT button move a floating
+/// window and the RIGHT button resize it, which is what somebody who has used
+/// this compositor anywhere else reaches for first.
+#[must_use]
+pub fn gestures(prefix: &str) -> Vec<String> {
+    vec![
+        format!("floating_modifier {prefix} normal"),
+        "bindgesture swipe:4:right workspace next".to_owned(),
+        "bindgesture swipe:4:left workspace prev".to_owned(),
+        "bindgesture swipe:4:up scale_workspace overview".to_owned(),
     ]
 }
 
@@ -303,7 +1019,7 @@ fn canonical_key(key: &str) -> String {
 /// The collision depends on the prefix: `Alt+Ctrl+L` only clashes with `Ctrl+Alt+L` in the
 /// nested loop. Checking BOTH and dropping in either keeps dev and production
 /// with the same keyboard — which is worth more than one extra chord in one of the two.
-const PREFIXES: [&str; 2] = ["Mod", "Alt"];
+const PREFIXES: [&str; 2] = ["Super", NESTED_PREFIX];
 
 #[must_use]
 pub fn full_chords() -> Vec<Chord> {
@@ -388,8 +1104,19 @@ pub fn media() -> Vec<(&'static str, String, &'static str)> {
         ("XF86AudioMute", "volume-mute"),
         ("XF86AudioMicMute", "mic-mute"),
         ("XF86AudioPlay", "media-play"),
+        // A PAUSE KEY toggles like play: `playerctl play-pause` is what the
+        // compositor's own configuration gives it too.
+        ("XF86AudioPause", "media-play"),
+        ("XF86AudioStop", "media-stop"),
         ("XF86AudioNext", "media-next"),
         ("XF86AudioPrev", "media-previous"),
+        // THE REST OF THE TOP ROW the compositor's own configuration binds:
+        // the screen's light, through the screens' own thread (it knows a
+        // panel from a monitor over DDC), and `Print`, through the capture
+        // `LEADER m s` takes.
+        ("XF86MonBrightnessUp", "brightness-up"),
+        ("XF86MonBrightnessDown", "brightness-down"),
+        ("Print", "screen-capture"),
     ]
     .into_iter()
     .map(|(key, id)| (key, format!("exec \"{shell}\" command {id}"), id))
@@ -537,6 +1264,78 @@ pub fn notification_program(program: ronoctua_notify::Program) -> Option<String>
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// Every top-level key under `prefix`, canonical, the bare ones included.
+    fn keys_under(prefix: &str) -> Vec<String> {
+        let mut out: Vec<String> = full_chords()
+            .iter()
+            .flat_map(|c| {
+                c.binds_for(prefix)
+                    .iter()
+                    .map(|(k, _)| canonical_key(&format!("{prefix}+{k}")))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        out.extend(emergency().into_iter().map(|(k, _, _)| canonical_key(k)));
+        out.extend(media().into_iter().map(|(k, _, _)| canonical_key(k)));
+        out
+    }
+
+    #[test]
+    fn no_chord_is_dropped_and_no_two_binds_share_a_key_in_either_loop() {
+        // The deduplication in `full_chords` DROPS a chord that lands on an
+        // emergency key, in silence. With three hundred binds that is where
+        // one would go missing, so it must drop nothing.
+        assert_eq!(full_chords().len(), chords().len(), "a chord was dropped");
+        for prefix in PREFIXES {
+            let keys = keys_under(prefix);
+            let mut seen = std::collections::BTreeSet::new();
+            for k in &keys {
+                assert!(
+                    seen.insert(k.clone()),
+                    "`{k}` is bound twice under {prefix}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_in_the_nested_loop_needs_a_second_alt() {
+        // The nested prefix IS Alt: a chord with Alt of its own would be the
+        // same keys as the chord without it.
+        for c in full_chords() {
+            for (k, _) in c.binds_for(NESTED_PREFIX) {
+                assert!(
+                    !k.split('+').any(|m| m.eq_ignore_ascii_case("alt")),
+                    "`{}` is `{k}` in the nested loop",
+                    c.shows
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_mode_leaves_and_every_key_in_it_is_distinct() {
+        for m in modes() {
+            let mut seen = std::collections::BTreeSet::new();
+            for k in &m.keys {
+                assert!(
+                    seen.insert(canonical_key(&k.key)),
+                    "`{}` is twice in the mode `{}`",
+                    k.key,
+                    m.name
+                );
+                assert!(!k.key.eq_ignore_ascii_case("escape"), "Esc is the way out");
+            }
+            assert!(!m.keys.is_empty(), "the mode `{}` has no keys", m.name);
+            // A mode is entered by the deed `mode "<name>"`, and that name is
+            // what the compositor's `mode` event reports back.
+            let entry = ronoctua_scroll::deeds::spoken_of(m.deed).expect("declared");
+            assert_eq!(entry.text, format!("mode \"{}\"", m.name));
+        }
+    }
+
     #[test]
     fn the_ids_are_kebab() {
         // `kebab-case`, like every registry id (section 13) — and the dot is

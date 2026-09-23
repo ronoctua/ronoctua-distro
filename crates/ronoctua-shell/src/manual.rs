@@ -54,10 +54,34 @@ pub fn assemble(texts: &Texts, chord: &str) -> Vec<Line> {
 
     // THE CHORDS, in the table's order — which is the order in which they make
     // sense together (focus, move, window, spaces, open), and not alphabetical.
+    let nested = crate::actions::nested();
     for a in crate::actions::full_chords() {
         out.push(Line {
-            key: format!("{chord} + {}", a.shows),
+            key: format!("{chord} + {}", a.shows_for(nested)),
             description: texts.t(&a.label()),
+            title: false,
+        });
+    }
+
+    // THE COMPOSITOR'S MODES, each under its own title: the chord that opens
+    // it is above with the others, and what the keys do once inside is here —
+    // the only place besides the hint line a mode draws while it is on.
+    for mode in crate::actions::modes() {
+        out.push(Line {
+            key: String::new(),
+            description: texts.t(&format!("{}{}", ronoctua_cmd::KEY_PREFIX_OF, mode.deed)),
+            title: true,
+        });
+        for k in &mode.keys {
+            out.push(Line {
+                key: k.shows.clone(),
+                description: texts.t(&format!("{}{}", ronoctua_cmd::KEY_PREFIX_OF, k.command)),
+                title: false,
+            });
+        }
+        out.push(Line {
+            key: "ESC".to_owned(),
+            description: texts.t(&format!("{}wm-mode-default", ronoctua_cmd::KEY_PREFIX_OF)),
             title: false,
         });
     }

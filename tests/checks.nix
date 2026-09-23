@@ -478,6 +478,153 @@ let
 
   # The default keymap closes: no collision and every shortcut pointing at a
   # command that exists. The binary is the same one a person runs by hand.
+  # EVERY SHORTCUT OF THE COMPOSITOR'S OWN CONFIGURATION IS BOUND HERE.
+  #
+  # The session passes `-c`, so the configuration the compositor ships is never
+  # read — and what it binds would simply not exist unless `actions.rs` binds
+  # it too. This reads the PINNED shipped file and the binds we generate, and
+  # asks of every one of its shortcuts: the same key doing the same thing, or
+  # a relocation written below with its reason, or — on the nine keys the
+  # distro already had — the same command on some key of ours. A compositor
+  # update that adds a shortcut fails here, naming it.
+  every-compositor-shortcut-is-bound =
+    let
+      binds =
+        (pkgs.callPackage ../nix/compositor-binds.nix { ronoctua-shell = rust.shell; }).forPrefix
+          "Super";
+    in
+    mkCheck "every-compositor-shortcut-is-bound" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: two configuration files, read as the compositor reads them —
+      # `set` variables, `mode "…" { }` blocks, comments.
+      def parse(path):
+          variables, binds, extra, mode = {}, [], [], None
+          for raw in open(path, encoding="utf-8"):
+              line = raw.split("#", 1)[0].strip() if raw.lstrip().startswith("#") else raw.strip()
+              if not line:
+                  continue
+              for name, value in sorted(variables.items(), key=lambda kv: -len(kv[0])):
+                  line = line.replace(name, value)
+              if line.startswith("set $"):
+                  _, name, value = line.split(None, 2)
+                  variables[name] = value
+                  continue
+              m = re.match(r'mode\s+"([^"]+)"\s*\{', line)
+              if m:
+                  mode = m.group(1)
+                  continue
+              if line == "}":
+                  mode = None
+                  continue
+              if line.startswith(("floating_modifier", "bindgesture")):
+                  extra.append(" ".join(line.split()))
+                  continue
+              if not line.startswith("bindsym"):
+                  continue
+              words = [w for w in line.split()[1:] if not w.startswith("--")]
+              binds.append((mode, canon(words[0]), " ".join(words[1:])))
+          return binds, extra
+
+      ALIASES = {"mod4": "super", "page_up": "prior", "page_down": "next"}
+      def canon(key):
+          parts = [ALIASES.get(p.lower(), p.lower()) for p in key.split("+")]
+          return "+".join(sorted(parts[:-1]) + parts[-1:])
+
+      def steps(command):
+          # `a; mode default;` and `a; mode default` are the same thing.
+          return [s.strip() for s in command.split(";") if s.strip()]
+
+      theirs, their_extra = parse("${inputs.scroll-src}/config.in")
+      ours, our_extra = parse("${binds}")
+      floor(len(theirs), 250, "binds in the shipped configuration")
+      floor(len(ours), 300, "binds we generate")
+
+      MODES = {"wssplit": "split", "jump": "jump", "filter": "filter",
+               "modifiers": "placement", "setsizeh": "width", "setsizev": "height",
+               "resize": "resize", "floating": "floating", "togglesizeh": "toggle-width",
+               "togglesizev": "toggle-height", "align": "align", "fit_size": "fit",
+               "trailmark": "trailmark", "trail": "trail", "spaces": "spaces"}
+      # WHERE A SHORTCUT OF THEIRS WENT, and why — the owner's rule: the
+      # distro keeps its keys, and what loses one gets another.
+      RELOCATED = {
+          "shift+super+left": "shift+super+h", "shift+super+down": "shift+super+j",
+          "shift+super+up": "shift+super+k", "shift+super+right": "shift+super+l",
+          "super+c": "super+i", "super+t": "super+m", "super+g": "super+s",
+          "super+comma": "ctrl+super+minus", "super+period": "ctrl+super+equal",
+          "super+button4": "ctrl+super+button4", "super+button5": "ctrl+super+button5",
+          # Bare, it takes Back away from every browser.
+          "button8": "super+button8",
+      }
+      # The distro's keys whose shipped command already has another key here.
+      ELSEWHERE = {"super+f", "shift+super+f"}
+      # What the shipped file hands to programs this distro does not ship.
+      PROGRAMS = [("kitty", "buffer-terminal"), ("wmenu-run", "apps-open"),
+                  ("$filemanager", "files-window"), ("scrollnag", "session-quit"),
+                  ("grim", "screen-capture"), ("set-sink-mute", "volume-mute"),
+                  ("-5%", "volume-down"), ("+5%", "volume-up"), ("set-source-mute", "mic-mute"),
+                  ("play-pause", "media-play"), ("previous", "media-previous"),
+                  ("playerctl next", "media-next"), ("playerctl stop", "media-stop"),
+                  ("5%-", "brightness-down"), ("5%+", "brightness-up")]
+      # Left out, and why: a deed with criteria names one program.
+      LEFT_OUT = {'jump criteria [app_id="firefox"]'}
+
+      def ours_as(command):
+          if command.startswith("exec "):
+              for needle, ours_id in PROGRAMS:
+                  if needle in command:
+                      return ["command " + ours_id]
+              return None
+          m = re.match(r'mode "([^"]+)"$', command)
+          if m and m.group(1) in MODES:
+              return ['mode "' + MODES[m.group(1)] + '"']
+          return steps(command)
+
+      def matches(wanted, command):
+          if wanted and wanted[0].startswith("command "):
+              return command.startswith("exec ") and command.endswith(wanted[0])
+          return steps(command) == wanted
+
+      by_key = {}
+      for mode, key, command in ours:
+          by_key.setdefault((mode, key), []).append(command)
+      wrong = []
+      for mode, key, command in theirs:
+          if any(steps(command)[0] == left for left in LEFT_OUT):
+              continue
+          wanted = ours_as(command)
+          if wanted is None:
+              wrong.append(f"{key}: `{command}` runs a program nobody mapped")
+              continue
+          where = (MODES.get(mode, mode) if mode else None, key)
+          if mode and mode not in MODES:
+              wrong.append(f"the mode `{mode}` has no counterpart here")
+              continue
+          if any(matches(wanted, c) for c in by_key.get(where, [])):
+              continue
+          if not mode and key in RELOCATED and any(
+              matches(wanted, c) for c in by_key.get((None, RELOCATED[key]), [])
+          ):
+              continue
+          if not mode and key in ELSEWHERE and any(
+              matches(wanted, c) for (m, _), cs in by_key.items() if m is None for c in cs
+          ):
+              continue
+          wrong.append(f"{'mode ' + mode + ': ' if mode else ""}{key} -> `{command}`")
+      for line in their_extra:
+          if line.replace("Mod4", "Super") not in our_extra:
+              wrong.append(f"`{line}` is not in our configuration")
+      for w in wrong:
+          print(f"ERROR: {w}", file=sys.stderr)
+      if wrong:
+          print(f"{len(wrong)} of the compositor's own shortcuts are not bound here.", file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: all {len(theirs)} of the compositor's shortcuts are bound, {len(RELOCATED)} of them elsewhere")
+      END
+    '';
+
   keymap-no-collision = mkCheck "keymap-no-collision" [ ] ''
     ${rust.workspace}/bin/ronoctua-shell check-keymap
   '';
@@ -17578,7 +17725,20 @@ let
       cat broke.txt >&2
       exit 1
     fi
-    echo "OK: the compositor reads every line of the config it will run"
+    # AND THE NESTED LOOP'S, which is not the same file: its prefix is Alt,
+    # and the `Super+Alt+…` shortcuts of the compositor's own configuration
+    # take other keys there (`Chord::nested`). A line refused only in the
+    # loop would be a shortcut that works installed and does nothing in
+    # `.#dev`.
+    cp ${devApp.config} nested
+    chmod +w nested
+    scroll --validate --config nested > nested.txt 2>&1 || true
+    if grep -q 'Error' nested.txt; then
+      echo "ERROR: the compositor refused a line of the NESTED loop's config." >&2
+      cat nested.txt >&2
+      exit 1
+    fi
+    echo "OK: the compositor reads every line of the config it will run, installed and nested"
   '';
 
   # THE POINTERS FRAGMENT, IN FRONT OF A REAL COMPOSITOR — the sibling of
@@ -22821,6 +22981,7 @@ let
       stream-key-is-never-an-argument
       volume-is-perceived
       media-keys-are-bare
+      every-compositor-shortcut-is-bound
       the-microphone-has-one-door
       audio-names-have-text
       one-syncthing-boundary
@@ -23108,6 +23269,7 @@ let
       # unit test; this is the command a PERSON runs after editing their own
       # keymap, and that is why it is worth existing separately.
       keymap-no-collision
+      every-compositor-shortcut-is-bound
       # The elision property test lives in `rust-tests` (5,000 cases drawn by
       # `layout::tests::property_*`).
       rust-tests

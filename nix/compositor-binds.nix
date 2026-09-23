@@ -98,7 +98,12 @@
           echo "ERROR: the emergency bind $press_key did not come out." >&2
           exit 1
         fi
-        if grep -qF "${prefix}+$press_key " $out; then
+        # BY THE COMMAND, not by the text: `${prefix}+Ctrl+Shift+l` is a
+        # DIFFERENT key from `Ctrl+Shift+l`, and in the nested loop it is a
+        # shortcut of the compositor's own (`Chord::nested`). What must not
+        # happen is the emergency's own command arriving only behind the prefix.
+        said=$(grep -F " $press_key " $out | grep -vF "${prefix}+$press_key " | head -1 | sed 's/^[^ ]* \(--[a-z-]* \)*[^ ]* //')
+        if [ -z "$said" ] || grep -F "${prefix}+$press_key " $out | grep -qF "$said"; then
           echo "ERROR: $press_key came out with the leader's prefix, and it exists" >&2
           echo "      exactly so as to work when the leader does not." >&2
           exit 1
