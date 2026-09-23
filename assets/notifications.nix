@@ -125,6 +125,84 @@
       ];
     };
 
+    # THE CAMERA'S PHOTO AND RECORDING, raised by the footer when the studio's
+    # state says one was written (`last_photo`, `last_recording`) — the
+    # screenshot's shape: discreet, `full` for the actions, and a tag we write.
+    studio-photo = {
+      when = [
+        {
+          field = "tag";
+          is = "studio-photo";
+        }
+      ];
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 30;
+      icon = "md-camera_iris";
+      tags = [
+        "studio-photo"
+        "media"
+      ];
+      actions = [
+        {
+          id = "edit";
+          run = "edit";
+          args = [
+            "-f"
+            "file"
+          ];
+        }
+        {
+          id = "open";
+          run = "open";
+          args = [ "file" ];
+        }
+        {
+          id = "folder";
+          run = "open";
+          args = [ "folder" ];
+        }
+        {
+          id = "copy-path";
+          copy-path = true;
+        }
+      ];
+    };
+    studio-recording = {
+      when = [
+        {
+          field = "tag";
+          is = "studio-recording";
+        }
+      ];
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 30;
+      icon = "md-record_rec";
+      tags = [
+        "studio-recording"
+        "media"
+      ];
+      actions = [
+        {
+          id = "open-video";
+          run = "open";
+          args = [ "file" ];
+        }
+        {
+          id = "folder";
+          run = "open";
+          args = [ "folder" ];
+        }
+        {
+          id = "copy-path";
+          copy-path = true;
+        }
+      ];
+    };
+
     # THE MACHINE CLOSED AN APPLICATION SO IT WOULD NOT FREEZE.
     #
     # It used to be built by hand in `surface.rs`, with its own urgency, its own

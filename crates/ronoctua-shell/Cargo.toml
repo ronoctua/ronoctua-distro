@@ -99,6 +99,11 @@ ronoctua-pointers = { path = "../ronoctua-pointers" }
 # footer holds its threads for the whole session — the power crate's
 # arrangement, and its reason.
 ronoctua-audio = { path = "../ronoctua-audio" }
+# THE CAMERA: the V4L2 boundary (the settings' list of cameras and their
+# controls), the studio's wire and preview, and the effect table the rings walk.
+ronoctua-camera = { path = "../ronoctua-camera" }
+ronoctua-studio = { path = "../ronoctua-studio" }
+ronoctua-effects = { path = "../ronoctua-effects" }
 ronoctua-syncthing = { path = "../ronoctua-syncthing" }
 ronoctua-bluetooth = { path = "../ronoctua-bluetooth" }
 ronoctua-keyboards = { path = "../ronoctua-keyboards" }

@@ -211,7 +211,10 @@
       keepSources = "${
         pkgs.callPackage ./nix/kept-sources.nix {
           inherit inputs;
-          downloads = atlasData.sources ++ [ pkgs.bibata-cursors.src ];
+          downloads = atlasData.sources ++ [
+            pkgs.bibata-cursors.src
+            segmentModel
+          ];
         }
       }/bin/ronoctua-keep-sources";
 
@@ -473,6 +476,8 @@
           keyboardsRs
           updatesRs
           cacheRs
+          cameraEffectsRs
+          segmentModel
           syntaxRs
           compositorDeeds
           ;
@@ -550,6 +555,16 @@
       cacheRs = pkgs.callPackage ./nix/cache.nix {
         cacheFile = ./assets/cache.nix;
       };
+
+      # THE CAMERA'S EFFECTS, generated from `assets/camera-effects.nix`: the
+      # Rust table and the text keys, and the refusal of a declaration no key
+      # could turn (see `nix/camera-effects.nix`).
+      cameraEffectsRs = pkgs.callPackage ./nix/camera-effects.nix {
+        effectsFile = ./assets/camera-effects.nix;
+      };
+
+      # THE SEGMENTATION MODEL, pinned by version and hash.
+      segmentModel = pkgs.callPackage ./nix/segment-model.nix { };
 
       # THE SYNTAX TABLE, generated from `assets/syntax.nix` — the same shape
       # again, and it takes `mimeDb` because a language claims MIME TYPES and
@@ -745,6 +760,9 @@
         # it. After `files.nix` because what it runs is that crate's work.
         ./nix/modules/transfers.nix
         ./nix/modules/aria2.nix
+        # The camera studio: the unit that owns every camera, and the kernel's
+        # virtual camera it writes to.
+        ./nix/modules/studio.nix
         ./nix/modules/browser-extension.nix
         ./nix/modules/fonts.nix
         ./nix/modules/scroll.nix
@@ -823,6 +841,11 @@
               # come with the whole workspace. `brain-unit-is-narrow` measures
               # that rather than asserting it.
               brain = rust.brain;
+              # The studio's daemon, EXTRACTED for the same reason: it owns the
+              # camera and draws nothing.
+              studio = rust.studio;
+              # The segmentation model its background effects run.
+              inherit segmentModel;
               # The cache sweep, extracted for the brain's reason and one of
               # its own: a program whose job is `unlink` must not have the
               # whole shell in its closure.
@@ -1470,6 +1493,8 @@
               pointers=yes
             elif [ "$a" = "--keyboards" ]; then
               keyboards=yes
+            elif [ "$a" = "--cameras" ]; then
+              cameras=yes
             else
               pass+=("$a")
             fi
@@ -1604,6 +1629,68 @@
               echo "vm: --keyboards found no external keyboard on this host" >&2
             else
               echo "vm: $taken keyboard(s) are the guest's until it closes; the built-in one stays here"
+            fi
+          fi
+          # `--cameras`: EVERY USB CAMERA OF THE HOST, as the USB DEVICE it is.
+          #
+          # A camera is not an evdev node that QEMU can forward: the guest has
+          # to see the device itself, enumerate its interfaces and load its
+          # own driver, which is what `usb-host` does. So what is passed is
+          # the USB device every capture node hangs from — ONE per device, the
+          # colour and the infrared nodes of one webcam being two interfaces
+          # of the same thing.
+          #
+          # BY UDEV, never by a model: `ID_V4L_CAPABILITIES` says `:capture:`
+          # on a node that captures, whatever its maker, and `ID_BUS=usb` is
+          # what can travel. A camera on another bus (a MIPI sensor behind
+          # libcamera) cannot, and is named so rather than skipped in silence.
+          # The host loses the camera until the VM closes.
+          if [ "''${cameras:-}" = yes ]; then
+            seen=""
+            for dev in /dev/video*; do
+              props=$(${pkgs.systemd}/bin/udevadm info -q property -n "$dev" 2>/dev/null) || continue
+              if ! grep -qE '^ID_V4L_CAPABILITIES=.*:capture:' <<< "$props"; then
+                continue
+              fi
+              # Our own loopback, if the host has one, is not a camera.
+              if grep -qE '^ID_V4L_PRODUCT=ronoctua$' <<< "$props"; then
+                continue
+              fi
+              name=$(cat "/sys/class/video4linux/''${dev##*/}/name" 2>/dev/null || echo "$dev")
+              if ! grep -qE '^ID_BUS=usb$' <<< "$props"; then
+                echo "vm: $name ($dev) is not on USB, and cannot be passed" >&2
+                continue
+              fi
+              # The USB DEVICE, not the interface: the first ancestor with a
+              # `busnum`.
+              at=$(readlink -f "/sys/class/video4linux/''${dev##*/}/device")
+              while [ -n "$at" ] && [ "$at" != / ] && [ ! -e "$at/busnum" ]; do
+                at=''${at%/*}
+              done
+              if [ ! -e "$at/busnum" ]; then
+                continue
+              fi
+              case " $seen " in
+                *" $at "*) continue ;;
+              esac
+              seen="$seen $at"
+              bus=$(cat "$at/busnum")
+              addr=$(cat "$at/devnum")
+              node=$(printf '/dev/bus/usb/%03d/%03d' "$bus" "$addr")
+              if [ ! -r "$node" ] || [ ! -w "$node" ]; then
+                echo "vm: $name ($node) needs access; asking sudo for it"
+                sudo ${pkgs.acl}/bin/setfacl -m "u:$(id -un):rw" "$node"
+              fi
+              echo "vm: passing $name (usb $bus:$addr) to the guest"
+              export QEMU_OPTS="''${QEMU_OPTS:-} -device usb-host,bus=cameras.0,hostbus=$bus,hostaddr=$addr"
+            done
+            if [ -z "$seen" ]; then
+              echo "vm: --cameras found no USB camera on this host" >&2
+            else
+              # One controller for all of them, named so the devices can say
+              # which bus they go on.
+              export QEMU_OPTS="-device qemu-xhci,id=cameras ''${QEMU_OPTS:-}"
+              echo "vm: the camera(s) are the guest's until it closes"
             fi
           fi
           exec ${self.nixosConfigurations.vm.config.system.build.vm}/bin/run-${self.nixosConfigurations.vm.config.networking.hostName}-vm "''${pass[@]}"

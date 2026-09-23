@@ -291,14 +291,33 @@ fn why_of(said: &str) -> Refusal {
 ///
 /// When this build has no `pw-cat`, or the program cannot be run.
 pub fn record(target: u32) -> Result<std::process::Child> {
+    recorder(
+        "8000",
+        "1",
+        &["--target", &target.to_string()],
+        "the meter",
+        "the footer",
+    )
+}
+
+/// THE ONE PLACE `--record` IS WRITTEN, for the meter and the studio alike —
+/// what opens a microphone is built once (`one-pipewire-boundary`).
+///
+/// THE SHEPHERD FIRST, WHEN THERE IS ONE. `setpriv` sets the death signal and
+/// then EXECS, so the recorder's parent is still this process — the guard
+/// costs a process image, not a process.
+fn recorder(
+    rate: &str,
+    channels: &str,
+    extra: &[&str],
+    what: &str,
+    parent: &str,
+) -> Result<std::process::Child> {
     let program = PW_CAT.context("this build has no pw-cat")?;
-    // THE SHEPHERD FIRST, WHEN THERE IS ONE. `setpriv` sets the death signal
-    // and then EXECS, so the recorder's parent is still this process — the
-    // guard costs a process image, not a process.
     let (spawn, lead) = match SETPRIV.filter(|p| !p.is_empty()) {
         Some(setpriv) => (setpriv, vec!["--pdeathsig", "KILL", "--", program]),
         None => {
-            tracing::warn!("no setpriv: the meter will not be killed by a SIGNAL to the footer");
+            tracing::warn!("no setpriv: {what} will not be killed by a SIGNAL to {parent}");
             (program, Vec::new())
         }
     };
@@ -309,22 +328,63 @@ pub fn record(target: u32) -> Result<std::process::Child> {
             "--format",
             "s16",
             "--rate",
-            "8000",
+            rate,
             "--channels",
-            "1",
-            "--target",
-            &target.to_string(),
-            "-",
+            channels,
         ])
+        .args(extra)
+        .arg("-")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         // ITS OWN GROUP, the idiom `transfers/media.rs` and the film player
-        // both use: a Ctrl+C in whatever terminal started the footer must not
-        // reach a child the footer owns.
+        // both use: a Ctrl+C in whatever terminal started the parent must not
+        // reach a child it owns.
         .process_group(0)
         .spawn()
         .with_context(|| format!("could not run {program}"))
+}
+
+/// What the studio records: the microphone, or what the machine plays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capture {
+    /// The default source.
+    Microphone,
+    /// The default sink's MONITOR — every sound the machine plays.
+    Desktop,
+}
+
+/// The rate and layout a recording is captured at: what every encoder and
+/// every receiving site takes without resampling.
+pub const CAPTURE_RATE: u32 = 48_000;
+/// See [`CAPTURE_RATE`].
+pub const CAPTURE_CHANNELS: u32 = 2;
+
+/// Opens a recording of `what`, signed 16-bit interleaved stereo at 48 kHz on
+/// stdout — the SECOND door that opens a microphone, and the same guard
+/// [`record`] has: `setpriv --pdeathsig KILL`, its own process group, and a
+/// caller that holds the child in a value whose `Drop` reaps it (the studio's
+/// `audio.rs`).
+///
+/// The monitor is `stream.capture.sink`, measured with the pinned `pw-cat`:
+/// with it and no target the stream links to the default SINK and records
+/// what is played; without it, to the default SOURCE.
+///
+/// # Errors
+///
+/// When this build has no `pw-cat`, or the program cannot be run.
+pub fn capture(what: Capture) -> Result<std::process::Child> {
+    let extra: &[&str] = match what {
+        Capture::Microphone => &[],
+        Capture::Desktop => &["-P", "{ stream.capture.sink = true }"],
+    };
+    recorder(
+        &CAPTURE_RATE.to_string(),
+        &CAPTURE_CHANNELS.to_string(),
+        extra,
+        "a recording",
+        "the studio",
+    )
 }
 
 #[cfg(test)]

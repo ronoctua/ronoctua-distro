@@ -46,7 +46,7 @@ use std::{
     io::Read,
     os::{fd::AsFd, unix::process::CommandExt},
     path::PathBuf,
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -343,22 +343,10 @@ pub fn player(out: calloop::channel::Sender<Beat>) -> Option<Player> {
     }
 }
 
-/// A child that is killed and reaped whatever happens next.
-///
-/// # Why it is a guard and not four calls
-///
-/// Because it WAS four calls — `kill(); wait()` written out at each of the
-/// exits of `play_video` — and the fifth exit somebody adds tomorrow leaks an
-/// ffmpeg reading a film nobody is looking at. A `Drop` covers `return`, `?`,
-/// `break` and a panic, and there is nowhere left to forget.
-struct Reaped(Child);
-
-impl Drop for Reaped {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
+// A child that is killed and reaped whatever happens next — the one guard
+// every frame reader in the tree shares (`ronoctua_camera::frames`, where the
+// argument for a guard over four calls is written).
+use ronoctua_camera::frames::{Filled, Reaped};
 
 /// What the thread checks between and inside its reads.
 struct Clock<'a> {
@@ -418,76 +406,14 @@ impl Clock<'_> {
     }
 }
 
-/// How a read of one whole frame turned out.
-enum Filled {
-    /// Every byte of it.
-    Whole,
-    /// The pipe closed. **A short frame is never sent** — half a picture read
-    /// as a whole one is the smear this whole design exists to rule out.
-    Short,
-    /// Nothing came inside the deadline.
-    Starved,
-    /// The order changed.
-    Left,
-}
-
 /// Reads exactly one frame, giving up rather than blocking for ever.
 ///
-/// # This is the live hang, and it is why `read_exact` is gone
-///
-/// `read_exact` blocks with NO DEADLINE, and the era was only checked between
-/// frames. An ffmpeg that opens the pipe and never writes — a mount that hung,
-/// a device that went away — held this thread for the rest of the session: the
-/// door kept painting, `orders.recv()` never ran again, and nothing on screen
-/// said so. So the read is a `poll` with a tick, and the deadline and the era
-/// are both asked every time round.
+/// THE LIVE HANG this closes is written over `ronoctua_camera::frames::fill`,
+/// which is the one reader: `read_exact` has no deadline, and an ffmpeg that
+/// opens the pipe and never writes held this thread for the rest of the
+/// session. Here the only thing added is WHO says stop — the era of the order.
 fn fill<R: Read + AsFd>(pipe: &mut R, into: &mut [u8], clock: &Clock<'_>) -> Filled {
-    let deadline = Instant::now() + STARVED;
-    let tick = rustix::event::Timespec {
-        tv_sec: 0,
-        tv_nsec: i64::try_from(TICK.as_nanos()).unwrap_or(20_000_000),
-    };
-    let mut got = 0usize;
-    while got < into.len() {
-        if !clock.current() {
-            return Filled::Left;
-        }
-        if Instant::now() >= deadline {
-            return Filled::Starved;
-        }
-        // The borrow of the pipe ends with this block, so the read below can
-        // take it mutably — the shape `tools::run` already uses.
-        let ready = {
-            let fd = pipe.as_fd();
-            let mut fds = [rustix::event::PollFd::new(
-                &fd,
-                rustix::event::PollFlags::IN,
-            )];
-            match rustix::event::poll(&mut fds, Some(&tick)) {
-                Ok(_) => fds[0].revents(),
-                // A signal is a tick, not a failure.
-                Err(rustix::io::Errno::INTR) => continue,
-                Err(e) => {
-                    tracing::warn!(error = %e, "the player's poll failed");
-                    return Filled::Short;
-                }
-            }
-        };
-        if !ready.intersects(
-            rustix::event::PollFlags::IN
-                | rustix::event::PollFlags::HUP
-                | rustix::event::PollFlags::ERR,
-        ) {
-            continue;
-        }
-        match pipe.read(&mut into[got..]) {
-            Ok(0) => return Filled::Short,
-            Ok(n) => got += n,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => return Filled::Short,
-        }
-    }
-    Filled::Whole
+    ronoctua_camera::frames::fill(pipe, into, STARVED, || clock.current())
 }
 
 /// Follows a video, through a live ffmpeg, until it is told to stop.

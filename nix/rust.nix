@@ -45,6 +45,10 @@
   updatesRs,
   # The cache policy, generated from `assets/cache.nix`.
   cacheRs,
+  # The camera's effects, generated from `assets/camera-effects.nix`.
+  cameraEffectsRs,
+  # The person-segmentation model (`nix/segment-model.nix`), read at run time.
+  segmentModel,
   syntaxRs,
   mimeDb,
   i18nRs,
@@ -171,6 +175,10 @@ let
       # "couldn't read quad.wgsl" — shows up in the NIX BUILD and not in the
       # local `cargo build`, which sees the whole tree.
       (lib.fileset.fileFilter (f: f.hasExt "wgsl") (src + "/crates"))
+      # The segmenter's reference — MediaPipe's own output on a synthetic
+      # input — which its test embeds. By NAME, not every `.txt`: the same
+      # trap as the `.wgsl`, and it too only showed in the Nix build.
+      (src + "/crates/ronoctua-segment/src/reference.txt")
     ];
   };
 
@@ -258,6 +266,9 @@ let
     # can keep alone, so the number comes from one file and the build refuses
     # the pair that breaks it.
     RONOCTUA_CACHE_RS = "${cacheRs}/cache.rs";
+    # THE CAMERA'S EFFECTS, one declaration for the studio's arithmetic and
+    # the text keys both languages owe. See `nix/camera-effects.nix`.
+    RONOCTUA_CAMERA_EFFECTS_RS = "${cameraEffectsRs}/effects.rs";
     # THE SYNTAX TABLE, and it is one file for the same reason the update
     # sequence is: what crosses to Rust is the finished table, not the
     # declaration. `crates/ronoctua-syntax`'s `build.rs` copies it into
@@ -590,6 +601,10 @@ let
   # a component pointed at the wrong kind of thing, and a font directory in
   # there would have had to weaken it.
   atRunTime = bufferComponents // {
+    # THE SEGMENTATION MODEL, at run time for `RONOCTUA_ATLAS`'s reason: a
+    # model update must not rebuild the workspace, and absence is a refusal
+    # drawn on the background effects, not an error.
+    RONOCTUA_SEGMENT_MODEL = "${segmentModel}";
     # THE FALLBACK FACES. Absent, the renderer keeps its four embedded ones and
     # says how many it has (`Text::coverage`) — which is what the installer and
     # the rescue console run with, and they draw two Latin languages.
@@ -896,6 +911,17 @@ rec {
     patchelf --shrink-rpath $out/bin/ronoctua-transfers
   '';
 
+  # THE STUDIO'S DAEMON, extracted the same way: it owns the camera, the
+  # encoders and the virtual camera, and draws nothing — a unit carrying the
+  # renderer and the wasm runtime would keep both alive for a process whose
+  # screen is somebody else's.
+  studio = pkgs.runCommand "ronoctua-studio" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-studio $out/bin/
+    chmod +w $out/bin/ronoctua-studio
+    patchelf --shrink-rpath $out/bin/ronoctua-studio
+  '';
+
   # THE KEYS DAEMON, extracted the same way: Independent mode runs it as root
   # in keyd's place, and a root unit whose closure carried the renderer and
   # the wasm runtime would keep all of it alive for a program that moves key
@@ -984,6 +1010,9 @@ rec {
       # and it proves nothing while passing. The variable is the one the
       # WRAPPER sets at run time; this is the same path, for the tests.
       RONOCTUA_ATLAS = "${atlasData}/world.atlas";
+      # AND THE MODEL, so `the_mask_is_mediapipes_own` compares against
+      # MediaPipe instead of returning early and proving nothing.
+      RONOCTUA_SEGMENT_MODEL = "${segmentModel}";
     }
   );
 

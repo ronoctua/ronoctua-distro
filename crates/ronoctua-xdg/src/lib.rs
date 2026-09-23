@@ -187,6 +187,59 @@ pub fn cache_root() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
 }
 
+/// One of the freedesktop USER directories (`XDG_PICTURES_DIR`,
+/// `XDG_VIDEOS_DIR`, `XDG_DOWNLOAD_DIR`…), or `$HOME/<fallback>`.
+///
+/// `~/.config/user-dirs.dirs` first and the environment second: the variable
+/// is only exported inside a graphical session, and the callers include a
+/// `.desktop` handler, a systemd unit and a browser's child process. The file
+/// is what a file dialog and `xdg-open` actually read — which is exactly the
+/// reason `nix/modules/home.nix` writes it.
+#[must_use]
+pub fn user_dir(key: &str, fallback: &str) -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if let Some(home) = home.as_ref()
+        && let Ok(text) = std::fs::read_to_string(home.join(".config").join("user-dirs.dirs"))
+        && let Some(value) = user_dir_value(&text, key)
+    {
+        return user_dir_expand(home, &value);
+    }
+    if let Some(dir) = std::env::var_os(key).map(PathBuf::from) {
+        return dir;
+    }
+    home.map_or_else(|| PathBuf::from("."), |h| h.join(fallback))
+}
+
+/// The value of one key in a user-dirs file, unquoted.
+#[must_use]
+pub fn user_dir_value(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix(key) else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        return Some(rest.trim().trim_matches('"').to_owned());
+    }
+    None
+}
+
+/// `$HOME/...` as written in that file, made absolute.
+#[must_use]
+pub fn user_dir_expand(home: &Path, value: &str) -> PathBuf {
+    for prefix in ["$HOME/", "${HOME}/"] {
+        if let Some(rest) = value.strip_prefix(prefix) {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(value)
+}
+
 /// Writes `bytes` to `dir/file`, whole and renamed over.
 ///
 /// Written to a scratch file and renamed, so a full disk or a kill mid-write

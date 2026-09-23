@@ -818,6 +818,22 @@ struct Footer {
     /// The pointer thread — started with the footer, because it is what gives
     /// a device plugged in with no view open a cursor of its own.
     pointer_thread: Option<ronoctua_pointers::Handle>,
+    /// The camera settings view (`LEADER s c c`), when it is open.
+    camera_view: Option<crate::camera_settings::View>,
+    /// What its rows read — rebuilt whenever a thread brings news.
+    camera_snapshot: crate::camera_settings::Snapshot,
+    /// Every camera, from the watch (inotify on `/dev`).
+    camera_list: Vec<ronoctua_camera::Camera>,
+    /// The watch itself, kept for the life of the footer.
+    _camera_watch: Option<ronoctua_camera::watch::Handle>,
+    /// The studio's last state: the modeline's recording mark, the photo and
+    /// recording notifications, and the settings' scenes.
+    studio: Option<ronoctua_studio::wire::State>,
+    /// Which programs have a camera open, from `/proc` every two seconds.
+    camera_holders: Vec<String>,
+    /// Whether the modeline may draw the camera mark (`studio.json`'s
+    /// `mark`), refreshed when the studio rereads its settings.
+    camera_mark_allowed: bool,
     /// Independent keyboards: the mode, the link to `ronoctua-keys`, and the
     /// keyboard the open region belongs to (`crate::keys_link`).
     keys: crate::keys_link::Keys,
@@ -1163,6 +1179,9 @@ enum ViewState {
     /// view and for its reason: a cursor over a list of settings holds
     /// nothing a person built by hand.
     Pointers,
+    /// The camera settings — `LEADER s c c`. Ranked with the pointers for
+    /// their reason: rows of settings hold nothing built by hand.
+    Camera,
     /// Syncthing — `LEADER s s s`.
     Syncthing,
     /// The shell's history — `LEADER s h h`.
@@ -1449,6 +1468,8 @@ enum Click {
     Audio(usize),
     /// A row of the pointers view: the cursor goes there, `RET` acts.
     Pointers(usize),
+    /// A row of the camera settings.
+    Camera(usize),
     /// A row of the Syncthing view.
     Syncthing(usize),
     /// A row of the language and region view.
@@ -2377,6 +2398,14 @@ pub fn run() -> Result<()> {
         pointer_view: None,
         pointer_snapshot: None,
         pointer_thread: None,
+        camera_view: None,
+        camera_snapshot: crate::camera_settings::Snapshot::default(),
+        camera_list: Vec::new(),
+        _camera_watch: None,
+        studio: None,
+        camera_holders: Vec::new(),
+        camera_mark_allowed: ronoctua_studio::prefs::store().read().mark
+            == ronoctua_studio::prefs::Mark::WhenInUse,
         keys: crate::keys_link::Keys {
             independent: crate::keys_link::independent(),
             ..Default::default()
@@ -3117,6 +3146,68 @@ pub fn run() -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the pointers' channel: {e}"))?;
 
+    // THE CAMERAS, by event: the settings view reads them, and the watch is
+    // an inotify thread that sleeps until a camera is plugged or unplugged.
+    let (camera_sender, camera_events) = channel::channel::<Vec<ronoctua_camera::Camera>>();
+    state._camera_watch = Some(ronoctua_camera::watch::watch(move |c| {
+        let _ = camera_sender.send(c);
+    }));
+    handle
+        .insert_source(camera_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(c) = event {
+                state.camera_list = c;
+                state.camera_reread();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the camera channel: {e}"))?;
+    // THE STUDIO'S STATE, for the recording mark and the photo and recording
+    // notifications. `client::watch` starts the daemon when nobody answers —
+    // the nested loop has no unit — and an idle studio costs nothing.
+    let (studio_sender, studio_events) = channel::channel::<Option<ronoctua_studio::wire::State>>();
+    let _studio_watch = ronoctua_studio::client::watch(move |s| {
+        let _ = studio_sender.send(s);
+    });
+    std::mem::forget(_studio_watch);
+    handle
+        .insert_source(studio_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(s) = event {
+                state.studio_arrived(s);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the studio channel: {e}"))?;
+    // AND WHO HAS A CAMERA OPEN — any program, from `/proc`. A browser opens
+    // the device directly and no graph hears of it, so the kernel's answer is
+    // the only one that covers everybody; measured, a walk costs under 8 ms.
+    let (holders_sender, holders_events) = channel::channel::<Vec<String>>();
+    let _ = std::thread::Builder::new()
+        .name("camera-holders".into())
+        .spawn(move || {
+            let mut last: Option<Vec<String>> = None;
+            loop {
+                let mut names: Vec<String> = ronoctua_memory::camera::holders("/dev/video")
+                    .into_iter()
+                    .map(|h| h.name)
+                    .collect();
+                names.sort();
+                names.dedup();
+                if last.as_ref() != Some(&names) {
+                    if holders_sender.send(names.clone()).is_err() {
+                        return;
+                    }
+                    last = Some(names);
+                }
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+        });
+    handle
+        .insert_source(holders_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(names) = event {
+                state.camera_holders = names;
+                state.draw_and_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the camera holders' channel: {e}"))?;
+
     // INDEPENDENT KEYBOARDS. The saved mode is applied once, off the frame's
     // thread (`systemctl start` waits for the unit) — and never in the nested
     // loop, whose compositor is not the one the keyboards belong to.
@@ -3653,6 +3744,10 @@ impl Footer {
                     .audio_snapshot
                     .as_ref()
                     .is_some_and(ronoctua_audio::Snapshot::is_listening),
+                // THE CAMERA, a privacy mark like the microphone's: any
+                // program with a camera open, ours included.
+                camera: self.camera_in_use(),
+                recording: self.studio_rolling(),
                 // SYNCTHING, and it is the only mark that may draw while all
                 // is WELL. That is the owner's choice and it is theirs to
                 // make; the default is the house rule — nothing at rest.
@@ -3984,6 +4079,11 @@ impl Footer {
             self.run_command("audio-open");
             return;
         }
+        // AND THE CAMERA'S TWO, to the camera's settings.
+        if id == "camera" || id == "recording" {
+            self.run_command("camera-settings-open");
+            return;
+        }
         // AND SYNCTHING'S, by the same command the key runs — the mouse
         // reaches no door the keyboard lacks.
         if id == "syncthing" {
@@ -4192,6 +4292,14 @@ impl Footer {
             // the program's own word for itself, and the sentence is about
             // the machine.
             "microphone" => Some(self.texts.t(ronoctua_i18n::key::HINT_MICROPHONE)),
+            // THE CAMERA NAMES THE PROGRAMS: unlike a capture stream's name,
+            // `/proc`'s `comm` is the program's own file name, which is what a
+            // person looks for to close it.
+            "camera" => Some(self.texts.t_with(
+                ronoctua_i18n::key::HINT_CAMERA_IN_USE,
+                &[("programs", &self.camera_holders.join(", "))],
+            )),
+            "recording" => Some(self.texts.t(ronoctua_i18n::key::HINT_RECORDING)),
             // AND SYNCTHING'S SAYS WHICH OF THE TWO IT IS. One glyph means
             // "everything is travelling" and the other means "nothing is",
             // and which of them is drawn depends on a preference — so the
@@ -6486,6 +6594,75 @@ impl Footer {
                     self.syncthing_press(press);
                 }
             }
+            "camera-open" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["camera".to_owned()], None);
+                }
+            }
+            "camera-settings-open" => self.open_camera_settings(),
+            "camera-settings-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["camera-settings".to_owned()], None);
+                }
+            }
+            "camera-settings-up"
+            | "camera-settings-down"
+            | "camera-settings-less"
+            | "camera-settings-more"
+            | "camera-settings-enter"
+            | "camera-settings-remove" => {
+                if let Some(press) = crate::camera_settings::press_of(id) {
+                    self.camera_settings_press(press);
+                }
+            }
+            // THE APP'S KEYS, from anywhere: the same press the app makes,
+            // told to the studio — a photo or a recording does not need the
+            // window open.
+            "camera-photo"
+            | "camera-record"
+            | "camera-effect-next"
+            | "camera-effect-previous"
+            | "camera-background-next"
+            | "camera-param-less"
+            | "camera-param-more"
+            | "camera-camera-next"
+            | "camera-mirror"
+            | "camera-scene-next"
+            | "camera-scene-previous"
+            | "camera-script"
+            | "camera-next-cue"
+            | "camera-virtual"
+            | "camera-stream" => {
+                if let Some(press) = crate::camera::press_of(id) {
+                    let errand = crate::camera::View::default().key(press, self.studio.as_ref());
+                    if let crate::camera::Errand::Tell(ask) = errand {
+                        self.studio_ask(&ask);
+                    }
+                }
+            }
+            // THE CAMERA'S QUESTIONS: with nothing typed this opens the
+            // question; with an argument it IS the answer (`s s d`'s shape).
+            "camera-scene-add"
+            | "camera-scene-rename"
+            | "camera-script-add"
+            | "camera-stream-url"
+            | "camera-stream-key" => match argument {
+                Some(said) if !said.trim().is_empty() => self.camera_typed(id, said),
+                _ => {
+                    let asked: &'static str = match id {
+                        "camera-scene-add" => "camera-scene-add",
+                        "camera-scene-rename" => "camera-scene-rename",
+                        "camera-script-add" => "camera-script-add",
+                        "camera-stream-url" => "camera-stream-url",
+                        _ => "camera-stream-key",
+                    };
+                    // THE KEY IS A SECRET: the minibuffer masks it as it does a
+                    // Wi-Fi password.
+                    self.mx.request(asked, asked == "camera-stream-key");
+                    self.apply_geometry(KeyboardInteractivity::Exclusive);
+                    self.draw_and_paint();
+                }
+            },
             "pointers-open" => self.open_pointers(),
             "pointers-window" => {
                 if let Ok(me) = std::env::current_exe() {
@@ -10004,6 +10181,21 @@ impl Footer {
             return;
         }
 
+        if self.view() == ViewState::Camera {
+            use ronoctua_keymap::Sym;
+            // BOTH DOORS THROUGH ONE TABLE — `camera_settings::OF_THE_VIEW`.
+            let press = match key.sym {
+                Sym::Esc => Some(crate::camera_settings::Press::Escape),
+                other => {
+                    crate::camera_settings::pressed(&ronoctua_keymap::Key::simple(other).notation())
+                }
+            };
+            if let Some(press) = press {
+                self.camera_settings_press(press);
+            }
+            return;
+        }
+
         if self.view() == ViewState::Pointers {
             use ronoctua_keymap::Sym;
             // BOTH DOORS THROUGH ONE TABLE — `pointers::OF_THE_VIEW`.
@@ -11087,6 +11279,8 @@ impl Footer {
             ViewState::Audio
         } else if self.pointer_view.is_some() {
             ViewState::Pointers
+        } else if self.camera_view.is_some() {
+            ViewState::Camera
         } else if self.display.is_some() {
             ViewState::Display
         } else if self.files.is_some() {
@@ -12578,6 +12772,22 @@ impl Footer {
                 .enumerate()
                 .map(|(n, r)| ExpansionRow {
                     click: (!r.heading).then_some(Click::Syncthing(n)),
+                    fields: r.fields,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+        if self.view() == ViewState::Camera
+            && let Some(v) = self.camera_view.as_ref()
+        {
+            let width = self.screen_columns();
+            return v
+                .rows(&self.camera_snapshot, width, &self.texts)
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::Camera(n)),
                     fields: r.fields,
                     foot: false,
                     ..ExpansionRow::empty_one()
@@ -14269,6 +14479,20 @@ impl Footer {
                     self.draw_and_paint();
                 }
             }
+            Some(Click::Camera(n)) => {
+                // THE MOUSE AIMS, AND THE SECOND CLICK ACTS — invariant 19.
+                let width = self.screen_columns();
+                let mut already = false;
+                if let Some(v) = self.camera_view.as_mut() {
+                    let rows = v.rows(&self.camera_snapshot, width, &self.texts);
+                    already = v.clicked(n, &rows);
+                }
+                if already {
+                    self.camera_settings_press(crate::camera_settings::Press::Enter);
+                } else {
+                    self.draw_and_paint();
+                }
+            }
             Some(Click::Pointers(n)) => {
                 // THE MOUSE AIMS, AND THE SECOND CLICK ACTS — invariant 19.
                 let width = self.screen_columns();
@@ -14578,6 +14802,10 @@ impl Footer {
                 .pointer_view
                 .as_ref()
                 .map(crate::pointers::View::cursor),
+            ViewState::Camera => self
+                .camera_view
+                .as_ref()
+                .map(crate::camera_settings::View::cursor),
             ViewState::Syncthing => self.syncthing.as_ref().map(crate::syncthing::View::cursor),
             // THE ROW THE VIEW DREW, and not `clip_cursor`, which counts
             // ENTRIES: the drawn list has a heading above them, so the two are
@@ -15164,6 +15392,8 @@ impl Footer {
         let audio = &self.audio;
         let pointer_view = &self.pointer_view;
         let pointer_snapshot = self.pointer_snapshot.as_ref();
+        let camera_view = &self.camera_view;
+        let camera_snapshot = &self.camera_snapshot;
         // THE READING TOO: this view's hint depends on which row the cursor
         // is on, and which rows exist depends on what PipeWire reported.
         let sound = self.audio_snapshot.as_ref();
@@ -15231,6 +15461,9 @@ impl Footer {
                 ViewState::Pointers => pointer_view
                     .as_ref()
                     .map(|v| v.hint(pointer_snapshot, hint_columns, texts)),
+                ViewState::Camera => camera_view
+                    .as_ref()
+                    .map(|v| v.hint(camera_snapshot, hint_columns, texts)),
                 ViewState::Syncthing => syncthing
                     .as_ref()
                     .map(|v| v.hint(syncthing_state, hint_columns, texts)),
@@ -18515,6 +18748,226 @@ impl Footer {
         }
     }
 
+    /// Opens the camera settings in the footer.
+    fn open_camera_settings(&mut self) {
+        if self.camera_view.is_some() {
+            self.follow_cursor();
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+            return;
+        }
+        if !self.region_is_free("camera-settings-open") {
+            return;
+        }
+        self.camera_snapshot =
+            crate::camera_settings::Snapshot::read(self.camera_list.clone(), self.studio.clone());
+        let columns = self.screen_columns();
+        let mut v = crate::camera_settings::View::fresh();
+        v.settle_in(&self.camera_snapshot, columns, &self.texts);
+        self.camera_view = Some(v);
+        self.first_page();
+        self.follow_cursor();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// Rebuilds what the camera settings read, the cursor kept on its row.
+    fn camera_reread(&mut self) {
+        let columns = self.screen_columns();
+        let spot = self.camera_view.as_ref().and_then(|v| {
+            v.rows(&self.camera_snapshot, columns, &self.texts)
+                .get(v.cursor())
+                .map(|r| r.spot.clone())
+        });
+        self.camera_snapshot =
+            crate::camera_settings::Snapshot::read(self.camera_list.clone(), self.studio.clone());
+        if let Some(v) = self.camera_view.as_mut() {
+            if let Some(spot) = spot {
+                v.follow(&spot, &self.camera_snapshot, columns, &self.texts);
+            }
+            v.settle_in(&self.camera_snapshot, columns, &self.texts);
+            self.region_resized();
+            self.draw_and_paint();
+        }
+    }
+
+    /// A key in the camera settings.
+    fn camera_settings_press(&mut self, press: crate::camera_settings::Press) {
+        let columns = self.screen_columns();
+        let Some(v) = self.camera_view.as_mut() else {
+            return;
+        };
+        let errand = v.key(press, &self.camera_snapshot, columns, &self.texts);
+        self.region_resized();
+        self.follow_cursor();
+        match crate::camera_settings::carry_out(errand, &self.camera_snapshot, &self.texts) {
+            Ok(Some(said)) => self.echo_message(said),
+            Ok(None) => {}
+            Err(crate::camera_settings::Errand::Close) => {
+                self.camera_view = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+            }
+            // THE VIEW CLOSES FIRST: a question opens the minibuffer, and the
+            // app opens a window — both would be refused by `region_is_free`.
+            Err(crate::camera_settings::Errand::Run(id)) => {
+                self.camera_view = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+                self.run_with(id, None);
+                return;
+            }
+            Err(_) => {}
+        }
+        self.camera_reread();
+        self.draw_and_paint();
+    }
+
+    /// Tells the studio something, saying on the minibuffer what refused.
+    fn studio_ask(&mut self, ask: &ronoctua_studio::wire::Ask) {
+        match ronoctua_studio::client::ask(ask) {
+            Ok(ronoctua_studio::wire::Say::Refused(t)) => {
+                let said = crate::camera::trouble_sentence(&t, &self.texts);
+                self.echo_message(said);
+            }
+            Ok(_) => {}
+            Err(_) => {
+                let said = self.texts.t(ronoctua_i18n::key::STUDIO_NOT_RUNNING);
+                self.echo_message(said);
+            }
+        }
+    }
+
+    /// What was typed for one of the camera's questions.
+    fn camera_typed(&mut self, id: &str, said: &str) {
+        use ronoctua_studio::wire::Ask;
+        let said = said.trim();
+        match id {
+            "camera-scene-add" => self.studio_ask(&Ask::SceneAdd {
+                name: said.to_owned(),
+            }),
+            "camera-scene-rename" => {
+                let from = self
+                    .studio
+                    .as_ref()
+                    .map(|s| s.scene.clone())
+                    .unwrap_or_default();
+                self.studio_ask(&Ask::SceneRename {
+                    from,
+                    to: said.to_owned(),
+                });
+            }
+            "camera-script-add" => {
+                let book = ronoctua_studio::prefs::book().read();
+                match ronoctua_studio::scene::parse_script(said, &book) {
+                    Some(script) => self.studio_ask(&Ask::ScriptAdd { script }),
+                    None => {
+                        let m = self.texts.t(ronoctua_i18n::key::CAMERA_SCRIPT_BAD);
+                        self.echo_message(m);
+                    }
+                }
+            }
+            "camera-stream-url" => {
+                let store = ronoctua_studio::prefs::store();
+                let mut p = store.read();
+                p.stream_url = Some(said.to_owned());
+                if let Err(e) = ronoctua_studio::prefs::keep(&store, &p) {
+                    let m = self.texts.t_with(
+                        ronoctua_i18n::key::STUDIO_TROUBLE_WRITE,
+                        &[("why", &e.to_string())],
+                    );
+                    self.echo_message(m);
+                } else {
+                    let _ = ronoctua_studio::client::tell(&Ask::Reload);
+                }
+            }
+            _ => {
+                if let Err(e) = ronoctua_studio::prefs::set_stream_key(said) {
+                    let m = self.texts.t_with(
+                        ronoctua_i18n::key::STUDIO_TROUBLE_WRITE,
+                        &[("why", &e.to_string())],
+                    );
+                    self.echo_message(m);
+                }
+            }
+        }
+        self.camera_reread();
+    }
+
+    /// The studio's new state: the marks, the notifications, the settings.
+    fn studio_arrived(&mut self, s: Option<ronoctua_studio::wire::State>) {
+        // A PHOTO OR A RECORDING WAS WRITTEN: said once, by the catalogue —
+        // and never for the first state, which reports what was written
+        // before this footer started.
+        let mut written: Vec<(String, bool)> = Vec::new();
+        if let (Some(old), Some(new)) = (&self.studio, &s) {
+            if let Some(path) = new
+                .last_photo
+                .clone()
+                .filter(|_| new.last_photo != old.last_photo)
+            {
+                written.push((path, true));
+            }
+            if let Some(path) = new
+                .last_recording
+                .clone()
+                .filter(|_| new.last_recording != old.last_recording)
+            {
+                written.push((path, false));
+            }
+        }
+        for (path, photo) in written {
+            let n = self.studio_notification(&path, photo);
+            self.arrived(n, std::time::Instant::now());
+        }
+        self.studio = s;
+        self.camera_mark_allowed =
+            ronoctua_studio::prefs::store().read().mark == ronoctua_studio::prefs::Mark::WhenInUse;
+        self.camera_reread();
+        self.draw_and_paint();
+    }
+
+    /// A photo or a recording, as a notification the catalogue recognises by
+    /// its tag — the screenshot's shape, the path in the icon field.
+    fn studio_notification(&self, path: &str, photo: bool) -> ronoctua_notify::Notification {
+        use ronoctua_i18n::key;
+        let (summary, body, tag) = if photo {
+            (
+                key::NOTIF_STUDIO_PHOTO_SUMMARY,
+                key::NOTIF_STUDIO_PHOTO_BODY,
+                "studio-photo",
+            )
+        } else {
+            (
+                key::NOTIF_STUDIO_RECORDING_SUMMARY,
+                key::NOTIF_STUDIO_RECORDING_BODY,
+                "studio-recording",
+            )
+        };
+        let mut n = ronoctua_notify::Notification::fresh_one(
+            0,
+            self.texts.t(key::NOTIF_STUDIO_APP),
+            Some(format!("file://{path}")),
+            self.texts.t(summary),
+            self.texts.t(body),
+            ronoctua_notify::Urgency::Low,
+        );
+        n.tags = vec![tag.to_owned()];
+        n
+    }
+
+    /// Whether the modeline draws the camera mark.
+    fn camera_in_use(&self) -> bool {
+        self.camera_mark_allowed && !self.camera_holders.is_empty()
+    }
+
+    /// Whether the studio is recording or streaming.
+    fn studio_rolling(&self) -> bool {
+        self.studio
+            .as_ref()
+            .is_some_and(|s| s.recording.is_some() || s.streaming.is_some())
+    }
+
     /// Opens the mice, touchpads and cursors view in the footer.
     fn open_pointers(&mut self) {
         if self.pointer_view.is_some() {
@@ -20412,6 +20865,8 @@ fn segment_color(
         // glyph already changed drawing, and the colour is what is seen before
         // the drawing is read.
         "battery" if battery_danger => tokens::color::STATE_ERROR,
+        // RECORDING OR STREAMING is a warning as much as a mark.
+        "recording" => tokens::color::STATE_ERROR,
         // THE KIND OF BUFFER. It used to carry the accent, from when it was the
         // only thing next to the name; now the state sits beside it saying what
         // is HAPPENING, and between "this is an icon browser" and "it is showing

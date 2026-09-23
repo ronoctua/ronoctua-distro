@@ -530,6 +530,22 @@ pkgs.testers.runNixOSTest {
             machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
 
+    if wanted("camera-settings"):
+        with subtest("the camera's settings, on a machine with no camera"):
+            control("camera-settings-open")
+            shot("33b-camera-settings", lines=15)
+            # The headings are `text.heading`, and a region that opened on
+            # nothing has none. A tight fuzz for the pointer's reason above.
+            has_colour(
+                "#" + token_hex("text.heading"),
+                at_least=40,
+                of="/tmp/33b-camera-settings.png",
+                fuzz=4,
+            )
+            focus_compositor()
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
+            machine.sleep(1)
+
     if wanted("tor"):
         with subtest("Tor: the section exists with the daemon STOPPED"):
             # -----------------------------------------------------------------

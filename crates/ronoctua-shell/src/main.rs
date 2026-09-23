@@ -86,6 +86,10 @@ mod manual;
 // The pure half of the brain bridge — the daemon's records turned into the
 // WIT's. Split out so `ronoctua-render-png` can link it without linking the
 // footer's line, which is what made the brain photographable at all.
+mod camera;
+mod camera_settings;
+mod camera_settings_window;
+mod camera_window;
 mod mind_wire;
 mod minibuffer;
 mod motion;
@@ -321,6 +325,12 @@ fn main() -> Result<()> {
             return audio_window::host_it().context("host the sound view");
         }
         // MICE, TOUCHPADS AND EVERY CURSOR, in a window of their own.
+        Some("camera") => {
+            return camera_window::host_it().context("the camera app");
+        }
+        Some("camera-settings") => {
+            return camera_settings_window::host_it().context("the camera settings window");
+        }
         Some("pointers") => {
             return pointers_window::host_it().context("host the pointers view");
         }
@@ -639,6 +649,11 @@ pub struct Marks<'a> {
     /// graph rather than guessed: the node exists exactly while the stream
     /// does.
     pub listening: bool,
+    /// A CAMERA IS OPEN — any program, found in `/proc`. A privacy mark, the
+    /// microphone's twin.
+    pub camera: bool,
+    /// The studio is recording or streaming.
+    pub recording: bool,
     /// SYNCTHING, and it is the only mark whose very existence is a choice.
     ///
     /// `None` draws nothing, which is what an ordinary day looks like: the
@@ -893,6 +908,32 @@ pub fn segments(
             removable: true,
         });
     }
+    // THE CAMERA, at the microphone's rung and for its reason: something is
+    // WATCHING, which is worth a cell whatever else the line has to say.
+    if marks.camera {
+        out.push(Segment {
+            id: "camera",
+            text: tokens::icon::CAMERA_IN_USE.to_string(),
+            priority: 2,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // AND RECORDING, one rung above: a recording that nobody remembers is
+    // running fills a disk and films a room.
+    if marks.recording {
+        out.push(Segment {
+            id: "recording",
+            text: tokens::icon::RECORDING.to_string(),
+            priority: 1,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
     // THE WAY OUT, before everything else on this side: whether anything
     // reaches the world is the first question a modeline answers, and the
     // two faults are the only ones drawn — a machine that is simply not
@@ -1116,6 +1157,8 @@ mod tests {
                         // line has to survive the pair.
                         silent: true,
                         listening: true,
+                        camera: true,
+                        recording: true,
                         // AND SYNCTHING'S, which the fullest line has to
                         // carry too: it is a mark somebody chose to have, so
                         // the worst case is a line that has it AND everything

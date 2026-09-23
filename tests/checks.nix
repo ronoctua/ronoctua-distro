@@ -1990,6 +1990,17 @@ let
     };
   };
 
+  # THE CAMERA STUDIO in a VM, with a camera that is nobody's hardware — a
+  # loopback fed by `testsrc` — and every assertion made from outside the
+  # screen: the preview memfd, `ffprobe`, a second reader of the virtual
+  # camera, and `/proc` for who holds the device.
+  cameraVm = import ./camera-vm.nix {
+    inherit pkgs lib fonts;
+    inherit scroll;
+    ronoctua-shell = rust.shell;
+    studio = rust.studio;
+  };
+
   displayVm = import ./display-vm.nix {
     inherit pkgs lib fonts;
     inherit scroll;
@@ -7645,6 +7656,192 @@ let
   # The microphone gets a rule of its own on top. `pw-cat --record` is the ONE
   # thing here that opens a recording device, and what keeps it honest is that
   # there is a single place to look at to know when it runs.
+  # THE CAMERA'S BOUNDARY: one file speaks the V4L2 ioctls, and one opens a
+  # camera for frames. A second of either is a second thing to be wrong about
+  # a device that has a LIGHT on it.
+  one-camera-boundary = mkCheck "one-camera-boundary" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a boundary is broken by a name anywhere outside it.
+    # `uncommented`, because two needles are string literals (`-input_format`
+    # is an argument ffmpeg is given) and a sentence ABOUT the boundary in a
+    # comment is not a call.
+    crates = pathlib.Path("${../crates}")
+    ioctls = crates / "ronoctua-camera" / "src" / "v4l2.rs"
+    door = crates / "ronoctua-camera" / "src" / "capture.rs"
+    swept = 0
+    wrong = []
+    for f in sorted(crates.rglob("*.rs")):
+        code = uncommented(without_tests(f.read_text()))
+        swept += 1
+        # THE V4L2 GROUP (`'V'`) is the ioctl family; nothing else in the tree
+        # has a reason to build an opcode of it.
+        if f != ioctls and re.search(r"opcode::\w+::<[^>]+>\(b'V'", code):
+            wrong.append(f"{f.relative_to(crates)} builds a V4L2 ioctl outside v4l2.rs")
+        if f != door and '"-input_format"' in code:
+            wrong.append(f"{f.relative_to(crates)} opens a camera for frames outside capture.rs")
+    floor(swept, 100, "sources of the workspace swept for a V4L2 call")
+    body = uncommented(ioctls.read_text())
+    floor(len(body), 2000, "characters of v4l2.rs")
+    for needle in ("QUERYCAP", "ENUM_FMT", "QUERYCTRL", "S_CTRL"):
+        if needle not in body:
+            wrong.append(f"v4l2.rs no longer names {needle}; has the boundary moved?")
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        sys.exit(1)
+    print("OK: one file speaks V4L2, one file opens a camera")
+    END
+  '';
+
+  # AND THAT DOOR IS A VALUE WITH A GUARD, the microphone's rule: dropping it
+  # closes the device, and a signal to the studio cannot leave it open.
+  the-camera-has-one-door = mkCheck "the-camera-has-one-door" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: the guard, the struct and the death signal are each either
+    # in their file or not. `uncommented`: `--pdeathsig` is a string literal.
+    src = pathlib.Path("${../crates/ronoctua-camera/src}")
+    door = uncommented((src / "capture.rs").read_text())
+    frames = uncommented((src / "frames.rs").read_text())
+    floor(len(door), 1500, "characters of capture.rs")
+    wrong = []
+    if "impl Drop for Reaped" not in frames:
+        wrong.append("frames.rs lost the `Drop` that kills the child; nothing closes the camera")
+    if "_child: Reaped" not in door:
+        wrong.append("`Capture` no longer holds its ffmpeg in a `Reaped`")
+    if "--pdeathsig" not in door or "RONOCTUA_SETPRIV" not in door:
+        wrong.append("the capture no longer runs under a death signal; a killed studio would film on")
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        sys.exit(1)
+    print("OK: a camera opens through one value, and closes with it")
+    END
+  '';
+
+  # THE STRUCTS THE KERNEL WRITES INTO, against the C compiler's `sizeof`. A
+  # wrong size is the kernel writing past a struct with no symptom at all —
+  # the trap AGENTS.md records from the libtorrent FFI.
+  v4l2-layout-matches-c =
+    mkCheck "v4l2-layout-matches-c" [ pkgs.python3 pkgs.stdenv.cc pkgs.linuxHeaders ]
+      ''
+        cat > probe.c <<'C'
+        #include <stdio.h>
+        #include <linux/videodev2.h>
+        int main(void) {
+          printf("Capability %zu\n", sizeof(struct v4l2_capability));
+          printf("FmtDesc %zu\n", sizeof(struct v4l2_fmtdesc));
+          printf("FrmSizeEnum %zu\n", sizeof(struct v4l2_frmsizeenum));
+          printf("FrmIvalEnum %zu\n", sizeof(struct v4l2_frmivalenum));
+          printf("QueryCtrl %zu\n", sizeof(struct v4l2_queryctrl));
+          printf("QueryMenu %zu\n", sizeof(struct v4l2_querymenu));
+          printf("Control %zu\n", sizeof(struct v4l2_control));
+          printf("QUERYCAP %lu\n", (unsigned long)VIDIOC_QUERYCAP);
+          printf("ENUM_FMT %lu\n", (unsigned long)VIDIOC_ENUM_FMT);
+          printf("QUERYCTRL %lu\n", (unsigned long)VIDIOC_QUERYCTRL);
+          printf("QUERYMENU %lu\n", (unsigned long)VIDIOC_QUERYMENU);
+          printf("G_CTRL %lu\n", (unsigned long)VIDIOC_G_CTRL);
+          printf("S_CTRL %lu\n", (unsigned long)VIDIOC_S_CTRL);
+          printf("ENUM_FRAMESIZES %lu\n", (unsigned long)VIDIOC_ENUM_FRAMESIZES);
+          printf("ENUM_FRAMEINTERVALS %lu\n", (unsigned long)VIDIOC_ENUM_FRAMEINTERVALS);
+          return 0;
+        }
+        C
+        cc -I${pkgs.linuxHeaders}/include probe.c -o probe
+        ./probe > measured.txt
+        python3 - <<'END'
+        import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
+
+        # PARSED: the C side is a table the compiler wrote, split on whitespace.
+        measured = {}
+        for row in pathlib.Path("measured.txt").read_text().splitlines():
+            name, value = row.split()
+            measured[name] = int(value)
+        # FILE-WIDE: `code_of`, and the numbers are the compile-time assertions and
+        # the opcode test; a number in a comment is prose, not a promise.
+        rust = code_of(pathlib.Path("${../crates/ronoctua-camera/src/v4l2.rs}").read_text())
+        floor(len(rust), 2000, "characters of v4l2.rs")
+        declared = {n: int(v) for n, v in re.findall(r"size_of::<(\w+)>\(\) == (\d+)", rust)}
+        for n, v in re.findall(r"assert_eq!\((\w+), (0x[0-9a-f_]+)\)", rust):
+            declared[n] = int(v.replace("_", ""), 16)
+        floor(len(declared), 12, "numbers v4l2.rs declares")
+        wrong = [f"{n}: the C compiler says {v}, the Rust says {declared.get(n)}" for n, v in sorted(measured.items()) if declared.get(n) != v]
+        for w in wrong:
+            print(f"ERROR: {w}", file=sys.stderr)
+        if wrong:
+            sys.exit(1)
+        print(f"OK: {len(measured)} sizes and opcodes agree with videodev2.h")
+        END
+      '';
+
+  # EVERY EFFECT AND EVERY PARAMETER HAS A NAME IN BOTH LANGUAGES. The keys
+  # are built from the table (`camera-effect-<id>`, `camera-param-<name>`),
+  # so the compiler cannot see a missing one: it would draw as `[key]`.
+  camera-effects-have-text = mkCheck "camera-effects-have-text" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import json, pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: the table is Nix turned to JSON by Nix itself.
+    table = json.loads(${lib.escapeShellArg (builtins.toJSON (import ../assets/camera-effects.nix))})
+    owed = {f"camera-effect-{e['id']}" for e in table["effects"]}
+    owed |= {f"camera-param-{p['name']}" for e in table["effects"] for p in e["params"]}
+    # AND THE THREE SCENES A FRESH MACHINE HAS, whose names are ids that the
+    # views translate (`ronoctua_studio::scene::BUILT_IN`).
+    # `uncommented`: the ids are string literals.
+    studio = uncommented(pathlib.Path("${../crates/ronoctua-studio/src/scene.rs}").read_text())
+    for name in re.findall(r'pub const (?:CAMERA|SCREEN|SCREEN_AND_CAMERA): &str = "([a-z-]+)";', studio):
+        owed.add(f"studio-scene-{name}")
+    floor(len(owed), 30, "keys the camera table owes")
+    wrong = []
+    for lang in ("en-GB", "pt-BR"):
+        # FILE-WIDE: `hashless`, and a key is a line of the `.ftl`, and a key
+        # written in a comment is not one.
+        text = hashless(pathlib.Path(f"${../assets/i18n}/{lang}.ftl").read_text())
+        have = set(re.findall(r"^([a-z][a-z0-9-]*) =", text, re.M))
+        for k in sorted(owed - have):
+            wrong.append(f"{lang} has no `{k}`")
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        sys.exit(1)
+    print(f"OK: {len(owed)} camera keys in both languages")
+    END
+  '';
+
+  # THE STREAM KEY NEVER TRAVELS IN `argv`: every program on the machine can
+  # read another's command line, and a stream key is a password to a channel.
+  stream-key-is-never-an-argument = mkCheck "stream-key-is-never-an-argument" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: `uncommented`, and the needles are ffmpeg options, literals.
+    body = uncommented(without_tests(pathlib.Path("${../crates/ronoctua-studio/src/outputs.rs}").read_text()))
+    floor(len(body), 3000, "characters of outputs.rs")
+    wrong = []
+    if '"-/rtmp_playpath"' not in body:
+        wrong.append("RTMP no longer reads its key from a file (`-/rtmp_playpath`)")
+    if '"-/streamid"' not in body:
+        wrong.append("SRT no longer reads its key from a file (`-/streamid`)")
+    if "stream_key_path" not in body:
+        wrong.append("the stream no longer takes the key's PATH")
+    if "read_to_string(&key" in body or "fs::read(&key" in body:
+        wrong.append("the stream reads the key's CONTENT, which is how it would reach argv")
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        sys.exit(1)
+    print("OK: the stream key reaches ffmpeg as a file, never as an argument")
+    END
+  '';
+
   one-pipewire-boundary = mkCheck "one-pipewire-boundary" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -8494,7 +8691,7 @@ let
 
   every-list-window-has-a-bar = mkCheck "every-list-window-has-a-bar" [ pkgs.python3 ] ''
     python3 - <<'END'
-    import pathlib, sys
+    import pathlib, re, sys
 
     exec(open("${pyPrelude}").read())
 
@@ -8505,6 +8702,12 @@ let
     # had a bar: it has FOUR bands rather than one list, so it asks `Scroll`
     # per section instead of going through `chrome::list_bar`.
     EXCEPT = {"files_window.rs"}
+    # AND ONE WINDOW ANSWERS THE WHEEL WITH NO LIST AT ALL: the camera's. Its
+    # wheel resizes a layer of the picture or turns a sound's volume, and it
+    # keeps no offset because there is nothing to scroll. The exception is
+    # PROVED below rather than granted: the day that window grows an offset,
+    # it is a list, and it is checked like the rest.
+    NOT_A_LIST = {"camera_window.rs"}
     wrong, windows = [], 0
 
     # COMMENTS COME OFF FIRST. The strings below are grepped for, and four of
@@ -8530,6 +8733,10 @@ let
             continue
         windows += 1
         if f.name in EXCEPT:
+            continue
+        if f.name in NOT_A_LIST:
+            if re.search(r"\boffset", body):
+                wrong.append(f"{f.name}: keeps an offset now, so it scrolls a list and needs the bar")
             continue
         for what, why in (
             ("chrome::list_bar", "draws no scrollbar"),
@@ -13900,11 +14107,14 @@ let
         # that binary or the footer would find yesterday's one and nothing would
         # say so.
         brain=${../crates/ronoctua-brain/src}
+        # AND THE STUDIO'S: the camera app and the settings view start it from
+        # beside themselves when nobody answers its socket.
+        studio=${../crates/ronoctua-studio/src}
         failed=0
 
         # The names come from the CODE that looks them up, never from a list
         # written here: a list would be a third place to keep in step.
-        beside=$(grep -rhoE 'parent\(\)\?\.join\("[a-z-]+"' "$shell" "$queue" "$brain" \
+        beside=$(grep -rhoE 'parent\(\)\?\.join\("[a-z-]+"' "$shell" "$queue" "$brain" "$studio" \
           | grep -oE '"[a-z-]+"' | tr -d '"' | sort -u)
         [ -n "$beside" ] || {
           echo "ERROR: nobody looks for a binary beside it — what does the grep match?" >&2
@@ -22604,6 +22814,11 @@ let
       power-never-asks
       audio-runs-by-path
       one-pipewire-boundary
+      one-camera-boundary
+      the-camera-has-one-door
+      v4l2-layout-matches-c
+      camera-effects-have-text
+      stream-key-is-never-an-argument
       volume-is-perceived
       media-keys-are-bare
       the-microphone-has-one-door
@@ -22646,6 +22861,7 @@ let
     notify-vm = notifyVm;
     power-vm = powerVm;
     display-vm = displayVm;
+    camera-vm = cameraVm;
     bluetooth-vm = bluetoothVm;
     network-vm = networkVm;
     impermanence-vm = impermanenceVm;

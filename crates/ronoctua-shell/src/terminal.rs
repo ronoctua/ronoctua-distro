@@ -110,27 +110,35 @@ pub fn floating_rules() -> String {
     // The rescue console is WIDER, and that is the only difference: it is read
     // while something is wrong, and a list with the log cut off is a diagnosis
     // one has to scroll for.
-    [(APP_ID_MONITOR, 70), (APP_ID_RESCUE, 90)]
-        .into_iter()
-        .map(|(app_id, percent)| {
-            let regex = app_id.replace('.', r"\.");
-            // `ppt` IS NOT OPTIONAL: a floating container is sized in PIXELS
-            // unless the unit says otherwise, so `resize set width 70` would
-            // make a seventy-pixel window — which reads as the monitor having
-            // failed to open rather than as a unit that was left out.
-            //
-            // And `move position center`, because a new floating window is
-            // not centred on its own. There is no equivalent of asking for it
-            // to open focused; one does, and that is the compositor's own
-            // behaviour rather than something to spell.
-            format!(
-                "for_window [app_id=\"^{regex}$\"] \
+    //
+    // AND THE CAMERA APP floats too, at 60%: it is a picture of a face the
+    // owner asked to see in a window of its own over the work, not a tile in
+    // the strip that would push every other window aside.
+    [
+        (APP_ID_MONITOR, 70),
+        (APP_ID_RESCUE, 90),
+        (crate::camera::APP_ID, 60),
+    ]
+    .into_iter()
+    .map(|(app_id, percent)| {
+        let regex = app_id.replace('.', r"\.");
+        // `ppt` IS NOT OPTIONAL: a floating container is sized in PIXELS
+        // unless the unit says otherwise, so `resize set width 70` would
+        // make a seventy-pixel window — which reads as the monitor having
+        // failed to open rather than as a unit that was left out.
+        //
+        // And `move position center`, because a new floating window is
+        // not centred on its own. There is no equivalent of asking for it
+        // to open focused; one does, and that is the compositor's own
+        // behaviour rather than something to spell.
+        format!(
+            "for_window [app_id=\"^{regex}$\"] \
                  floating enable, \
                  resize set width {percent} ppt height {percent} ppt, \
                  move position center\n"
-            )
-        })
-        .collect()
+        )
+    })
+    .collect()
 }
 
 /// It builds the engine INSIDE the VT thread — see `ronoctua_term::terminal`.

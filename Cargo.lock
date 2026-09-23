@@ -2756,6 +2756,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-camera"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-store",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "ronoctua-clipboard"
 version = "0.1.0"
 dependencies = [
@@ -2836,6 +2848,10 @@ dependencies = [
  "serde_json",
  "tracing",
 ]
+
+[[package]]
+name = "ronoctua-effects"
+version = "0.1.0"
 
 [[package]]
 name = "ronoctua-files"
@@ -3067,6 +3083,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-segment"
+version = "0.1.0"
+
+[[package]]
 name = "ronoctua-shell"
 version = "0.1.0"
 dependencies = [
@@ -3082,6 +3102,7 @@ dependencies = [
  "ronoctua-audio",
  "ronoctua-bluetooth",
  "ronoctua-brain",
+ "ronoctua-camera",
  "ronoctua-clipboard",
  "ronoctua-clipcascade",
  "ronoctua-clock",
@@ -3090,6 +3111,7 @@ dependencies = [
  "ronoctua-design",
  "ronoctua-disks",
  "ronoctua-display",
+ "ronoctua-effects",
  "ronoctua-files",
  "ronoctua-i18n",
  "ronoctua-inspect",
@@ -3108,6 +3130,7 @@ dependencies = [
  "ronoctua-runtime",
  "ronoctua-scroll",
  "ronoctua-store",
+ "ronoctua-studio",
  "ronoctua-syncthing",
  "ronoctua-syntax",
  "ronoctua-term",
@@ -3136,6 +3159,29 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "ronoctua-studio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "ronoctua-audio",
+ "ronoctua-camera",
+ "ronoctua-effects",
+ "ronoctua-files",
+ "ronoctua-memory",
+ "ronoctua-segment",
+ "ronoctua-store",
+ "ronoctua-xdg",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]

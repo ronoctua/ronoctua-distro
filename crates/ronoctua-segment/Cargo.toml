@@ -1,0 +1,27 @@
+[package]
+name = "ronoctua-segment"
+description = "Which pixels of a camera frame are a person: a TFLite reader and a small interpreter, zero dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ZERO DEPENDENCIES, and not by taste.
+#
+# The obvious crate was measured first: `tract-tflite` 0.23.8 REFUSES the model
+# this distro ships (MediaPipe's `selfie_segmenter`, float16/1) at its first
+# operator — 110 `DEQUANTIZE`s of float16 weights it has no registration for,
+# and one `CUSTOM` op (`Convolution2DTransposeBias`, MediaPipe's own) that no
+# general runtime has. Its registry is private, so neither can be added from
+# outside. onnxruntime is a C++ library and a store path.
+#
+# The model uses ELEVEN operators, and every one is a loop over NHWC floats.
+# That is the shape of the hand-written MD5 and the hand-written zip reader in
+# this tree: a small, closed format read by the code that needs it, measured
+# against the reference (`tests` below carry MediaPipe's own output for a fixed
+# synthetic frame), with nothing downloaded at build time but the model bytes.
+[dependencies]
+
+[lints]
+workspace = true

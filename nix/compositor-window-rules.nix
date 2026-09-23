@@ -51,4 +51,9 @@ runCommand "ronoctua-window-rules.conf" { } ''
   grep -qF 'br\.ronoctua\.monitor' $out || {
     echo "ERROR: the rule does not match the monitor's app id." >&2
     exit 1; }
+  # AND THE CAMERA APP, which a person opens over their work: a tile would
+  # push every window in the strip aside to show a face.
+  grep -qF 'br\.ronoctua\.camera' $out || {
+    echo "ERROR: the rule does not match the camera app's id." >&2
+    exit 1; }
 ''

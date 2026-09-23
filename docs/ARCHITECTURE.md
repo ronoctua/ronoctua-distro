@@ -7059,6 +7059,56 @@ própria vista carrega.
 
 ---
 
+### A câmera e o estúdio
+
+**Por que um daemon.** Um dispositivo V4L2 transmite para UM leitor. Se o app abrisse a câmera,
+a câmera virtual morreria com a janela, e uma gravação também; uma cena com a tela e a webcam
+precisa de um processo que tenha as duas. Então o `ronoctua-studio` é dono de todo vídeo, e app e
+ajustes são clientes. Ele fica de pé com a sessão e NÃO é ativado por socket: adotar o descritor que
+o systemd abriu pede `from_raw_fd`, que é `unsafe`, e um daemon parado num `Condvar` custa o mesmo
+que um que não existe. Com nada assistindo, gravando ou transmitindo, toda fonte fecha.
+
+**Por que memória e não a câmera virtual para a prévia.** O `v4l2loopback` é legível por qualquer
+programa. A prévia de uma cena com a TELA ficaria aberta à máquina inteira enquanto a pessoa só
+olhava. Um `memfd` passado por `SCM_RIGHTS` chega só a quem pediu. O anel tem três fatias com um
+número de sequência escrito antes e depois dos pixels; uma fatia sobrescrita durante a cópia é
+jogada fora, nunca mostrada rasgada. É `pread`/`pwrite`, sem `mmap` e sem `unsafe`, e a cópia que o
+leitor faz é a que o upload já faria.
+
+**Por que um interpretador nosso e não o `tract`.** Medido: o `tract-tflite` recusa o
+`selfie_segmenter` (110 `DEQUANTIZE` de pesos fp16 e um `Convolution2DTransposeBias` CUSTOM). O
+modelo usa onze operações; um leitor de flatbuffer mais o interpretador são poucos milhares de
+linhas sem dependência, o molde do MD5 e do zip. A referência é o MediaPipe 1.0.1 sobre uma entrada
+sintética de 16×16 (`reference.txt`): pior diferença 5,8e-5, e uma sabotagem de um operador a leva a
+0,31. Em release, 25 ms por máscara numa thread própria; a máscara é suavizada no tempo e o quadro
+nunca espera por ela.
+
+**Por que a composição é na CPU.** As fontes chegam do ffmpeg JÁ no tamanho da camada, então compor
+é copiar e misturar retângulos: ~9 ms por quadro a 720p com duas camadas. A GPU pediria ler de
+volta cada quadro para o encoder, e isso só vale depois de uma medida que a peça.
+
+**Por que o encoder não reinicia.** Trocar de cena, mover a webcam ou mudar um efeito durante a
+gravação muda o que o compositor LÊ; o encoder recebe quadros crus num cano e não sabe de cena
+nenhuma. O som chega por FIFOs não bloqueantes: um encoder que para de ler perde som em vez de
+travar o laço — o laço travado, com a trava na mão, foi um deadlock medido ao parar uma gravação.
+
+**Por que o fundo é desfocado em tamanho reduzido.** Medido nesta máquina: o desfoque de quadro
+inteiro (seis passadas de caixa a 1280×720) custava 46 ms, e uma câmera a 30 fps dá 33. Cada quadro
+ficava mais para trás, e como a fonte lia a câmera no mesmo laço que aplicava o efeito, o atraso se
+acumulava na fila do ffmpeg — o dono leu o vídeo como inutilizável. Duas correções, e as duas são
+necessárias: o fundo é reduzido por um quarto do raio (entre 1 e 8), desfocado lá e trazido de volta
+bilinear (9,5 ms, e o que a redução perde é o detalhe que o desfoque existe para tirar; onde a máscara
+é a pessoa, o pixel original fica byte a byte); e a câmera é lida numa thread própria que guarda só
+o quadro mais novo, então nenhum efeito, por lento que seja, volta a acumular atraso. Medido depois,
+com a câmera real e o fundo desfocado: 30 quadros por segundo.
+
+**Genérico por construção.** Nada nomeia um fabricante. Câmera é o nó cujo `device_caps` tem
+`VIDEO_CAPTURE`; infravermelho é o nó cujo único formato é cinza; a identidade é o `card`, o `bus` e
+a INTERFACE USB, porque cor e IR de uma mesma webcam têm `card` e `bus` iguais. O modo sai do que o
+dispositivo enumera (pelo menos 24 quadros por segundo se algum modo chega lá, a maior área até
+1080p, comprimido antes de cru no mesmo tamanho), e o
+`camera-vm` prova tudo contra uma "webcam" que é um loopback alimentado por `testsrc`.
+
 ## 7. Memória, disco, boot e instalação
 
 ### A máquina não trava por falta de memória — e o desktop não é a vítima

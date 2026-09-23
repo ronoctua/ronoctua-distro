@@ -663,4 +663,37 @@
   app-slack = "fa-slack";
   app-spotify = "fa-spotify";
   app-signal = "md-signal";
+
+  # THE CAMERA STUDIO (`LEADER m c`, `LEADER s c`).
+  #
+  # The app's controls are drawn OVER the picture, one glyph per control and
+  # every one of them a key too (invariant 19): a camera's face is the whole
+  # window, so a control has no room for a word and a word over a face would
+  # be read before the face. Each glyph is what the control DOES, not what the
+  # app is: `camera_iris` takes a photo, `record_rec` records.
+  studio-photo = "md-camera_iris";
+  studio-record = "md-record_rec";
+  studio-stop = "md-stop";
+  studio-effect = "md-auto_fix";
+  studio-background = "md-blur";
+  studio-camera-turn = "md-camera_switch";
+  studio-mirror = "md-flip_horizontal";
+  studio-scene = "md-view_dashboard";
+  studio-mixer = "md-tune_vertical";
+  studio-fit = "md-fit_to_screen";
+  studio-fill = "md-fullscreen";
+  studio-pin = "md-pin";
+  studio-unpin = "md-pin_off";
+  studio-virtual = "md-webcam";
+  studio-stream = "md-broadcast";
+  studio-script = "md-script_text_play";
+  studio-next = "md-skip_next";
+  studio-settings = "cod-settings_gear";
+  # THE PRIVACY MARK on the modeline: SOMETHING HAS A CAMERA OPEN — any
+  # program, found in `/proc`, ours included. Present or absent, like the
+  # microphone's.
+  camera-in-use = "md-webcam";
+  # And the one that says the studio is RECORDING or STREAMING, drawn in the
+  # danger tone: a mark that is also a warning.
+  recording = "md-record_rec";
 }

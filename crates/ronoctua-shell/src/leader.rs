@@ -687,6 +687,13 @@ pub const BY_NAME_ONLY: &[&str] = &[
     "brain-start-emacs",
     "brain-clock-automatic",
     "example-open",
+    // THE CAMERA'S QUESTIONS: rows of `LEADER s c` run them, and each opens
+    // the minibuffer asking for its words (`ask-<id>`).
+    "camera-scene-add",
+    "camera-scene-rename",
+    "camera-script-add",
+    "camera-stream-url",
+    "camera-stream-key",
 ];
 
 /// And for the button a standing notice offers.
@@ -998,6 +1005,126 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "audio-default",
             label: key::CMD_AUDIO_DEFAULT,
+        },
+        // THE CAMERA STUDIO — `m c` opens the app (a picture, in a window of
+        // its own, floating), `s c c` and `s c w` its settings. Every key of
+        // the app is a command too, so `LEADER :` reaches a photo, a recording
+        // or the next scene from anywhere without the app open.
+        Command {
+            id: "camera-open",
+            label: key::CMD_CAMERA_OPEN,
+        },
+        Command {
+            id: "camera-settings-open",
+            label: key::CMD_CAMERA_SETTINGS_OPEN,
+        },
+        Command {
+            id: "camera-settings-window",
+            label: key::CMD_CAMERA_SETTINGS_WINDOW,
+        },
+        Command {
+            id: "camera-settings-up",
+            label: key::CMD_CAMERA_SETTINGS_UP,
+        },
+        Command {
+            id: "camera-settings-down",
+            label: key::CMD_CAMERA_SETTINGS_DOWN,
+        },
+        Command {
+            id: "camera-settings-less",
+            label: key::CMD_CAMERA_SETTINGS_LESS,
+        },
+        Command {
+            id: "camera-settings-more",
+            label: key::CMD_CAMERA_SETTINGS_MORE,
+        },
+        Command {
+            id: "camera-settings-enter",
+            label: key::CMD_CAMERA_SETTINGS_ENTER,
+        },
+        Command {
+            id: "camera-settings-remove",
+            label: key::CMD_CAMERA_SETTINGS_REMOVE,
+        },
+        Command {
+            id: "camera-photo",
+            label: key::CMD_CAMERA_PHOTO,
+        },
+        Command {
+            id: "camera-record",
+            label: key::CMD_CAMERA_RECORD,
+        },
+        Command {
+            id: "camera-effect-next",
+            label: key::CMD_CAMERA_EFFECT_NEXT,
+        },
+        Command {
+            id: "camera-effect-previous",
+            label: key::CMD_CAMERA_EFFECT_PREVIOUS,
+        },
+        Command {
+            id: "camera-background-next",
+            label: key::CMD_CAMERA_BACKGROUND_NEXT,
+        },
+        Command {
+            id: "camera-param-less",
+            label: key::CMD_CAMERA_PARAM_LESS,
+        },
+        Command {
+            id: "camera-param-more",
+            label: key::CMD_CAMERA_PARAM_MORE,
+        },
+        Command {
+            id: "camera-camera-next",
+            label: key::CMD_CAMERA_CAMERA_NEXT,
+        },
+        Command {
+            id: "camera-mirror",
+            label: key::CMD_CAMERA_MIRROR,
+        },
+        Command {
+            id: "camera-scene-next",
+            label: key::CMD_CAMERA_SCENE_NEXT,
+        },
+        Command {
+            id: "camera-scene-previous",
+            label: key::CMD_CAMERA_SCENE_PREVIOUS,
+        },
+        Command {
+            id: "camera-script",
+            label: key::CMD_CAMERA_SCRIPT,
+        },
+        Command {
+            id: "camera-next-cue",
+            label: key::CMD_CAMERA_NEXT_CUE,
+        },
+        Command {
+            id: "camera-virtual",
+            label: key::CMD_CAMERA_VIRTUAL,
+        },
+        Command {
+            id: "camera-stream",
+            label: key::CMD_CAMERA_STREAM,
+        },
+        Command {
+            id: "camera-scene-add",
+            label: key::CMD_CAMERA_SCENE_ADD,
+        },
+        Command {
+            id: "camera-scene-rename",
+            label: key::CMD_CAMERA_SCENE_RENAME,
+        },
+        Command {
+            id: "camera-script-add",
+            label: key::CMD_CAMERA_SCRIPT_ADD,
+        },
+        Command {
+            id: "camera-stream-url",
+            label: key::CMD_CAMERA_STREAM_URL,
+        },
+        Command {
+            id: "camera-stream-key",
+            label: key::CMD_CAMERA_STREAM_KEY,
         },
         // MICE, TOUCHPADS AND EVERY CURSOR — `s i i` in the footer and `s i w`
         // in a window, the doubled letter and the `w` every view of this
@@ -2165,6 +2292,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // odds and ends is exactly where a named trio would stop looking like
         // one.
         ("m s", "screen-capture", None),
+        ("m c", "camera-open", None),
         // `i` for ICONS, and not `g` for glyphs: the Nerd Fonts browser is the
         // first collection, and others are going to come in — the group is born with the
         // name of what it is going to hold, and not with the first item's.
@@ -2218,6 +2346,8 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // the view on the thresholds.
         ("s a a", "audio-open", None),
         ("s a w", "audio-window", None),
+        ("s c c", "camera-settings-open", None),
+        ("s c w", "camera-settings-window", None),
         ("s i i", "pointers-open", None),
         ("s i w", "pointers-window", None),
         ("s p p", "power-open", None),
@@ -2403,6 +2533,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("s s", key::GROUP_SYNCTHING),
         ("s d", key::GROUP_DISPLAY),
         ("s a", key::GROUP_AUDIO),
+        ("s c", key::GROUP_CAMERA),
         ("s i", key::GROUP_POINTERS),
         ("s p", key::GROUP_POWER),
         ("s b", key::GROUP_BLUETOOTH),
@@ -2590,6 +2721,20 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     out.extend(crate::power::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(crate::audio::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::pointers::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
+    out.extend(
+        crate::camera_settings::OF_THE_VIEW
+            .iter()
+            .map(|(_, id, _)| *id),
+    );
+    // THE CAMERA APP'S KEYS, but the three that are the WINDOW's own (the
+    // sound drawer, fit or fill, pinning the controls): those mean nothing
+    // anywhere else and are not commands of the registry.
+    out.extend(
+        crate::camera::OF_THE_VIEW
+            .iter()
+            .map(|(_, id, _)| *id)
+            .filter(|id| !crate::camera::LOCAL.contains(id)),
+    );
     out.extend(crate::syncthing::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     // THE KEYBOARD'S TOP ROW, which the compositor binds directly — the same
     // arrangement as the four emergency keys just above.
@@ -3266,6 +3411,35 @@ mod tests {
             "audio-default",
             "pointers-open",
             "pointers-window",
+            "camera-open",
+            "camera-settings-open",
+            "camera-settings-window",
+            "camera-settings-up",
+            "camera-settings-down",
+            "camera-settings-less",
+            "camera-settings-more",
+            "camera-settings-enter",
+            "camera-settings-remove",
+            "camera-photo",
+            "camera-record",
+            "camera-effect-next",
+            "camera-effect-previous",
+            "camera-background-next",
+            "camera-param-less",
+            "camera-param-more",
+            "camera-camera-next",
+            "camera-mirror",
+            "camera-scene-next",
+            "camera-scene-previous",
+            "camera-script",
+            "camera-next-cue",
+            "camera-virtual",
+            "camera-stream",
+            "camera-scene-add",
+            "camera-scene-rename",
+            "camera-script-add",
+            "camera-stream-url",
+            "camera-stream-key",
             "pointers-up",
             "pointers-down",
             "pointers-enter",

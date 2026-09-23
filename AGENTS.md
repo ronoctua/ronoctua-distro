@@ -1756,6 +1756,38 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   a cada passo — a BARRA (`chrome::meter`, dois `mark`s de uma célula) é que diz quanto.
   **O aparelho escolhido é do PipeWire** (`default.configured.*`) e não guardamos cópia; o
   `audio.json` fica com o passo, o teto acima de 100% e se a linha aparece.
+- **`LEADER m c` é a CÂMERA, e `LEADER s c` os ajustes dela** (`camera.rs`/`camera_window.rs` e
+  `camera_settings.rs`, duas portas: `s c c`/`s c w`). **Um PROCESSO é dono do vídeo**
+  (`ronoctua-studio`, unidade de usuário): uma captura V4L2 serve UM leitor, e gravação, transmissão
+  e câmera virtual têm de sobreviver à janela. App e ajustes são CLIENTES do socket dele (JSON por
+  linha, estado inteiro), e só a `Capture` do `ronoctua-camera` abre câmera — valor com `Drop` e
+  `setpriv --pdeathsig`, cobrado pelo `the-camera-has-one-door`. Em repouso toda fonte está FECHADA
+  e a luz da câmera apaga. **A câmera é achada pelo que o KERNEL diz, nunca pelo modelo**: nó que
+  não tem `VIDEO_CAPTURE` (metadados) sai, formato só cinza é infravermelho, e a identidade é
+  `card|bus|interface`, porque uma webcam USB expõe cor e IR com o MESMO `card` e o MESMO `bus`. O
+  nosso `v4l2loopback` (rótulo `ronoctua`, nó 42) nunca é fonte. **A prévia viaja por MEMÓRIA**
+  (`memfd` por `SCM_RIGHTS`, três fatias com seqlock, `pread`/`pwrite`, sem `mmap`): pela câmera
+  virtual, uma cena com a TELA seria legível por todo programa da máquina enquanto a pessoa só
+  olhava a prévia. **Efeitos são DECLARADOS** (`assets/camera-effects.nix`) e rodam em Rust por
+  fonte, AO VIVO; cor de efeito é aritmética, não token (inv. 9 é sobre a UI). **O fundo sai de um
+  interpretador TFLite NOSSO** (`ronoctua-segment`): o `tract` recusa o modelo (pesos fp16 atrás de
+  `DEQUANTIZE` e um operador CUSTOM), são onze operações, e o teste compara contra o MediaPipe
+  (pior diferença 5,8e-5). **Cenas e roteiros** moram em `studio/scenes.json` e trocar de cena é o
+  compositor LER outro estado: o encoder não reinicia (o `camera-vm` compara o PID). **A chave de
+  transmissão nunca vai ao `argv`** (`-/rtmp_playpath <arquivo 0600>`, `stream-key-is-never-an-argument`).
+  **A tela é capturada por `ext-image-copy-capture-v1`**, que é protocolo Wayland padrão e não IPC
+  nem layer-shell — a exceção ao inv. 3 que o dono aprovou com o plano, do mesmo tipo do
+  `wl_data_device`. Marcas `camera` (varredura de fds em `/proc`, 2 s, ~8 ms) e `recording`.
+  **Controle de vários valores ABRE UM MENU** (efeito, fundo, câmera, cena): clique esquerdo abre,
+  direito anda um passo, `C-<letra>` abre pelo teclado, e o menu que não cabe em altura vira
+  COLUNAS em vez de rolar — sem deslocamento, a isenção do `every-list-window-has-a-bar` continua
+  provada. `camera::MenuBox` é onde ele é desenhado E acertado. **O ponteiro sobre um botão põe o
+  que ele faz no lugar da linha de atalhos**, e isso é recalculado DEPOIS de pintar: o ponteiro que
+  traz os controles de volta chega quando ainda não há botão nenhum. **A câmera é lida numa thread
+  que guarda só o quadro MAIS NOVO**: lida entre dois efeitos, um efeito lento deixava quadros
+  velhos na fila do ffmpeg e o atraso crescia até segundos — agora efeito lento custa quadros,
+  nunca tempo. A tela de ajustes tem `Voltar tudo ao padrão`, que pergunta DUAS vezes na própria
+  linha e guarda o que a pessoa DIGITOU (cenas, endereço e chave da transmissão).
 - **A LINHA ACIMA DA MODELINE TEM DOIS INQUILINOS**: o relance (`LEADER d`) e o retorno do volume,
   e o último a pedir fica com ela. Uma aritmética só (`above_rows`/`above_line_at`), um `Showing` só
   — a pizza, a pausa no ponteiro e o prazo são da FILEIRA e não do que está nela, senão seriam dois

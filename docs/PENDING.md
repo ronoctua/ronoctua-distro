@@ -197,6 +197,21 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
+### 0.0000035. O que a câmera ainda não faz · pequeno a médio cada
+
+- **Câmera MIPI atrás do libcamera** (muitos laptops novos com sensor Intel IPU): ela não é um nó
+  V4L2 de captura comum e não aparece. Acaba quando uma dessas é fonte, provada numa máquina que a
+  tem. Médio.
+- **Formatos multiplanares** (`VIDEO_CAPTURE_MPLANE`) são ignorados pela varredura. Pequeno.
+- **Duas cadeias de efeito na mesma câmera** (uma para a prévia, outra para a câmera virtual): hoje o
+  efeito é da FONTE. Acaba quando o `Sends::Camera` pode levar uma cadeia própria. Pequeno.
+- **Texto como fonte de cena**: declarado no plano, não entrou. Pequeno.
+- **Recuo para `wlr-screencopy`** quando o compositor não anuncia `ext-image-copy-capture-v1`. O
+  pinado anuncia; outro compositor pode não anunciar. Pequeno.
+- **A instância `.#dev` grava de verdade**: o plano dizia que ela só ENSAIARIA, como o cérebro, e
+  ela não ensaia — um laço aninhado abre a câmera e escreve em `Videos`. Acaba com a decisão do dono
+  sobre isso. Minúsculo.
+
 ### 0.000004. O que falta de `LEADER s l`, e o relance que não existe · médio cada
 
 A vista de idioma e região existe no RODAPÉ (`s l`), troca de idioma ao vivo nas dez portas, e

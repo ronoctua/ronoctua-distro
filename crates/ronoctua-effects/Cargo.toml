@@ -1,0 +1,19 @@
+[package]
+name = "ronoctua-effects"
+description = "What an effect does to a camera frame: pure arithmetic over RGBA, the table declared in Nix."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ZERO DEPENDENCIES. A frame is a `Vec<u8>` and an effect is a loop over it;
+# nothing here opens a file, starts a thread or reads a clock, which is what
+# lets every effect be proved in `cargo test` on a frame of a few pixels and
+# lets the studio change a parameter between two frames without restarting
+# anything — a filter inside ffmpeg would restart the process, and a recording
+# would stutter every time a slider moved.
+[dependencies]
+
+[lints]
+workspace = true

@@ -1,0 +1,50 @@
+[package]
+name = "ronoctua-studio"
+description = "The daemon that owns the camera: sources, scenes, effects, the virtual camera, photos, recordings and streams."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ONE PROCESS OWNS THE VIDEO, and this is it — the shape of
+# `ronoctua-transfers`: a user unit on its own socket, the whole state on
+# every change, and clients (the camera app, the settings view, the footer's
+# marks) that never touch a device.
+#
+# Why a daemon and not the app: a V4L2 capture streams to ONE reader, the
+# virtual camera and a recording have to outlive the window that started
+# them, and a scene mixes sources no single window has. What stays in the
+# library half (`scene`, `compose`, `mix`, `wire`, `prefs`, `client`) is pure
+# or client-side, which is all the shell links.
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rustix = { workspace = true, features = [ "event", "fs", "net", "pipe" ] }
+image.workspace = true
+wayland-client.workspace = true
+wayland-protocols = { version = "0.32", features = [ "client", "staging" ] }
+ronoctua-camera = { path = "../ronoctua-camera" }
+ronoctua-effects = { path = "../ronoctua-effects" }
+ronoctua-segment = { path = "../ronoctua-segment" }
+ronoctua-audio = { path = "../ronoctua-audio" }
+ronoctua-store = { path = "../ronoctua-store" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+# `/proc`: who holds a camera, for the busy sentence.
+ronoctua-memory = { path = "../ronoctua-memory" }
+# Local time from `/etc/localtime`, for a photo's file name.
+ronoctua-files = { path = "../ronoctua-files" }
+
+[dependencies.tracing-subscriber]
+workspace = true
+
+# THE DAEMON, as its own binary — `nix/rust.nix` extracts JUST this, so the
+# unit's closure has no renderer and no wasm runtime.
+[[bin]]
+name = "ronoctua-studio"
+path = "src/bin/daemon.rs"
+
+[lints]
+workspace = true

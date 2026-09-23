@@ -75,6 +75,11 @@
   # a view that drew no cursor, or drew it in the text's tone, would photograph
   # as a list of words and pass any assertion about words.
   { id = "pointers"; }
+  # THE CAMERA'S SETTINGS (`LEADER s c c`) on a machine with NO camera, which
+  # is the state a desktop tower and this VM share. The view must still be a
+  # view — its sections, and a sentence saying there is no camera — and not a
+  # blank region: the headings' tone is the assertion.
+  { id = "camera-settings"; }
   # THE OTHER HALF OF WHAT THE OWNER REPORTED: he could not find a way to turn
   # Tor on. The section lived behind `if let Some(scene)`, and the control
   # socket only answers when Tor is already running — so a stopped Tor drew no

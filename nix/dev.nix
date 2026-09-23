@@ -1315,7 +1315,8 @@ let
               if cargo build --profile loop -p ronoctua-shell --bin ronoctua-shell \
                    -p ronoctua-rescue --bin ronoctua-rescue \
                    -p ronoctua-transfers --bin ronoctua-transfers \
-                   -p ronoctua-brain --bin ronoctua-brain 2>&1 | tail -20; then
+                   -p ronoctua-brain --bin ronoctua-brain \
+                   -p ronoctua-studio --bin ronoctua-studio 2>&1 | tail -20; then
                 export RONOCTUA_FOOTER_BIN="$CARGO_TARGET_DIR/loop/ronoctua-shell"
                 restart_footer
               else

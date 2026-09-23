@@ -26,6 +26,7 @@
 use std::path::{Path, PathBuf};
 
 // WHAT EMACS IS DOING, which is a  question and therefore this crate's.
+pub mod camera;
 pub mod emacs;
 pub mod guard;
 pub mod machine;

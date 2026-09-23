@@ -232,7 +232,7 @@ const DECIDING_WIDTH: u16 = 80;
 /// How many cells a bar gets.
 ///
 /// Wide enough to read a tenth, narrow enough to leave the number beside it.
-const BAR_CELLS: u16 = 10;
+pub(crate) const BAR_CELLS: u16 = 10;
 
 /// The view.
 #[derive(Debug, Default)]
