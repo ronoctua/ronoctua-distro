@@ -50,8 +50,60 @@
 
 use std::path::{Path, PathBuf};
 
-/// The subdirectory under both roots.
+/// The subdirectory under every root.
 pub const NAME: &str = "ronoctua";
+
+/// The variable that makes a SECOND copy of this system on one machine.
+///
+/// # Why the development loop needs one
+///
+/// `nix run .#dev` is this system running inside a window of another one, and
+/// that other one can be THIS system, installed. Without a name of its own the
+/// loop reads and writes the installed session's files and sockets: its cursor
+/// thread rewrites the `scroll-pointers.conf` the real compositor includes,
+/// from the devices a NESTED compositor sees, and its footer talks to the real
+/// session's queue and brain in whatever protocol this commit speaks. Named,
+/// every root below becomes `ronoctua-<instance>` and every socket
+/// `ronoctua-<instance>-…`, and the two never meet.
+///
+/// What is NOT ours stays shared on purpose — the Trash, the thumbnail cache,
+/// the apps a person installed, their shell history: those are the person's
+/// files, and a copy of this system shows them the same person's files.
+pub const INSTANCE: &str = "RONOCTUA_INSTANCE";
+
+/// The instance this process belongs to, when it is a second copy; `None` for
+/// the system itself. Only lowercase letters, digits and `-`, and at most 16:
+/// it becomes part of paths and socket names, and a socket path has a length
+/// limit that a long name would reach first.
+#[must_use]
+pub fn instance() -> Option<String> {
+    std::env::var(INSTANCE).ok().filter(|v| a_fine_instance(v))
+}
+
+/// Whether `value` may name an instance — see [`instance`].
+fn a_fine_instance(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 16
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// `ronoctua`, or `ronoctua-<instance>` — see [`INSTANCE`].
+#[must_use]
+pub fn name() -> String {
+    instance().map_or_else(|| NAME.to_owned(), |i| format!("{NAME}-{i}"))
+}
+
+/// `$XDG_RUNTIME_DIR/<name>-<leaf>` — a socket or a runtime file of ours, named
+/// per instance like the roots are. `None` without a runtime directory: there
+/// is no fallback to `/tmp`, because a control socket in a shared directory is
+/// attack surface.
+#[must_use]
+pub fn runtime_file(leaf: &str) -> Option<PathBuf> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")?;
+    Some(PathBuf::from(dir).join(format!("{}-{leaf}", name())))
+}
 
 /// `$XDG_CONFIG_HOME/ronoctua`, or `~/.config/ronoctua`; `None` with neither
 /// variable set, which is not a home this system knows how to write into.
@@ -60,7 +112,7 @@ pub fn config_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join(NAME))
+    Some(base.join(name()))
 }
 
 /// `$XDG_STATE_HOME/ronoctua`, or `~/.local/state/ronoctua`. See [`config_dir`].
@@ -71,7 +123,7 @@ pub fn state_dir() -> Option<PathBuf> {
         .or_else(|| {
             std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("state"))
         })?;
-    Some(base.join(NAME))
+    Some(base.join(name()))
 }
 
 /// `$XDG_DATA_HOME/ronoctua`, or `~/.local/share/ronoctua`. See [`config_dir`].
@@ -92,7 +144,7 @@ pub fn data_dir() -> Option<PathBuf> {
         .or_else(|| {
             std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
         })?;
-    Some(base.join(NAME))
+    Some(base.join(name()))
 }
 
 /// `$XDG_CACHE_HOME/ronoctua`, or `~/.cache/ronoctua`. See [`config_dir`].
@@ -113,7 +165,7 @@ pub fn cache_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
-    Some(base.join(NAME))
+    Some(base.join(name()))
 }
 
 /// `$XDG_CACHE_HOME`, or `~/.cache` — the root itself, with no name of ours on
@@ -185,6 +237,16 @@ pub fn write_atomically(dir: &Path, file: &str, bytes: &[u8]) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_instance_is_a_short_plain_name() {
+        assert!(a_fine_instance("dev"));
+        assert!(a_fine_instance("dev-2"));
+        assert!(!a_fine_instance(""), "empty is the system itself");
+        assert!(!a_fine_instance("../etc"), "a path is not a name");
+        assert!(!a_fine_instance("Dev"));
+        assert!(!a_fine_instance("a-name-that-is-too-long"));
+    }
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ronoctua-xdg-{}-{tag}", std::process::id()));

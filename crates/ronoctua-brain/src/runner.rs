@@ -555,6 +555,13 @@ impl Runner {
                 m.rehearsing = None;
             }
         });
+        // A SECOND COPY OF THIS SYSTEM ONLY EVER REHEARSES. The development
+        // loop brings its own brain up, and on an installed machine that is a
+        // second scheduler beside the real one: both would rebuild the
+        // system, sweep the cache and restart units on their own clocks.
+        // Rehearsing keeps every task exercisable from the loop and changes
+        // nothing — see `ronoctua_xdg::INSTANCE`.
+        rehearsal |= ronoctua_xdg::instance().is_some();
         // AND THE PATIENCE IS THE TASK'S OWN, for the reason `Task::defaults`
         // gives: two hours is right for a rebuild and absurd for a sweep, and a
         // number resolved differently here from the one on the row would be the

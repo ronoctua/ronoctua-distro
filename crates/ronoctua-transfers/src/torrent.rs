@@ -62,12 +62,7 @@ static SWARM: OnceLock<Option<Sender<Order>>> = OnceLock::new();
 /// unlike the socket, which is deliberately in `XDG_RUNTIME_DIR` and dies with
 /// the session.
 fn state_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
-        })?;
-    Some(base.join("ronoctua").join("torrent"))
+    Some(ronoctua_xdg::data_dir()?.join("torrent"))
 }
 
 /// One row the session thread is watching.

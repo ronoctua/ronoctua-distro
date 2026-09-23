@@ -56,6 +56,11 @@
 
   virtualisation.vmVariant = {
     virtualisation = {
+      # THE DISK IS THE DISTRO'S, NOT THE HOST'S: NixOS names it after the
+      # hostname (`noctua-vm`), and `noctua` is the machine's prefix while
+      # this file is a copy of `ronoctua`. `nix run .#vm` reads this same
+      # value to find an earlier VM on it.
+      diskImage = "./ronoctua-vm.qcow2";
       memorySize = 4096;
       cores = 4;
       diskSize = 16384;

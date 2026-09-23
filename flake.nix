@@ -1474,6 +1474,34 @@
               pass+=("$a")
             fi
           done
+          # AN EARLIER VM ON THIS SAME DISK IS STOPPED FIRST, and only that one.
+          #
+          # Two VMs cannot share a disk — QEMU refuses the image's lock — and
+          # one left running from another terminal still holds the host's mice
+          # and keyboards under `--pointers`/`--keyboards`, so this one could
+          # not take them. The match is the disk's own path in QEMU's command
+          # line, never a program's name: a VM of something else, or this
+          # system installed and running, is not touched.
+          disk=$(readlink -f "''${NIX_DISK_IMAGE:-${self.nixosConfigurations.vm.config.virtualisation.vmVariant.virtualisation.diskImage}}")
+          for proc in /proc/[0-9]*; do
+            if [ ! -O "$proc" ]; then
+              continue
+            fi
+            line=$({ tr '\0' ' ' < "$proc/cmdline"; } 2>/dev/null) || continue
+            case "$line" in
+              *qemu-system*"file=$disk,"*)
+                pid=''${proc#/proc/}
+                echo "vm: stopping the VM already running on $disk (pid $pid)"
+                kill "$pid" 2>/dev/null || true
+                for _ in $(seq 1 50); do
+                  if ! kill -0 "$pid" 2>/dev/null; then
+                    break
+                  fi
+                  sleep 0.1
+                done
+                ;;
+            esac
+          done
           if [ "''${pointers:-}" = yes ]; then
             found=0
             # THE BUILT-IN TOUCHPAD'S PARENTS, found before anything is passed:

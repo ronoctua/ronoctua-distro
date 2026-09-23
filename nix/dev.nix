@@ -559,6 +559,65 @@ let
         export GBM_BACKENDS_PATH="''${LIBGL_DRIVERS_PATH%/dri}/gbm"
       fi
 
+      # THE LOOP IS A SECOND COPY OF THIS SYSTEM, and says so before anything
+      # starts: every file and socket of ours becomes `ronoctua-dev…`
+      # (`ronoctua_xdg::INSTANCE`), inherited by the compositor, the footer,
+      # the queue and the brain. On a machine where the distro is INSTALLED
+      # the real session keeps its own — without this the loop's cursor thread
+      # rewrote the `scroll-pointers.conf` the real compositor includes, and
+      # its footer talked to the real queue and brain.
+      export RONOCTUA_INSTANCE=dev
+      # AND WHICH SESSION: every process the loop starts inherits it, so a
+      # process can be asked which loop it belongs to. See the sweep below and
+      # the watcher's third guard further down.
+      export RONOCTUA_DEV_PID="$$"
+
+      # WHAT AN EARLIER LOOP LEFT RUNNING, stopped before this one starts.
+      #
+      # A loop that is killed hard — a terminal closed, a `kill -9` — never
+      # runs its `trap`, and what it started goes on: a compositor with no
+      # window, a queue, a brain, a footer. People learned to begin every
+      # session with `pkill 'ronoctua-'`, which on a machine where this
+      # system is INSTALLED would take the real session's footer, brain and
+      # queue with it. So the question is never the NAME: it is whether the
+      # process carries `RONOCTUA_INSTANCE=dev` in the environment it was
+      # started with, and whether the loop in its `RONOCTUA_DEV_PID` is gone.
+      # A second loop running beside this one is alive, and is left alone.
+      for proc in /proc/[0-9]*; do
+        pid=''${proc#/proc/}
+        if [ "$pid" = "$$" ] || [ ! -O "$proc" ]; then
+          continue
+        fi
+        # ANOTHER USER'S PROCESS, or one gone by now, answers with an error the
+        # SHELL prints (the `<` fails before `tr` runs), so the braces carry it.
+        env_of=$({ tr '\0' '\n' < "$proc/environ"; } 2>/dev/null) || continue
+        if ! grep -qx 'RONOCTUA_INSTANCE=dev' <<< "$env_of"; then
+          continue
+        fi
+        owner=$(sed -n 's/^RONOCTUA_DEV_PID=//p' <<< "$env_of" | head -n1)
+        # THIS SESSION'S OWN — the subshells running this very loop carry it.
+        if [ "$owner" = "$$" ]; then
+          continue
+        fi
+        # A LOOP THAT IS STILL THERE: its PID alive, and still the loop (a PID
+        # the kernel has since handed to something else is not).
+        if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null \
+          && grep -q ronoctua-dev "/proc/$owner/cmdline" 2>/dev/null; then
+          continue
+        fi
+        echo "left over from an earlier loop, stopped: $pid $({ tr '\0' ' ' < "$proc/cmdline"; } 2>/dev/null | cut -c1-80)"
+        kill "$pid" 2>/dev/null || true
+      done
+      dev_config="''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua-dev"
+      # SEEDED ONCE from the person's own settings, so the loop starts looking
+      # like their desk and not like a fresh install. Only the choices, never
+      # what happened (state) or what was downloaded (data); and never again
+      # after the first time, or a setting changed in here would be undone.
+      if [ ! -e "$dev_config" ] && [ -d "''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua" ]; then
+        cp -r "''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua" "$dev_config"
+        echo "settings: copied once into $dev_config"
+      fi
+
       # THE CONFIG ARRIVES READY AND VALIDATED — see this file's `let`.
       cfg=${nestedConfig}
       # THE PERSON'S THEME AND DESK, included as production includes them.
@@ -570,18 +629,18 @@ let
       # THE INCLUDES ARE WRITTEN AS THE PRODUCTION ONES ARE — with the
       # variable, not with a resolved path. `include` expands shell syntax
       # (`wordexp(3)`), so `''${XDG_CONFIG_HOME:-$HOME/.config}` is the same
-      # rule `ronoctua_store::config_dir()` follows, and the two ends of the
-      # path come from ONE source. A missing file is not fatal.
+      # rule `ronoctua_store::config_dir()` follows — with the instance's
+      # name, `ronoctua-dev`, set above. A missing file is not fatal.
       {
-        echo "include \"''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-theme.conf\""
+        echo "include \"''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua-dev/scroll-theme.conf\""
         # AND THE SCREENS, so the display view's write-and-reload path is the
         # one exercised in here rather than only in production. The block
         # above sets the nested output's mode, and a block for the person's
         # own monitor simply does not match it.
-        echo "include \"''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-display.conf\""
+        echo "include \"''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua-dev/scroll-display.conf\""
         # AND THE POINTERS: which seat every pointing device is on, and the
         # cursor each seat draws.
-        echo "include \"''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-pointers.conf\""
+        echo "include \"''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua-dev/scroll-pointers.conf\""
       } >> "$cfg_themed"
 
       # ── THE HOST'S OWN PIXELS ────────────────────────────────────────────
@@ -1055,8 +1114,8 @@ let
       # a PID, and this is the one that means "the session that wanted a footer
       # is still running" — true through every hot reload, false the instant
       # Ctrl+C is answered, and answerable no matter who the kernel made its
-      # parent.
-      export RONOCTUA_DEV_PID="$$"
+      # parent. Exported at the top already, with the instance; said again
+      # here only as the reminder of what it is for.
 
       # WHAT THE RUNNING FOOTER READS, and it goes BEFORE the footer starts.
       #

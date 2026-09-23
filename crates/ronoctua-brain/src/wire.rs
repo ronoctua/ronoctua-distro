@@ -120,10 +120,12 @@ pub enum Say {
 /// `XDG_RUNTIME_DIR` absent. There is no fallback to `/tmp`, for the reason
 /// `leader::socket_path` already gives: a control socket in a shared directory
 /// is attack surface.
+///
+/// Named per instance (`ronoctua_xdg::INSTANCE`): the development loop's brain
+/// is not the installed session's, and it only ever rehearses.
 pub fn socket_path() -> Result<PathBuf> {
-    let dir = std::env::var_os("XDG_RUNTIME_DIR")
-        .context("XDG_RUNTIME_DIR is not set; without it there is nowhere to put the socket")?;
-    Ok(PathBuf::from(dir).join("ronoctua-brain.sock"))
+    ronoctua_xdg::runtime_file("brain.sock")
+        .context("XDG_RUNTIME_DIR is not set; without it there is nowhere to put the socket")
 }
 
 /// Writes one object and the newline that ends it.

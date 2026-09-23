@@ -1,11 +1,11 @@
-# Rodar o ambiente de desenvolvimento
+# Desenvolver
 
-Para trabalhar no sistema sem instalá-lo — o compositor sobe numa janela do seu computador, e o
-rodapé embaixo dela. Não precisa de VM.
+Para trabalhar no sistema sem instalá-lo: o compositor sobe numa janela do seu computador, com o
+rodapé embaixo dela. Para o boot inteiro, há uma VM.
 
-## O que você precisa antes
+## Antes de começar
 
-**Nix com flakes habilitado.** Confira com `nix --version`; se der "command not found", instale por
+**Nix com flakes.** Confira com `nix --version`; se der "command not found", instale por
 <https://nixos.org/download>. Depois:
 
 ```
@@ -13,152 +13,168 @@ mkdir -p ~/.config/nix
 echo 'experimental-features = nix-command flakes' >> ~/.config/nix/nix.conf
 ```
 
-**Nada além disso.** Os arquivos de fonte ocupam 4,1 GB e não estão no git — nem como LFS, cuja cota
-gratuita é quatro vezes menor que eles. São saída de build, e vivem como assets de um Release deste
-mesmo repositório, que o flake busca por hash.
-
-## Passos
-
-**1. Clonar.**
+**Nada além disso.** As fontes (4,1 GB) não estão no git — nem como LFS, cuja cota gratuita é quatro
+vezes menor que elas. São saída de build e moram como assets de um Release deste repositório, que o
+flake busca por hash na primeira construção (~1,4 GB comprimidos, uma vez só).
 
 ```
 git clone https://github.com/ronoctua/ronoctua-distro.git
 cd ronoctua-distro
 ```
 
-Os arquivos de fonte vêm sozinhos: são input do flake, buscados do Release por hash na primeira
-construção. São ~1,4 GB comprimidos, demoram, e é uma vez só.
+Todo comando abaixo roda **na raiz do clone**. `nix develop` entra no ambiente e imprime os comandos
+disponíveis — essa lista sai do próprio flake e vale mais do que qualquer texto aqui.
 
-**2. Entrar no ambiente.**
+> **Sobre o `direnv`.** Ele entra no ambiente sozinho ao entrar na pasta. É um programa do **seu
+> sistema**, não do flake — você precisaria dele *antes* de poder entrar no ambiente. Se quiser:
+> instale pelo gerenciador da sua distro, ponha `eval "$(direnv hook zsh)"` no `.zshrc` e rode
+> `direnv allow`. O `.envrc` busca o `nix-direnv` sozinho.
 
-```
-nix develop
-```
+## Os dois comandos do dia a dia
 
-Basta isto. A primeira vez compila bastante; depois é instantâneo. Ao entrar, ele imprime os comandos
-disponíveis — essa lista é mais confiável do que qualquer coisa escrita aqui, porque sai do próprio
-flake.
-
-> **Sobre o `direnv`.** Ele entra no ambiente sozinho ao entrar na pasta, poupando digitar
-> `nix develop`. Mas é um programa do **seu sistema**, não do flake — e o projeto não tem como
-> fornecê-lo, porque você precisaria dele *antes* de poder entrar no ambiente. Se quiser:
-> `sudo pacman -S direnv` (ou o gerenciador da sua distro), `eval "$(direnv hook zsh)"` no seu
-> `.zshrc`, e `direnv allow`. O `.envrc` busca o `nix-direnv` sozinho.
-
-**3. Verificar que está tudo de pé.**
-
-```
-nix run .#gate
-```
-
-Sai sem reclamar? A fundação está correta. Ele demora bastante na primeira vez.
-
-Ele roda o `nix flake check`, e faz duas coisas antes: **mede a memória livre** e limita quantas
-compilações podem correr ao mesmo tempo, e constrói as três pesadas uma de cada vez. Sem isso, numa
-máquina com `earlyoom`, o `rustc` é morto com `signal: 15` e **sem diagnóstico nenhum** — parece
-defeito de compilação e é falta de RAM. Se acontecer mesmo assim, ele diz que foi o `earlyoom`, em
-vez de deixar você adivinhando.
-
-**4. Subir o desktop.**
+Prontos para copiar:
 
 ```
 nix run .#dev
 ```
 
-Abre uma janela com o compositor rodando dentro dela e o rodapé embaixo.
-
-Editar um `.rs` em `crates/` recompila e reinicia o rodapé sozinho, com o compositor de pé. Editar um
-`.rs` em `buffers/` reconstrói **aquele componente** e reinicia o rodapé apontando para ele — são
-caminhos diferentes porque um buffer é um componente wasm, e quem constrói componente é o flake. Ele
-imprime `hot reload ligado` na partida — se não imprimir, você não está na raiz do projeto.
-
-> **Arquivo novo precisa de `git add -N`.** O flake enxerga a árvore do **git**, e um arquivo que
-> nunca foi adicionado é invisível para ele: a construção passa, sai idêntica, e a sua edição
-> simplesmente não está lá. O laço percebe e diz isso em vez de anunciar sucesso.
-
-## Mexer em arquivos sem sair do teclado
-
-`LEADER . .` abre o gerenciador na região do rodapé; `LEADER . w` abre a mesma coisa numa janela, sem
-o teto de doze linhas. As duas desenham a mesma vista — o que muda é só o tamanho.
-
-Dentro dele, a tecla que resolve tudo é a **vírgula**: ela abre o menu de ações, e cada linha mostra
-a tecla que a roda. Não há uma segunda tabela para decorar, e isso é de propósito: o menu sai da
-mesma tabela de onde as teclas são lidas, então não tem como divergir.
-
-> **O botão direito abre o mesmo menu**, e passar o ponteiro sobre uma permissão explica aquele bit
-> na linha de baixo — numa pasta o `x` é "entrar" e não "executar", e a frase muda junto. Nada disso
-> flutua: é a mesma região, e o invariante 14 continua de pé.
-
-Trocar dono, grupo ou permissão é **escolher numa lista**, nunca digitar uma sintaxe. Só o dono pede
-senha, porque só ele precisa de root — e quem pergunta é o polkit, uma vez por sessão.
-
-## A única tecla que você precisa saber
-
-Um toque em **`Ctrl+Alt+Espaço`** abre a lista de atalhos, logo abaixo das duas linhas do rodapé. É
-por ela que se descobre todo o resto: cada tecla vem com o que faz, e passar o ponteiro sobre um item
-mostra a descrição na linha de baixo.
-
-Não há uma segunda tabela para consultar, e isso é de propósito — a lista sai do mesmo registro de
-onde as teclas são lidas, então ela não tem como divergir. Um markdown com dezesseis atalhos teria.
-
-**Por que não `Super`?** Aqui o compositor roda como *janela dentro* do seu, e quem recebe o `Super`
-primeiro é o de fora — a tecla nunca chega. Na distro instalada, onde ele **é** o compositor da
-sessão, a leader é o `Super` sozinho. O `Ctrl+Alt+Espaço` também não é intocável: se o **seu**
-ambiente já usar essa combinação, ele a captura antes, e a tecla não chega aqui. O sintoma é
-"nenhum atalho funciona", que tem três causas com a mesma tela — rode `nix run .#diagnostics` antes
-de supor qual delas é.
-
-Quatro atalhos ficam fora da lista de propósito, para quando a máquina para de responder:
-`Ctrl+Alt+L` abre a lista quando a leader falha, `Ctrl+Shift+L` restaura o teclado,
-`Ctrl+Alt+Esc` abre o monitor de processos e **`Ctrl+Alt+Del` abre o console de resgate**.
-
-> **O `Ctrl+Alt+Del` deixou de reiniciar.** Ele abre o console de resgate, e reiniciar é uma linha lá
-> dentro. Se a máquina estiver travada a ponto de nem isso responder, **sete toques em dois segundos**
-> ainda reiniciam à força — essa saída é do systemd e não passa por nada nosso.
->
-> Com o compositor vivo, o console abre numa janela flutuante e o mouse funciona. Sem ele — compositor
-> travado, sessão que não subiu —, o systemd abre o mesmo programa num console virtual próprio, e aí é
-> só teclado. `Alt+F1` volta para onde você estava; sair do console também.
-
-O comando imprime as teclas certas ao subir. Elas valem mais do que este texto.
-
-## Os outros comandos
-
 ```
-nix run .#quick        dez escolhidos — o laço de edição, ~1 min
-nix run .#most         os que não constroem instalação — antes de commitar
-nix flake check        o mesmo que .#gate, cru — sem dimensionar pela memória
-nix run .#vm           a distro inteira numa VM: initrd, impermanência, boot de verdade
-nix run .#bench        mede os alvos de desempenho; sai != 0 se algum estourar
-nix run .#diagnostics  instantâneo de quando os atalhos travam (só leitura)
-nix build .#iso        gera o ISO instalável
+nix run .#vm -- --pointers --keyboards
 ```
 
-### As três baterias, e por que são três
+**Nenhum dos dois precisa de `pkill` antes.** Cada um encerra sozinho o que uma execução anterior
+deixou de pé — e só isso. Ver [O que fica rodando](#o-que-fica-rodando).
+
+### `.#dev` — o compositor numa janela
+
+Abre uma janela com o compositor dentro e o rodapé embaixo. A leader aqui é **`Ctrl+Alt+Espaço`**
+(não `Super`: o `Super` é do compositor de fora, e nunca chega). Um toque abre a lista de atalhos, e
+tudo o mais se descobre por ela; as teclas de emergência são impressas no terminal ao subir.
+
+**Editar recarrega sozinho.** Um `.rs` em `crates/` recompila e reinicia o rodapé, com o compositor
+de pé. Um `.rs` em `buffers/` reconstrói **aquele componente** e reinicia o rodapé apontando para ele —
+um buffer é um componente wasm, e quem constrói componente é o flake. O laço imprime
+`hot reload ligado` na partida; se não imprimir, você não está na raiz do projeto.
+
+> **Arquivo novo precisa de `git add -N`.** O flake enxerga a árvore do **git**: um arquivo nunca
+> adicionado é invisível para ele, a construção passa e a sua edição simplesmente não está lá. O laço
+> percebe e diz isso em vez de anunciar sucesso.
+
+**O laço é uma SEGUNDA cópia do sistema, com nome próprio.** Ele sobe com
+`RONOCTUA_INSTANCE=dev`, e tudo o que é nosso ganha esse nome:
+
+| | o sistema instalado | o laço |
+|---|---|---|
+| ajustes | `~/.config/ronoctua` | `~/.config/ronoctua-dev` |
+| estado | `~/.local/state/ronoctua` | `~/.local/state/ronoctua-dev` |
+| dados e cache | `…/share/ronoctua`, `~/.cache/ronoctua` | `…-dev` |
+| fila e cérebro | `$XDG_RUNTIME_DIR/ronoctua-transfers.sock`, `…-brain.sock` | `ronoctua-dev-transfers.sock`, `ronoctua-dev-brain.sock` |
+
+É isso que deixa rodar o laço **dentro da própria distro instalada** sem um mexer no outro: o
+compositor de verdade continua lendo os seus arquivos, e a sessão de verdade continua com a sua fila
+e o seu cérebro. **O cérebro do laço só ENSAIA** — senão seriam dois agendadores reconstruindo o
+sistema, cada um no seu relógio. Na primeira vez, o laço copia os seus ajustes para
+`~/.config/ronoctua-dev`, para começar parecido com a sua mesa; depois disso as duas cópias seguem
+separadas. Para começar do zero:
+
+```
+rm -rf ~/.config/ronoctua-dev ~/.local/state/ronoctua-dev
+```
+
+O que **não** é nosso continua compartilhado de propósito: a Lixeira, o cache de miniaturas do
+freedesktop, os apps instalados, o histórico do shell. São os seus arquivos, e uma cópia do sistema
+mostra os arquivos da mesma pessoa. O mesmo vale para a máquina: rede, Bluetooth, som, brilho e
+teclados são os de verdade, no laço como na sessão.
+
+### `.#vm` — a distro inteira, com boot de verdade
+
+Initrd, impermanência, unidades do systemd, o instalado como ele é. Usuário `noctua`, senha
+`noctua`. É mais lenta que o `.#dev`: o vídeo é por software.
+
+- **`--pointers`** entrega cada mouse e touchpad do seu computador à VM como ele mesmo, cada um com
+  o seu cursor — sem isso o QEMU junta todos num aparelho só. O **touchpad embutido fica com você**:
+  é ele que leva o ponteiro para fora da janela da VM. Lá dentro, ele move o ponteiro do próprio
+  QEMU, que nasce desligado quando há uma mão de verdade (há uma linha em `LEADER s i` para ligá-lo).
+- **`--keyboards`** faz o mesmo com os teclados **externos**. O embutido fica com você, e toda chave
+  de segurança (YubiKey e afins) também — a VM nunca a toma.
+- Os dois pedem `sudo` uma vez por aparelho, para ler o nó dele. Enquanto a VM roda, o que ela tomou
+  não responde aqui; volta quando ela fecha.
+
+**A VM lembra.** O disco é `ronoctua-vm.qcow2`, na pasta de onde você a chamou, e ele sobrevive a
+desligar e reiniciar — dispositivos lembrados, cursores numerados, ajustes. Para uma VM do zero:
+
+```
+rm -f ronoctua-vm.qcow2 && nix run .#vm -- --pointers --keyboards
+```
+
+## O que fica rodando
+
+Um `Ctrl+C` no terminal do `.#dev` encerra tudo o que ele subiu: compositor, rodapé, fila, cérebro.
+O que escapa é o que foi morto **sem** poder limpar — terminal fechado, `kill -9`. Por isso:
+
+- **O `.#dev` limpa na partida.** Todo processo que o laço sobe carrega no ambiente
+  `RONOCTUA_INSTANCE=dev` e o PID da sessão que o subiu. Ao começar, ele encerra os que têm a marca
+  e cuja sessão já não existe — nunca pelo **nome**. Um `pkill 'ronoctua-'` pegaria o rodapé, o
+  cérebro e a fila da distro instalada, que têm os mesmos nomes; a marca não. Um segundo `.#dev`
+  aberto em outro terminal está vivo, e é deixado em paz.
+- **O `.#vm` encerra a VM que já estava no mesmo disco.** Duas não dividem um disco, e uma esquecida
+  segura os seus mouses e teclados. A escolha é pelo caminho do disco na linha de comando do QEMU,
+  então nenhuma outra VM é tocada.
+
+Para ver o que sobrou de algum laço, sem matar nada:
+
+```
+grep -l 'RONOCTUA_INSTANCE=dev' /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3 | xargs -r ps -o pid,etime,args -p
+```
+
+## Verificar
 
 | | quanto | quando |
 |---|---|---|
 | `nix run .#quick` | ~1 min | no meio de uma edição |
-| `nix run .#most` | minutos | antes de commitar |
+| `nix run .#most` | ~16 min | antes de commitar |
 | `nix run .#gate` | horas | antes de publicar — **só ele fecha o invariante 7** |
 
-O **`quick`** são dez nomes em `tests/quick.nix`: formatação dos dois idiomas, clippy, testes e as
-tabelas que o compilador não confere. É um **subconjunto escolhido**, e não uma categoria — há mais
-de cem checks e a maioria também não sobe VM. Ele diz isso ao terminar.
+O **`quick`** são dez nomes escolhidos em `tests/quick.nix` — formatação, clippy, testes e tabelas que
+o compilador não confere. É um **subconjunto**, não uma categoria, e ele diz isso ao terminar.
 
-O **`most`** é derivado: todos os checks menos os de `tests/slow.nix`. O que sai de lá **constrói uma
-instalação** — um sistema NixOS, uma imagem de disco ou o ISO — ou é um marco (`mN`), que é pergunta
-de hora de publicar. As VMs comuns ficam, e ficam por medição: cada roteiro leva de 17 a 48 s, e
-mesmo os que particionam um disco ou emulam um TPM não saem da faixa (`disko-vm` 77 s, `oom-vm` 49 s,
-`tpm-vm` 22 s). Ao terminar, ele **lista o que não verificou**, com os nomes.
+O **`most`** é todo check menos os de `tests/slow.nix`, que **constroem uma instalação** (um sistema
+NixOS, uma imagem de disco, o ISO) ou são marcos. As VMs comuns ficam: cada roteiro leva de 17 a 48 s.
+Ao terminar, ele **lista o que não verificou**, pelo nome. `test-tiers-are-total` exige que a divisão
+não envelheça, e um check novo entra no `most` sozinho.
 
-> **A divisão não pode envelhecer.** `test-tiers-are-total` exige que todo nome de `tests/slow.nix`
-> exista em `checks`, e `quick-names-exist` faz o mesmo pelo laço curto. Um check novo entra no
-> `most` sozinho — que é o padrão certo, porque um check caro esquecido faz o relógio reclamar, e um
-> check barato esquecido não faria ruído nenhum.
+O **`gate`** roda o `nix flake check` depois de **medir a memória livre**: ele limita quantas
+compilações correm juntas e constrói as três pesadas uma de cada vez. Sem isso, numa máquina com
+`earlyoom`, o `rustc` morre com `signal: 15` **sem diagnóstico nenhum** — parece defeito de compilação
+e é falta de RAM. Se acontecer mesmo assim, ele diz que foi o `earlyoom`.
 
-O `nix run .#vm` é mais lento que o `.#dev`, e o que se ganha é o boot completo. Usuário `noctua`,
-senha `noctua`.
+> **`nix flake check` sem `-L` não mostra log** — silêncio não é sintoma.
+
+### Olhar antes de dizer "pronto"
+
+```
+nix run .#png -- "$RONOCTUA_BUFFER_KEYBOARD" --out teclados.png
+```
+
+Um buffer vira PNG em 0,2 s, sem VM. Dentro do `nix develop`, cada componente tem a sua variável
+(`RONOCTUA_BUFFER_BRAIN`, `…_EXAMPLE`, `…_FORMAT` e os outros); `--help` lista as opções — tamanho,
+tema, idioma, e teclas e cliques para andar até a tela que se quer.
+
+```
+nix build .#shots-<cena>           fotografa UMA cena (e o que ela precisa) numa VM
+nix build .#shots                  todas
+```
+
+Teste verde não vê espaço em branco, sobreposição nem uma faixa no lugar errado. A foto vê.
+
+## Os outros comandos
+
+```
+nix run .#diagnostics  instantâneo de quando os atalhos travam (só leitura)
+nix run .#bench        mede os alvos de desempenho; sai != 0 se algum estourar
+nix build .#iso        o ISO instalável
+nix run .#install      instala (ensaia sem --execute)
+```
 
 ### Quando o ponteiro parece atrasado
 
@@ -166,36 +182,28 @@ senha `noctua`.
 RONOCTUA_MEASURE_HOVER=1 RUST_LOG=ronoctua_render=info nix run .#dev
 ```
 
-Cada linha que o ponteiro cruza vira uma medida: quanto tempo do EVENTO até o `present`. É a nossa
-metade da latência — sem compositor e sem varredura. Se ela vier em milissegundos de um dígito, o
-atraso que se vê não está no que o rodapé calcula, e o que sobra é a cadeia: no laço aninhado há um
-compositor a mais entre a mão e a tela, nos dois sentidos. Medir a outra metade exige a distro
-instalada (`docs/PENDING.md`, item 3).
+Cada linha que o ponteiro cruza vira uma medida: do EVENTO até o `present`. É a nossa metade da
+latência. Se ela vier em milissegundos de um dígito, o atraso que se vê está na cadeia — no laço há
+um compositor a mais entre a mão e a tela. Medir a outra metade exige a distro instalada.
 
-## Quando é preciso instalar de verdade
+## Instalar de verdade
 
-Boot, TPM, hibernação e desempenho gráfico não se provam em VM. E instalar costumava custar uma
-tarde: o `nixos-install` **constrói** o sistema na máquina alvo, e o que este repositório produz não
-existe em cache público nenhum — o shell, o compositor do input pinado, o `libghostty-vt` e os buffers wasm
-eram compilados do zero, toda vez.
+Boot, TPM, hibernação e desempenho gráfico não se provam em VM.
 
-Duas coisas mudaram isso, e elas se somam:
+**O ISO carrega o que ninguém tem em cache** — o shell, o compositor pinado, o `libghostty-vt`, os
+buffers wasm e as fontes vão no `isoImage.storeContents`. A máquina alvo não compila nada; o resto ela
+baixa do `cache.nixos.org`.
 
-**O ISO carrega o que ninguém tem em cache.** A semente vai no `isoImage.storeContents` e o
-`nix-store --load-db` a registra no boot. A máquina alvo não compila nada; ela baixa do
-`cache.nixos.org` o que já vem pronto de lá.
-
-**A instalação `minimal` tem 6,9 GiB contra 22,8.** Escolha-a na terceira pergunta. Ela deixa de fora
-os aplicativos e não deixa de fora a distro — e quando você precisar de um deles, é uma linha:
+**A instalação `minimal` tem 6,9 GiB contra 22,8 da `full`.** Ela deixa de fora os aplicativos, não a
+distro — e um deles é uma linha depois:
 
 ```
 ronoctua.browser.enable = true;    # em /etc/nixos/host.nix, depois nixos-rebuild switch
 ```
 
-Instalar o Chrome assim baixa 0,42 GiB. Instalar a `full` para chegar nele baixa 23.
-
-Depois da primeira instalação, o laço deixa de passar pelo ISO: edite, e rode `nixos-rebuild switch
---flake /etc/nixos#noctua` na própria máquina.
+Depois da primeira instalação, o laço deixa de passar pelo ISO: edite, e rode
+`nixos-rebuild switch --flake /etc/nixos#noctua` na própria máquina. E o `.#dev` continua servindo
+ali dentro, com o nome próprio que ele tem (ver [`.#dev`](#dev--o-compositor-numa-janela)).
 
 ## Se algo der errado
 
@@ -205,25 +213,19 @@ Depois da primeira instalação, o laço deixa de passar pelo ISO: edite, e rode
 | `404` num input de fonte | o Release não está publicado, ou o repositório está privado | asset de Release herda a visibilidade do repositório; não há token que contorne |
 | `nix run .#dev` diz que não há sessão gráfica | você está num TTY | use `nix run .#vm` |
 | o rodapé não aparece, mas o compositor sobe | ele recusou a layer surface | `RUST_LOG=ronoctua_shell=debug nix run .#dev` mostra o motivo |
-| nenhum atalho responde | tecla que não chega, modificador preso, ou foco não concedido | `nix run .#diagnostics` separa as três |
-| a modeline não mostra porcentagem ao colar | a fila de transferências não subiu | `journalctl --user -u ronoctua-transfers`; fora do NixOS ela é iniciada pelo próprio rodapé, e `RUST_LOG=ronoctua_transfers=info` diz o porquê |
-| um link some da fila com `o aria2 nao esta atendendo` | o aria2 é uma **unidade**, e o laço aninhado não sobe unidade nenhuma | é esperado fora de uma sessão de verdade; para exercitar o motor, rode `aria2c --conf-path=$XDG_RUNTIME_DIR/ronoctua-aria2.conf` à mão depois de gerar o arquivo, ou use `nix run .#vm` |
-| um vídeo falha com `esta instalacao nao tem o yt-dlp` | o caminho vem da unidade, não do binário | no laço aninhado, `export RONOCTUA_YT_DLP=$(which yt-dlp)` antes de subir — baked por `option_env!` ele entraria no perfil reduzido, e por isso não é |
-| um vídeo com restrição de idade falha, mesmo com `t i v` | os cookies são decisão da MÁQUINA, e o laço aninhado não sobe unidade nenhuma | `export RONOCTUA_COOKIES_BROWSER=chrome+basictext` antes de subir, ou aponte um arquivo com `RONOCTUA_COOKIES_FILE`; no sistema instalado é `ronoctua.transfers.cookies` |
-| `Login with OAuth is no longer supported` | o yt-dlp recusa OAuth desde antes desta versão | não é contornável: cookies é o caminho, e o PO token (`$XDG_STATE_HOME/ronoctua/po-token`) é o que faz o papel de "dispositivo real" |
-| o yt-dlp diz que precisa de PO token | o gerador é opcional e vem desligado | `ronoctua.transfers.poToken = "on-demand"`; no laço aninhado, `export RONOCTUA_POT_HOME=$(nix build --no-link --print-out-paths .#pot-provider)/server RONOCTUA_DENO=$(command -v deno)` |
-| `Not implemented: HTMLCanvasElement's getContext()` | o `canvas` não é construído de propósito — nada sob `server/src` o importa | é esperado: o plugin lê a última linha da saída, e o token vem nela |
-| o navegador se desloga sozinho depois de um download identificado | o YouTube gira os cookies, e usar os do navegador em uso pode invalidá-los | `ronoctua.transfers.cookies = "file"` com um jar exportado de uma janela anônima onde você entrou e que fechou SEM sair da conta |
-| um magnet não abre nada | o `.desktop` é do sistema instalado | `xdg-open` só encontra o manipulador depois de um rebuild; à mão, `ronoctua-transfers open '<magnet>'` |
-| a extensão não aparece no Chrome | a política é escrita por unidade de SISTEMA, no boot | `systemctl status ronoctua-browser-extension`; o Chrome lê a política ao **iniciar**, então feche todas as janelas antes de conferir |
+| nenhum atalho responde | tecla que não chega, modificador preso, ou foco não concedido — três causas com a mesma tela | `nix run .#diagnostics` separa as três; e confira se o **seu** ambiente não captura `Ctrl+Alt+Espaço` antes |
+| a VM não abre dizendo que o disco está em uso | uma VM de outro disco com o mesmo nome, ou de outro usuário | a do mesmo disco o `.#vm` já encerra; confira com `ps -ef \| grep qemu` |
+| a modeline não mostra porcentagem ao colar | a fila de transferências não subiu | fora do NixOS ela é iniciada pelo próprio rodapé; `RUST_LOG=ronoctua_transfers=info` diz o porquê |
+| um link some da fila com `o aria2 nao esta atendendo` | o aria2 é uma **unidade**, e o laço não sobe unidade nenhuma | esperado fora de uma sessão de verdade; para exercitar o motor, use `nix run .#vm` |
+| um vídeo falha com `esta instalacao nao tem o yt-dlp` | o caminho vem da unidade, não do binário | no laço, `export RONOCTUA_YT_DLP=$(which yt-dlp)` antes de subir |
+| um vídeo com restrição de idade falha, mesmo com `t i v` | os cookies são decisão da MÁQUINA | `export RONOCTUA_COOKIES_BROWSER=chrome+basictext` antes de subir, ou `RONOCTUA_COOKIES_FILE`; no sistema instalado é `ronoctua.transfers.cookies` |
+| `Login with OAuth is no longer supported` | o yt-dlp recusa OAuth | cookies é o caminho, e o PO token (`$XDG_STATE_HOME/ronoctua/po-token`) faz o papel de "dispositivo real" |
+| o yt-dlp diz que precisa de PO token | o gerador é opcional e vem desligado | `ronoctua.transfers.poToken = "on-demand"`; no laço, `export RONOCTUA_POT_HOME=$(nix build --no-link --print-out-paths .#pot-provider)/server RONOCTUA_DENO=$(command -v deno)` |
+| o navegador se desloga depois de um download identificado | o YouTube gira os cookies | `ronoctua.transfers.cookies = "file"` com um jar exportado de uma janela anônima que você fechou SEM sair da conta |
+| um magnet não abre nada | o `.desktop` é do sistema instalado | à mão, `ronoctua-transfers open '<magnet>'` |
+| a extensão não aparece no Chrome | a política é escrita por unidade de SISTEMA, no boot | `systemctl status ronoctua-browser-extension`; feche todas as janelas do Chrome antes de conferir |
 
-**Um processo fica de pé depois do `nix run .#dev`, e é de propósito.** `ronoctua-transfers` é a fila:
-ela existe para **sobreviver** ao rodapé reiniciar — que no laço aninhado acontece a cada edição de
-arquivo. O `trap` de saída não a mata porque o socket é **por usuário**, não por sessão: matá-la
-poderia derrubar uma cópia de verdade da sessão real. Ela é ociosa e a próxima execução a reaproveita;
-para encerrá-la à mão, `pkill -f bin/ronoctua-transfers`.
-
-**A sessão de torrent vive dentro dessa unidade.** Ela sobe na primeira vez que um magnet chega e
-escuta em 6881-6889; matar a fila para a semeadura, e o estado (o que retomar) fica em
-`$XDG_DATA_HOME/ronoctua/torrent`. Um `.torrent` puramente v2 para experimentar sai de
-`ronoctua-test-torrent <diretório>`, que cria um, verifica, e não toca a rede.
+**A sessão de torrent vive dentro da fila.** Ela sobe no primeiro magnet e escuta em 6881-6889; o
+estado fica em `$XDG_DATA_HOME/ronoctua/torrent` (no laço, `ronoctua-dev/torrent`). Um `.torrent`
+puramente v2 para experimentar sai de `ronoctua-test-torrent <diretório>`, que cria, verifica e não
+toca a rede.

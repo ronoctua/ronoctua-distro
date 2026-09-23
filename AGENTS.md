@@ -109,6 +109,17 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   brain: `PGID == PID`, alcançáveis só pelo `/proc/<pid>/exe` apontando para esta build) e poda na
   PARTIDA os logs de sessões velhas — eram 65 arquivos e 55 MB. Cobram o `a-dead-footer-stays-dead`
   e o `the-dev-loop-ends-with-the-session`.
+- **O laço é uma SEGUNDA cópia do sistema, com nome próprio** (`RONOCTUA_INSTANCE=dev`,
+  `ronoctua_xdg::instance`/`name`/`runtime_file`): toda raiz nossa vira `ronoctua-dev` e todo
+  socket nosso `ronoctua-dev-…`, então o `.#dev` roda DENTRO da distro instalada sem reescrever o
+  `scroll-pointers.conf` que o compositor de verdade inclui nem falar com a fila e o cérebro da
+  sessão de verdade. **O cérebro de uma instância só ENSAIA** — senão seriam dois agendadores
+  reconstruindo o sistema. O que não é nosso (Lixeira, miniaturas do freedesktop, apps, histórico
+  do shell, o segredo do aria2 e o PO token, que são da máquina) segue compartilhado de propósito.
+  **E sobra se acha pela MARCA, nunca pelo nome**: o laço encerra na partida o processo que traz
+  `RONOCTUA_INSTANCE=dev` no ambiente e cujo `RONOCTUA_DEV_PID` morreu — um `pkill 'ronoctua-'`
+  levaria o rodapé, o cérebro e a fila instalados, que têm os mesmos nomes. O `.#vm` encerra só a
+  VM que já está no MESMO disco (o caminho na linha de comando do QEMU).
 - **A aritmética do rodapé não pergunta ao conteúdo do rodapé.** `Footer::metric` é o fundo: ele
   transforma largura, altura e a PRIMEIRA LINHA da região num frame, e essa primeira linha é o
   `first_of_expansion`. Nada que o `metric` alcance pode perguntar o que a região CONTÉM — e a shell
