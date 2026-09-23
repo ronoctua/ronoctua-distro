@@ -290,7 +290,7 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
         outputs: OutputState::new(&globals, &qh),
         seats: SeatState::new(&globals, &qh),
         _compositor: compositor,
-        keyboard: None,
+        keyboards: crate::seats::Seats::default(),
         mods: Modifiers::default(),
         window,
         width: 0,
@@ -386,7 +386,7 @@ struct TerminalWindow {
     outputs: OutputState,
     seats: SeatState,
     _compositor: CompositorState,
-    keyboard: Option<wl_keyboard::WlKeyboard>,
+    keyboards: crate::seats::Seats<Modifiers, wl_keyboard::WlKeyboard>,
     mods: Modifiers,
     window: Window,
     /// The window's size in LOGICAL pixels — what the compositor configured
@@ -714,7 +714,7 @@ impl SeatHandler for TerminalWindow {
         seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
-        if cap == Capability::Keyboard && self.keyboard.is_none() {
+        if cap == Capability::Keyboard {
             // A KEYBOARD THAT REPEATS: holding a key here is meant to work,
             // and SCTK only repeats for one made this way.
             match self.seats.get_keyboard_with_repeat(
@@ -722,9 +722,17 @@ impl SeatHandler for TerminalWindow {
                 &seat,
                 None,
                 self.handle.clone(),
-                Box::new(|state: &mut Self, _, event| state.typed(event)),
+                Box::new(|state: &mut Self, kb, event| {
+                    state.keyboards.switch_to(kb, &mut state.mods);
+                    state.typed(event);
+                }),
             ) {
-                Ok(k) => self.keyboard = Some(k),
+                Ok(k) => {
+                    // EVERY KEYBOARD, and not only the first: one per seat, and in
+                    // Independent mode one per cursor.
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.keyboards.took(&seat, k, name.as_deref());
+                }
                 Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
         }
@@ -734,13 +742,11 @@ impl SeatHandler for TerminalWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: wl_seat::WlSeat,
+        seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
-        if cap == Capability::Keyboard
-            && let Some(k) = self.keyboard.take()
-        {
-            k.release();
+        if cap == Capability::Keyboard {
+            self.keyboards.lost(&seat, &mut self.mods);
         }
     }
 
@@ -774,12 +780,13 @@ impl KeyboardHandler for TerminalWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
         _: &[u32],
         _: &[Keysym],
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         tracing::debug!("the terminal gained keyboard focus");
     }
 
@@ -787,20 +794,22 @@ impl KeyboardHandler for TerminalWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
     }
 
     fn press_key(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         event: KeyEvent,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         self.typed(event);
     }
 
@@ -822,22 +831,24 @@ impl KeyboardHandler for TerminalWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         _: KeyEvent,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
     }
 
     fn update_modifiers(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         mods: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         self.mods = mods;
     }
 }

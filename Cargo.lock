@@ -2918,6 +2918,20 @@ name = "ronoctua-keymap"
 version = "0.1.0"
 
 [[package]]
+name = "ronoctua-keys"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-keyboards",
+ "ronoctua-xdg",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "ronoctua-lan"
 version = "0.1.0"
 dependencies = [
@@ -2969,6 +2983,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ronoctua-compositor",
+ "ronoctua-keyboards",
+ "ronoctua-keys",
  "ronoctua-scroll",
  "ronoctua-store",
  "serde",
@@ -3079,6 +3095,7 @@ dependencies = [
  "ronoctua-inspect",
  "ronoctua-keyboards",
  "ronoctua-keymap",
+ "ronoctua-keys",
  "ronoctua-lan",
  "ronoctua-memory",
  "ronoctua-network",
@@ -3108,6 +3125,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols-wlr",
  "wgpu",
+ "xkbcommon",
 ]
 
 [[package]]

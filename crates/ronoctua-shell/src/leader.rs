@@ -686,6 +686,7 @@ pub const BY_NAME_ONLY: &[&str] = &[
     "brain-proceed",
     "brain-start-emacs",
     "brain-clock-automatic",
+    "example-open",
 ];
 
 /// And for the button a standing notice offers.
@@ -864,6 +865,12 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "memory-open",
             label: key::CMD_MEMORY_OPEN,
+        },
+        // THE REFERENCE for several keyboards in one app — by name only: it
+        // is a model for apps to come, not a place anybody goes daily.
+        Command {
+            id: "example-open",
+            label: key::CMD_EXAMPLE_OPEN,
         },
         // `LEADER b` — what the machine does BY ITSELF. The panel's own
         // commands are not here either: they live in the buffer's descriptor,

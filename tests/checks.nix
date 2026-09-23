@@ -10790,6 +10790,184 @@ let
     END
   '';
 
+  # EVERY DOOR TAKES EVERY KEYBOARD, the keyboard twin of the check above.
+  #
+  # In Independent mode every keyboard is its own seat, on its cursor's; a
+  # door that took only the first keyboard it was offered answered one person
+  # and dropped the rest — measured in the VM: a second keyboard on cursor 4's
+  # seat typed into a terminal of ours and nothing arrived.
+  every-door-hears-every-keyboard = mkCheck "every-door-hears-every-keyboard" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a door is a file, and the question is whether ANY keyboard it
+    # is offered is dropped. The handlers are narrowed with `body_of`, because
+    # the switch has to be where the events are handled.
+    wrong = []
+    doors = 0
+    for path in sorted(pathlib.Path("${../crates/ronoctua-shell/src}").glob("*.rs")):
+        code = code_of(without_tests(path.read_text()))
+        if not re.search(r"impl KeyboardHandler for \w+", code):
+            continue
+        doors += 1
+        name = path.name
+        if re.search(r"\bkeyboard\s*:\s*Option<\s*wl_keyboard::WlKeyboard\s*>", code):
+            wrong.append(f"{name}: keeps ONE keyboard (`keyboard: Option<WlKeyboard>`)")
+        # `(?<!::)`: the SEAT's capability, never `ronoctua_protocol::Capability`,
+        # which is a buffer's and has nothing to do with a keyboard device.
+        for cond in re.findall(r"\bif\s+([^{]*(?<!::)Capability::Keyboard[^{]*)\{", code):
+            if not re.fullmatch(r"\s*\w+\s*==\s*Capability::Keyboard\s*", cond):
+                wrong.append(f"{name}: takes a keyboard only when `{cond.strip()}`")
+        if not re.search(r"\.\w+\.took\(&seat,\s*k\b", code):
+            wrong.append(f"{name}: never hands a keyboard to `Seats::took`")
+        start = code.index("impl KeyboardHandler for")
+        handler = code[start:]
+        for fn in ("enter", "leave", "press_key", "release_key", "update_modifiers"):
+            body = body_of(handler, fn)
+            if body is None or "switch_to(" not in body:
+                wrong.append(f"{name}: its `{fn}` does not start from the keyboard that spoke")
+    floor(doors, 17, "doors that take keyboards")
+    if wrong:
+        print("ERROR: a door that drops a keyboard:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        print("      Every keyboard goes through `crate::seats`, or a second keyboard", file=sys.stderr)
+        print("      types into a window that does not listen to it.", file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {doors} doors, and every one hears every keyboard")
+    END
+  '';
+
+  # THE KEYS DAEMON'S RULE IS AS NARROW AS TOR'S: two units — keyd and the
+  # remapper the mode switch trades it for —, `start` and `stop`, one user,
+  # and `YES`, because nothing in this session may ask.
+  keys-polkit-is-narrow =
+    let
+      rules = self.nixosConfigurations.vm.config.security.polkit.extraConfig;
+    in
+    mkCheck "keys-polkit-is-narrow" [ pkgs.python3 ] ''
+      export RONOCTUA_USER=${self.nixosConfigurations.vm.config.ronoctua.user}
+      cat > rules.js <<'RULES'
+      ${rules}
+      RULES
+      python3 - <<'END'
+      import os, re, sys
+
+      user = os.environ["RONOCTUA_USER"]
+      text = open("rules.js").read()
+      wrong = []
+      rules = re.split(r"polkit\.addRule", text)[1:]
+      ours = [r for r in rules if "ronoctua-keys.service" in r]
+      if len(ours) != 1:
+          wrong.append(f"{len(ours)} rules mention ronoctua-keys.service; there may be one")
+      for rule in ours:
+          if set(re.findall(r"polkit\.Result\.(\w+)", rule)) != {"YES"}:
+              wrong.append("the rule answers something other than YES")
+          if set(re.findall(r'action\.id\s*==\s*"([^"]+)"', rule)) != {"org.freedesktop.systemd1.manage-units"}:
+              wrong.append("the rule is about another action")
+          units = set(re.findall(r'lookup\("unit"\)\s*==\s*"([^"]+)"', rule))
+          if units != {"keyd.service", "ronoctua-keys.service"}:
+              wrong.append(f"the rule names the units {sorted(units)}")
+          verbs = set(re.findall(r'lookup\("verb"\)\s*==\s*"([^"]+)"', rule))
+          if verbs != {"start", "stop"}:
+              wrong.append(f"the rule allows the verbs {sorted(verbs)}")
+          if set(re.findall(r'subject\.user\s*==\s*"([^"]+)"', rule)) != {user}:
+              wrong.append("the rule is for another user")
+          body = re.search(r"if\s*\((.*?)\)\s*\{", rule, re.S)
+          left = body.group(1) if body else "?"
+          for known in (
+              r'action\.id\s*==\s*"[^"]+"',
+              r'action\.lookup\("verb"\)\s*==\s*"[^"]+"',
+              r'action\.lookup\("unit"\)\s*==\s*"[^"]+"',
+              r'subject\.user\s*==\s*"[^"]+"',
+          ):
+              left = re.sub(known, "", left)
+          leftover = re.sub(r"[\s()&|]", "", left)
+          if leftover:
+              wrong.append(f"the condition tests something else as well: {leftover!r}")
+      if wrong:
+          print("ERROR: the keyboard mode's polkit rule is not narrow:", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: one rule, keyd and ronoctua-keys, start and stop, {user}, and YES")
+      END
+    '';
+
+  # ONE CRATE OPENS THE KERNEL'S INPUT DEVICES: `ronoctua-keys`, which grabs a
+  # keyboard and makes its twin. A second place that read `/dev/input` would
+  # be a keylogger nobody audited; one that wrote `/dev/uinput` could type as
+  # anybody.
+  one-input-device-boundary = mkCheck "one-input-device-boundary" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: the question is whether ANY file outside the crate names an
+    # input device, anywhere in it. `uncommented` because the needles ARE
+    # literals: a path, an ioctl's name.
+    crates = pathlib.Path("${../crates}")
+    wrong, looked = [], 0
+    for path in sorted(crates.rglob("*.rs")):
+        looked += 1
+        text = uncommented(path.read_text())
+        if "ronoctua-keys" in path.parts:
+            continue
+        for needle in ("/dev/uinput", "/dev/input/", "EVIOCGRAB", "UI_DEV_CREATE"):
+            if needle in text:
+                wrong.append(f"{path.relative_to(crates)} names {needle}")
+    floor(looked, 300, "Rust files read")
+    keys = uncommented(pathlib.Path("${../crates/ronoctua-keys/src}/device.rs").read_text())
+    if "EVIOCGRAB" not in keys:
+        print("ERROR: ronoctua-keys no longer grabs a keyboard where this looks", file=sys.stderr)
+        sys.exit(1)
+    if wrong:
+        print("ERROR: a crate other than ronoctua-keys touches an input device:", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        sys.exit(1)
+    print("OK: only ronoctua-keys opens /dev/input and /dev/uinput")
+    END
+  '';
+
+  # EVERY KEYBOARD OF THE REMAPPER CARRIES THE LEADER, the sibling of
+  # `keyd-rules-carry-the-leader`: in Independent mode each keyboard has a
+  # leader key of its own, and a keyboard without one is a keyboard that
+  # cannot open anything.
+  keys-rules-carry-the-leader = mkCheck "keys-rules-carry-the-leader" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+    exec(open("${pyPrelude}").read())
+
+    src = pathlib.Path("${../crates/ronoctua-keys/src}")
+    engine = code_of(without_tests((src / "engine.rs").read_text()))
+    config = code_of(without_tests((src / "config.rs").read_text()))
+    floor(len(engine), 2000, "characters of the engine")
+    floor(len(config), 1000, "characters of the config")
+    new = body_of(engine, "new")
+    wrong = []
+    if new is None or "ronoctua_keyboards::LEADER.1" not in new:
+        wrong.append("`Engine::new` does not install the leader's rule")
+    # THE LEADER GOES IN FIRST, so a remap of its key — which somebody chose —
+    # still wins, as it does in keyd's files.
+    elif new.index("ronoctua_keyboards::LEADER.1") > new.index("remaps"):
+        wrong.append("`Engine::new` installs the leader after the remaps")
+    rules_of = body_of(config, "rules_of")
+    if rules_of is None or "ronoctua_keyboards::LEADER.0" not in rules_of:
+        wrong.append("a unit nobody named does not take the distro's leader key")
+    render = body_of(config, "render")
+    if render is None or "unit_leader" not in render:
+        wrong.append("`render` does not give every unit its leader key")
+    if wrong:
+        print("ERROR: a keyboard of the remapper could come up without a leader:", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        sys.exit(1)
+    print("OK: every keyboard the remapper holds has a leader")
+    END
+  '';
+
   every-window-repeats = mkCheck "every-window-repeats" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
@@ -11034,13 +11212,15 @@ let
       # comment is the audit: adding a line here is claiming somebody read the
       # rule and decided the door is the right width.
       AGREED = {
-          # OURS — seven modules, and every one of them names ONE unit inside
+          # OURS — eight modules, and every one of them names its units inside
           # the same action. `files` and `rescue` return `AUTH_SELF_KEEP` (they
-          # ask, once, and remember); `keyboard`, `memory`, `update` and `tor`
-          # return `YES`, because nothing this system does on its own may ask.
-          # Each has a check of its own about which unit and which verbs.
+          # ask, once, and remember); `keyboard`, `keys`, `memory`, `update` and
+          # `tor` return `YES`, because nothing this system does on its own may
+          # ask. `keys` is the one that names TWO units — keyd and its
+          # replacement, which the mode switch trades. Each has a check of its
+          # own about which unit and which verbs.
           "org.freedesktop.systemd1.manage-units":
-              "ours: files, rescue, keyboard, memory, update, tor, syncthing",
+              "ours: files, rescue, keyboard, keys, memory, update, tor, syncthing",
           # nix/modules/base.nix — the machine's own clock. THREE actions and
           # not four: `set-local-rtc` decides whether the hardware clock runs
           # in local time, nothing in this tree asks for it, and a fourth
@@ -22273,6 +22453,10 @@ let
       the-shots-script-fits-in-an-argument
       every-window-repeats
       every-door-hears-every-seat
+      every-door-hears-every-keyboard
+      keys-polkit-is-narrow
+      one-input-device-boundary
+      keys-rules-carry-the-leader
       every-window-knows-its-scale
       every-list-window-has-a-bar
       every-window-header-opens
@@ -22358,6 +22542,10 @@ let
       the-shots-script-fits-in-an-argument
       every-window-repeats
       every-door-hears-every-seat
+      every-door-hears-every-keyboard
+      keys-polkit-is-narrow
+      one-input-device-boundary
+      keys-rules-carry-the-leader
       every-window-knows-its-scale
       every-list-window-has-a-bar
       every-window-header-opens

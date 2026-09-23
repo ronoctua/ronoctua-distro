@@ -3220,6 +3220,9 @@ impl State {
                 }
                 vec![Effect::Redraw]
             }
+            // ONE SELECTION FOR EVERY KEYBOARD: this buffer keeps a single
+            // cursor, which every keyboard typing here moves.
+            Input::KeyboardSeat(_) | Input::KeyboardLeft(_) => Vec::new(),
             // THE WORDS FOR THE KEYS THIS BUFFER TEACHES, so the header can
             // measure them. They arrive once, before the first frame.
             Input::Phrases(said) => {

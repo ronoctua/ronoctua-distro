@@ -367,6 +367,27 @@ pub enum FocusFollows {
     Always,
 }
 
+/// One keyboard setting of one device — what gives an independent keyboard
+/// its own layout and repeat.
+///
+/// Apart from [`Setting`] because those are the POINTER's and all `Copy`;
+/// these carry text. A device's block takes the WHOLE of its xkb settings,
+/// never only the one that differs (see the adapter's `keyboard_command`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "setting", content = "value")]
+pub enum KeyboardSetting {
+    /// The xkb layout — `gb`.
+    Layout(String),
+    /// The xkb variant; empty is the layout's default.
+    Variant(String),
+    /// The xkb options, comma-separated.
+    Options(String),
+    /// Characters a second a held key repeats at.
+    RepeatRate(u16),
+    /// Milliseconds before a held key repeats.
+    RepeatDelay(u16),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

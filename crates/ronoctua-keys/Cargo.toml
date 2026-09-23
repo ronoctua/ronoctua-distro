@@ -1,0 +1,33 @@
+[package]
+name = "ronoctua-keys"
+description = "Independent keyboards: every keyboard its own virtual twin, its own remaps and its own leader, and the socket the footer takes a keyboard through."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# WHAT THIS CRATE IS THE FRONTIER OF: `/dev/input` and `/dev/uinput`. Nothing
+# else in the tree opens either (`one-input-device-boundary`). The daemon runs
+# as root in Independent mode, in keyd's place; the shell links the library
+# for the protocol and the config, and never touches a device.
+
+[[bin]]
+name = "ronoctua-keys"
+path = "src/bin/ronoctua-keys.rs"
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# THE IOCTLS AND THE INOTIFY. `rustix` and not `libc`: its API is safe, and
+# the three opcodes it cannot type are the one `unsafe` module (`device.rs`).
+rustix = { workspace = true, features = [ "fs", "event", "process" ] }
+# The vocabulary, the units and their preferences.
+ronoctua-keyboards = { path = "../ronoctua-keyboards" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+
+[lints]
+workspace = true

@@ -1,60 +1,230 @@
-//! A minimal native buffer — the first one end to end (milestone 7).
+//! Several keyboards in one app — the REFERENCE for the apps to come.
 //!
-//! It exists to prove the boundary, not to be useful: it draws a heading and
-//! counts the keys it receives. The glyph browser (section 6.5) uses exactly
-//! this interface, with real content.
+//! It exists to show one thing working end to end: in Independent mode every
+//! keyboard is its own seat, the host says whose keys come next
+//! (`Input::KeyboardSeat`), and a buffer that keeps a caret per seat
+//! (`ronoctua_design::Carets`) lets two people move two selections and fill
+//! two fields AT ONCE, each drawn in their own cursor's colour
+//! (`Role::selection_of`). A buffer that ignores the seat treats every
+//! keyboard as one — which is what every other buffer does, and is right for
+//! them.
+//!
+//! # What it is made of
+//!
+//! One list a caret walks: six items, then the form's two fields. Up and down
+//! move the caret of the keyboard that pressed them; a character goes into the
+//! field under THAT keyboard's caret; a click moves the caret of the cursor
+//! that is resting where it clicked — the pointer and the keyboard of one seat
+//! are one hand.
 //!
 //! # What this file does NOT import
 //!
-//! No Wayland, no token value, no translated text — the three of invariant 11.
-//! Note that there is no way of doing it even if one wanted to: the WIT's
-//! `world` does not offer it.
-//!
-//! # And it no longer generates its own bindings
-//!
-//! It is the FIRST buffer through `ronoctua-design`, which is what invariant 12
-//! names and what `docs/PENDING.md` said did not exist. Two things follow, and
-//! both are the point of the crate:
-//!
-//!   - the heading is not written here. `Screen::heading` is the ONE heading,
-//!     so this file cannot get its air wrong, cannot put a rule under it, and
-//!     cannot start its content at a column of its own invention. Four buffers
-//!     had four answers to that, which is the report this work came from.
-//!   - `wit_bindgen::generate!` is gone, and with it the crate-wide
-//!     `#![allow(unsafe_code, missing_docs)]` this file used to need. The
-//!     exemption belongs to the one crate that generates bindings, and that is
-//!     no longer this one.
-//!
-//! # Why `std`, and not `no_std`
-//!
-//! `wasm32-wasip2` has `std`, and a component without it would need its own
-//! allocator and panic handler — ceremony to save a few KiB in a binary that is
-//! already mapped copy-on-write. What matters for section 5.2's budget is the
-//! size of the DATA, not that of the library.
+//! No Wayland, no token value, no translated text — invariant 11. Every word
+//! on the screen goes out as a key.
 
-use std::cell::Cell;
+use std::cell::RefCell;
 
 use ronoctua_design::guest::Wit;
 use ronoctua_design::types::{
-    Binding, BufferState, Capability, Color, Command, Context, Descriptor, Effect, Guest, Icon,
-    Input, Run, Screen, Tone,
+    Binding, BufferState, Capability, Command, Context, Descriptor, Effect, Guest, Icon, Input,
+    Role, Run, Screen, Tone,
 };
+use ronoctua_design::{Carets, Hovers};
 
-thread_local! {
-    /// How many keys arrived.
-    ///
-    /// `thread_local` with a `Cell`, and not `static mut`: a component is
-    /// single-threaded by construction, but `static mut` requires `unsafe` on
-    /// every access and edition 2024's `static_mut_refs` complains with reason.
-    static KEYS: Cell<u32> = const { Cell::new(0) };
+/// The text keys this buffer draws — owed by both languages.
+mod key {
+    pub const TITLE: &str = "example-title";
+    pub const NOTE: &str = "example-note";
+    pub const LIST: &str = "example-list";
+    pub const FORM: &str = "example-form";
+    pub const EMPTY: &str = "example-empty";
+    /// The six items and the two fields, in the order the caret walks them.
+    pub const ITEMS: [&str; 6] = [
+        "example-item-one",
+        "example-item-two",
+        "example-item-three",
+        "example-item-four",
+        "example-item-five",
+        "example-item-six",
+    ];
+    pub const FIELDS: [&str; 2] = ["example-field-name", "example-field-note"];
 }
 
-/// The heading's text, and the only key this buffer needs.
-mod key {
-    /// Borrowed rather than invented: this buffer draws a heading to prove one
-    /// can be drawn, and inventing a sentence for it would owe two `.ftl`
-    /// lines that say nothing anybody reads.
-    pub const TITLE: &str = "cmd-mx-open";
+/// The keys this buffer binds, under `m`.
+const KEYMAP: &[(&str, &str)] = &[("m c", "example-clear")];
+
+/// How many rows the caret walks: the items, then the fields.
+const ROWS: usize = key::ITEMS.len() + key::FIELDS.len();
+
+#[derive(Default)]
+struct State {
+    /// Where every keyboard is — a row, per seat.
+    carets: Carets<usize>,
+    /// What the form holds: one value per field, whoever typed it.
+    values: [String; 2],
+    /// Where every pointer rests.
+    hover: Hovers,
+    /// The screen line each row was drawn on, remembered where it was drawn:
+    /// a click is resolved against the drawing, never a second guess.
+    lines: Vec<(u16, usize)>,
+}
+
+thread_local! {
+    static STATE: RefCell<State> = RefCell::new(State::default());
+}
+
+impl State {
+    /// The row a screen line is, if it is one.
+    fn row_at(&self, line: u16) -> Option<usize> {
+        self.lines.iter().find(|(l, _)| *l == line).map(|(_, r)| *r)
+    }
+
+    /// The band row `row` is drawn on, and whose: a keyboard's caret first
+    /// (the first to type wins a shared row), then a resting pointer.
+    fn band_of(&self, row: usize, line: u16) -> Option<Role> {
+        let many = self.carets.many();
+        if let Some((seat, _)) = self.carets.all().find(|(_, r)| **r == row) {
+            return Some(if many {
+                Role::selection_of(seat)
+            } else {
+                Role::Band
+            });
+        }
+        self.hover.first(|(_, l)| l == line).map(Role::hover_of)
+    }
+
+    fn draw(&mut self, ctx: &Context) -> Vec<Command> {
+        let mut screen = Screen::<Wit>::of(ctx);
+        let columns = screen.columns();
+        let second = (columns / 3).max(12);
+        let mut line = screen.heading(Icon::Keyboard, key::TITLE);
+        // A SENTENCE, WRAPPED BY THE HOST: it is the only side that has the
+        // translated words, and cut at the width it would lose its end —
+        // which is where the point is.
+        screen.paragraph(
+            line,
+            2,
+            Run::label(key::NOTE)
+                .quiet()
+                .within(columns.saturating_sub(1)),
+        );
+        line += 3;
+        self.lines.clear();
+        screen.put(line, Run::label(key::LIST).dim());
+        line += 1;
+        for (n, item) in key::ITEMS.iter().enumerate() {
+            if let Some(role) = self.band_of(n, line) {
+                screen.ground_in(line, 0, columns, role);
+            }
+            screen.put(line, Run::label(item).within(columns));
+            self.lines.push((line, n));
+            line += 1;
+        }
+        line += 1;
+        screen.put(line, Run::label(key::FORM).dim());
+        line += 1;
+        for (f, field) in key::FIELDS.iter().enumerate() {
+            let n = key::ITEMS.len() + f;
+            if let Some(role) = self.band_of(n, line) {
+                screen.ground_in(line, 0, columns, role);
+            }
+            screen.put(line, Run::label(field).within(second.saturating_sub(1)));
+            let value = &self.values[f];
+            let run = if value.is_empty() {
+                Run::label(key::EMPTY).dim()
+            } else {
+                Run::datum(value)
+            };
+            screen.put(line, run.at(second).within(columns.saturating_sub(second)));
+            self.lines.push((line, n));
+            line += 1;
+        }
+        screen.finish_wit()
+    }
+
+    fn act(&mut self, e: Input) -> Vec<Effect> {
+        match e {
+            Input::KeyboardSeat(seat) => {
+                self.carets.seat(seat);
+                vec![Effect::Redraw]
+            }
+            Input::KeyboardLeft(seat) => {
+                self.carets.left(seat);
+                vec![Effect::Redraw]
+            }
+            Input::Down => {
+                let r = self.carets.here();
+                *r = (*r + 1).min(ROWS - 1);
+                vec![Effect::Redraw]
+            }
+            Input::Up => {
+                let r = self.carets.here();
+                *r = r.saturating_sub(1);
+                vec![Effect::Redraw]
+            }
+            // A CHARACTER GOES INTO THE FIELD UNDER THIS KEYBOARD'S CARET, and
+            // nowhere when the caret is on an item.
+            Input::Character(c) => {
+                let row = *self.carets.here();
+                match row.checked_sub(key::ITEMS.len()) {
+                    Some(f) if f < key::FIELDS.len() => {
+                        self.values[f].push(c);
+                        vec![Effect::Redraw]
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            Input::Delete => {
+                let row = *self.carets.here();
+                match row.checked_sub(key::ITEMS.len()) {
+                    Some(f) if f < key::FIELDS.len() => {
+                        self.values[f].pop();
+                        vec![Effect::Redraw]
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            // `RET` walks on, as a form's `Tab` does.
+            Input::Confirm => {
+                let r = self.carets.here();
+                *r = (*r + 1) % ROWS;
+                vec![Effect::Redraw]
+            }
+            // A CLICK MOVES THE CARET OF THE HAND THAT CLICKED: the cursor
+            // resting on that line is the seat's, and its keyboard's caret goes
+            // there. With no hand resting there, the keyboard typing now moves.
+            Input::Click(p) => {
+                let Some(row) = self.row_at(p.line) else {
+                    return Vec::new();
+                };
+                let seat = self
+                    .hover
+                    .first(|(_, l)| l == p.line)
+                    .unwrap_or_else(|| self.carets.now());
+                *self.carets.of(seat) = row;
+                vec![Effect::Redraw]
+            }
+            Input::Hover(p) => {
+                if self.hover.set(p.seat, (p.at.column, p.at.line)) {
+                    vec![Effect::Redraw]
+                } else {
+                    Vec::new()
+                }
+            }
+            Input::Unhover(seat) => {
+                if self.hover.clear(seat) {
+                    vec![Effect::Redraw]
+                } else {
+                    Vec::new()
+                }
+            }
+            Input::Command(id) if id == "example-clear" => {
+                self.values = Default::default();
+                vec![Effect::Redraw]
+            }
+            _ => Vec::new(),
+        }
+    }
 }
 
 struct Component;
@@ -64,79 +234,101 @@ impl Guest for Component {
         Descriptor {
             name: "example".into(),
             mode: "example".into(),
-            // The keymap as DATA (section 7.9), and only under `SPC m`: the host refuses
-            // at load whoever tries to bind under a global prefix.
-            keymap: vec![Binding {
-                keys: "m r".into(),
-                command: "example-restart".into(),
-            }],
-            // ONE STATE, which is the normal case: a counter is never doing
-            // anything other than counting. Every buffer declares at least
-            // `normal`, because that is where `Esc` returns to.
+            keymap: KEYMAP
+                .iter()
+                .map(|(keys, command)| Binding {
+                    keys: (*keys).into(),
+                    command: (*command).into(),
+                })
+                .collect(),
+            // ONE STATE: there is nothing here but the list and the form.
             states: vec![BufferState {
                 id: "normal".into(),
                 letter: 'n',
                 tone: Tone::Standard,
             }],
-            commands: vec!["example-restart".into()],
-            // Nothing in the modeline: this buffer exists to prove the boundary.
+            commands: KEYMAP.iter().map(|(_, c)| (*c).into()).collect(),
             segments: vec![],
-            // No capability: it needs neither a PTY nor pixels.
+            // NO CAPABILITY: whose keys come next is not a privilege, it is
+            // what every buffer is told.
             capabilities: Vec::<Capability>::new(),
-            // Nothing it holds is text of the interface: everything this buffer
-            // shows goes out as a key and the host translates it when it draws.
             phrases: vec![],
         }
     }
 
     fn render(ctx: Context) -> Vec<Command> {
-        let n = KEYS.get();
-        let mut screen = Screen::<Wit>::of(&ctx);
-
-        // THE HEADING, AND NOTHING ABOUT IT IS DECIDED HERE. The air above and
-        // below, the glyph's column, the title's budget and the row the content
-        // starts on all come back from one function, which is the whole reason
-        // that function exists.
-        let line = screen.heading(Icon::Info, key::TITLE);
-
-        // DATA, not a key: a counter has no translation.
-        screen.put(line, Run::datum(&format!("keys: {n}")).quiet());
-        screen.finish_wit()
+        STATE.with_borrow_mut(|s| s.draw(&ctx))
     }
 
     fn event(e: Input) -> Vec<Effect> {
-        // `Cancel` does NOT close. `Effect::Close` exists and stays in the
-        // protocol — a buffer that ends by itself needs it —, but tying it to
-        // `Esc` would make the key one presses by reflex to leave anything at
-        // all DESTROY the buffer.
-        //
-        // Here it only does not count the key: there is no transient state to
-        // cancel in a counter.
-        if matches!(e, Input::Cancel) {
-            return vec![];
-        }
-        // BEING SENT TO THE ONE STATE IT HAS IS NOT A KEYSTROKE. It arrives when
-        // somebody taps `Esc` anywhere, and counting it would make the counter
-        // measure the host's bookkeeping instead of the person's typing.
-        if matches!(e, Input::EnterState(_)) {
-            return vec![];
-        }
-        // NOR IS A PHRASE. It arrives once, at load, carrying the words the
-        // host resolved for whoever declared any — this buffer declares none,
-        // so it should never see one. Counting it would make the counter start
-        // at one on a screen nobody has touched.
-        if matches!(e, Input::Phrases(_)) {
-            return vec![];
-        }
-        KEYS.set(KEYS.get() + 1);
-        vec![Effect::Redraw]
+        STATE.with_borrow_mut(|s| s.act(e))
     }
 }
 
 ronoctua_design::bindings::export!(Component with_types_in ronoctua_design::bindings);
 
-// `Color` is re-exported by the design crate and this buffer names no colour of
-// its own: the heading's tone and the counter's are roles, resolved by the
-// palette. The import is kept so a future line here starts from the vocabulary
-// rather than from a token name.
-const _: Option<Color> = None;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ronoctua_design::types::{Heights, Pointed, Position};
+
+    fn context() -> Context {
+        Context {
+            lines: 30,
+            columns: 80,
+            heights: Heights {
+                small: 1,
+                base: 1,
+                normal: 1,
+                large: 2,
+                huge: 2,
+            },
+        }
+    }
+
+    /// FAILS IF: two keyboards move one selection, or type into one field.
+    #[test]
+    fn two_keyboards_move_two_carets_and_fill_two_fields() {
+        let mut s = State::default();
+        let _ = s.draw(&context());
+        // Keyboard of seat 0 goes to the first field.
+        let _ = s.act(Input::KeyboardSeat(0));
+        for _ in 0..key::ITEMS.len() {
+            let _ = s.act(Input::Down);
+        }
+        // Keyboard of seat 3 goes to the second.
+        let _ = s.act(Input::KeyboardSeat(3));
+        for _ in 0..=key::ITEMS.len() {
+            let _ = s.act(Input::Down);
+        }
+        // They type at once, interleaved.
+        for (seat, c) in [(0, 'a'), (3, 'x'), (0, 'b'), (3, 'y')] {
+            let _ = s.act(Input::KeyboardSeat(seat));
+            let _ = s.act(Input::Character(c));
+        }
+        assert_eq!(s.values[0], "ab");
+        assert_eq!(s.values[1], "xy");
+        assert!(s.carets.many());
+    }
+
+    /// FAILS IF: a click moves some other hand's caret.
+    #[test]
+    fn a_click_moves_the_caret_of_the_hand_that_clicked() {
+        let mut s = State::default();
+        let _ = s.draw(&context());
+        let _ = s.act(Input::KeyboardSeat(0));
+        let _ = s.act(Input::KeyboardSeat(2));
+        let (line, row) = s.lines[3];
+        let _ = s.act(Input::Hover(Pointed {
+            at: Position { column: 2, line },
+            seat: 2,
+        }));
+        let _ = s.act(Input::Click(Position { column: 2, line }));
+        let carets: Vec<(u16, usize)> = s.carets.all().map(|(k, r)| (k, *r)).collect();
+        assert!(carets.contains(&(2, row)), "seat 2's caret: {carets:?}");
+        assert!(
+            carets.contains(&(0, 0)),
+            "seat 0's did not move: {carets:?}"
+        );
+    }
+}

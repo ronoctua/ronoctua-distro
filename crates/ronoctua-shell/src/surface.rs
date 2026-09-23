@@ -305,11 +305,7 @@ struct Footer {
 
     // --- leader and keyboard (section 7.4) ---
     seats: SeatState,
-    keyboard: Option<wl_keyboard::WlKeyboard>,
-    /// The seat the keyboard is on — a click reads its modifiers only from a
-    /// pointer on the SAME seat, so Ctrl held on one keyboard never turns
-    /// another cursor's click into a Ctrl+click. See `crate::seats`.
-    keyboard_seat: Option<wl_seat::WlSeat>,
+    keyboards: crate::seats::Seats<Modifiers, wl_keyboard::WlKeyboard>,
     /// Modifiers held RIGHT NOW. The key event does not carry them; they arrive in
     /// an event of their own and hold until the next one.
     mods: Modifiers,
@@ -822,6 +818,11 @@ struct Footer {
     /// The pointer thread — started with the footer, because it is what gives
     /// a device plugged in with no view open a cursor of its own.
     pointer_thread: Option<ronoctua_pointers::Handle>,
+    /// Independent keyboards: the mode, the link to `ronoctua-keys`, and the
+    /// keyboard the open region belongs to (`crate::keys_link`).
+    keys: crate::keys_link::Keys,
+    /// The watch on `keyboards.json`, whose mode and units the seats follow.
+    _keyboards_watch: Option<ronoctua_files::notice::Notice>,
     /// Which source this door has asked to have open.
     ///
     /// It shadows `View::listening` so the order goes out when it CHANGES.
@@ -2269,8 +2270,7 @@ pub fn run() -> Result<()> {
         owes_paint: false,
         windows: ronoctua_compositor::State::default(),
         seats: SeatState::new(&globals, &qh),
-        keyboard: None,
-        keyboard_seat: None,
+        keyboards: crate::seats::Seats::default(),
         mods: Modifiers::default(),
         inheritance: Inheritance::default(),
         leader: Leader::default(),
@@ -2377,6 +2377,11 @@ pub fn run() -> Result<()> {
         pointer_view: None,
         pointer_snapshot: None,
         pointer_thread: None,
+        keys: crate::keys_link::Keys {
+            independent: crate::keys_link::independent(),
+            ..Default::default()
+        },
+        _keyboards_watch: None,
         audio_listening: None,
         audio_prefs: ronoctua_audio::prefs::store().read(),
         sound: None,
@@ -3111,6 +3116,46 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the pointers' channel: {e}"))?;
+
+    // INDEPENDENT KEYBOARDS. The saved mode is applied once, off the frame's
+    // thread (`systemctl start` waits for the unit) — and never in the nested
+    // loop, whose compositor is not the one the keyboards belong to.
+    if std::env::var_os("RONOCTUA_NESTED").is_none() {
+        let _ = std::thread::Builder::new()
+            .name("keyboard-mode".to_owned())
+            .spawn(crate::keyboard::apply_saved_mode);
+    }
+    let (keys_sender, keys_said) = channel::channel::<crate::keys_link::Said>();
+    crate::keys_link::listen(keys_sender);
+    handle
+        .insert_source(keys_said, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(m) = event {
+                state.keys_said(m);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the keys channel: {e}"))?;
+    // AND THE KEYBOARDS' FILE: the mode, and each unit's cursor — the seats
+    // follow it, so a change there is a new plan for the pointers' thread.
+    let (keyboards_changed, keyboards_file) = channel::channel::<()>();
+    state._keyboards_watch = ronoctua_store::config_dir().and_then(|dir| {
+        ronoctua_files::notice::Notice::on_file(
+            &dir,
+            ronoctua_keyboards::FILE,
+            ronoctua_files::notice::Pace::Coalesced,
+            move || keyboards_changed.send(()).is_ok(),
+        )
+        .ok()
+    });
+    handle
+        .insert_source(keyboards_file, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.keys.independent = crate::keys_link::independent();
+                if let Some(h) = state.pointer_thread.as_ref() {
+                    h.send(ronoctua_pointers::Order::Look);
+                }
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the keyboards watch: {e}"))?;
 
     let (display_sender, display_events) = channel::channel::<ronoctua_display::Event>();
     match ronoctua_display::watch(move |e| {
@@ -4633,7 +4678,7 @@ impl SeatHandler for Footer {
         // Having the object captures nothing — what decides that is the layer
         // surface's `keyboard-interactivity`. Creating it only on the first
         // leader would lose the first event.
-        if cap == Capability::Keyboard && self.keyboard.is_none() {
+        if cap == Capability::Keyboard {
             // WITH REPEAT, and it had never been. SCTK only calls `repeat_key`
             // for a keyboard created this way, so that method was dead code in
             // both doors and NO key repeated anywhere in this shell — holding
@@ -4646,7 +4691,10 @@ impl SeatHandler for Footer {
                     &seat,
                     None,
                     handle,
-                    Box::new(|state: &mut Self, _, event| state.typed(event)),
+                    Box::new(|state: &mut Self, kb, event| {
+                        state.keyboards.switch_to(kb, &mut state.mods);
+                        state.typed(event);
+                    }),
                 )
             } else {
                 self.seats.get_keyboard(qh, &seat, None)
@@ -4654,8 +4702,8 @@ impl SeatHandler for Footer {
             match made {
                 Ok(k) => {
                     tracing::debug!("the seat's keyboard is ready");
-                    self.keyboard = Some(k);
-                    self.keyboard_seat = Some(seat.clone());
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.keyboards.took(&seat, k, name.as_deref());
                 }
                 Err(e) => tracing::warn!(error = %e, "no keyboard; the leader will not work"),
             }
@@ -4688,10 +4736,8 @@ impl SeatHandler for Footer {
         seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
-        if cap == Capability::Keyboard
-            && let Some(k) = self.keyboard.take()
-        {
-            k.release();
+        if cap == Capability::Keyboard {
+            self.keyboards.lost(&seat, &mut self.mods);
         }
         if cap == Capability::Pointer {
             self.pointers.lost(&seat, &mut self.here);
@@ -4929,12 +4975,13 @@ impl KeyboardHandler for Footer {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
         _: &[u32],
         _: &[Keysym],
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         tracing::debug!("the footer gained keyboard focus");
         // THE PAIR IS OVER, and nothing more is forgiven: from here a `leave`
         // is a keyboard actually taken away.
@@ -4950,10 +4997,11 @@ impl KeyboardHandler for Footer {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         // Losing focus happens: another surface asked for exclusivity, or the
         // compositor switched output. Staying "capturing" without receiving a key
         // would leave the footer expanded forever — and now there are THREE owners
@@ -4992,10 +5040,11 @@ impl KeyboardHandler for Footer {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         event: KeyEvent,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         self.typed(event);
     }
 
@@ -5017,10 +5066,11 @@ impl KeyboardHandler for Footer {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         event: KeyEvent,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         if event.keysym == Keysym::Control_R {
             self.right_ctrl = false;
         }
@@ -5030,12 +5080,13 @@ impl KeyboardHandler for Footer {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         mods: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         // IT RESYNCS THE CtrlRight. If no Ctrl is held, the right one is not
         // held either — and this is the net that catches the case where the key
         // release did not arrive (focus lost with it pressed). Without this, the
@@ -5740,6 +5791,13 @@ impl Footer {
             self.toggle_fold();
         }
         if leader_click {
+            // IN INDEPENDENT MODE THE REGION BELONGS TO A KEYBOARD, and a click
+            // hands it to the one paired with the cursor that clicked.
+            if self.keys.independent
+                && let Some(unit) = self.keyboard_of_the_pointer_here()
+            {
+                self.hand_the_region_to(&unit);
+            }
             self.activate_leader();
             return;
         }
@@ -7229,6 +7287,7 @@ impl Footer {
                 self.open_buffer_about("RONOCTUA_BUFFER_KEYBOARD", about.as_deref());
             }
             "memory-open" => self.open_buffer("RONOCTUA_BUFFER_MEMORY"),
+            "example-open" => self.open_buffer("RONOCTUA_BUFFER_EXAMPLE"),
             "brain-open" => self.open_buffer("RONOCTUA_BUFFER_BRAIN"),
             // THE COUNTDOWN'S TWO ANSWERS. They are the band's two controls and
             // they are reachable with no window open, which is the whole point:
@@ -7661,11 +7720,13 @@ impl Footer {
     /// The modifiers a click of the pointer `here` carries: the keyboard's
     /// when the keyboard is on that pointer's seat, and none otherwise.
     fn pointer_mods(&self) -> Modifiers {
-        if self.pointers.here_is_on(self.keyboard_seat.as_ref()) {
-            self.mods
-        } else {
-            Modifiers::default()
-        }
+        // THE KEYBOARD ON THE POINTER'S OWN SEAT, whichever that is: with a
+        // keyboard per seat, a click of cursor 2 carries cursor 2's `Ctrl`.
+        self.pointers
+            .seat_here()
+            .and_then(|seat| self.keyboards.state_on(seat, &self.mods))
+            .copied()
+            .unwrap_or_default()
     }
 
     fn glance_lets_go(&mut self) -> bool {
@@ -14580,6 +14641,18 @@ impl Footer {
     /// The **exclusive zone follows the height**: expanding pushes the buffers
     /// up. See the top of the module.
     fn apply_geometry(&mut self, keyboard: KeyboardInteractivity) {
+        // IN INDEPENDENT MODE THE FOOTER NEVER TAKES THE WAYLAND KEYBOARD: an
+        // exclusive layer would take every seat's (`crate::keys_link`), and
+        // the keyboard that opened the region arrives over the socket instead.
+        let keyboard = if self.keys.independent {
+            KeyboardInteractivity::None
+        } else {
+            keyboard
+        };
+        // AND A REGION THAT CLOSED GIVES ITS KEYBOARD BACK.
+        if !self.grabbing() {
+            self.keys.release();
+        }
         // EVERY screen changes height together.
         //
         // It is not a detail: if only the focused screen grew, the zone would be
@@ -15499,6 +15572,24 @@ impl Footer {
         // bars have never hidden; this is the same rule for the other eight
         // views of the footer.
         let bar_showing = self.has_bar();
+        // WHOSE THE REGION IS, in Independent mode: the keyboard that opened it
+        // types through a cursor, and the minibuffer line wears that cursor's
+        // band — with several people at one desk, the footer says which of them
+        // it is listening to.
+        let owner_tint = self.keys.owner.as_ref().and_then(|o| {
+            let cursor = self
+                .pointer_snapshot
+                .as_ref()?
+                .keyboards
+                .iter()
+                .find(|k| k.identity == o.unit)?
+                .cursor;
+            let colour = ronoctua_pointers::prefs::store()
+                .read()
+                .cursor(cursor)
+                .colour;
+            Some(crate::seats::band_colour(true, colour))
+        });
         let first_paint = self.frames_painted < 3;
         let mut painted = false;
 
@@ -16556,6 +16647,15 @@ impl Footer {
                 height: line_height,
                 color: tokens::color::MODELINE_BACKGROUND,
             }];
+            if let Some(color) = owner_tint {
+                backgrounds.push(ronoctua_render::quad::Quad {
+                    x: 0.0,
+                    y: f32::from(mini_line) * line_height,
+                    width: width as f32,
+                    height: line_height,
+                    color,
+                });
+            }
 
             // AND THE BAND'S, one tone above the modeline's.
             //
@@ -18440,6 +18540,98 @@ impl Footer {
     }
 
     /// What the pointer thread says.
+    /// What the keys daemon said.
+    fn keys_said(&mut self, said: crate::keys_link::Said) {
+        use crate::keys_link::Said;
+        use ronoctua_keys::wire::FromDaemon;
+        match said {
+            Said::Connected(link) => self.keys.link = Some(link),
+            Said::Gone => {
+                self.keys.link = None;
+                // THE KEYBOARD THAT HELD THE REGION IS GONE WITH IT: the
+                // daemon's end closed, the kernel dropped its grab, and the
+                // region would wait for keys that go elsewhere now.
+                if self.keys.owner.take().is_some() && self.grabbing() {
+                    self.lost_the_keyboard();
+                }
+            }
+            Said::Daemon(FromDaemon::Units { .. }) => {}
+            Said::Daemon(FromDaemon::Leader { unit }) => {
+                if !self.keys.independent {
+                    return;
+                }
+                // ONE REGION, ONE OWNER: a second keyboard's leader waits
+                // until the first one's view closes, and says so.
+                if let Some(o) = self.keys.owner.as_ref()
+                    && o.unit != unit
+                    && self.grabbing()
+                {
+                    let said = self.texts.t(ronoctua_i18n::key::KEYS_REGION_TAKEN);
+                    self.echo_message(said);
+                    self.draw_and_paint();
+                    return;
+                }
+                self.hand_the_region_to(&unit);
+                self.activate_leader();
+            }
+            Said::Daemon(FromDaemon::Key { unit, code, value }) => {
+                let Some(owner) = self.keys.owner.as_mut().filter(|o| o.unit == unit) else {
+                    return;
+                };
+                let (event, down, mods) = owner.key(code, value);
+                self.mods = mods;
+                if down {
+                    self.typed(event);
+                } else if event.keysym == Keysym::Control_R {
+                    self.right_ctrl = false;
+                }
+                if !self.grabbing() {
+                    self.keys.release();
+                }
+            }
+        }
+    }
+
+    /// Makes `unit` the keyboard the region belongs to, and asks the daemon
+    /// for its keys.
+    fn hand_the_region_to(&mut self, unit: &str) {
+        if self.keys.owner.as_ref().is_some_and(|o| o.unit == unit) {
+            return;
+        }
+        self.keys.release();
+        match crate::keys_link::Owner::of(unit) {
+            Some(owner) => {
+                self.keys.owner = Some(owner);
+                self.mods = Modifiers::default();
+                self.keys.ask(&ronoctua_keys::wire::ToDaemon::Divert {
+                    unit: unit.to_owned(),
+                });
+            }
+            None => tracing::warn!(
+                unit,
+                "no keymap for the keyboard; the region opens without it"
+            ),
+        }
+    }
+
+    /// The keyboard paired with the cursor `here` — what a click that opens
+    /// the leader hands the region to, in Independent mode.
+    fn keyboard_of_the_pointer_here(&self) -> Option<String> {
+        let seat = self.pointers.seat_here()?;
+        let name = self.seats.info(seat).and_then(|i| i.name)?;
+        let number = if name == "seat0" {
+            ronoctua_pointers::FIRST
+        } else {
+            name.strip_prefix("ronoctua-cursor-")?.parse().ok()?
+        };
+        self.pointer_snapshot
+            .as_ref()?
+            .keyboards
+            .iter()
+            .find(|k| k.cursor == number)
+            .map(|k| k.identity.clone())
+    }
+
     fn pointer_event(&mut self, e: ronoctua_pointers::Event) {
         match e {
             ronoctua_pointers::Event::Snapshot(s) => {

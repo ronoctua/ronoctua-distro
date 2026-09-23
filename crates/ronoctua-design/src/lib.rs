@@ -122,8 +122,9 @@ pub mod bindings {
 }
 
 pub mod budget;
+pub mod carets;
 pub mod grid;
-pub mod hovers;
+mod hovers;
 pub mod phrases;
 // THE PIXEL RAIL IS THE HOST'S. A component counts in cells and lines and has
 // no surface; see the module's own head for why that is not an omission.
@@ -138,6 +139,7 @@ pub mod sheet;
 pub mod table;
 
 pub use budget::{budget, claimed, room, stands, tall, wide};
+pub use carets::Carets;
 pub use grid::Grid;
 pub use hovers::Hovers;
 pub use phrases::Phrases;
@@ -353,6 +355,10 @@ pub enum Role {
     /// cursor is on the window: colour is spent only where it tells two hands
     /// apart, the rule the shell's own windows keep (`crate::seats`).
     HoverOf(u16),
+    /// ONE KEYBOARD'S SELECTION, in its cursor's colour — `cursor.selection.*`,
+    /// the band a buffer paints under each [`crate::Carets`] caret when more
+    /// than one keyboard types into it. Built through [`Role::selection_of`].
+    SelectionOf(u16),
     /// The notation of a shortcut — `RET`, `m r`, `Tab`.
     ///
     /// # Why the hint family had to be reachable
@@ -381,6 +387,12 @@ impl Role {
     #[must_use]
     pub const fn hover_of(seat: u16) -> Self {
         Self::HoverOf(seat % 8)
+    }
+
+    /// The selection band of keyboard `seat` — the ninth wears the first's.
+    #[must_use]
+    pub const fn selection_of(seat: u16) -> Self {
+        Self::SelectionOf(seat % 8)
     }
 }
 
@@ -494,6 +506,14 @@ impl Palette for Tokens {
             Role::HoverOf(5) => "cursor-hover-six",
             Role::HoverOf(6) => "cursor-hover-seven",
             Role::HoverOf(_) => "cursor-hover-eight",
+            Role::SelectionOf(0) => "cursor-selection-one",
+            Role::SelectionOf(1) => "cursor-selection-two",
+            Role::SelectionOf(2) => "cursor-selection-three",
+            Role::SelectionOf(3) => "cursor-selection-four",
+            Role::SelectionOf(4) => "cursor-selection-five",
+            Role::SelectionOf(5) => "cursor-selection-six",
+            Role::SelectionOf(6) => "cursor-selection-seven",
+            Role::SelectionOf(_) => "cursor-selection-eight",
             // THE HINT FAMILY, the same three the minibuffer's own line uses:
             // `Register::Key`, `Register::Prose` and `Register::Separator` in
             // `chrome.rs` resolve to exactly these.

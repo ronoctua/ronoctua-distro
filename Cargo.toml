@@ -49,6 +49,7 @@ members = [
   "crates/ronoctua-audio",
   "crates/ronoctua-bluetooth",
   "crates/ronoctua-keyboards",
+  "crates/ronoctua-keys",
   "crates/ronoctua-tunnel",
   "crates/ronoctua-syncthing",
   "crates/ronoctua-world",

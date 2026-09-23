@@ -341,8 +341,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         outputs: OutputState::new(&globals, &qh),
         seats: SeatState::new(&globals, &qh),
         _compositor: compositor,
-        keyboard: None,
-        keyboard_seat: None,
+        keyboards: crate::seats::Seats::default(),
         pointers: crate::seats::Seats::default(),
         here: PerSeat::default(),
         mods: Modifiers::default(),
@@ -433,11 +432,7 @@ struct FilesWindow {
     outputs: OutputState,
     seats: SeatState,
     _compositor: CompositorState,
-    keyboard: Option<wl_keyboard::WlKeyboard>,
-    /// The seat the keyboard is on — a click reads its modifiers only from a
-    /// pointer on the SAME seat, so Ctrl held on one keyboard never turns
-    /// another cursor's click into a Ctrl+click.
-    keyboard_seat: Option<wl_seat::WlSeat>,
+    keyboards: crate::seats::Seats<Modifiers, wl_keyboard::WlKeyboard>,
     /// Every pointer this window was offered — one per cursor — with the
     /// state of each while another is `here`. See `crate::seats`.
     pointers: crate::seats::Seats<PerSeat>,
@@ -1665,11 +1660,13 @@ impl FilesWindow {
     /// The modifiers a click of `here` carries: the keyboard's, when the
     /// keyboard is on the pointer's seat, and none otherwise.
     fn pointer_mods(&self) -> Modifiers {
-        if self.pointers.here_is_on(self.keyboard_seat.as_ref()) {
-            self.mods
-        } else {
-            Modifiers::default()
-        }
+        // THE KEYBOARD ON THE POINTER'S OWN SEAT, whichever that is: with a
+        // keyboard per seat, a click of cursor 2 carries cursor 2's `Ctrl`.
+        self.pointers
+            .seat_here()
+            .and_then(|seat| self.keyboards.state_on(seat, &self.mods))
+            .copied()
+            .unwrap_or_default()
     }
 
     fn scene(&mut self) -> Scene<'_> {
@@ -3016,7 +3013,7 @@ impl SeatHandler for FilesWindow {
         seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
-        if cap == Capability::Keyboard && self.keyboard.is_none() {
+        if cap == Capability::Keyboard {
             // WITH REPEAT, and it had never been. `repeat_key` is written in
             // both doors and was documented as making holding `j` walk the
             // list — and SCTK only ever calls it for a keyboard created THIS
@@ -3031,11 +3028,14 @@ impl SeatHandler for FilesWindow {
                 &seat,
                 None,
                 self.handle.clone(),
-                Box::new(|state: &mut Self, _, event| state.typed(event)),
+                Box::new(|state: &mut Self, kb, event| {
+                    state.keyboards.switch_to(kb, &mut state.mods);
+                    state.typed(event);
+                }),
             ) {
                 Ok(k) => {
-                    self.keyboard = Some(k);
-                    self.keyboard_seat = Some(seat.clone());
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.keyboards.took(&seat, k, name.as_deref());
                 }
                 Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
@@ -3064,10 +3064,8 @@ impl SeatHandler for FilesWindow {
         seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
-        if cap == Capability::Keyboard
-            && let Some(k) = self.keyboard.take()
-        {
-            k.release();
+        if cap == Capability::Keyboard {
+            self.keyboards.lost(&seat, &mut self.mods);
         }
         if cap == Capability::Pointer {
             self.pointers.lost(&seat, &mut self.here);
@@ -3303,22 +3301,24 @@ impl KeyboardHandler for FilesWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
         _: &[u32],
         _: &[Keysym],
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
     }
 
     fn leave(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         // The modifiers whole, for the reason the footer already records: a
         // state that only updates with focus cannot keep holding without it,
         // and a stuck `alt` makes every following key come out as `M-…`.
@@ -3329,10 +3329,11 @@ impl KeyboardHandler for FilesWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         event: KeyEvent,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         self.typed(event);
     }
 
@@ -3357,22 +3358,24 @@ impl KeyboardHandler for FilesWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         _: KeyEvent,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
     }
 
     fn update_modifiers(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         mods: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         self.mods = mods;
     }
 }

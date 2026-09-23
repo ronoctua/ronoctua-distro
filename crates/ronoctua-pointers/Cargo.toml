@@ -25,6 +25,9 @@ ronoctua-scroll = { path = "../ronoctua-scroll" }
 # The preference file, written atomically, degrading to the default with a
 # reason in the log.
 ronoctua-store = { path = "../ronoctua-store" }
+# The keyboards: their mode, their units, and the names their twins carry.
+ronoctua-keyboards = { path = "../ronoctua-keyboards" }
+ronoctua-keys = { path = "../ronoctua-keys" }
 
 [lints]
 workspace = true

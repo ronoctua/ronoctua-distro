@@ -131,6 +131,8 @@ usage: ronoctua-render-png <component.wasm> [options]
   --mind <file>       a brain mind, as JSON, delivered before drawing
   --hover <col,line[,cursor]>  rests a pointer on a cell; the cursor number
                       (from 0) lets two hands rest at once
+  --seat <cursor>     the keys after this are that cursor's keyboard's
+                      (Independent mode: one caret per keyboard)
   --list              prints the display list instead of drawing it
   --state <id>        enters a state before drawing
   --command <id>      fires a command of the buffer
@@ -315,6 +317,12 @@ fn parse() -> Result<Ask> {
                         .context("the hover's cursor")?,
                 });
             }
+            // WHOSE KEYS COME NEXT: every `--key`/`--type` after this is that
+            // seat's, as the host says it with a keyboard per seat — what a
+            // buffer keeping a caret per keyboard is photographed with.
+            "--seat" => me.inputs.push(Input::KeyboardSeat {
+                seat: value()?.trim().parse().context("the seat")?,
+            }),
             "--state" => me.inputs.push(Input::EnterState(value()?)),
             "--command" => me.inputs.push(Input::Command(value()?)),
             "--type" => me.inputs.extend(value()?.chars().map(Input::Char)),

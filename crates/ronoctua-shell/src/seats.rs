@@ -30,32 +30,53 @@
 //! had. With more than one, each band takes its own cursor's hover colour
 //! (`cursor.hover.*`) — colour is spent only where it tells two hands apart.
 
-use smithay_client_toolkit::reexports::client::Proxy as _;
+use smithay_client_toolkit::reexports::client::Proxy;
 use smithay_client_toolkit::reexports::client::backend::ObjectId;
-use smithay_client_toolkit::reexports::client::protocol::{wl_pointer, wl_seat};
+use smithay_client_toolkit::reexports::client::protocol::{wl_keyboard, wl_pointer, wl_seat};
 
 use ronoctua_tokens::Color;
 
-/// One pointer and the state stored for it while another is `here`.
+/// A seat's device a door holds one of per seat — its pointer, or its
+/// keyboard. The same bookkeeping answers both: a keyboard is a seat's too,
+/// and in Independent mode there is one per cursor (`ronoctua-keys`).
+pub trait Device: Proxy + Clone {
+    /// Gives the device back to the compositor.
+    fn let_go(&self);
+}
+
+impl Device for wl_pointer::WlPointer {
+    fn let_go(&self) {
+        self.release();
+    }
+}
+
+impl Device for wl_keyboard::WlKeyboard {
+    fn let_go(&self) {
+        self.release();
+    }
+}
+
+/// One device and the state stored for it while another is `here`.
 #[derive(Debug)]
-struct Held<T> {
+struct Held<T, D> {
     seat: wl_seat::WlSeat,
-    pointer: wl_pointer::WlPointer,
+    pointer: D,
     /// Which of the cursor colours it wears, from `0`.
     colour: u8,
     /// Its state, while it is not the one `here`. `None` while it IS.
     kept: Option<T>,
 }
 
-/// Every pointer a door has been offered, and the state of each.
+/// Every pointer — or every keyboard — a door has been offered, and the state
+/// of each.
 #[derive(Debug)]
-pub struct Seats<T> {
-    held: Vec<Held<T>>,
-    /// Which pointer the door's `here` belongs to.
+pub struct Seats<T, D = wl_pointer::WlPointer> {
+    held: Vec<Held<T, D>>,
+    /// Which device the door's `here` belongs to.
     here: Option<ObjectId>,
 }
 
-impl<T> Default for Seats<T> {
+impl<T, D> Default for Seats<T, D> {
     fn default() -> Self {
         Self {
             held: Vec::new(),
@@ -64,17 +85,12 @@ impl<T> Default for Seats<T> {
     }
 }
 
-impl<T: Default> Seats<T> {
-    /// A pointer was offered on `seat`.
+impl<T: Default, D: Device> Seats<T, D> {
+    /// A device was offered on `seat`.
     ///
     /// `name` is the seat's name when the compositor has said it, which is
     /// what the cursor's colour is read from (see [`colour_of`]).
-    pub fn took(
-        &mut self,
-        seat: &wl_seat::WlSeat,
-        pointer: wl_pointer::WlPointer,
-        name: Option<&str>,
-    ) {
+    pub fn took(&mut self, seat: &wl_seat::WlSeat, pointer: D, name: Option<&str>) {
         self.held.retain(|h| h.seat.id() != seat.id());
         let colour = colour_of(name, self.held.len());
         self.held.push(Held {
@@ -96,13 +112,13 @@ impl<T: Default> Seats<T> {
             *here = T::default();
             self.here = None;
         }
-        gone.pointer.release();
+        gone.pointer.let_go();
     }
 
     /// Makes `here` the state of `pointer`, putting the current one away.
     ///
     /// Called FIRST in `pointer_frame`, before anything reads `here`.
-    pub fn switch_to(&mut self, pointer: &wl_pointer::WlPointer, here: &mut T) {
+    pub fn switch_to(&mut self, pointer: &D, here: &mut T) {
         let id = pointer.id();
         if self.here.as_ref() == Some(&id) {
             return;
@@ -152,16 +168,16 @@ impl<T: Default> Seats<T> {
             .map_or(0, |h| u16::from(h.colour))
     }
 
-    /// Whether `here` belongs to `seat` — what a door asks before reading the
-    /// modifiers of a keyboard, which is on one seat only.
-    #[must_use]
-    pub fn here_is_on(&self, seat: Option<&wl_seat::WlSeat>) -> bool {
-        let Some(seat) = seat else {
-            return false;
-        };
-        self.held
-            .iter()
-            .any(|h| h.seat.id() == seat.id() && self.here.as_ref() == Some(&h.pointer.id()))
+    /// The state of the device on `seat`, `here` included — what a pointer
+    /// asks of the KEYBOARD on its own seat, which is the one whose
+    /// modifiers a click reads.
+    pub fn state_on<'a>(&'a self, seat: &wl_seat::WlSeat, here: &'a T) -> Option<&'a T> {
+        let h = self.held.iter().find(|h| h.seat.id() == seat.id())?;
+        if self.here.as_ref() == Some(&h.pointer.id()) {
+            Some(here)
+        } else {
+            h.kept.as_ref()
+        }
     }
 
     /// The seat `here` belongs to — what a drag is started on, since the

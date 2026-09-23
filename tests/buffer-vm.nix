@@ -92,11 +92,14 @@ pkgs.testers.runNixOSTest {
             raise
 
         journal = machine.succeed("journalctl -u buffer --no-pager")
-        # THREE commands: title, rule and the key counter — the example only
-        # emits the third when there are more than two lines of context, and the
-        # host asks for 24. If the `render` gave back empty, everything below
-        # would pass with a blank window.
-        assert "commands=3" in journal, journal
+        # A FULL FRAME: the heading, the note, the list's six items and the
+        # form's two fields — the reference app for several keyboards. A floor
+        # and not a count, because the number is the app's to change; what it
+        # guards is a `render` that came back EMPTY, with everything below then
+        # passing over a blank window.
+        import re as _re
+        drawn = [int(n) for n in _re.findall(r"component rendered commands=(\d+)", journal)]
+        assert drawn and max(drawn) >= 10, journal
 
     with subtest("the COMPOSITOR sees a window, not a region of ours"):
         # The proof of invariant 4. A buffer drawn inside our surface would not
@@ -126,8 +129,8 @@ pkgs.testers.runNixOSTest {
 
     with subtest("the component's key came out TRANSLATED on screen"):
         # The whole chain: component -> DisplayList -> i18n -> tokens -> wgpu ->
-        # pixel. The component sends `cmd-mx-open`; in pt-BR that is
-        # "Executar comando…", and that is what the OCR has to read.
+        # pixel. The component sends `example-title`; in pt-BR that is
+        # "Vários teclados", and that is what the OCR has to read.
         w, h, x, y = window_box(sock, "br.ronoctua.example")
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         # THE WINDOW'S OWN RECTANGLE, asked of the compositor.
@@ -147,8 +150,8 @@ pkgs.testers.runNixOSTest {
         ).strip()
         print(f"OCR: {read_back!r}")
         # pt-BR: the OCR needle is the VALUE of a text key on screen
-        # (`cmd-mx-open`), not a message of this test.
-        assert "executar" in read_back.lower(), (
+        # (`example-title`), not a message of this test.
+        assert "teclados" in read_back.lower(), (
             f"the key did not come out translated on screen; OCR read {read_back!r}"
         )
 

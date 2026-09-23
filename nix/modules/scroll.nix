@@ -560,6 +560,15 @@ in
         #
         # `screenshots-land-in-a-declared-directory` reads THIS unit, not the
         # source, which is what turns that from a comment into a gate.
+        # THE MACHINE'S KEYBOARD, for a keyboard of its own in Independent
+        # mode: its `input "<twin>"` block carries these whole, because the
+        # compositor merges `type:keyboard` into a device's block only when
+        # the device already exists as the config is read — and a twin made
+        # after it would come up with no layout at all (`input.c`,
+        # `store_input_config`).
+        RONOCTUA_XKB_LAYOUT = keyboard.layout;
+        RONOCTUA_XKB_VARIANT = keyboard.variant;
+        RONOCTUA_XKB_OPTIONS = keyboard.options;
         RONOCTUA_SCREENSHOTS = screenshotDir;
         RONOCTUA_GRIM = "${pkgs.grim}/bin/grim";
         RONOCTUA_SLURP = "${pkgs.slurp}/bin/slurp";

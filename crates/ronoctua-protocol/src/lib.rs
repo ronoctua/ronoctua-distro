@@ -210,6 +210,15 @@ pub enum Effect {
     /// what it wants, and the host writes the file, asks keyd whether it can
     /// read it, and restarts the daemon.
     Remap(Remap),
+    /// Switch how the keyboards work together, provisionally. Needs
+    /// [`Capability::Keyboard`]: the host switches, counts down on
+    /// [`Boards::asking`], and switches back unless [`Effect::KeyboardModeKept`]
+    /// arrives first — a remapper that fails is a machine with no keyboard.
+    KeyboardMode(KeyboardMode),
+    /// Keep the mode the countdown is about.
+    KeyboardModeKept,
+    /// One setting of one keyboard unit, in Independent mode.
+    UnitChange(UnitChange),
 }
 
 impl Effect {
@@ -240,7 +249,10 @@ impl Effect {
             // system, and a buffer that asked for nothing must not get to
             // change that quietly.
             Self::Tune(_) => Some(Capability::Brain),
-            Self::Remap(_) => Some(Capability::Keyboard),
+            Self::Remap(_)
+            | Self::KeyboardMode(_)
+            | Self::KeyboardModeKept
+            | Self::UnitChange(_) => Some(Capability::Keyboard),
             // AND THESE COST NOTHING, each for a reason that is worth being
             // able to check rather than assume: redrawing, closing and saying
             // which state one is in are the buffer talking about ITSELF;
@@ -597,6 +609,94 @@ pub struct Boards {
     /// rule written after the leader's wins, so remapping it is how somebody
     /// loses the key that opens everything, on that keyboard.
     pub leader: String,
+    /// Together or Independent.
+    pub mode: KeyboardMode,
+    /// Every unit, plugged or remembered, for Independent mode.
+    pub units: Vec<UnitBoard>,
+    /// The cursor numbers a unit can be put on.
+    pub cursors: Vec<u16>,
+    /// The layouts this machine has.
+    pub layouts: Vec<LayoutWord>,
+    /// Seconds left before a switch of mode undoes itself; zero when none.
+    pub asking: u16,
+}
+
+/// How the keyboards work together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeyboardMode {
+    /// As one, through keyd, on the first cursor's seat.
+    #[default]
+    Together,
+    /// Each unit its own virtual twin, on its cursor's seat.
+    Independent,
+}
+
+/// One keyboard UNIT, for Independent mode — a device, not a model.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UnitBoard {
+    /// The host's hash of where it is plugged and its address.
+    pub identity: String,
+    /// What the kernel calls it.
+    pub name: String,
+    /// Its model, `vendor:product`.
+    pub model: String,
+    /// Built into this machine.
+    pub built_in: bool,
+    /// Plugged in right now.
+    pub plugged: bool,
+    /// The cursor it types through.
+    pub cursor: u16,
+    /// Its xkb layout, empty for the machine's.
+    pub layout: String,
+    /// Its xkb variant, empty for the layout's default.
+    pub variant: String,
+    /// keyd's name for the key whose tap is its leader.
+    pub leader: String,
+    /// Repeat rate per second; zero is the compositor's.
+    pub repeat_rate: u16,
+    /// Repeat delay in milliseconds; zero is the compositor's.
+    pub repeat_delay: u16,
+    /// What its keys become, as [`Board::decided`].
+    pub decided: Vec<(String, String)>,
+}
+
+/// An xkb layout the machine has.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LayoutWord {
+    /// Its code — `gb`.
+    pub code: String,
+    /// What xkeyboard-config calls it — data, like a device's name.
+    pub name: String,
+    /// The variant codes it offers.
+    pub variants: Vec<String>,
+}
+
+/// One setting of a unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnitSetting {
+    /// The cursor it types through.
+    Cursor(u16),
+    /// Its layout; empty for the machine's.
+    Layout(String),
+    /// Its variant; empty for the layout's default.
+    Variant(String),
+    /// The key whose tap is its leader.
+    Leader(String),
+    /// Repeat rate; zero is the compositor's.
+    RepeatRate(u16),
+    /// Repeat delay; zero is the compositor's.
+    RepeatDelay(u16),
+    /// keyd's key name, and what it becomes; empty undoes.
+    Remap(String, String),
+}
+
+/// Which unit, and what changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitChange {
+    /// [`UnitBoard::identity`].
+    pub unit: String,
+    /// What changes.
+    pub setting: UnitSetting,
 }
 
 /// What a key on a keyboard should become.
@@ -2668,6 +2768,17 @@ pub enum Input {
     /// cursor's highlight stays.
     Unhover {
         /// Which cursor left.
+        seat: u16,
+    },
+    /// The next keys are this seat's — sent whenever the seat typing into
+    /// the window changes, so a buffer can keep one selection per keyboard.
+    KeyboardSeat {
+        /// The cursor's colour number, as [`Input::Hover`]'s.
+        seat: u16,
+    },
+    /// That seat's keyboard left the window.
+    KeyboardLeft {
+        /// Which one.
         seat: u16,
     },
 }

@@ -485,6 +485,8 @@
         bufferTransfers = buffers.transfers;
         bufferFormat = buffers.format;
         bufferBrain = buffers.brain;
+        # The reference for several keyboards in one app (`buffers/example`).
+        bufferExample = buffers.example;
         inherit iconSuperpack ghosttyVt torrentShim;
         # The THIRD face embedded in the renderer, generated along with the database: without
         # it the 1,668 icons would come out as tofu.
@@ -747,6 +749,9 @@
         ./nix/modules/fonts.nix
         ./nix/modules/scroll.nix
         ./nix/modules/keyboard.nix
+        # Independent keyboards: keyd's replacement when every keyboard is its
+        # own, beside the module that sets keyd up.
+        ./nix/modules/keys.nix
         ./nix/modules/icons.nix
         ./nix/modules/foreign.nix
         ./nix/modules/terminal.nix
@@ -809,6 +814,9 @@
               # that outlives the session, and its closure should be the copy
               # and not the desktop.
               transfers = rust.transfers;
+              # The keys daemon, EXTRACTED for the same reason: it runs as root
+              # in keyd's place when the keyboards are independent.
+              keys = rust.keys;
               # The brain's daemon, EXTRACTED for the same reason as the queue's
               # — and one more: it decides WHEN the machine rebuilds itself, and
               # a unit with no screen must not carry the renderer that would
@@ -1459,6 +1467,8 @@
           for a in "$@"; do
             if [ "$a" = "--pointers" ]; then
               pointers=yes
+            elif [ "$a" = "--keyboards" ]; then
+              keyboards=yes
             else
               pass+=("$a")
             fi
@@ -1500,6 +1510,48 @@
               # longer reach its emulated tablet, which would be a cursor no
               # hand moves. `nix/modules/vm.nix` is the reader of this flag.
               export QEMU_KERNEL_PARAMS="''${QEMU_KERNEL_PARAMS:-} ronoctua_pointers"
+            fi
+          fi
+          # `--keyboards`: EVERY EXTERNAL KEYBOARD OF THE HOST, EACH ITS OWN —
+          # what Independent mode is tried with. The BUILT-IN one stays with
+          # the host (buses i8042 and host, `0011`/`0019`), so the host is never
+          # left without a keyboard while the VM holds the others.
+          if [ "''${keyboards:-}" = yes ]; then
+            taken=0
+            for dev in /dev/input/event*; do
+              props=$(${pkgs.systemd}/bin/udevadm info -q property -n "$dev" 2>/dev/null) || continue
+              if ! grep -qE '^ID_INPUT_KEYBOARD=1$' <<< "$props"; then
+                continue
+              fi
+              if grep -qiE '^ID_VENDOR_ID=0fac$' <<< "$props"; then
+                continue
+              fi
+              # A SECURITY TOKEN THAT ALSO TYPES — its one-time codes arrive
+              # as keystrokes — carries a smart-card interface (class `0b`).
+              # It is the key somebody signs with, and it stays with the host.
+              if grep -qE '^ID_USB_INTERFACES=.*:0b[0-9a-f]{4}:' <<< "$props"; then
+                continue
+              fi
+              bus=$(cat "/sys/class/input/''${dev##*/}/device/id/bustype" 2>/dev/null || echo "")
+              case "$bus" in
+                0011 | 0019) continue ;;
+              esac
+              name=$(cat "/sys/class/input/''${dev##*/}/device/name" 2>/dev/null || echo "$dev")
+              case "$name" in
+                *keyd*) continue ;;
+              esac
+              if [ ! -r "$dev" ] || [ ! -w "$dev" ]; then
+                echo "vm: $name ($dev) needs read access; asking sudo for it"
+                sudo ${pkgs.acl}/bin/setfacl -m "u:$(id -un):rw" "$dev"
+              fi
+              echo "vm: passing $name ($dev) to the guest as a keyboard of its own"
+              export QEMU_OPTS="''${QEMU_OPTS:-} -device virtio-input-host-pci,evdev=$dev"
+              taken=$((taken + 1))
+            done
+            if [ "$taken" = 0 ]; then
+              echo "vm: --keyboards found no external keyboard on this host" >&2
+            else
+              echo "vm: $taken keyboard(s) are the guest's until it closes; the built-in one stays here"
             fi
           fi
           exec ${self.nixosConfigurations.vm.config.system.build.vm}/bin/run-${self.nixosConfigurations.vm.config.networking.hostName}-vm "''${pass[@]}"

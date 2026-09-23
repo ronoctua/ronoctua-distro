@@ -428,6 +428,8 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
             ])),
         ),
         Input::Unhover { seat } => ("unhover", Some(Val::U16(*seat))),
+        Input::KeyboardSeat { seat } => ("keyboard-seat", Some(Val::U16(*seat))),
+        Input::KeyboardLeft { seat } => ("keyboard-left", Some(Val::U16(*seat))),
         // THE WHEEL, and it carries a `position` RECORD the way `click` does —
         // a nested record and not two more fields, because that is the shape
         // the WIT declares and `wasmtime` lowers a record POSITIONALLY. Two
@@ -841,7 +843,121 @@ fn val_of_boards(b: &ronoctua_protocol::Boards) -> wasmtime::component::Val {
         ("boards".into(), Val::List(boards)),
         ("trouble".into(), Val::String(b.trouble.clone())),
         ("leader".into(), Val::String(b.leader.clone())),
+        (
+            "mode".into(),
+            Val::Enum(keyboard_mode_name(b.mode).to_owned()),
+        ),
+        (
+            "units".into(),
+            Val::List(b.units.iter().map(val_of_unit).collect()),
+        ),
+        (
+            "cursors".into(),
+            Val::List(b.cursors.iter().map(|c| Val::U16(*c)).collect()),
+        ),
+        (
+            "layouts".into(),
+            Val::List(
+                b.layouts
+                    .iter()
+                    .map(|l| {
+                        Val::Record(vec![
+                            ("code".into(), Val::String(l.code.clone())),
+                            ("name".into(), Val::String(l.name.clone())),
+                            (
+                                "variants".into(),
+                                Val::List(
+                                    l.variants.iter().map(|v| Val::String(v.clone())).collect(),
+                                ),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        ("asking".into(), Val::U16(b.asking)),
     ])
+}
+
+/// The WIT's name for a keyboard mode.
+const fn keyboard_mode_name(m: ronoctua_protocol::KeyboardMode) -> &'static str {
+    match m {
+        ronoctua_protocol::KeyboardMode::Together => "together",
+        ronoctua_protocol::KeyboardMode::Independent => "independent",
+    }
+}
+
+/// One unit, IN THE WIT'S FIELD ORDER — see `val_of_boards`.
+fn val_of_unit(u: &ronoctua_protocol::UnitBoard) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+
+    Val::Record(vec![
+        ("identity".into(), Val::String(u.identity.clone())),
+        ("name".into(), Val::String(u.name.clone())),
+        ("model".into(), Val::String(u.model.clone())),
+        ("built-in".into(), Val::Bool(u.built_in)),
+        ("plugged".into(), Val::Bool(u.plugged)),
+        ("cursor".into(), Val::U16(u.cursor)),
+        ("layout".into(), Val::String(u.layout.clone())),
+        ("layout-variant".into(), Val::String(u.variant.clone())),
+        ("leader".into(), Val::String(u.leader.clone())),
+        ("repeat-rate".into(), Val::U16(u.repeat_rate)),
+        ("repeat-delay".into(), Val::U16(u.repeat_delay)),
+        (
+            "decided".into(),
+            Val::List(
+                u.decided
+                    .iter()
+                    .map(|(k, v)| Val::Tuple(vec![Val::String(k.clone()), Val::String(v.clone())]))
+                    .collect(),
+            ),
+        ),
+    ])
+}
+
+/// The unit change the guest asked for, read back out of its record.
+fn unit_change_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol::UnitChange> {
+    use ronoctua_protocol::UnitSetting;
+    use wasmtime::component::Val;
+
+    let Some(Val::Record(fields)) = v else {
+        return None;
+    };
+    let get = |name: &str| fields.iter().find(|(n, _)| n == name).map(|(_, v)| v);
+    let Some(Val::String(unit)) = get("unit") else {
+        return None;
+    };
+    let Some(Val::Variant(case, payload)) = get("setting") else {
+        return None;
+    };
+    let text = || match payload.as_deref() {
+        Some(Val::String(s)) => Some(s.clone()),
+        _ => None,
+    };
+    let number = || match payload.as_deref() {
+        Some(Val::U16(n)) => Some(*n),
+        _ => None,
+    };
+    let setting = match case.as_str() {
+        "cursor" => UnitSetting::Cursor(number()?),
+        "layout" => UnitSetting::Layout(text()?),
+        "layout-variant" => UnitSetting::Variant(text()?),
+        "leader" => UnitSetting::Leader(text()?),
+        "repeat-rate" => UnitSetting::RepeatRate(number()?),
+        "repeat-delay" => UnitSetting::RepeatDelay(number()?),
+        "remap" => match payload.as_deref() {
+            Some(Val::Tuple(pair)) => match pair.as_slice() {
+                [Val::String(k), Val::String(v)] => UnitSetting::Remap(k.clone(), v.clone()),
+                _ => return None,
+            },
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(ronoctua_protocol::UnitChange {
+        unit: unit.clone(),
+        setting,
+    })
 }
 
 /// The survey, as a `Val` the guest can receive.
@@ -1328,6 +1444,17 @@ fn effects_from(v: &wasmtime::component::Val) -> Vec<ronoctua_protocol::Effect> 
                 // file so that `tune` cannot become the second one.
                 "tune" => setting_from(payload.as_deref()).map(Effect::Tune),
                 "remap" => remap_from(payload.as_deref()).map(Effect::Remap),
+                "keyboard-mode" => match payload.as_deref() {
+                    Some(Val::Enum(n)) if n == "independent" => Some(Effect::KeyboardMode(
+                        ronoctua_protocol::KeyboardMode::Independent,
+                    )),
+                    Some(Val::Enum(n)) if n == "together" => Some(Effect::KeyboardMode(
+                        ronoctua_protocol::KeyboardMode::Together,
+                    )),
+                    _ => None,
+                },
+                "keyboard-mode-kept" => Some(Effect::KeyboardModeKept),
+                "unit-change" => unit_change_from(payload.as_deref()).map(Effect::UnitChange),
                 otherwise => {
                     tracing::warn!(effect = otherwise, "an unknown effect");
                     None

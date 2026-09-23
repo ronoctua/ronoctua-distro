@@ -197,7 +197,7 @@ pub fn host_it() -> Result<()> {
         outputs: OutputState::new(&globals, &qh),
         seats: SeatState::new(&globals, &qh),
         _compositor: compositor,
-        keyboard: None,
+        keyboards: crate::seats::Seats::default(),
         pointers: crate::seats::Seats::default(),
         here: PerSeat::default(),
         window,
@@ -257,7 +257,7 @@ struct SyncthingWindow {
     outputs: OutputState,
     seats: SeatState,
     _compositor: CompositorState,
-    keyboard: Option<wl_keyboard::WlKeyboard>,
+    keyboards: crate::seats::Seats<Modifiers, wl_keyboard::WlKeyboard>,
     /// Every pointer this window was offered — one per cursor — with the
     /// state of each while another is `here`. See `crate::seats`.
     pointers: crate::seats::Seats<PerSeat>,
@@ -884,7 +884,7 @@ impl SeatHandler for SyncthingWindow {
         seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
-        if cap == Capability::Keyboard && self.keyboard.is_none() {
+        if cap == Capability::Keyboard {
             // A KEYBOARD THAT REPEATS — see the `handle` field. The rate and
             // the delay are the COMPOSITOR's, arriving as `RepeatInfo`;
             // nothing here invents either.
@@ -893,9 +893,17 @@ impl SeatHandler for SyncthingWindow {
                 &seat,
                 None,
                 self.handle.clone(),
-                Box::new(|state: &mut Self, _, event| state.typed(event)),
+                Box::new(|state: &mut Self, kb, event| {
+                    state.keyboards.switch_to(kb, &mut state.mods);
+                    state.typed(event);
+                }),
             ) {
-                Ok(k) => self.keyboard = Some(k),
+                Ok(k) => {
+                    // EVERY KEYBOARD, and not only the first: one per seat, and in
+                    // Independent mode one per cursor.
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.keyboards.took(&seat, k, name.as_deref());
+                }
                 Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
         }
@@ -918,10 +926,8 @@ impl SeatHandler for SyncthingWindow {
         seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
-        if cap == Capability::Keyboard
-            && let Some(k) = self.keyboard.take()
-        {
-            k.release();
+        if cap == Capability::Keyboard {
+            self.keyboards.lost(&seat, &mut self.mods);
         }
         if cap == Capability::Pointer {
             self.pointers.lost(&seat, &mut self.here);
@@ -936,22 +942,24 @@ impl KeyboardHandler for SyncthingWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
         _: &[u32],
         _: &[Keysym],
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
     }
 
     fn leave(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         // A MODIFIER HELD WHEN THE FOCUS WENT IS A MODIFIER NOBODY WILL SEE
         // COME UP — the release goes to whoever has the keyboard now.
         self.hinted.let_everything_go();
@@ -961,10 +969,11 @@ impl KeyboardHandler for SyncthingWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         event: KeyEvent,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         // THE HEADER'S OWN KEYS FIRST — the right `Ctrl` and its pair, and the
         // `Esc` that shuts an open drawer before it closes the window. See
         // `chrome::Hinted::took_a_key`.
@@ -990,10 +999,11 @@ impl KeyboardHandler for SyncthingWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         event: KeyEvent,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         // THE MODIFIER IS LET GO HERE, and it has to be: xkb merges both
         // Ctrls into one bit, so the modifier event cannot say which of them
         // came up.
@@ -1010,12 +1020,13 @@ impl KeyboardHandler for SyncthingWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         mods: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        self.keyboards.switch_to(kb, &mut self.mods);
         self.mods = mods;
     }
 }

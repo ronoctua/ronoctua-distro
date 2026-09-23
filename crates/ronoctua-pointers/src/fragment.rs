@@ -100,6 +100,33 @@ pub fn text_of(plan: &Plan, prefs: &Preferences) -> Result<String> {
     Ok(out)
 }
 
+/// The keyboards' lines, after the pointers': each twin attached to the seat
+/// of its cursor (the first seat is the fallback, never attached to), and
+/// its whole block of settings — see [`crate::keyboards`].
+///
+/// # Errors
+///
+/// A name a command cannot carry.
+pub fn keyboards_text(keys: &[crate::keyboards::KeyboardPlan]) -> Result<String> {
+    let mut out = String::new();
+    for k in keys {
+        if k.cursor != FIRST {
+            let _ = writeln!(
+                out,
+                "{}",
+                wire::seat_command(
+                    &crate::plan::seat_of(k.cursor),
+                    &SeatAsk::Attach(k.twin.clone())
+                )?
+            );
+        }
+        for s in &k.settings {
+            let _ = writeln!(out, "{}", wire::keyboard_command(&k.twin, s)?);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

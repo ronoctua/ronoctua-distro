@@ -2523,6 +2523,8 @@ impl State {
                 | Input::Mind(_)
             | Input::Hover { .. }
             | Input::Unhover(_)
+            | Input::KeyboardSeat(_)
+            | Input::KeyboardLeft(_)
                 | Input::Keyboards(_)
                 | Input::Formatted(_)
                 // A CATALOGUE PAGES, it does not scroll: `C-,` turns the

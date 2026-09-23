@@ -9,7 +9,7 @@ use std::os::unix::net::UnixStream;
 use anyhow::{Context as _, Result, bail};
 use ronoctua_compositor::{
     AccelProfile, Arity, Ask, ButtonMap, ClickMethod, Deed, DragLock, FingerDrag, FocusFollows,
-    ScrollMethod, SeatAsk, SendEvents, Setting, Transform,
+    KeyboardSetting, ScrollMethod, SeatAsk, SendEvents, Setting, Transform,
 };
 
 /// The six bytes that start every message, in both directions.
@@ -263,6 +263,35 @@ pub fn input_command(device: &str, setting: Setting) -> Result<String> {
     Ok(format!("input \"{at}\" {tail}"))
 }
 
+/// An xkb value as a command can carry it: layouts, variants and options are
+/// letters, digits and `_,:+-()` — `compose:caps,shift:both_capslock` — and
+/// the empty string, which is "the default".
+fn xkb_word(w: &str) -> Result<&str> {
+    if w.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "_,:+-()".contains(c))
+    {
+        Ok(w)
+    } else {
+        bail!("`{w}` is not an xkb value a command can carry")
+    }
+}
+
+/// The command that sets one [`KeyboardSetting`] on one device.
+///
+/// QUOTED, and an empty value is the quotes alone: `xkb_variant ""` is the
+/// parser's own way of saying "none", which a bare word could not say.
+pub fn keyboard_command(device: &str, setting: &KeyboardSetting) -> Result<String> {
+    let at = safe_word(device)?;
+    let tail = match setting {
+        KeyboardSetting::Layout(l) => format!("xkb_layout \"{}\"", xkb_word(l)?),
+        KeyboardSetting::Variant(v) => format!("xkb_variant \"{}\"", xkb_word(v)?),
+        KeyboardSetting::Options(o) => format!("xkb_options \"{}\"", xkb_word(o)?),
+        KeyboardSetting::RepeatRate(r) => format!("repeat_rate {r}"),
+        KeyboardSetting::RepeatDelay(d) => format!("repeat_delay {d}"),
+    };
+    Ok(format!("input \"{at}\" {tail}"))
+}
+
 /// The command that asks one thing of one seat.
 pub fn seat_command(seat: &str, ask: &SeatAsk) -> Result<String> {
     // `*` IS THE COMPOSITOR'S "EVERY SEAT", and it is the one word outside the
@@ -331,6 +360,27 @@ pub fn spoken(deed: &Deed, text: &str, argument: Option<&str>) -> Result<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_keyboard_setting_is_quoted_and_an_empty_one_is_the_default() {
+        let twin = "0:0:ronoctua_keyboard_0a1b2c3d";
+        assert_eq!(
+            keyboard_command(twin, &KeyboardSetting::Layout("gb".into())).unwrap(),
+            "input \"0:0:ronoctua_keyboard_0a1b2c3d\" xkb_layout \"gb\""
+        );
+        assert_eq!(
+            keyboard_command(twin, &KeyboardSetting::Variant(String::new())).unwrap(),
+            "input \"0:0:ronoctua_keyboard_0a1b2c3d\" xkb_variant \"\""
+        );
+        assert!(
+            keyboard_command(
+                twin,
+                &KeyboardSetting::Options("compose:caps,shift:both_capslock".into())
+            )
+            .is_ok()
+        );
+        assert!(keyboard_command(twin, &KeyboardSetting::Layout("gb\"; exit".into())).is_err());
+    }
     use ronoctua_compositor::ModeAsked;
 
     #[test]

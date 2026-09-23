@@ -310,7 +310,8 @@ pub fn host_it(unit: &str) -> Result<()> {
         outputs: OutputState::new(&globals, &qh),
         seats: SeatState::new(&globals, &qh),
         _compositor: compositor,
-        keyboard: None,
+        keyboards: crate::seats::Seats::default(),
+        key_here: Modifiers::default(),
         pointers: crate::seats::Seats::default(),
         here: PerSeat::default(),
         layer,
@@ -377,7 +378,10 @@ struct Lifeline {
     outputs: OutputState,
     seats: SeatState,
     _compositor: CompositorState,
-    keyboard: Option<wl_keyboard::WlKeyboard>,
+    keyboards: crate::seats::Seats<Modifiers, wl_keyboard::WlKeyboard>,
+    /// The modifiers of the keyboard whose events are being handled — the
+    /// per-seat state `keyboards` swaps in (`crate::seats`).
+    key_here: Modifiers,
     /// Every pointer this window was offered — one per cursor — with the
     /// state of each while another is `here`. See `crate::seats`.
     pointers: crate::seats::Seats<PerSeat>,
@@ -915,9 +919,14 @@ impl SeatHandler for Lifeline {
         // NO REPEAT ASKED FOR, and that is not the oversight
         // `every-window-repeats` exists to catch: nothing here is a list one
         // walks. Four letters, each one a single press.
-        if capability == Capability::Keyboard && self.keyboard.is_none() {
+        if capability == Capability::Keyboard {
             match self.seats.get_keyboard(qh, &seat, None) {
-                Ok(k) => self.keyboard = Some(k),
+                Ok(k) => {
+                    // EVERY KEYBOARD, and not only the first: one per seat, and in
+                    // Independent mode one per cursor.
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.keyboards.took(&seat, k, name.as_deref());
+                }
                 Err(e) => tracing::warn!(error = %e, "no keyboard"),
             }
         }
@@ -940,10 +949,8 @@ impl SeatHandler for Lifeline {
         seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
-        if capability == Capability::Keyboard
-            && let Some(k) = self.keyboard.take()
-        {
-            k.release();
+        if capability == Capability::Keyboard {
+            self.keyboards.lost(&seat, &mut self.key_here);
         }
         if capability == Capability::Pointer {
             self.pointers.lost(&seat, &mut self.here);
@@ -958,10 +965,11 @@ impl KeyboardHandler for Lifeline {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         event: KeyEvent,
     ) {
+        self.keyboards.switch_to(kb, &mut self.key_here);
         // THE NOTATION, AND THEN THE TABLE. It is `audio_window`'s shape: the
         // door turns what its toolkit handed it into the spelling the table
         // holds, and the table is the only place a key is written.
@@ -985,10 +993,11 @@ impl KeyboardHandler for Lifeline {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         _: KeyEvent,
     ) {
+        self.keyboards.switch_to(kb, &mut self.key_here);
     }
 
     /// NOTHING REPEATS HERE, and this is the one door where that is right.
@@ -1011,34 +1020,37 @@ impl KeyboardHandler for Lifeline {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
         _: &[u32],
         _: &[Keysym],
     ) {
+        self.keyboards.switch_to(kb, &mut self.key_here);
     }
 
     fn leave(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
     ) {
+        self.keyboards.switch_to(kb, &mut self.key_here);
     }
 
     fn update_modifiers(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         _: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        self.keyboards.switch_to(kb, &mut self.key_here);
     }
 }
 

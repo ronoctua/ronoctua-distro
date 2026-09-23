@@ -102,6 +102,12 @@ ronoctua-audio = { path = "../ronoctua-audio" }
 ronoctua-syncthing = { path = "../ronoctua-syncthing" }
 ronoctua-bluetooth = { path = "../ronoctua-bluetooth" }
 ronoctua-keyboards = { path = "../ronoctua-keyboards" }
+# Independent keyboards: the remapper's rules and the socket its leader
+# comes through. The shell never opens a device; the daemon does.
+ronoctua-keys = { path = "../ronoctua-keys" }
+# The diverted keyboard's keys, translated with ITS layout — the same crate
+# SCTK compiles every Wayland keymap with.
+xkbcommon = "0.8"
 # THE TWO TUNNELS — Tailscale's local API and Tor's control socket — for the
 # modeline's two marks and the network view's two sections. Neither daemon
 # signals, so the crate polls on a thread of its own; a machine with neither

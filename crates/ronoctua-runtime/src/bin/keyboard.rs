@@ -24,7 +24,9 @@
 //! Usage: `ronoctua-test-keyboard <component.wasm> <i18n-dir>`
 
 use anyhow::{Context as _, Result, bail};
-use ronoctua_protocol::{Board, Boards, Effect, Input, Word};
+use ronoctua_protocol::{
+    Board, Boards, Effect, Input, KeyboardMode, LayoutWord, UnitBoard, UnitSetting, Word,
+};
 
 /// The labels this buffer cuts ON PURPOSE, and why.
 const ON_PURPOSE: &[(&str, &str)] = &[
@@ -33,6 +35,16 @@ const ON_PURPOSE: &[(&str, &str)] = &[
         "the sentence that says the layout and the repeat rate are not per \
          keyboard. It is a paragraph under the list, and it is meant to wrap \
          rather than to fit on one line.",
+    ),
+    (
+        "keyboard-independent-note",
+        "what Independent mode means, under the list — a sentence, meant to \
+         wrap like the one about the global settings.",
+    ),
+    (
+        "keyboard-keep-note",
+        "the question's sentence after a switch of mode, a line of its own \
+         under the title and above the countdown.",
     ),
     (
         "keyboard-same-model",
@@ -90,6 +102,7 @@ fn boards() -> Boards {
         ],
         trouble: String::new(),
         leader: "leftmeta".to_owned(),
+        ..Boards::default()
     }
 }
 
@@ -246,10 +259,26 @@ fn main() -> Result<()> {
         bail!("the list does not say that the layout and the repeat rate are global");
     }
 
+    // ---- THE SWITCH IS ROW ZERO ----
+    //
+    // Where the cursor starts, and `RET` there asks for the other mode — the
+    // host makes it provisional; the buffer only asks.
+    if !said.iter().any(|k| k == "keyboard-mode") {
+        bail!("the list does not draw the switch between the two modes");
+    }
+    let effects = inst.event(&Input::Confirm)?;
+    if !effects
+        .iter()
+        .any(|e| matches!(e, Effect::KeyboardMode(KeyboardMode::Independent)))
+    {
+        bail!("`RET` on the switch did not ask for Independent mode: {effects:?}");
+    }
+
     // ---- ONE KEYBOARD ----
     //
-    // The cursor starts on the first, which is the built-in one; `RET` opens
-    // it and the state changes, which is what the modeline draws.
+    // One row down is the first keyboard, the built-in one; `RET` opens it and
+    // the state changes, which is what the modeline draws.
+    inst.event(&Input::Down)?;
     let effects = inst.event(&Input::Confirm)?;
     if !effects
         .iter()
@@ -386,6 +415,115 @@ fn main() -> Result<()> {
     let list = look(&mut inst)?;
     if !keys(&list).iter().any(|k| k == "keyboard-title") {
         bail!("`Esc` did not go back to the list");
+    }
+
+    // ---- INDEPENDENT MODE: UNITS, NOT MODELS ----
+    let mut independent = boards();
+    independent.mode = KeyboardMode::Independent;
+    independent.cursors = vec![1, 2, 3];
+    independent.layouts = vec![
+        LayoutWord {
+            code: "gb".to_owned(),
+            name: "English (UK)".to_owned(),
+            variants: vec!["extd".to_owned()],
+        },
+        LayoutWord {
+            code: "fr".to_owned(),
+            name: "French".to_owned(),
+            variants: Vec::new(),
+        },
+    ];
+    let unit = |identity: &str, name: &str, plugged: bool, cursor: u16| UnitBoard {
+        identity: identity.to_owned(),
+        name: name.to_owned(),
+        model: "3554:f605".to_owned(),
+        built_in: false,
+        plugged,
+        cursor,
+        layout: String::new(),
+        variant: String::new(),
+        leader: "leftmeta".to_owned(),
+        repeat_rate: 0,
+        repeat_delay: 0,
+        decided: Vec::new(),
+    };
+    independent.units = vec![
+        unit("0a1b2c3d", "Bluetooth Keyboard", true, 2),
+        unit("4e5f6a7b", "USB Keyboard", false, 1),
+    ];
+    inst.event(&Input::Keyboards(independent.clone()))?;
+    let list = look(&mut inst)?;
+    if drawing {
+        draw(&list, COLUMNS, "Independent mode: every unit");
+    }
+    let said = keys(&list);
+    for wanted in [
+        "keyboard-independent-note",
+        "keyboard-unplugged",
+        "keyboard-cursor",
+    ] {
+        if !said.iter().any(|k| k == wanted) {
+            bail!("Independent mode's list does not say `{wanted}`: {said:?}");
+        }
+    }
+    // FROM THE TOP, whatever the cursor was on: row zero is the switch and
+    // the first unit is one below it.
+    for _ in 0..4 {
+        inst.event(&Input::Up)?;
+    }
+    inst.event(&Input::Down)?;
+    inst.event(&Input::Confirm)?;
+    let page = look(&mut inst)?;
+    if drawing {
+        draw(&page, COLUMNS, "one unit, and its settings");
+    }
+    let said = keys(&page);
+    for wanted in [
+        "keyboard-unit",
+        "keyboard-types-through",
+        "keyboard-layout",
+        "keyboard-leader-key",
+        "keyboard-repeat-rate",
+    ] {
+        if !said.iter().any(|k| k == wanted) {
+            bail!("a unit's page does not say `{wanted}`: {said:?}");
+        }
+    }
+    // THE CURSOR RING HANDS BACK A CURSOR THE HOST OFFERED, for a unit it sent.
+    let effects = inst.event(&Input::Right)?;
+    let Some(Effect::UnitChange(change)) = effects
+        .iter()
+        .find(|e| matches!(e, Effect::UnitChange(_)))
+        .cloned()
+    else {
+        bail!("the right arrow on a unit's cursor asked for nothing: {effects:?}");
+    };
+    if change.unit != "0a1b2c3d" || change.setting != UnitSetting::Cursor(3) {
+        bail!("the cursor ring handed back {change:?}");
+    }
+
+    // ---- THE QUESTION AFTER A SWITCH ----
+    let mut asking = independent;
+    asking.asking = 12;
+    inst.event(&Input::Keyboards(asking))?;
+    let question = look(&mut inst)?;
+    if drawing {
+        draw(&question, COLUMNS, "the question after a switch of mode");
+    }
+    let said = keys(&question);
+    for wanted in ["keyboard-keep-title", "keyboard-go-back", "keyboard-keep"] {
+        if !said.iter().any(|k| k == wanted) {
+            bail!("the question does not say `{wanted}`: {said:?}");
+        }
+    }
+    // AND THE FIRST `RET` GOES BACK: a question that appears by itself
+    // answers NO.
+    let effects = inst.event(&Input::Confirm)?;
+    if !effects
+        .iter()
+        .any(|e| matches!(e, Effect::KeyboardMode(KeyboardMode::Together)))
+    {
+        bail!("the first `RET` on the question did not go back: {effects:?}");
     }
 
     ronoctua_runtime::driven::every_label_fits(&i18n, ON_PURPOSE, COLUMNS)?;

@@ -79,10 +79,87 @@ pub fn restore_it() -> Result<(), String> {
 
 /// Is the unit active right now?
 fn active() -> bool {
+    active_unit(UNIT)
+}
+
+fn active_unit(unit: &str) -> bool {
     Command::new(SYSTEMCTL_PATH)
-        .args(["is-active", "--quiet", UNIT])
+        .args(["is-active", "--quiet", unit])
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// The unit `nix/modules/keys.nix` defines — Independent mode's remapper.
+///
+/// The polkit rule there names this and keyd, `start` and `stop`, and nothing
+/// else; the two units conflict, so starting one stops the other.
+const KEYS_UNIT: &str = "ronoctua-keys.service";
+
+/// Puts the keyboards in `mode`: renders the remapper's rules when it is
+/// Independent, then starts the unit that mode runs — which stops the other.
+///
+/// # Errors
+///
+/// The rules could not be written, polkit refused, or the unit did not stay
+/// active; systemd's own words come back, as `restore_it`'s do.
+pub fn switch_to(mode: ronoctua_keyboards::Mode) -> Result<(), String> {
+    let unit = match mode {
+        ronoctua_keyboards::Mode::Together => UNIT,
+        ronoctua_keyboards::Mode::Independent => {
+            render_keys()?;
+            KEYS_UNIT
+        }
+    };
+    if active_unit(unit) {
+        return Ok(());
+    }
+    let output = Command::new(SYSTEMCTL_PATH)
+        .args(["start", unit])
+        .output()
+        .map_err(|e| format!("{SYSTEMCTL_PATH}: {e}"))?;
+    if !output.status.success() {
+        let reason = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(if reason.is_empty() {
+            format!(
+                "{SYSTEMCTL_PATH} start {unit} exited with {}",
+                output.status
+            )
+        } else {
+            reason
+        });
+    }
+    if !active_unit(unit) {
+        return Err(format!("{unit} started and did not stay active"));
+    }
+    Ok(())
+}
+
+/// Writes what the remapper reads, from the person's keyboard preferences
+/// and the units plugged in now. The daemon reloads it on its own (inotify).
+///
+/// # Errors
+///
+/// The directory is not there — a machine built without `keys.nix`.
+pub fn render_keys() -> Result<(), String> {
+    let prefs = ronoctua_keyboards::store().read();
+    let units = ronoctua_keyboards::units().unwrap_or_default();
+    let config = ronoctua_keys::config::render(&prefs, &units);
+    ronoctua_keys::config::write(ronoctua_keys::config::DIRECTORY, &config)
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Applies the saved mode, once, when the session starts.
+///
+/// keyd is what the machine boots with; a person who chose Independent gets
+/// the remapper when their session begins — never through an `enable` that
+/// would outlive the choice (`keys.nix`).
+pub fn apply_saved_mode() {
+    let mode = ronoctua_keyboards::store().read().mode;
+    if mode == ronoctua_keyboards::Mode::Independent
+        && let Err(e) = switch_to(mode)
+    {
+        tracing::warn!(error = %e, "the saved keyboard mode could not be applied; keyd stays");
+    }
 }
 
 #[cfg(test)]
@@ -95,6 +172,7 @@ mod tests {
         // does not close the hole on its own — whoever closes it is the
         // `keyboard-vm`, which really restarts as the user —, but it anchors the name.
         assert_eq!(super::UNIT, "keyd.service");
+        assert_eq!(super::KEYS_UNIT, "ronoctua-keys.service");
     }
 
     #[test]

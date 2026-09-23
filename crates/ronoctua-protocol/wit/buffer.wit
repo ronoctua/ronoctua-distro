@@ -368,6 +368,19 @@ interface types {
         // what it wants, and the host writes the file, asks keyd whether it
         // can read it, and restarts the daemon.
         remap(remap),
+        // Switch how the keyboards work together. Needs
+        // `capability::keyboard`.
+        //
+        // PROVISIONAL, and the host is what makes it so: a remapper that fails
+        // to start is a machine with no keyboard, so the host switches, puts a
+        // countdown on `boards.asking`, and switches BACK on its own unless
+        // `keyboard-mode-kept` arrives first.
+        keyboard-mode(keyboard-mode),
+        // Keep the mode the countdown is about.
+        keyboard-mode-kept,
+        // One setting of one keyboard unit, in Independent mode. Needs
+        // `capability::keyboard`.
+        unit-change(unit-change),
     }
 
     // Capabilities a buffer may ASK for in the descriptor. The host refuses whoever
@@ -952,6 +965,82 @@ interface types {
         // that keyboard. The buffer holds no table of ours and could not know
         // which key it is.
         leader: string,
+        // Together or Independent — what the switch shows.
+        mode: keyboard-mode,
+        // Every unit, plugged or remembered, for Independent mode.
+        units: list<unit-board>,
+        // The cursor numbers a unit can be put on: every cursor there is, and
+        // the next one after them.
+        cursors: list<u16>,
+        // The layouts this machine's xkeyboard-config has.
+        layouts: list<layout-word>,
+        // Seconds left before a switch of mode undoes itself; zero when no
+        // switch is waiting to be kept.
+        asking: u16,
+    }
+
+    // HOW THE KEYBOARDS WORK TOGETHER.
+    enum keyboard-mode {
+        // As one, through keyd, on the first cursor's seat — the default.
+        together,
+        // Each unit its own virtual twin, on its cursor's seat, with its own
+        // layout, remaps and leader key.
+        independent,
+    }
+
+    // ONE KEYBOARD UNIT, for Independent mode — a device, not a model: two of
+    // the same model on one desk are two people there.
+    record unit-board {
+        // Who it is: the host's hash of where it is plugged and its address.
+        identity: string,
+        // What the kernel calls it.
+        name: string,
+        // Its model, `vendor:product`.
+        model: string,
+        // Built into this machine.
+        built-in: bool,
+        // Plugged in right now. A unit that is not is still listed, with what
+        // was decided about it, and its rows refuse.
+        plugged: bool,
+        // The cursor it types through.
+        cursor: u16,
+        // Its xkb layout and variant, empty for the machine's. The variant's
+        // field says `layout-variant` because `variant` is a WIT keyword.
+        layout: string,
+        layout-variant: string,
+        // keyd's name for the key whose tap is its leader.
+        leader: string,
+        // Repeat rate (per second) and delay (ms); zero is the compositor's.
+        repeat-rate: u16,
+        repeat-delay: u16,
+        // What its keys become, as `board.decided`.
+        decided: list<tuple<string, string>>,
+    }
+
+    // AN XKB LAYOUT the machine has: its code, the name xkeyboard-config gives
+    // it (data, like a device's name), and the variant codes it offers.
+    record layout-word {
+        code: string,
+        name: string,
+        variants: list<string>,
+    }
+
+    // ONE SETTING OF A UNIT.
+    variant unit-setting {
+        cursor(u16),
+        layout(string),
+        layout-variant(string),
+        leader(string),
+        repeat-rate(u16),
+        repeat-delay(u16),
+        // keyd's key name, and what it becomes; empty undoes.
+        remap(tuple<string, string>),
+    }
+
+    // WHICH UNIT, AND WHAT CHANGES.
+    record unit-change {
+        unit: string,
+        setting: unit-setting,
     }
 
     // WHAT A KEY ON A KEYBOARD SHOULD BECOME.
@@ -1663,6 +1752,14 @@ interface types {
         // clears the highlight and the other keeps it. It names WHICH pointer
         // — one cursor leaving must not put out another's highlight.
         unhover(u16),
+        // THE NEXT KEYS ARE THIS SEAT'S. Sent before a key whenever the seat
+        // typing into this window changes — one number, the cursor's colour,
+        // as `pointed.seat` — so a buffer can keep one selection or one field
+        // PER KEYBOARD. A buffer that ignores it treats every keyboard as one,
+        // which is what every buffer did before it.
+        keyboard-seat(u16),
+        // That seat's keyboard LEFT this window.
+        keyboard-left(u16),
     }
 }
 
@@ -1698,7 +1795,10 @@ interface view {
         // list exists for.
         vital, vital-sign, pulse, standing, hold-kind, outcome-kind, day-part,
         step-outcome, run-record, task-step, task-state, announcement, gate, mind,
-        step-switch, knob, setting
+        step-switch, knob, setting,
+        // And the independent keyboards', reachable only from inside `boards`
+        // and `effect`.
+        keyboard-mode, unit-board, layout-word, unit-setting, unit-change
     };
 
     // Who the buffer is: name, mode, keymap, commands and modeline segments.

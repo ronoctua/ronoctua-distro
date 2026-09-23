@@ -75,6 +75,7 @@ mod hidpi;
 mod history;
 mod history_window;
 mod keyboard;
+mod keys_link;
 mod language;
 mod leader;
 // THE LINE THAT OUTLIVES THE FOOTER — raised by systemd when it fails.

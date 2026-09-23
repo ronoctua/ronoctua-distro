@@ -744,6 +744,12 @@ CURSOR_START_HUE = 265.0
 #: be told apart (evilside's closest pair was ΔE 0.019 at 0.80); near white
 #: the same share carries the yellow band onto the film's `#FFFF00`.
 CURSOR_HOVER_CHROMA = {"dark": 0.95, "light": 0.60}
+#: AND THE SELECTION each keyboard moves in one of our apps, when several
+#: keyboards type into one window (`ronoctua_design::Carets`): its cursor's
+#: hue at the lightness `surface.selection` sits at — the band that says
+#: "the keyboard is here", once per keyboard. A single keyboard keeps the
+#: accent's own selection, the rule the hover bands follow.
+CURSOR_SELECTION_CHROMA = {"dark": 0.95, "light": 0.60}
 
 
 def shaped_tokens(theme: Theme) -> dict[str, Resolved]:
@@ -780,11 +786,14 @@ def shaped_tokens(theme: Theme) -> dict[str, Resolved]:
     cursor_rel = CURSOR_CHROMA
     cursor_hues = cs.even_delta_e_hues(CURSOR_COUNT, CURSOR_START_HUE, CURSOR_L, cursor_rel)
     hover_l = theme.primitive("neutral", "hover").lch[0]
+    selection_l = theme.primitive("accent", "element").lch[0]
     for i, hue in enumerate(cursor_hues):
         lch, rgb8 = cs.screen_colour(CURSOR_L, hue, cursor_rel)
         put(f"cursor.fill.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, L {CURSOR_L:.2f}, equal ΔE arcs from the accent"), "computed")
         lch, rgb8 = cs.screen_colour(hover_l, hue, CURSOR_HOVER_CHROMA["dark" if theme.rising > 0.0 else "light"])
         put(f"cursor.hover.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, at the neutral hover's L {hover_l:.3f}"), "computed")
+        lch, rgb8 = cs.screen_colour(selection_l, hue, CURSOR_SELECTION_CHROMA["dark" if theme.rising > 0.0 else "light"])
+        put(f"cursor.selection.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, at the selection's L {selection_l:.3f}"), "computed")
     lch, rgb8 = cs.screen_colour(CURSOR_OUTLINE_L, CURSOR_START_HUE, 0.0)
     put("cursor.outline", Swatch(lch, rgb8, f"achromatic, L {CURSOR_OUTLINE_L:.2f}"), "computed")
 
@@ -1195,6 +1204,9 @@ CURSOR_RIM = (60, 70)
 CURSOR_HOVER_BAND = (0.02, 0.03)
 #: Two cursors' hover bands, told apart from each other.
 CURSOR_HOVER_GAP = (cs.JND, 0.03)
+#: The row's own words on a keyboard's selection band — the floor body text
+#: carries everywhere else in this file.
+CURSOR_SELECTION_TEXT = (60, 75)
 #: THE LOUD END OF AN ORDINAL RAMP, which is the half of it that has to read.
 #: The floor every signal in this file carries; measured 83.2 to 87.0.
 LEVEL_TOP_FLOOR = (45, 50)
@@ -1329,6 +1341,19 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
             v = de(a, ground)
             findings.append(Finding(_level(v, *CURSOR_HOVER_BAND), "cursors", f"{a} on {ground}", v, f"ΔE ≥ {CURSOR_HOVER_BAND[0]}"))
         for b in hovers[i + 1 :]:
+            v = de(a, b)
+            findings.append(Finding(_level(v, *CURSOR_HOVER_GAP), "cursors", f"{a} vs {b}", v, f"ΔE ≥ {CURSOR_HOVER_GAP[0]}"))
+    # AND EACH KEYBOARD'S SELECTION: a band on the ground, apart from the
+    # others, and under text that still reads — a selected row carries the
+    # row's own words.
+    selections = [f"cursor.selection.{WORDS[i + 1]}" for i in range(CURSOR_COUNT)]
+    for i, a in enumerate(selections):
+        for ground in ("surface.chrome", "surface.buffer"):
+            v = de(a, ground)
+            findings.append(Finding(_level(v, *CURSOR_HOVER_BAND), "cursors", f"{a} on {ground}", v, f"ΔE ≥ {CURSOR_HOVER_BAND[0]}"))
+        v = lc("text.primary", a)
+        findings.append(Finding(_level(v, *CURSOR_SELECTION_TEXT), "cursors", f"text.primary on {a}", v, f"Lc ≥ {CURSOR_SELECTION_TEXT[0]}"))
+        for b in selections[i + 1 :]:
             v = de(a, b)
             findings.append(Finding(_level(v, *CURSOR_HOVER_GAP), "cursors", f"{a} vs {b}", v, f"ΔE ≥ {CURSOR_HOVER_GAP[0]}"))
 

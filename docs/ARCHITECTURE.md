@@ -2872,6 +2872,25 @@ borda `client.focused`; `send_unfocus` desativa uma janela quando um assento a d
 outro nela; uma superfície `exclusive` toma o teclado de todos os assentos; e app estrangeiro que
 ouve um assento só responde só ao primeiro.
 
+**Teclados independentes: por que o keyd sai, e não é consertado.** O keyd agarra todo teclado e
+emite UM virtual — é o desenho dele, e é o certo para uma pessoa. Dois teclados em dois assentos
+precisam de dois dispositivos no compositor, e nenhuma configuração do keyd dá isso. Então o modo
+Independentes troca o daemon, e não o remenda: o `ronoctua-keys` fala o MESMO vocabulário
+(`assets/keyboards.nix`, com o mesmo sentido do `overload` do keyd — toque é pressionar e soltar sem
+outra tecla no meio), para que a mesma palavra faça a mesma coisa nos dois modos. O layout vai no
+bloco `input` do gêmeo, INTEIRO (layout, variante E opções): o compositor só mescla o `type:keyboard`
+num dispositivo que já existe quando o config é lido, e um gêmeo nascido depois viria sem nada.
+
+**Por que a leader não passa pelo Wayland nesse modo.** Uma layer com teclado `exclusive` recebe o
+foco de TODOS os assentos de uma vez, e não há IPC que foque uma layer para um assento só. Pedir o
+teclado seria calar todos os outros enquanto alguém usa a leader. O daemon já tem todo teclado; ele
+diz ao rodapé qual tocou a leader, e DESVIA só aquele pelo socket até a região fechar. O rodapé
+traduz com o xkb daquele teclado e entrega o mesmo `KeyEvent` que o Wayland entregaria.
+
+**Por que o par teclado–cursor é pelo `vendor:produto`.** O teclado Bluetooth e o touchpad dele são
+dois dispositivos do mesmo aparelho, e é por esse par que o `plan::one_physical` já junta as
+interfaces de um touchpad. Sem par, o teclado digita pelo cursor 1, que é onde todo teclado estava.
+
 ---
 
 ## 5. Buffers nativos e o protocolo

@@ -30,7 +30,8 @@ use std::cell::RefCell;
 use ronoctua_design::guest::Wit;
 use ronoctua_design::types::{
     Binding, Board, Boards, BufferState, Capability, Command, Context, Descriptor, Effect, Guest,
-    Icon, Input, Remap, Role, Run, Screen, Scroll, Tone,
+    Icon, Input, KeyboardMode, Remap, Role, Run, Screen, Scroll, Tone, UnitBoard, UnitChange,
+    UnitSetting,
 };
 
 /// The text keys this buffer draws. Every one of them is owed by both
@@ -68,7 +69,48 @@ mod key {
     pub const SAME_MODEL: &str = "keyboard-same-model";
     /// This key is the leader, and moving it costs the leader.
     pub const IS_THE_LEADER: &str = "keyboard-is-the-leader";
+    /// The row that switches how the keyboards work together.
+    pub const MODE: &str = "keyboard-mode";
+    /// As one, through keyd.
+    pub const TOGETHER: &str = "keyboard-mode-together";
+    /// Each on its own.
+    pub const INDEPENDENT: &str = "keyboard-mode-independent";
+    /// What Independent mode means, said under the list.
+    pub const INDEPENDENT_NOTE: &str = "keyboard-independent-note";
+    /// The heading of one unit's own page.
+    pub const UNIT: &str = "keyboard-unit";
+    /// A unit that is not plugged in right now.
+    pub const UNPLUGGED: &str = "keyboard-unplugged";
+    /// The word after a cursor's number.
+    pub const CURSOR: &str = "keyboard-cursor";
+    /// A unit's settings, one row each.
+    pub const TYPES_THROUGH: &str = "keyboard-types-through";
+    pub const LAYOUT: &str = "keyboard-layout";
+    pub const VARIANT: &str = "keyboard-variant";
+    pub const LEADER_KEY: &str = "keyboard-leader-key";
+    pub const RATE: &str = "keyboard-repeat-rate";
+    pub const DELAY: &str = "keyboard-repeat-delay";
+    /// "The machine's" — a layout or variant nobody chose for this unit.
+    pub const MACHINES: &str = "keyboard-machines";
+    /// "The compositor's" — a repeat nobody chose for this unit.
+    pub const COMPOSITORS: &str = "keyboard-compositors";
+    /// The question after a switch of mode.
+    pub const KEEP_TITLE: &str = "keyboard-keep-title";
+    pub const KEEP_NOTE: &str = "keyboard-keep-note";
+    pub const SECONDS: &str = "keyboard-seconds";
+    pub const GO_BACK: &str = "keyboard-go-back";
+    pub const KEEP: &str = "keyboard-keep";
 }
+
+/// The repeat rates a unit's ring turns through, per second — zero is the
+/// compositor's own.
+const RATES: [u16; 7] = [0, 15, 20, 25, 30, 40, 50];
+
+/// The repeat delays, in milliseconds — zero is the compositor's own.
+const DELAYS: [u16; 7] = [0, 200, 250, 300, 400, 500, 600];
+
+/// How many settings rows a unit's page has before its keys.
+const UNIT_SETTINGS: usize = 6;
 
 /// The keys this buffer binds, all under `m` — the host refuses any other
 /// prefix at load.
@@ -94,6 +136,9 @@ enum Level {
     /// go on saying one keyboard's name while the arrows remapped another —
     /// which is the transfer queue's lesson, in `AGENTS.md`.
     One(String),
+    /// One keyboard UNIT, in Independent mode — by identity, for the reason
+    /// `One` holds an id.
+    Unit(String),
 }
 
 /// Everything this buffer holds.
@@ -131,6 +176,10 @@ struct State {
     list_top: u16,
     /// How many rows of it are on the screen.
     list_lines: u16,
+    /// Which answer of the keep-the-mode question the cursor is on — zero is
+    /// "go back", where it starts: a question that appears by itself answers
+    /// NO to the next `RET`.
+    answer: usize,
 }
 
 thread_local! {
@@ -144,17 +193,123 @@ impl State {
             return 0;
         };
         match &self.level {
-            Level::List => b.boards.len(),
+            // THE MODE IS ROW ZERO, and the keyboards follow it.
+            Level::List => 1 + self.items(),
             Level::One(_) => b.keys.len(),
+            Level::Unit(_) => UNIT_SETTINGS + b.keys.len(),
         }
+    }
+
+    /// Is Independent mode on?
+    fn independent(&self) -> bool {
+        self.boards
+            .as_ref()
+            .is_some_and(|b| b.mode == KeyboardMode::Independent)
+    }
+
+    /// How many keyboards the list shows: models in Together mode, units in
+    /// Independent mode.
+    fn items(&self) -> usize {
+        self.boards.as_ref().map_or(0, |b| {
+            if self.independent() {
+                b.units.len()
+            } else {
+                b.boards.len()
+            }
+        })
+    }
+
+    /// Is a switch of mode waiting to be kept?
+    fn asking(&self) -> bool {
+        self.boards.as_ref().is_some_and(|b| b.asking > 0)
     }
 
     /// The keyboard the cursor is about, on either level.
     fn board(&self) -> Option<&Board> {
         let b = self.boards.as_ref()?;
         match &self.level {
-            Level::List => b.boards.get(self.cursor),
+            Level::List => b.boards.get(self.cursor.checked_sub(1)?),
             Level::One(id) => b.boards.iter().find(|k| k.id == *id),
+            Level::Unit(_) => None,
+        }
+    }
+
+    /// The unit the cursor is about, on either level.
+    fn unit(&self) -> Option<&UnitBoard> {
+        let b = self.boards.as_ref()?;
+        match &self.level {
+            Level::List => b.units.get(self.cursor.checked_sub(1)?),
+            Level::Unit(id) => b.units.iter().find(|u| u.identity == *id),
+            Level::One(_) => None,
+        }
+    }
+
+    /// One step round a ring of anything, from where `now` is.
+    fn around<T: PartialEq + Clone>(ring: &[T], now: &T, forward: bool) -> Option<T> {
+        if ring.is_empty() {
+            return None;
+        }
+        let at = ring.iter().position(|x| x == now).unwrap_or(0);
+        let len = ring.len();
+        let next = if forward {
+            (at + 1) % len
+        } else {
+            (at + len - 1) % len
+        };
+        Some(ring[next].clone())
+    }
+
+    /// The change one step round the cursor's row, on a unit's page.
+    fn turn_unit(&self, forward: bool) -> Option<UnitChange> {
+        let Level::Unit(_) = &self.level else {
+            return None;
+        };
+        let b = self.boards.as_ref()?;
+        let u = self.unit()?;
+        let setting = match self.cursor {
+            0 => UnitSetting::Cursor(Self::around(&b.cursors, &u.cursor, forward)?),
+            1 => {
+                // THE MACHINE'S LAYOUT IS THE FIRST ANSWER, the way back.
+                let mut ring = vec![String::new()];
+                ring.extend(b.layouts.iter().map(|l| l.code.clone()));
+                UnitSetting::Layout(Self::around(&ring, &u.layout, forward)?)
+            }
+            2 => {
+                let mut ring = vec![String::new()];
+                if let Some(l) = b.layouts.iter().find(|l| l.code == u.layout) {
+                    ring.extend(l.variants.iter().cloned());
+                }
+                UnitSetting::LayoutVariant(Self::around(&ring, &u.layout_variant, forward)?)
+            }
+            3 => {
+                let ring: Vec<String> = b.keys.iter().map(|w| w.keyd.clone()).collect();
+                UnitSetting::Leader(Self::around(&ring, &u.leader, forward)?)
+            }
+            4 => UnitSetting::RepeatRate(Self::around(&RATES, &u.repeat_rate, forward)?),
+            5 => UnitSetting::RepeatDelay(Self::around(&DELAYS, &u.repeat_delay, forward)?),
+            n => {
+                let word = b.keys.get(n - UNIT_SETTINGS)?;
+                let now = u
+                    .decided
+                    .iter()
+                    .find(|(k, _)| *k == word.keyd)
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default();
+                UnitSetting::Remap((word.keyd.clone(), self.ring(&now, forward)))
+            }
+        };
+        Some(UnitChange {
+            unit: u.identity.clone(),
+            setting,
+        })
+    }
+
+    /// The mode the switch row would go to.
+    fn other_mode(&self) -> KeyboardMode {
+        if self.independent() {
+            KeyboardMode::Together
+        } else {
+            KeyboardMode::Independent
         }
     }
 
@@ -222,7 +377,7 @@ impl State {
         // cursor and the warning about two of a model.
         let after = match self.level {
             Level::List => 2,
-            Level::One(_) => 4,
+            Level::One(_) | Level::Unit(_) => 4,
         };
         let room = usize::from(height.saturating_sub(top + after).max(1));
         let rows = self.rows();
@@ -252,8 +407,21 @@ impl State {
     /// row is the row's own key, which is the rule the file manager already
     /// has written down and the one the owner asked to be absolute.
     fn confirm(&mut self) -> Vec<Effect> {
+        if self.asking() {
+            return self.answer_it();
+        }
         match self.level {
-            Level::List if self.rows() > 0 => {
+            Level::List if self.cursor == 0 => vec![Effect::KeyboardMode(self.other_mode())],
+            Level::List if self.independent() => {
+                let Some(id) = self.unit().map(|u| u.identity.clone()) else {
+                    return Vec::new();
+                };
+                self.level = Level::Unit(id);
+                self.cursor = 0;
+                self.offset = 0;
+                vec![Effect::Redraw]
+            }
+            Level::List => {
                 let Some(id) = self.board().map(|k| k.id.clone()) else {
                     return Vec::new();
                 };
@@ -262,8 +430,23 @@ impl State {
                 self.offset = 0;
                 vec![Effect::Redraw]
             }
-            Level::List => Vec::new(),
             Level::One(_) => self.turn(true).map(Effect::Remap).into_iter().collect(),
+            Level::Unit(_) => self
+                .turn_unit(true)
+                .map(Effect::UnitChange)
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    /// The keep-the-mode question, answered where its cursor is.
+    fn answer_it(&mut self) -> Vec<Effect> {
+        let back = self.answer == 0;
+        self.answer = 0;
+        if back {
+            vec![Effect::KeyboardMode(KeyboardMode::Together)]
+        } else {
+            vec![Effect::KeyboardModeKept]
         }
     }
 
@@ -315,6 +498,138 @@ impl State {
         );
     }
 
+    /// One unit in the list: its name, the cursor it types through, and
+    /// whether it is plugged in.
+    fn draw_unit_row(
+        &self,
+        screen: &mut Screen<Wit>,
+        line: u16,
+        unit: &UnitBoard,
+        here: bool,
+        second: u16,
+        body: u16,
+    ) {
+        let name = Run::datum(&unit.name).within(second.saturating_sub(1));
+        screen.put(line, if here { name.accent() } else { name });
+        // THE CURSOR'S NUMBER AND THE WORD FOR IT, two runs: a count cannot go
+        // inside a text key (invariant 11).
+        screen.put(line, Run::label(key::CURSOR).quiet().at(second).within(8));
+        screen.put(line, Run::datum(&unit.cursor.to_string()).at(second + 9));
+        let last = body.saturating_sub(second * 2);
+        if !unit.plugged {
+            screen.put(
+                line,
+                Run::label(key::UNPLUGGED).dim().at(second * 2).within(last),
+            );
+        } else if unit.built_in {
+            screen.put(
+                line,
+                Run::label(key::BUILT_IN)
+                    .quiet()
+                    .at(second * 2)
+                    .within(last),
+            );
+        } else {
+            screen.put(
+                line,
+                Run::label(key::ATTACHED)
+                    .quiet()
+                    .at(second * 2)
+                    .within(last),
+            );
+        }
+    }
+
+    /// One row of a unit's page: a setting, or a key and what it becomes.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_setting_row(
+        &self,
+        screen: &mut Screen<Wit>,
+        line: u16,
+        unit: &UnitBoard,
+        n: usize,
+        here: bool,
+        second: u16,
+        body: u16,
+    ) {
+        let Some(b) = self.boards.as_ref() else {
+            return;
+        };
+        let within = second.saturating_sub(1);
+        let value_room = body.saturating_sub(second);
+        let label_of = |k: &str| {
+            let run = Run::label(k).within(within);
+            if here { run.accent() } else { run }
+        };
+        let text_or = |v: &str, fallback: &'static str| {
+            if v.is_empty() {
+                Run::label(fallback).quiet()
+            } else {
+                Run::datum(v)
+            }
+        };
+        let number_or = |v: u16, fallback: &'static str| {
+            if v == 0 {
+                Run::label(fallback).quiet()
+            } else {
+                Run::datum(&v.to_string())
+            }
+        };
+        let (label, value) = match n {
+            0 => (
+                label_of(key::TYPES_THROUGH),
+                Run::datum(&unit.cursor.to_string()),
+            ),
+            1 => {
+                let name = b
+                    .layouts
+                    .iter()
+                    .find(|l| l.code == unit.layout)
+                    .map_or_else(|| unit.layout.clone(), |l| l.name.clone());
+                (label_of(key::LAYOUT), text_or(&name, key::MACHINES))
+            }
+            2 => (
+                label_of(key::VARIANT),
+                text_or(&unit.layout_variant, key::MACHINES),
+            ),
+            3 => {
+                let word = b
+                    .keys
+                    .iter()
+                    .find(|w| w.keyd == unit.leader)
+                    .map_or_else(|| Run::datum(&unit.leader), |w| Run::label(&w.text));
+                (label_of(key::LEADER_KEY), word)
+            }
+            4 => (
+                label_of(key::RATE),
+                number_or(unit.repeat_rate, key::COMPOSITORS),
+            ),
+            5 => (
+                label_of(key::DELAY),
+                number_or(unit.repeat_delay, key::COMPOSITORS),
+            ),
+            n => {
+                let Some(word) = b.keys.get(n - UNIT_SETTINGS) else {
+                    return;
+                };
+                let now = unit
+                    .decided
+                    .iter()
+                    .find(|(k, _)| *k == word.keyd)
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default();
+                let said = b
+                    .choices
+                    .iter()
+                    .find(|c| c.keyd == now)
+                    .map_or(key::UNCHANGED, |c| c.text.as_str());
+                (label_of(&word.text), Run::label(said))
+            }
+        };
+        screen.put(line, label);
+        screen.put(line, value.at(second).within(value_room));
+    }
+
     /// Keeps the cursor on a row that exists — the list changes under it when
     /// a keyboard is unplugged, and a cursor past the end focuses nothing.
     fn settle(&mut self) {
@@ -327,14 +642,21 @@ impl State {
         // AND A LEVEL ABOUT A KEYBOARD THAT WENT AWAY GOES BACK TO THE LIST.
         // A page of keys for a keyboard nobody can see is a page where every
         // key would be refused, one at a time, with nothing saying why.
-        if let Level::One(id) = &self.level
-            && self
-                .boards
-                .as_ref()
-                .is_none_or(|b| !b.boards.iter().any(|k| k.id == *id))
-        {
+        let gone = match &self.level {
+            Level::One(id) => self.boards.as_ref().is_none_or(|b| {
+                b.mode != KeyboardMode::Together || !b.boards.iter().any(|k| k.id == *id)
+            }),
+            Level::Unit(id) => self.boards.as_ref().is_none_or(|b| {
+                b.mode != KeyboardMode::Independent || !b.units.iter().any(|u| u.identity == *id)
+            }),
+            Level::List => false,
+        };
+        if gone {
             self.level = Level::List;
             self.cursor = 0;
+        }
+        if !self.asking() {
+            self.answer = 0;
         }
     }
 }
@@ -411,6 +733,7 @@ impl State {
             let heading = match s.level {
                 Level::List => key::TITLE,
                 Level::One(_) => key::ONE,
+                Level::Unit(_) => key::UNIT,
             };
             let mut line = screen.heading(Icon::Keyboard, heading);
 
@@ -434,17 +757,47 @@ impl State {
                 line += 2;
             }
 
+            // THE QUESTION AFTER A SWITCH, and nothing else until it is
+            // answered: the keyboards just changed under the person, and the
+            // one thing on the screen is whether to keep that.
+            if b.asking > 0 {
+                screen.put(line, Run::label(key::KEEP_TITLE).accent());
+                line += 1;
+                screen.put(line, Run::label(key::KEEP_NOTE).quiet().within(body));
+                line += 1;
+                screen.put(line, Run::datum(&b.asking.to_string()).accent());
+                screen.put(
+                    line,
+                    Run::label(key::SECONDS)
+                        .quiet()
+                        .at(4)
+                        .within(body.saturating_sub(4)),
+                );
+                line += 2;
+                s.list_top = line;
+                s.list_lines = 2;
+                for (n, answer) in [key::GO_BACK, key::KEEP].into_iter().enumerate() {
+                    let here = n == s.answer;
+                    if here {
+                        screen.ground_in(line, 0, body, Role::Band);
+                    } else if let Some(seat) = s.hover_on(n) {
+                        screen.ground_in(line, 0, body, Role::hover_of(seat));
+                    }
+                    let run = Run::label(answer).within(body);
+                    screen.put(line, if here { run.accent() } else { run });
+                    line += 1;
+                }
+                return screen.finish_wit();
+            }
+
             match s.level {
                 Level::List => {
-                    if b.boards.is_empty() {
-                        screen.put(line, Run::label(key::NONE).dim());
-                        return screen.finish_wit();
-                    }
                     let (from, room) = s.window(line, ctx.lines);
                     s.list_top = line;
-                    let shown = room.min(b.boards.len().saturating_sub(from));
+                    let total = s.rows();
+                    let shown = room.min(total.saturating_sub(from));
                     s.list_lines = u16::try_from(shown).unwrap_or(u16::MAX);
-                    for (n, board) in b.boards.iter().enumerate().skip(from).take(room) {
+                    for n in from..from + shown {
                         let here = n == s.cursor;
                         if here {
                             screen.ground_in(line, 0, body, Role::Band);
@@ -455,60 +808,132 @@ impl State {
                             // the shell answers the two separately.
                             screen.ground_in(line, 0, body, Role::hover_of(seat));
                         }
-                        let name = Run::datum(&board.name).within(second.saturating_sub(1));
-                        screen.put(line, if here { name.accent() } else { name });
-                        let where_from = if board.built_in {
-                            key::BUILT_IN
-                        } else {
-                            key::ATTACHED
-                        };
-                        // EVERY COLUMN CARRIES ITS BUDGET. Without one a run
-                        // is "as far as there is", and at 46 columns `part of
-                        // this machine` reached across the count beside it —
-                        // the driver refused it, on line 3, by name.
-                        screen.put(
-                            line,
-                            Run::label(where_from)
-                                .at(second)
-                                .within(second.saturating_sub(1))
-                                .quiet(),
-                        );
-                        // HOW MANY KEYS SOMEBODY MOVED, as a number and then
-                        // the word for it. A count cannot go inside a text key
-                        // — the buffer sends a key and the host resolves it,
-                        // with no arguments to put a number in (invariant 11)
-                        // — so the two are two runs on one line.
-                        let changed = board.decided.len();
-                        // AND THE LAST COLUMN STOPS BEFORE THE BAR'S LANE: a
-                        // field measured against the whole width reaches the
-                        // cell the control is in, and no bar draws over
-                        // content nor content over a bar.
-                        let last = body.saturating_sub(second * 2);
-                        if changed == 0 {
+                        // ROW ZERO IS THE SWITCH: how the keyboards work
+                        // together, and a ring of two.
+                        if n == 0 {
+                            let label = Run::label(key::MODE).within(second.saturating_sub(1));
+                            screen.put(line, if here { label.accent() } else { label });
+                            let value = if s.independent() {
+                                key::INDEPENDENT
+                            } else {
+                                key::TOGETHER
+                            };
                             screen.put(
                                 line,
-                                Run::label(key::UNTOUCHED).dim().at(second * 2).within(last),
+                                Run::label(value)
+                                    .at(second)
+                                    .within(body.saturating_sub(second)),
                             );
+                            line += 1;
+                            continue;
+                        }
+                        if s.independent() {
+                            let Some(unit) = b.units.get(n - 1) else {
+                                continue;
+                            };
+                            s.draw_unit_row(&mut screen, line, unit, here, second, body);
                         } else {
-                            screen.put(line, Run::datum(&changed.to_string()).at(second * 2));
+                            let Some(board) = b.boards.get(n - 1) else {
+                                continue;
+                            };
+                            let name = Run::datum(&board.name).within(second.saturating_sub(1));
+                            screen.put(line, if here { name.accent() } else { name });
+                            let where_from = if board.built_in {
+                                key::BUILT_IN
+                            } else {
+                                key::ATTACHED
+                            };
+                            // EVERY COLUMN CARRIES ITS BUDGET. Without one a
+                            // run is "as far as there is", and at 46 columns
+                            // `part of this machine` reached across the count
+                            // beside it — the driver refused it, on line 3.
                             screen.put(
                                 line,
-                                Run::label(key::CHANGED)
-                                    .quiet()
-                                    .at(second * 2 + 3)
-                                    .within(last.saturating_sub(3)),
+                                Run::label(where_from)
+                                    .at(second)
+                                    .within(second.saturating_sub(1))
+                                    .quiet(),
                             );
+                            // HOW MANY KEYS SOMEBODY MOVED, as a number and
+                            // then the word for it: a count cannot go inside a
+                            // text key (invariant 11), so the two are two runs.
+                            let changed = board.decided.len();
+                            // AND THE LAST COLUMN STOPS BEFORE THE BAR'S LANE.
+                            let last = body.saturating_sub(second * 2);
+                            if changed == 0 {
+                                screen.put(
+                                    line,
+                                    Run::label(key::UNTOUCHED).dim().at(second * 2).within(last),
+                                );
+                            } else {
+                                screen.put(line, Run::datum(&changed.to_string()).at(second * 2));
+                                screen.put(
+                                    line,
+                                    Run::label(key::CHANGED)
+                                        .quiet()
+                                        .at(second * 2 + 3)
+                                        .within(last.saturating_sub(3)),
+                                );
+                            }
                         }
                         line += 1;
                     }
-                    s.draw_bar(&mut screen, columns, b.boards.len());
-                    // AND WHAT THIS SCREEN CANNOT DO, said rather than left to
-                    // be discovered. The layout and the repeat rate are the
-                    // compositor's, one of each for every keyboard there is —
-                    // a page that stayed quiet about it would read as a page
-                    // that had simply forgotten them.
+                    s.draw_bar(&mut screen, columns, total);
+                    if s.items() == 0 {
+                        line += 1;
+                        screen.put(line, Run::label(key::NONE).dim());
+                    }
+                    // AND WHAT THIS MODE MEANS, said rather than left to be
+                    // discovered: in Together mode the layout and the repeat are
+                    // the compositor's, one for all; in Independent mode each
+                    // keyboard has its own, and its own cursor.
                     line += 1;
-                    screen.put(line, Run::label(key::GLOBAL).dim());
+                    let note = if s.independent() {
+                        key::INDEPENDENT_NOTE
+                    } else {
+                        key::GLOBAL
+                    };
+                    screen.put(line, Run::label(note).dim().within(body));
+                }
+                Level::Unit(_) => {
+                    let Some(unit) = s.unit().cloned() else {
+                        return screen.finish_wit();
+                    };
+                    screen.put(line, Run::datum(&unit.name).quiet().within(body));
+                    line += 2;
+                    let (from, room) = s.window(line, ctx.lines);
+                    s.list_top = line;
+                    let total = s.rows();
+                    let shown = room.min(total.saturating_sub(from));
+                    s.list_lines = u16::try_from(shown).unwrap_or(u16::MAX);
+                    for n in from..from + shown {
+                        let here = n == s.cursor;
+                        if here {
+                            screen.ground_in(line, 0, body, Role::Band);
+                        } else if let Some(seat) = s.hover_on(n) {
+                            screen.ground_in(line, 0, body, Role::hover_of(seat));
+                        }
+                        s.draw_setting_row(&mut screen, line, &unit, n, here, second, body);
+                        line += 1;
+                    }
+                    s.draw_bar(&mut screen, columns, total);
+                    // THE TECHNICAL WORD, under the cursor: keyd's name for the
+                    // key, and the layout's code — the words somebody searches.
+                    let word = match s.cursor {
+                        1 => unit.layout.clone(),
+                        2 => unit.layout_variant.clone(),
+                        3 => unit.leader.clone(),
+                        n if n >= UNIT_SETTINGS => b
+                            .keys
+                            .get(n - UNIT_SETTINGS)
+                            .map(|w| w.keyd.clone())
+                            .unwrap_or_default(),
+                        _ => String::new(),
+                    };
+                    if !word.is_empty() {
+                        line += 1;
+                        screen.put(line, Run::datum(&word).dim().small());
+                    }
                 }
                 Level::One(_) => {
                     let Some(board) = s.board().cloned() else {
@@ -636,13 +1061,35 @@ impl State {
                 // Silence here is a state nobody can reach, with the modeline
                 // going on offering it.
                 Input::EnterState(id) => {
-                    s.level = if id == "keyboard-editing" {
-                        Level::One(s.board().map(|k| k.id.clone()).unwrap_or_default())
-                    } else {
+                    s.level = if id != "keyboard-editing" {
                         Level::List
+                    } else if s.independent() {
+                        Level::Unit(s.unit().map(|u| u.identity.clone()).unwrap_or_default())
+                    } else {
+                        Level::One(s.board().map(|k| k.id.clone()).unwrap_or_default())
                     };
                     s.cursor = 0;
                     vec![Effect::Redraw]
+                }
+                // THE QUESTION HAS TWO ANSWERS, and the arrows move between
+                // them while it is up.
+                Input::Down | Input::Up if s.asking() => {
+                    s.answer = usize::from(matches!(e, Input::Down));
+                    vec![Effect::Redraw]
+                }
+                Input::Click(p) if s.asking() => match s.row_at(p.line) {
+                    Some(n) if n == s.answer => s.answer_it(),
+                    Some(n) => {
+                        s.answer = n.min(1);
+                        vec![Effect::Redraw]
+                    }
+                    None => Vec::new(),
+                },
+                // `Esc` ON THE QUESTION IS "GO BACK", the answer that is safe
+                // to give without reading it.
+                Input::Cancel if s.asking() => {
+                    s.answer = 0;
+                    s.answer_it()
                 }
                 Input::Down => {
                     if s.cursor + 1 < s.rows() {
@@ -678,6 +1125,9 @@ impl State {
                     }
                     vec![Effect::Redraw]
                 }
+                // ONE SELECTION FOR EVERY KEYBOARD: this buffer keeps a single
+                // cursor, which every keyboard typing here moves.
+                Input::KeyboardSeat(_) | Input::KeyboardLeft(_) => Vec::new(),
                 // THE WHEEL SCROLLS THE WINDOW and leaves the cursor where it
                 // is: this page explains whatever the cursor is on, and a
                 // wheel that moved it would change the explanation while
@@ -710,6 +1160,13 @@ impl State {
                 Input::Confirm | Input::Right => s.confirm(),
                 Input::Left => match s.level {
                     Level::One(_) => s.turn(false).map(Effect::Remap).into_iter().collect(),
+                    Level::Unit(_) => s
+                        .turn_unit(false)
+                        .map(Effect::UnitChange)
+                        .into_iter()
+                        .collect(),
+                    // THE SWITCH IS A RING OF TWO: either arrow turns it.
+                    Level::List if s.cursor == 0 => vec![Effect::KeyboardMode(s.other_mode())],
                     Level::List => vec![],
                 },
                 // `Esc` GOES BACK ONE LEVEL and never closes: the key one
@@ -724,7 +1181,17 @@ impl State {
                             .as_ref()
                             .and_then(|b| b.boards.iter().position(|k| k.id == *id));
                         s.level = Level::List;
-                        s.cursor = at.unwrap_or(0);
+                        // ONE PAST IT: row zero is the switch.
+                        s.cursor = at.map_or(0, |a| a + 1);
+                        vec![Effect::Redraw]
+                    }
+                    Level::Unit(id) => {
+                        let at = s
+                            .boards
+                            .as_ref()
+                            .and_then(|b| b.units.iter().position(|u| u.identity == *id));
+                        s.level = Level::List;
+                        s.cursor = at.map_or(0, |a| a + 1);
                         vec![Effect::Redraw]
                     }
                     Level::List => vec![],
@@ -755,11 +1222,11 @@ impl State {
             // for no reason.
             let now = match &s.level {
                 Level::List => "normal",
-                Level::One(_) => "keyboard-editing",
+                Level::One(_) | Level::Unit(_) => "keyboard-editing",
             };
             let before = match &was {
                 Level::List => "normal",
-                Level::One(_) => "keyboard-editing",
+                Level::One(_) | Level::Unit(_) => "keyboard-editing",
             };
             // REPORTED WHEN THE NAME CHANGES, and not when the level does:
             // moving from one keyboard to another is the same state, and
@@ -781,7 +1248,8 @@ ronoctua_design::bindings::export!(Component with_types_in ronoctua_design::bind
 mod tests {
     use super::{Level, State};
     use ronoctua_design::types::{
-        Board, Boards, Context, Effect, Heights, Input, Position, WheelEvent, Word,
+        Board, Boards, Context, Effect, Heights, Input, KeyboardMode, LayoutWord, Position,
+        UnitBoard, UnitSetting, WheelEvent, Word,
     };
 
     fn a_context(lines: u16, columns: u16) -> Context {
@@ -825,9 +1293,135 @@ mod tests {
                 boards: (0..9).map(a_board).collect(),
                 trouble: String::new(),
                 leader: "k0".to_owned(),
+                mode: KeyboardMode::Together,
+                units: (0..3).map(a_unit).collect(),
+                cursors: vec![1, 2, 3],
+                layouts: vec![
+                    LayoutWord {
+                        code: "gb".to_owned(),
+                        name: "English (UK)".to_owned(),
+                        variants: vec!["extd".to_owned()],
+                    },
+                    LayoutWord {
+                        code: "fr".to_owned(),
+                        name: "French".to_owned(),
+                        variants: Vec::new(),
+                    },
+                ],
+                asking: 0,
             }),
             ..State::default()
         }
+    }
+
+    fn a_unit(n: usize) -> UnitBoard {
+        UnitBoard {
+            identity: format!("0000000{n}"),
+            name: format!("unit {n}"),
+            model: "0001:0001".to_owned(),
+            built_in: n == 0,
+            plugged: true,
+            cursor: 1,
+            layout: String::new(),
+            layout_variant: String::new(),
+            leader: "k0".to_owned(),
+            repeat_rate: 0,
+            repeat_delay: 0,
+            decided: Vec::new(),
+        }
+    }
+
+    fn independent() -> State {
+        let mut s = a_state();
+        if let Some(b) = s.boards.as_mut() {
+            b.mode = KeyboardMode::Independent;
+        }
+        s
+    }
+
+    /// FAILS IF: the first row does not switch the mode — by `RET`, by
+    /// either arrow, and by a second click.
+    #[test]
+    fn the_first_row_switches_the_mode() {
+        let mut s = a_state();
+        drawn(&mut s, 20, 80);
+        assert_eq!(s.cursor, 0);
+        assert!(matches!(
+            s.act(Input::Confirm)[..],
+            [Effect::KeyboardMode(KeyboardMode::Independent)]
+        ));
+        assert!(matches!(
+            s.act(Input::Left)[..],
+            [Effect::KeyboardMode(KeyboardMode::Independent)]
+        ));
+        let mut i = independent();
+        drawn(&mut i, 20, 80);
+        assert!(matches!(
+            i.act(Input::Confirm)[..],
+            [Effect::KeyboardMode(KeyboardMode::Together)]
+        ));
+    }
+
+    /// FAILS IF: Independent mode lists models instead of units, or a unit's
+    /// page does not turn its settings.
+    #[test]
+    fn a_unit_has_its_own_page_and_rings() {
+        let mut s = independent();
+        drawn(&mut s, 30, 80);
+        assert_eq!(s.rows(), 1 + 3, "the switch and the three units");
+        s.cursor = 2;
+        let _ = s.act(Input::Confirm);
+        assert!(matches!(&s.level, super::Level::Unit(id) if id == "00000001"));
+        drawn(&mut s, 30, 80);
+        // THE CURSOR RING: one step to the next cursor.
+        s.cursor = 0;
+        let turned = s.act(Input::Confirm);
+        assert!(
+            matches!(&turned[..], [Effect::UnitChange(c)] if matches!(c.setting, UnitSetting::Cursor(2)))
+        );
+        // THE LAYOUT RING starts on the machine's and goes to the first.
+        s.cursor = 1;
+        let turned = s.act(Input::Confirm);
+        assert!(
+            matches!(&turned[..], [Effect::UnitChange(c)] if matches!(&c.setting, UnitSetting::Layout(l) if l == "gb"))
+        );
+        // AND A KEY, after the six settings.
+        s.cursor = super::UNIT_SETTINGS;
+        let turned = s.act(Input::Confirm);
+        assert!(matches!(
+            &turned[..],
+            [Effect::UnitChange(c)] if matches!(&c.setting, UnitSetting::Remap((k, v)) if k == "k0" && v == "k1")
+        ));
+        // `Esc` comes back to the same unit in the list.
+        let _ = s.act(Input::Cancel);
+        assert!(matches!(s.level, super::Level::List));
+        assert_eq!(s.cursor, 2);
+    }
+
+    /// FAILS IF: the question after a switch does not start on "go back", or
+    /// `Esc` on it keeps the new mode.
+    #[test]
+    fn the_question_answers_no_first() {
+        let mut s = independent();
+        if let Some(b) = s.boards.as_mut() {
+            b.asking = 12;
+        }
+        drawn(&mut s, 20, 80);
+        assert_eq!(s.list_lines, 2);
+        assert!(matches!(
+            s.act(Input::Confirm)[..],
+            [Effect::KeyboardMode(KeyboardMode::Together)]
+        ));
+        let _ = s.act(Input::Down);
+        assert!(matches!(
+            s.act(Input::Confirm)[..],
+            [Effect::KeyboardModeKept]
+        ));
+        let _ = s.act(Input::Down);
+        assert!(matches!(
+            s.act(Input::Cancel)[..],
+            [Effect::KeyboardMode(KeyboardMode::Together)]
+        ));
     }
 
     /// Draws the frame the way `render` does, so the state learns where its

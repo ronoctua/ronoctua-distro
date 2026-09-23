@@ -736,6 +736,26 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   foco segue o ponteiro. **Cada ordem lê o `pointers.json`, muda uma coisa e escreve** — nenhuma
   porta guarda cópia entre ordens —, e só a thread do RODAPÉ detecta dispositivo novo. Tirar um
   dispositivo de um assento é RELOAD (o compositor não tem *detach*); pôr num novo é IPC na hora.
+- **Os teclados têm DOIS MODOS, e o interruptor é UM** (`LEADER s k`, a primeira linha):
+  **Juntos** é o keyd como sempre — um teclado virtual, no `seat0`, um layout para todos — e
+  **Independentes** troca o keyd pelo `ronoctua-keys` (`nix/modules/keys.nix`, `Conflicts=` dos
+  dois lados): cada teclado UNIDADE é agarrado (`EVIOCGRAB`) e reemitido por um gêmeo uinput
+  próprio (`ronoctua keyboard <identidade>`, vendor 0, e a identidade é o `phys`+`uniq` — dois
+  do mesmo modelo são dois), que o `ronoctua-pointers` prende ao assento do cursor dele, com
+  layout, repetição, remaps e tecla leader PRÓPRIOS. **Trocar de modo é PROVISÓRIO** (o molde
+  das telas): um remapeador que não sobe é uma máquina sem teclado, então a troca pergunta, com
+  o cursor em "voltar" e 15 s de relógio monotônico. **Morrer DEVOLVE o teclado**: o kernel
+  solta o grab quando o descritor fecha, e um que não volta chama o keyd (`OnFailure=`). **E
+  nesse modo o rodapé NUNCA pede o teclado Wayland**: uma layer `exclusive` toma o de TODOS os
+  assentos (`layer_shell.c:130`), então o toque da leader de um teclado vai ao rodapé pelo
+  SOCKET do daemon, que DESVIA só aquele teclado enquanto a região está aberta (`keys_link.rs`,
+  com o xkb DAQUELE teclado) — os outros continuam digitando nas janelas deles, e a linha do
+  minibuffer veste a cor do cursor dono. **Toda porta ouve todo teclado** (`Seats<_,
+  WlKeyboard>`, cobra o `every-door-hears-every-keyboard`), e um buffer sabe DE QUEM é a próxima
+  tecla (`keyboard-seat`): o `buffers/example` (`example-open`, só por nome) é a REFERÊNCIA, uma
+  seleção e um campo por teclado, cada um em `cursor.selection.*` (`ronoctua_design::Carets`).
+  O `--keyboards` da `.#vm` passa os externos e deixa o embutido e toda chave de segurança (a
+  interface de smartcard, `0b`) com o host.
 - **As cores dos cursores são as MESMAS em todo tema** (`cursor.fill.*`, oito, de uma matiz fixa;
   o nono repete o primeiro): a cor é como a pessoa sabe qual mão é qual, e trocar de tema não
   pode repintá-la. Só o hover é por tema, porque deita na superfície do tema. As formas são o

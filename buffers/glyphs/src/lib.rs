@@ -2401,6 +2401,8 @@ impl State {
                 | Input::Mind(_)
             | Input::Hover { .. }
             | Input::Unhover(_)
+            | Input::KeyboardSeat(_)
+            | Input::KeyboardLeft(_)
                 | Input::Keyboards(_)
                 | Input::Formatted(_)
 

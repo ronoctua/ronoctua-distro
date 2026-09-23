@@ -24,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 pub mod fragment;
+pub mod keyboards;
 pub mod plan;
 pub mod prefs;
 pub mod typing;
@@ -53,6 +54,8 @@ pub struct Snapshot {
     pub settings_failed: bool,
     /// Whether there is a compositor to ask at all.
     pub connected: bool,
+    /// Every keyboard's twin and its cursor — empty in Together mode.
+    pub keyboards: Vec<keyboards::KeyboardPlan>,
 }
 
 /// Where a device should go.
@@ -184,6 +187,7 @@ where
                 store,
                 detects,
                 fragment_said: None,
+                keys_said: None,
             };
             let first = hands.carry(&Order::Look);
             on_event(Event::Snapshot(Box::new(first.0)));
@@ -268,7 +272,13 @@ fn follow_typing(
     store: &ronoctua_store::Store<Preferences>,
 ) {
     let chosen = store.read().typing;
-    if chosen == Typing::First {
+    // IN INDEPENDENT MODE EVERY KEYBOARD IS ON ITS OWN CURSOR'S SEAT, and
+    // types where that cursor chose without anything asked of the
+    // compositor: moving `seat0`'s focus there would move a keyboard nobody
+    // pressed.
+    let independent =
+        ronoctua_keyboards::store().read().mode == ronoctua_keyboards::Mode::Independent;
+    if chosen == Typing::First || independent {
         before.clear();
         return;
     }
@@ -302,6 +312,8 @@ struct Hands {
     /// The fragment's text as last written, so an unchanged one is not
     /// written again.
     fragment_said: Option<String>,
+    /// The keyboards' part of it, as last written.
+    keys_said: Option<String>,
 }
 
 impl Hands {
@@ -338,6 +350,7 @@ impl Hands {
             None => (Vec::new(), Vec::new(), false),
         };
         let plan = plan::plan(&devices, &prefs);
+        let keyboards = keyboards_of(&devices, &plan);
         Snapshot {
             devices,
             seats,
@@ -345,6 +358,7 @@ impl Hands {
             plan,
             settings_failed,
             connected,
+            keyboards,
         }
     }
 
@@ -369,7 +383,13 @@ impl Hands {
                 .write(&chosen)
                 .context("writing the pointer settings")?;
         }
-        let text = fragment::text_of(&plan, &chosen)?;
+        let keys = keyboards_of(&now.devices, &plan);
+        let keys_text = fragment::keyboards_text(&keys)?;
+        let text = fragment::text_of(&plan, &chosen)? + &keys_text;
+        // A KEYBOARD'S SETTINGS HAVE NO LIVE ASK: layout and repeat reach a
+        // device by the file, read again. Only when they changed.
+        let keys_changed = self.keys_said.as_deref() != Some(keys_text.as_str());
+        self.keys_said = Some(keys_text);
         let fragment_changed = self.fragment_said.as_deref() != Some(text.as_str());
         if fragment_changed {
             write_fragment(&text)?;
@@ -382,8 +402,33 @@ impl Hands {
                 anyhow::bail!("there is no compositor to ask")
             };
         };
-        apply(wm.as_mut(), &now.seats, &plan, &chosen, fragment_changed)
+        apply(
+            wm.as_mut(),
+            &now.seats,
+            &plan,
+            &chosen,
+            fragment_changed,
+            &keys,
+            keys_changed,
+        )
     }
+}
+
+/// The keyboards placed, from the keyboards' own file and the units the kernel
+/// lists now.
+fn keyboards_of(devices: &[Device], plan: &Plan) -> Vec<keyboards::KeyboardPlan> {
+    let chosen = ronoctua_keyboards::store().read();
+    if chosen.mode != ronoctua_keyboards::Mode::Independent {
+        return Vec::new();
+    }
+    let units = ronoctua_keyboards::units().unwrap_or_default();
+    keyboards::plan(
+        &chosen,
+        &units,
+        devices,
+        plan,
+        &keyboards::Machine::from_env(),
+    )
 }
 
 /// The preferences with one order carried out.
@@ -453,6 +498,8 @@ fn apply(
     plan: &Plan,
     prefs: &Preferences,
     fragment_changed: bool,
+    keys: &[keyboards::KeyboardPlan],
+    keys_changed: bool,
 ) -> Result<()> {
     let seat_now = |id: &str| {
         seats
@@ -477,11 +524,28 @@ fn apply(
             }
         }
     }
+    // THE KEYBOARDS' TWINS, the same way: attached live to a seat of ours,
+    // back to the first seat by a re-read. A twin's settings (layout, repeat)
+    // have no live ask, so a change in them is a re-read too.
+    for k in keys {
+        let seat = plan::seat_of(k.cursor);
+        if seat_now(&k.twin).as_deref() == Some(seat.as_str()) {
+            continue;
+        }
+        if k.cursor == FIRST {
+            must_reread |= seat_now(&k.twin).is_some_and(|s| s != seat);
+        } else {
+            wm.ask_seat(&seat, SeatAsk::Attach(k.twin.clone()))?;
+        }
+    }
+    must_reread |= keys_changed && !keys.is_empty();
     // A SEAT OF OURS WITH NOTHING ON IT is one the file no longer names, and
     // only a re-read removes it — or a cursor would be left on the screen
     // that no hand moves.
     if seats.iter().any(|s| {
-        s.name.starts_with("ronoctua-cursor-") && !plan.cursors.iter().any(|c| c.seat == s.name)
+        s.name.starts_with("ronoctua-cursor-")
+            && !plan.cursors.iter().any(|c| c.seat == s.name)
+            && !keys.iter().any(|k| plan::seat_of(k.cursor) == s.name)
     }) {
         must_reread = true;
     }
@@ -563,7 +627,7 @@ mod tests {
             seats: seats.clone(),
             ..Scripted::default()
         };
-        apply(&mut wm, &seats, &p, &plan, true).unwrap();
+        apply(&mut wm, &seats, &p, &plan, true, &[], false).unwrap();
         assert!(wm.told.contains(&Said::Seat(
             "ronoctua-cursor-2".into(),
             SeatAsk::Attach("2:2:Two".into())
@@ -601,7 +665,7 @@ mod tests {
         prefs.devices.entry("2:2:Two".into()).or_default().cursor = Some(1);
         let p = plan::plan(&devices, &prefs);
         let mut wm = Scripted::default();
-        apply(&mut wm, &seats, &p, &prefs, true).unwrap();
+        apply(&mut wm, &seats, &p, &prefs, true, &[], false).unwrap();
         assert_eq!(wm.told, vec![Said::Reread]);
     }
 

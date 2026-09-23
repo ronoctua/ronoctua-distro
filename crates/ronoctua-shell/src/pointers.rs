@@ -1081,6 +1081,7 @@ mod tests {
             plan,
             settings_failed: false,
             connected: true,
+            keyboards: Vec::new(),
         }
     }
 

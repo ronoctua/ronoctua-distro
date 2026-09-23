@@ -188,6 +188,106 @@ pub fn seen_in(text: &str) -> Vec<Keyboard> {
     out
 }
 
+/// One keyboard UNIT — a device, not a model.
+///
+/// [`Keyboard`] is keyd's grain: `vendor:product`, so two of the same model
+/// are one. Independent mode gives every keyboard its own seat, and there two
+/// identical keyboards on one desk are two people: they have to stay two.
+/// What tells them apart is where they are plugged (`phys`) and, over
+/// Bluetooth — where `phys` is the ADAPTER's address, the same for every
+/// device on it —, the device's own address (`uniq`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Unit {
+    /// The model, as [`Keyboard::id`].
+    pub id: String,
+    /// What the kernel calls it.
+    pub name: String,
+    /// Is it built into this machine? See [`Keyboard::built_in`].
+    pub built_in: bool,
+    /// Where it is plugged — `usb-0000:00:14.0-3/input0`.
+    pub phys: String,
+    /// Its own address, when it has one — a Bluetooth device's.
+    pub uniq: String,
+    /// Its event node's name — `event7`.
+    pub event: String,
+}
+
+impl Unit {
+    /// Who this unit is, in eight hex digits that survive a replug into the
+    /// same port and a reboot.
+    ///
+    /// It names the unit's virtual twin (`ronoctua keyboard <identity>`) and
+    /// its entry in `keyboards.json`, so the daemon and the shell compute it
+    /// apart and agree. FNV-1a, the same ten lines `ronoctua_inspect::cache`
+    /// uses: a collision is two keyboards sharing settings, not a crash, and
+    /// at 32 bits on one desk it does not happen.
+    #[must_use]
+    pub fn identity(&self) -> String {
+        let mut h: u32 = 0x811c_9dc5;
+        for b in [&self.phys, "\0", &self.uniq, "\0", &self.name]
+            .iter()
+            .flat_map(|s| s.bytes())
+        {
+            h ^= u32::from(b);
+            h = h.wrapping_mul(0x0100_0193);
+        }
+        format!("{h:08x}")
+    }
+}
+
+/// keyd's own virtual devices carry this vendor (`0x0FAC`): its output, never
+/// a keyboard of anyone's.
+const KEYD_VENDOR: &str = "0fac:";
+
+/// Every keyboard UNIT the kernel is reporting — see [`Unit`].
+///
+/// # Errors
+///
+/// `/proc/bus/input/devices` could not be read.
+pub fn units() -> Result<Vec<Unit>> {
+    let text = std::fs::read_to_string(DEVICES).with_context(|| format!("reading {DEVICES}"))?;
+    Ok(units_in(&text))
+}
+
+/// The keyboard units in what `/proc/bus/input/devices` printed — the same
+/// test for "is a keyboard" as [`seen_in`], every unit kept.
+#[must_use]
+pub fn units_in(text: &str) -> Vec<Unit> {
+    let mut out = Vec::new();
+    for block in text.split("\n\n") {
+        let Some(board) = seen_in(block).into_iter().next() else {
+            continue;
+        };
+        if board.id.starts_with(KEYD_VENDOR) {
+            continue;
+        }
+        let field = |prefix: &str| {
+            block
+                .lines()
+                .find_map(|l| l.strip_prefix(prefix))
+                .map(|v| v.trim().to_owned())
+                .unwrap_or_default()
+        };
+        let event = field("H: Handlers=")
+            .split_whitespace()
+            .find(|h| h.starts_with("event"))
+            .map(str::to_owned);
+        let Some(event) = event else {
+            continue;
+        };
+        out.push(Unit {
+            id: board.id,
+            name: board.name,
+            built_in: board.built_in,
+            phys: field("P: Phys="),
+            uniq: field("U: Uniq="),
+            event,
+        });
+    }
+    out.sort();
+    out
+}
+
 /// What one keyboard has been told to do.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Board {
@@ -197,12 +297,59 @@ pub struct Board {
     pub keys: BTreeMap<String, String>,
 }
 
+/// How the keyboards work together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Mode {
+    /// As one: keyd merges every keyboard into one, on the first cursor's
+    /// seat, with one layout for all.
+    #[default]
+    Together,
+    /// Each on its own: `ronoctua-keys` gives every unit a virtual twin of
+    /// its own, on the seat of the cursor it is paired with, with its own
+    /// layout, remaps and leader key.
+    Independent,
+}
+
+/// One keyboard UNIT's own settings, in Independent mode.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct UnitPrefs {
+    /// What the kernel called it when it was last seen — what the screen
+    /// names it by while it is unplugged.
+    pub name: String,
+    /// keyd's key name, to keyd's action — [`Board::keys`]' shape. `None`
+    /// until touched, and then the MODEL's Together remaps stand, so switching
+    /// modes does not change what a key does.
+    pub keys: Option<BTreeMap<String, String>>,
+    /// The key whose tap is this keyboard's leader. `None` is the distro's,
+    /// [`LEADER`]'s key.
+    pub leader: Option<String>,
+    /// The cursor it types through. `None` is the default pairing: the
+    /// cursor of a pointing device built into the same unit, or the first.
+    pub cursor: Option<u16>,
+    /// Its xkb layout, when not the machine's.
+    pub layout: Option<String>,
+    /// Its xkb variant, when not the machine's.
+    pub variant: Option<String>,
+    /// Characters a second a held key repeats at, when not the compositor's.
+    pub repeat_rate: Option<u16>,
+    /// Milliseconds before a held key repeats, when not the compositor's.
+    pub repeat_delay: Option<u16>,
+}
+
 /// What the person decided, for every keyboard they have touched.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Preferences {
-    /// By `vendor:product`.
+    /// By `vendor:product` — Together mode's, keyd's grain.
     #[serde(default)]
     pub boards: BTreeMap<String, Board>,
+    /// Together or Independent.
+    #[serde(default)]
+    pub mode: Mode,
+    /// By [`Unit::identity`] — Independent mode's grain.
+    #[serde(default)]
+    pub units: BTreeMap<String, UnitPrefs>,
 }
 
 /// The file this lives in, under `$XDG_CONFIG_HOME/ronoctua`.
@@ -234,6 +381,88 @@ impl Preferences {
             self.boards.remove(id);
         }
     }
+}
+
+impl Preferences {
+    /// What this unit's keys become in Independent mode: its own, or its
+    /// model's from Together mode when it has none.
+    #[must_use]
+    pub fn unit_keys(&self, unit: &Unit) -> BTreeMap<String, String> {
+        self.units
+            .get(&unit.identity())
+            .and_then(|u| u.keys.clone())
+            .unwrap_or_else(|| self.of(&unit.id).keys)
+    }
+
+    /// This unit's leader key.
+    #[must_use]
+    pub fn unit_leader(&self, identity: &str) -> String {
+        self.units
+            .get(identity)
+            .and_then(|u| u.leader.clone())
+            .unwrap_or_else(|| LEADER.0.to_owned())
+    }
+}
+
+/// An xkb layout: its code, xkeyboard-config's name for it, and its variants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Layout {
+    /// `gb`.
+    pub code: String,
+    /// `English (UK)` — xkeyboard-config's words, data like a device's name.
+    pub name: String,
+    /// The variant codes it offers.
+    pub variants: Vec<String>,
+}
+
+/// The layouts in an xkeyboard-config `.lst`: its `! layout` section, and
+/// each variant of its `! variant` section filed under the layout it names
+/// (`  mac  fr: French (Macintosh)`).
+#[must_use]
+pub fn layouts_in(text: &str) -> Vec<Layout> {
+    let mut section = "";
+    let mut out: Vec<Layout> = Vec::new();
+    for line in text.lines() {
+        if let Some(name) = line.strip_prefix("! ") {
+            section = match name.trim() {
+                "layout" => "layout",
+                "variant" => "variant",
+                _ => "",
+            };
+            continue;
+        }
+        let Some((code, rest)) = line.trim().split_once(char::is_whitespace) else {
+            continue;
+        };
+        let rest = rest.trim();
+        match section {
+            "layout" => out.push(Layout {
+                code: code.to_owned(),
+                name: rest.to_owned(),
+                variants: Vec::new(),
+            }),
+            "variant" => {
+                if let Some((of, _)) = rest.split_once(':')
+                    && let Some(l) = out.iter_mut().find(|l| l.code == of)
+                {
+                    l.variants.push(code.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The layouts this machine has — `RONOCTUA_XKB_LIST`, set by the wrapper.
+/// None when it is not set: the rows then offer only the machine's layout.
+#[must_use]
+pub fn layouts() -> Vec<Layout> {
+    std::env::var("RONOCTUA_XKB_LIST")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| layouts_in(&t))
+        .unwrap_or_default()
 }
 
 /// The store this lives in.
@@ -427,6 +656,56 @@ N: Name=\"Pebble M350s Mouse\"
 H: Handlers=mouse0 event5
 B: KEY=1f0000 0 0 0
 ";
+
+    #[test]
+    fn every_unit_is_kept_and_named_by_where_it_is() {
+        // TWO OF THE SAME MODEL, on two ports: keyd sees one keyboard, and
+        // Independent mode has to see two people.
+        let two = "\
+I: Bus=0003 Vendor=046d Product=c31c Version=0110
+N: Name=\"Logitech USB Keyboard\"
+P: Phys=usb-0000:00:14.0-1/input0
+H: Handlers=sysrq kbd leds event8
+B: KEY=402000007 ff803078f800d001 feffffdfffcfffff fffffffffffffffe
+
+I: Bus=0003 Vendor=046d Product=c31c Version=0110
+N: Name=\"Logitech USB Keyboard\"
+P: Phys=usb-0000:00:14.0-2/input0
+H: Handlers=sysrq kbd leds event9
+B: KEY=402000007 ff803078f800d001 feffffdfffcfffff fffffffffffffffe
+
+I: Bus=0019 Vendor=0fac Product=0ade Version=0001
+N: Name=\"keyd virtual keyboard\"
+H: Handlers=sysrq kbd leds event10
+B: KEY=402000007 ff803078f800d001 feffffdfffcfffff fffffffffffffffe
+";
+        assert_eq!(
+            seen_in(two).iter().filter(|k| k.id == "046d:c31c").count(),
+            1,
+            "keyd's grain: one model"
+        );
+        let units = units_in(two);
+        assert_eq!(units.len(), 2, "two units, and keyd's own output is none");
+        assert_eq!(units[0].event, "event8");
+        assert_ne!(units[0].identity(), units[1].identity());
+        assert_eq!(units[0].identity().len(), 8);
+        // AND OVER BLUETOOTH the address is what differs.
+        let bt = units_in(DEVICES_FIXTURE);
+        assert_eq!(bt.len(), 2);
+        assert_eq!(bt[1].uniq, "aa:bb:cc:dd:ee:ff");
+        assert_eq!(bt[1].identity(), units_in(DEVICES_FIXTURE)[1].identity());
+    }
+
+    #[test]
+    fn layouts_carry_their_variants() {
+        let lst = "! model\n  pc105   Generic 105-key PC\n\n! layout\n  us   English (US)\n  fr   French\n\n! variant\n  intl   us: English (US, intl.)\n  mac    fr: French (Macintosh)\n\n! option\n  grp   Switching\n";
+        let l = layouts_in(lst);
+        assert_eq!(l.len(), 2);
+        assert_eq!(l[0].code, "us");
+        assert_eq!(l[0].name, "English (US)");
+        assert_eq!(l[0].variants, vec!["intl"]);
+        assert_eq!(l[1].variants, vec!["mac"]);
+    }
 
     #[test]
     fn a_modalias_and_a_kernel_id_are_the_same_two_numbers() {

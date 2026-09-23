@@ -43,7 +43,7 @@ pub mod input;
 
 pub use input::{
     AccelProfile, ButtonMap, ClickMethod, Device, DeviceKind, DragLock, FingerDrag, FocusFollows,
-    PointerSettings, ScrollMethod, Seat, SeatAsk, SendEvents, Setting,
+    KeyboardSetting, PointerSettings, ScrollMethod, Seat, SeatAsk, SendEvents, Setting,
 };
 
 use std::collections::BTreeMap;

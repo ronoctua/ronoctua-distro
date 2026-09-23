@@ -159,10 +159,13 @@ pub fn plan(devices: &[Device], prefs: &Preferences) -> Plan {
         }
     }
 
-    for d in devices
-        .iter()
-        .filter(|d| d.kind.points() && !follows_the_keyboards(&d.id))
-    {
+    for d in devices.iter().filter(|d| {
+        d.kind.points()
+                && !follows_the_keyboards(&d.id)
+                // A KEYBOARD'S TWIN IS NEVER A HAND, whatever libinput
+                // decided it is: its seat is its keyboard's (`keyboards`).
+                && ronoctua_keys::wire::unit_of_twin(&d.id).is_none()
+    }) {
         if !seen.insert(d.id.clone()) {
             continue;
         }

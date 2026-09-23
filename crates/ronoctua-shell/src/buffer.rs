@@ -196,7 +196,10 @@ struct Host {
     outputs: OutputState,
     seats: SeatState,
     _compositor: CompositorState,
-    keyboard: Option<wl_keyboard::WlKeyboard>,
+    key_devices: crate::seats::Seats<Modifiers, wl_keyboard::WlKeyboard>,
+    /// The seat the buffer was last told the keys are from — so
+    /// `keyboard-seat` is sent when it CHANGES, and not before every key.
+    typing_seat: Option<u16>,
     /// The pointer, so the click reaches the buffer's items.
     /// Every pointer this window was offered — one per cursor — with the
     /// state of each while another is `here`. See `crate::seats`.
@@ -586,6 +589,118 @@ struct Keyboards {
     /// Why the last write did not go through, already a text key. Empty when
     /// it did.
     trouble: String,
+    /// The identities of the units delivered, the cursors offered, and the
+    /// layouts — what a unit change may name.
+    units: Vec<String>,
+    cursors: Vec<u16>,
+    layouts: Vec<(String, Vec<String>)>,
+    /// A switch of mode waiting to be kept, and what it undoes to.
+    provisional: Option<Provisional>,
+}
+
+/// A switch of mode that undoes itself unless it is kept — see
+/// [`ronoctua_protocol::Effect::KeyboardMode`].
+#[derive(Debug, Clone, Copy)]
+struct Provisional {
+    /// The mode it goes back to.
+    from: ronoctua_keyboards::Mode,
+    /// When it goes back — the MONOTONIC clock, as the screens' countdown:
+    /// a step of the wall clock must not freeze it or cut it short.
+    until: std::time::Instant,
+}
+
+/// How long a switch of mode waits to be kept.
+const KEEP_THE_MODE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Every keyboard unit, plugged or remembered, as the buffer draws it.
+fn units_of(prefs: &ronoctua_keyboards::Preferences) -> Vec<ronoctua_protocol::UnitBoard> {
+    let seen = ronoctua_keyboards::units().unwrap_or_default();
+    let pointers = ronoctua_pointers::prefs::store().read();
+    let remembered = || {
+        pointers
+            .devices
+            .iter()
+            .filter_map(|(id, d)| d.cursor.map(|c| (id.as_str(), c)))
+    };
+    let board = |identity: String,
+                 name: String,
+                 model: String,
+                 built_in: bool,
+                 plugged: bool,
+                 paired: Option<u16>| {
+        let own = prefs.units.get(&identity).cloned().unwrap_or_default();
+        let decided = own
+            .keys
+            .clone()
+            .unwrap_or_else(|| prefs.of(&model).keys)
+            .into_iter()
+            .collect();
+        ronoctua_protocol::UnitBoard {
+            leader: prefs.unit_leader(&identity),
+            identity,
+            name: if name.is_empty() {
+                own.name.clone()
+            } else {
+                name
+            },
+            model,
+            built_in,
+            plugged,
+            cursor: own.cursor.or(paired).unwrap_or(ronoctua_pointers::FIRST),
+            layout: own.layout.unwrap_or_default(),
+            variant: own.variant.unwrap_or_default(),
+            repeat_rate: own.repeat_rate.unwrap_or(0),
+            repeat_delay: own.repeat_delay.unwrap_or(0),
+            decided,
+        }
+    };
+    let mut out: Vec<_> = seen
+        .iter()
+        .map(|u| {
+            board(
+                u.identity(),
+                u.name.clone(),
+                u.id.clone(),
+                u.built_in,
+                true,
+                ronoctua_pointers::keyboards::paired(u, remembered()),
+            )
+        })
+        .collect();
+    for (identity, own) in &prefs.units {
+        if !out.iter().any(|b| &b.identity == identity) {
+            out.push(board(
+                identity.clone(),
+                own.name.clone(),
+                String::new(),
+                false,
+                false,
+                None,
+            ));
+        }
+    }
+    out
+}
+
+/// The cursors a unit can be put on: every cursor there is, and the next.
+fn cursors_offered(prefs: &ronoctua_keyboards::Preferences) -> Vec<u16> {
+    let pointers = ronoctua_pointers::prefs::store().read();
+    let mut all: std::collections::BTreeSet<u16> = pointers
+        .devices
+        .values()
+        .filter_map(|d| d.cursor)
+        .chain(pointers.cursors.keys().copied())
+        .chain(prefs.units.values().filter_map(|u| u.cursor))
+        .collect();
+    all.insert(ronoctua_pointers::FIRST);
+    let next = all
+        .iter()
+        .max()
+        .copied()
+        .unwrap_or(ronoctua_pointers::FIRST)
+        + 1;
+    all.insert(next);
+    all.into_iter().collect()
 }
 
 impl Keyboards {
@@ -595,6 +710,10 @@ impl Keyboards {
             keys: Vec::new(),
             choices: Vec::new(),
             trouble: String::new(),
+            units: Vec::new(),
+            cursors: Vec::new(),
+            layouts: Vec::new(),
+            provisional: None,
         }
     }
 }
@@ -1038,7 +1157,8 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         outputs: OutputState::new(&globals, &qh),
         seats: SeatState::new(&globals, &qh),
         _compositor: compositor,
-        keyboard: None,
+        key_devices: crate::seats::Seats::default(),
+        typing_seat: None,
         pointers: crate::seats::Seats::default(),
         here: PerSeat::default(),
         mods: Modifiers::default(),
@@ -2223,6 +2343,24 @@ impl Host {
                     }
                     self.remap(&what);
                 }
+                // THE MODE AND A UNIT'S SETTINGS, behind the same capability:
+                // what they reach is the daemon between every keyboard and
+                // everything else.
+                ronoctua_protocol::Effect::KeyboardMode(_)
+                | ronoctua_protocol::Effect::KeyboardModeKept
+                | ronoctua_protocol::Effect::UnitChange(_)
+                    if !self
+                        .capabilities
+                        .contains(&ronoctua_protocol::Capability::Keyboard) =>
+                {
+                    tracing::error!(
+                        capability = ?ronoctua_protocol::Capability::Keyboard,
+                        "keyboard change refused: the buffer did not declare the capability"
+                    );
+                }
+                ronoctua_protocol::Effect::KeyboardMode(to) => self.switch_mode(to),
+                ronoctua_protocol::Effect::KeyboardModeKept => self.keep_the_mode(),
+                ronoctua_protocol::Effect::UnitChange(change) => self.unit_change(&change),
                 // A PREFERENCE, and the gate in front of it reads like the two
                 // above for the same reason: what is being remembered here is
                 // when the machine rebuilds its own operating system, so the
@@ -2681,6 +2819,17 @@ impl Host {
         self.deliver(&ronoctua_protocol::Input::Rack(over));
     }
 
+    /// Tells the buffer whose keys come next, when that changed — the
+    /// cursor-colour number of the seat whose keyboard spoke, as a hover's.
+    /// It is what lets a buffer keep one selection per keyboard.
+    fn say_whose_keys(&mut self) {
+        let seat = self.key_devices.colour_number_here();
+        if self.typing_seat != Some(seat) {
+            self.typing_seat = Some(seat);
+            self.deliver(&ronoctua_protocol::Input::KeyboardSeat { seat });
+        }
+    }
+
     /// Reads the keyboards and what was decided, and sends the whole picture.
     ///
     /// # Why it reads the kernel every time
@@ -2756,13 +2905,224 @@ impl Host {
             // rule written after it wins — which is the one remap that costs
             // the key opening everything else.
             leader: ronoctua_keyboards::LEADER.0.to_owned(),
+            mode: match prefs.mode {
+                ronoctua_keyboards::Mode::Together => ronoctua_protocol::KeyboardMode::Together,
+                ronoctua_keyboards::Mode::Independent => {
+                    ronoctua_protocol::KeyboardMode::Independent
+                }
+            },
+            units: units_of(&prefs),
+            cursors: cursors_offered(&prefs),
+            layouts: ronoctua_keyboards::layouts()
+                .into_iter()
+                .map(|l| ronoctua_protocol::LayoutWord {
+                    code: l.code,
+                    name: l.name,
+                    variants: l.variants,
+                })
+                .collect(),
+            asking: self
+                .keyboards
+                .as_ref()
+                .and_then(|k| k.provisional)
+                .map_or(0, |p| {
+                    let left = p.until.saturating_duration_since(std::time::Instant::now());
+                    u16::try_from(left.as_secs() + 1).unwrap_or(u16::MAX)
+                }),
         };
         if let Some(k) = self.keyboards.as_mut() {
             k.boards = over.boards.iter().map(|b| b.id.clone()).collect();
             k.keys = over.keys.iter().map(|w| w.keyd.clone()).collect();
             k.choices = over.choices.iter().map(|w| w.keyd.clone()).collect();
+            k.units = over.units.iter().map(|u| u.identity.clone()).collect();
+            k.cursors.clone_from(&over.cursors);
+            k.layouts = over
+                .layouts
+                .iter()
+                .map(|l| (l.code.clone(), l.variants.clone()))
+                .collect();
         }
         self.deliver(&ronoctua_protocol::Input::Keyboards(over));
+    }
+
+    /// Switches how the keyboards work together — PROVISIONALLY.
+    ///
+    /// A remapper that fails to start is a machine with no keyboard, so the
+    /// switch is made, the mode written (the footer's seats follow the file),
+    /// and a countdown armed that switches back on its own unless
+    /// [`Self::keep_the_mode`] arrives first. The display view's rule, for the
+    /// same kind of risk.
+    fn switch_mode(&mut self, to: ronoctua_protocol::KeyboardMode) {
+        let to = match to {
+            ronoctua_protocol::KeyboardMode::Together => ronoctua_keyboards::Mode::Together,
+            ronoctua_protocol::KeyboardMode::Independent => ronoctua_keyboards::Mode::Independent,
+        };
+        let store = ronoctua_keyboards::store();
+        let Some(mut prefs) = store.parsed() else {
+            self.trouble(ronoctua_i18n::key::KEYBOARD_TROUBLE_FILE);
+            return;
+        };
+        if prefs.mode == to {
+            return;
+        }
+        let from = prefs.mode;
+        if let Err(e) = crate::keyboard::switch_to(to) {
+            tracing::error!(error = %e, "the keyboards did not switch");
+            self.trouble(ronoctua_i18n::key::KEYBOARD_TROUBLE_MODE);
+            return;
+        }
+        prefs.mode = to;
+        if let Err(e) = store.write(&prefs) {
+            tracing::error!(error = %e, "the keyboards file was not written");
+        }
+        // A SWITCH BACK IS NOT PROVISIONAL: it is the way home, and a way home
+        // that undid itself would be a trap.
+        let provisional = (from == ronoctua_keyboards::Mode::Together).then(|| Provisional {
+            from,
+            until: std::time::Instant::now() + KEEP_THE_MODE,
+        });
+        if let Some(k) = self.keyboards.as_mut() {
+            k.provisional = provisional;
+            k.trouble.clear();
+        }
+        if provisional.is_some() {
+            self.arm_the_countdown();
+        }
+        self.keyboards_arrived();
+    }
+
+    /// The countdown's clock: armed with the switch, and gone with it.
+    fn arm_the_countdown(&mut self) {
+        let tick = timer::Timer::from_duration(std::time::Duration::from_secs(1));
+        let armed = self.handle.insert_source(tick, |_, (), state: &mut Self| {
+            let Some(p) = state.keyboards.as_ref().and_then(|k| k.provisional) else {
+                return timer::TimeoutAction::Drop;
+            };
+            if std::time::Instant::now() >= p.until {
+                state.undo_the_mode(p.from);
+                return timer::TimeoutAction::Drop;
+            }
+            state.keyboards_arrived();
+            timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
+        });
+        if armed.is_err() {
+            // NO CLOCK IS NO COUNTDOWN, and a switch nobody can see undo
+            // itself is not safe to keep: go back now.
+            tracing::warn!("could not arm the keyboard countdown; switching back");
+            if let Some(p) = self.keyboards.as_ref().and_then(|k| k.provisional) {
+                self.undo_the_mode(p.from);
+            }
+        }
+    }
+
+    /// Nobody kept it: back to where it was.
+    fn undo_the_mode(&mut self, from: ronoctua_keyboards::Mode) {
+        if let Err(e) = crate::keyboard::switch_to(from) {
+            tracing::error!(error = %e, "the keyboards did not switch back");
+        }
+        let store = ronoctua_keyboards::store();
+        if let Some(mut prefs) = store.parsed() {
+            prefs.mode = from;
+            if let Err(e) = store.write(&prefs) {
+                tracing::error!(error = %e, "the keyboards file was not written");
+            }
+        }
+        if let Some(k) = self.keyboards.as_mut() {
+            k.provisional = None;
+        }
+        self.keyboards_arrived();
+    }
+
+    /// The switch is kept.
+    fn keep_the_mode(&mut self) {
+        if let Some(k) = self.keyboards.as_mut() {
+            k.provisional = None;
+        }
+        self.keyboards_arrived();
+    }
+
+    /// One setting of one unit — checked against what was SENT, written, and
+    /// handed to whoever reads it: the remapper (its rules) and the footer's
+    /// seats (the file it watches).
+    fn unit_change(&mut self, change: &ronoctua_protocol::UnitChange) {
+        use ronoctua_protocol::UnitSetting;
+        let Some(gate) = self.keyboards.as_ref() else {
+            return;
+        };
+        if !gate.units.contains(&change.unit) {
+            tracing::error!(
+                unit = change.unit,
+                "unit change refused: no such unit was sent"
+            );
+            return;
+        }
+        let offered = match &change.setting {
+            UnitSetting::Cursor(n) => gate.cursors.contains(n),
+            UnitSetting::Layout(l) => l.is_empty() || gate.layouts.iter().any(|(c, _)| c == l),
+            UnitSetting::Variant(_) | UnitSetting::RepeatRate(_) | UnitSetting::RepeatDelay(_) => {
+                true
+            }
+            UnitSetting::Leader(k) => gate.keys.contains(k),
+            UnitSetting::Remap(k, v) => gate.keys.contains(k) && gate.choices.contains(v),
+        };
+        if !offered {
+            tracing::error!(change = ?change, "unit change refused: not something that was offered");
+            return;
+        }
+        let store = ronoctua_keyboards::store();
+        let Some(mut prefs) = store.parsed() else {
+            self.trouble(ronoctua_i18n::key::KEYBOARD_TROUBLE_FILE);
+            return;
+        };
+        let seen = ronoctua_keyboards::units().unwrap_or_default();
+        let model_keys = seen
+            .iter()
+            .find(|u| u.identity() == change.unit)
+            .map(|u| prefs.unit_keys(u))
+            .unwrap_or_default();
+        let name = seen
+            .iter()
+            .find(|u| u.identity() == change.unit)
+            .map(|u| u.name.clone());
+        let own = prefs.units.entry(change.unit.clone()).or_default();
+        if let Some(name) = name {
+            own.name = name;
+        }
+        match &change.setting {
+            UnitSetting::Cursor(n) => own.cursor = Some(*n),
+            UnitSetting::Layout(l) => {
+                own.layout = (!l.is_empty()).then(|| l.clone());
+                own.variant = None;
+            }
+            UnitSetting::Variant(v) => own.variant = (!v.is_empty()).then(|| v.clone()),
+            UnitSetting::Leader(k) => own.leader = Some(k.clone()),
+            UnitSetting::RepeatRate(r) => own.repeat_rate = (*r > 0).then_some(*r),
+            UnitSetting::RepeatDelay(d) => own.repeat_delay = (*d > 0).then_some(*d),
+            UnitSetting::Remap(k, v) => {
+                let keys = own.keys.get_or_insert(model_keys);
+                if v.is_empty() {
+                    keys.remove(k);
+                } else {
+                    keys.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        if let Err(e) = store.write(&prefs) {
+            tracing::error!(error = %e, "the keyboards file was not written");
+            self.trouble(ronoctua_i18n::key::KEYBOARD_TROUBLE_FILE);
+            return;
+        }
+        if prefs.mode == ronoctua_keyboards::Mode::Independent
+            && let Err(e) = crate::keyboard::render_keys()
+        {
+            tracing::error!(error = %e, "the remapper's rules were not written");
+            self.trouble(ronoctua_i18n::key::KEYBOARD_TROUBLE_FILE);
+            return;
+        }
+        if let Some(k) = self.keyboards.as_mut() {
+            k.trouble.clear();
+        }
+        self.keyboards_arrived();
     }
 
     /// Makes a key on one keyboard mean something else.
@@ -3160,7 +3520,7 @@ impl SeatHandler for Host {
         seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
-        if cap == Capability::Keyboard && self.keyboard.is_none() {
+        if cap == Capability::Keyboard {
             // A KEYBOARD THAT REPEATS: holding a key here is meant to work,
             // and SCTK only repeats for one made this way.
             match self.seats.get_keyboard_with_repeat(
@@ -3168,9 +3528,18 @@ impl SeatHandler for Host {
                 &seat,
                 None,
                 self.handle.clone(),
-                Box::new(|state: &mut Self, _, event| state.typed(event)),
+                Box::new(|state: &mut Self, kb, event| {
+                    state.key_devices.switch_to(kb, &mut state.mods);
+                    state.say_whose_keys();
+                    state.typed(event);
+                }),
             ) {
-                Ok(k) => self.keyboard = Some(k),
+                Ok(k) => {
+                    // EVERY KEYBOARD, and not only the first: one per seat, and in
+                    // Independent mode one per cursor.
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.key_devices.took(&seat, k, name.as_deref());
+                }
                 Err(e) => tracing::warn!(error = %e, "no keyboard; the buffer takes no input"),
             }
         }
@@ -3195,10 +3564,8 @@ impl SeatHandler for Host {
         seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
-        if cap == Capability::Keyboard
-            && let Some(k) = self.keyboard.take()
-        {
-            k.release();
+        if cap == Capability::Keyboard {
+            self.key_devices.lost(&seat, &mut self.mods);
         }
         if cap == Capability::Pointer {
             self.pointers.lost(&seat, &mut self.here);
@@ -3303,12 +3670,13 @@ impl KeyboardHandler for Host {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
         _: &[u32],
         _: &[Keysym],
     ) {
+        self.key_devices.switch_to(kb, &mut self.mods);
         self.escape = Escape::default();
     }
 
@@ -3317,21 +3685,31 @@ impl KeyboardHandler for Host {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
     ) {
+        self.key_devices.switch_to(kb, &mut self.mods);
         self.escape = Escape::default();
+        // THAT SEAT'S KEYBOARD LEFT, and the buffer is told which: another
+        // keyboard still typing here keeps its field.
+        let seat = self.key_devices.colour_number_here();
+        if self.typing_seat == Some(seat) {
+            self.typing_seat = None;
+        }
+        self.deliver(&ronoctua_protocol::Input::KeyboardLeft { seat });
     }
 
     fn press_key(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         event: KeyEvent,
     ) {
+        self.key_devices.switch_to(kb, &mut self.mods);
+        self.say_whose_keys();
         self.typed(event);
     }
 
@@ -3361,10 +3739,11 @@ impl KeyboardHandler for Host {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         event: KeyEvent,
     ) {
+        self.key_devices.switch_to(kb, &mut self.mods);
         if self.escape.release(event.keysym) == EscapeAct::Tap {
             // `Cancel` ALONE, and the state follows from it.
             //
@@ -3389,12 +3768,13 @@ impl KeyboardHandler for Host {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        kb: &wl_keyboard::WlKeyboard,
         _: u32,
         mods: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        self.key_devices.switch_to(kb, &mut self.mods);
         self.mods = mods;
     }
 }

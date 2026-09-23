@@ -1272,6 +1272,9 @@ impl State {
                 }
                 vec![Effect::Redraw]
             }
+            // ONE SELECTION FOR EVERY KEYBOARD: this buffer keeps a single
+            // cursor, which every keyboard typing here moves.
+            Input::KeyboardSeat(_) | Input::KeyboardLeft(_) => Vec::new(),
             // THE WHEEL SCROLLS THE WINDOW and leaves the cursor where it is:
             // on this panel the cursor decides what gets CLOSED, and a wheel
             // that moved it would move the target while somebody reads the

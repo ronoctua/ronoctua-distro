@@ -86,6 +86,7 @@
   bufferTransfers,
   bufferFormat,
   bufferBrain,
+  bufferExample,
   iconSuperpack,
   lucideFontFile,
   marksFontFile,
@@ -574,6 +575,10 @@ let
     RONOCTUA_BUFFER_TRANSFERS = "${bufferTransfers}/lib/ronoctua_buffer_transfers.wasm";
     RONOCTUA_BUFFER_FORMAT = "${bufferFormat}/lib/ronoctua_buffer_format.wasm";
     RONOCTUA_BUFFER_BRAIN = "${bufferBrain}/lib/ronoctua_buffer_brain.wasm";
+    # THE REFERENCE for several keyboards in one app: a list each keyboard
+    # moves its own selection in, and a form each fills at once
+    # (`ronoctua_design::Carets`). Reached by name, `example-open`.
+    RONOCTUA_BUFFER_EXAMPLE = "${bufferExample}/lib/ronoctua_buffer_example.wasm";
   };
 
   # EVERYTHING THE WRAPPER SETS, and not only the components.
@@ -612,6 +617,11 @@ let
     # the installer and the rescue console have no atlas, and there the info
     # panel shows the coordinate and no globe, with a sentence saying why.
     RONOCTUA_ATLAS = "${atlasData}/world.atlas";
+    # THE LAYOUTS THE MACHINE HAS, for a keyboard of its own in Independent
+    # mode: xkeyboard-config's list — the same package the compositor compiles
+    # a keymap from, so a layout offered is a layout that exists. Read as DATA
+    # (`ronoctua_keyboards::layouts_in`); absence offers only the machine's own.
+    RONOCTUA_XKB_LIST = "${pkgs.xkeyboard_config}/share/X11/xkb/rules/evdev.lst";
   };
 
   # The dependencies, compiled once.
@@ -884,6 +894,17 @@ rec {
     chmod +w $out/bin/ronoctua-transfers
     # The graphics rpath belongs to the footer; this program opens no window.
     patchelf --shrink-rpath $out/bin/ronoctua-transfers
+  '';
+
+  # THE KEYS DAEMON, extracted the same way: Independent mode runs it as root
+  # in keyd's place, and a root unit whose closure carried the renderer and
+  # the wasm runtime would keep all of it alive for a program that moves key
+  # codes from one device to another.
+  keys = pkgs.runCommand "ronoctua-keys" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-keys $out/bin/
+    chmod +w $out/bin/ronoctua-keys
+    patchelf --shrink-rpath $out/bin/ronoctua-keys
   '';
 
   # THE BRAIN'S DAEMON, extracted the same way and for the same reason.
