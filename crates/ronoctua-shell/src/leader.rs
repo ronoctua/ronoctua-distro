@@ -2037,15 +2037,25 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // decision: a buffer IS a window of the compositor (invariant 4), and
         // "buffer" and "window" were two groups for one thing. `w w` switches
         // (the doubled letter, the convention of every prefix's own view),
-        // `n` next, `d` closes — Doom's `SPC w d` —, `s` chooses the state
-        // (grafted at runtime, see `Footer::state_key`), `o` opens a terminal
-        // and `O` one outside the compositor's tiling. The `b` they used to
+        // `n` next, `d` closes — Doom's `SPC w d` —, and `s` chooses the state
+        // (grafted at runtime, see `Footer::state_key`). The `b` they used to
         // hang off is the brain's now.
         ("w w", "buffer-switch", None),
         ("w n", "buffer-next", None),
         ("w d", "buffer-close", None),
-        ("w o", "buffer-terminal", None),
-        ("w O", "buffer-terminal-external", None),
+        // AND CLOSING IS ALSO ONE KEY, the owner's call: it is what a hand
+        // does most after opening, and `w d` stays for whoever reads `w` as
+        // the place of everything about a window.
+        ("q", "buffer-close", None),
+        // ---------------------------------------------------------------
+        // TERMINAL — `RET`, and not under `w`.
+        // ---------------------------------------------------------------
+        // `w` is about windows in general, and opening a TERMINAL is one
+        // program, so it has a prefix of its own (the owner's decision). The
+        // doubled key is the external one — Ghostty, the terminal a person
+        // reaches for — and `/` is the one this distro draws itself.
+        ("RET RET", "buffer-terminal-external", None),
+        ("RET /", "buffer-terminal", None),
         // ---------------------------------------------------------------
         // WORKSPACE — `TAB`, and not `e`.
         //
@@ -2365,6 +2375,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // group owes is a LABEL, which this one has.
         (".", key::GROUP_FILE),
         ("w", key::GROUP_WINDOW),
+        ("RET", key::GROUP_TERMINAL),
         ("TAB", key::GROUP_WORKSPACE),
         ("TAB m", key::GROUP_WORKSPACE_MOVE),
         // `m` FOR MISCELLANEOUS, and `m i` for the browsers inside it. See the

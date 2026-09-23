@@ -256,7 +256,7 @@ let
 
     # A TERMINAL, through the registry and not through a `$term` of its own.
     #
-    # `buffer-terminal` is the id `LEADER w o` runs, so this bind proves the
+    # `buffer-terminal` is the id `LEADER RET /` runs, so this bind proves the
     # control socket end to end under Scroll — and it costs no second opinion
     # about which terminal this project uses.
     bindsym $mod+Return exec ${ronoctua-shell}/bin/ronoctua-shell command buffer-terminal
@@ -837,7 +837,7 @@ let
       echo "  Ctrl+Alt+L          an alternative leader, if the one above fails"
       echo "  Ctrl+Shift+L        restores the keyboard"
       echo "  Ctrl+Alt+Esc        process monitor (floating)"
-      echo "  Ctrl+Alt+Space q q  quit"
+      echo "  Ctrl+Alt+Space s q q  quit"
       echo
       echo "config: $cfg"
       echo

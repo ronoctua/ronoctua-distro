@@ -330,6 +330,7 @@ cmd-workspace-move-next = Move window to next workspace
 cmd-workspace-move-previous = Move window to previous workspace
 cmd-screen-capture = Screenshot
 group-window = window/buffer
+group-terminal = terminal
 group-workspace = workspace
 cmd-workspace-overview = Workspace overview
 cmd-window-float = Toggle floating

@@ -1384,7 +1384,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   nunca chega aos vinte. O build recusa o par que a quebra.
 - **`LEADER b` é o cérebro, SEM submenu** (`ronoctua-brain` — o `b` era o grupo BUFFER, e buffer é
   janela (inv. 4), então os dois grupos viraram `w`: `w w` troca, `w n` próximo, `w d` fecha, `w s`
-  estado, `w o`/`w O` terminal). O dono pediu a tecla direta, e uma sequência não pode ser comando e
+  estado; e o terminal saiu do `w` para o `RET`: `RET RET` o externo, `RET /` o da distro). O dono pediu a tecla direta, e uma sequência não pode ser comando e
   prefixo ao mesmo tempo — o `keymap-no-collision` derruba o BUILD —, então `b a` e `b p` saíram. O
   que elas faziam já existia dentro do buffer (`m a`, `m p`), e **a faixa passou a imprimir as
   teclas do BUFFER**. Os dois continuam comandos do registro, então `LEADER :` os alcança pelo nome

@@ -317,6 +317,7 @@ cmd-workspace-move-next = Levar a janela para o próximo espaço
 cmd-workspace-move-previous = Levar a janela para o espaço anterior
 cmd-screen-capture = Capturar a tela
 group-window = janela/buffer
+group-terminal = terminal
 group-workspace = workspace
 cmd-workspace-overview = Panorama dos espaços
 cmd-window-float = Alternar flutuante

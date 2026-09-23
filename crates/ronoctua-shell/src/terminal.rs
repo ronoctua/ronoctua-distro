@@ -76,7 +76,7 @@ pub const APP_ID: &str = "br.ronoctua.terminal";
 /// what floats it is a `for_window` rule matched on this string. The shell
 /// does not place windows (invariant 4): it says WHAT the window is, and the
 /// compositor decides where. With a single `app_id` the rule would float every
-/// terminal, including `LEADER w o`.
+/// terminal, including `LEADER RET /`.
 pub const APP_ID_MONITOR: &str = "br.ronoctua.monitor";
 
 /// The RESCUE console's `app_id` — the third identity of the same terminal.

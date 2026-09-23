@@ -2989,7 +2989,7 @@ exceção existe.
 **Quem faz flutuar é o compositor** (inv. 4). O que o shell decide é a IDENTIDADE da janela: o mesmo
 terminal sobe com `app_id` `br.ronoctua.monitor` em vez de `br.ronoctua.terminal`, e uma
 `window-rule` casa esse id. Com um `app_id` só, a regra flutuaria todo terminal — inclusive o
-`LEADER w o`.
+`LEADER RET /`.
 
 **E a regra é GERADA da mesma constante** (`export-window-rules`, como os acordes). Escrita à
 mão, a string existiria em três lugares — o Rust, `nix/modules/scroll.nix` e `nix/dev.nix` —, e o dia

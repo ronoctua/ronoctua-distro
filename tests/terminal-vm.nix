@@ -207,7 +207,7 @@ pkgs.testers.runNixOSTest {
         )
         # AND THE ORDINARY TERMINAL DOES NOT FLOAT. Without this the test would
         # pass just as well with a rule matching every window, which is the
-        # mistake `LEADER w o` would pay for.
+        # mistake `LEADER RET /` would pay for.
         assert not open_now["br.ronoctua.terminal"]["floating"], (
             "the rule caught the ordinary terminal too"
         )
