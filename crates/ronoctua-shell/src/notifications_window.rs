@@ -1490,9 +1490,8 @@ impl NotificationsWindow {
             self.ask_paint();
             return;
         }
-        // THE MOUSE AIMS, THE KEYS ACT — the transfer panel's rule, and this
-        // view has the same shape: marking read, running an action, adjusting a
-        // filter are all things somebody meant to do.
+        // A CLICK IS THE `RET` OF THE ROW IT LANDS ON — `View::clicked` answers
+        // with the same errand the key would (`open_here`), invariant 19.
         if let Some((row, cell)) = clicked {
             // THE DRAWN ROW, headings and all: which of them is an item of
             // which column is `View::place_of`, the one plan the drawing

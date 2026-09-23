@@ -41,11 +41,12 @@ use crate::prefs::FIRST;
 pub enum Typing {
     /// Where cursor [`FIRST`] focused — the keyboards' own seat, and what the
     /// compositor does with nothing asked of it.
-    #[default]
     First,
     /// Where this cursor focused.
     Cursor(u16),
-    /// Where the last cursor to focus a window focused it.
+    /// Where the last cursor to focus a window focused it — the distro's
+    /// default, the owner's choice.
+    #[default]
     Latest,
 }
 

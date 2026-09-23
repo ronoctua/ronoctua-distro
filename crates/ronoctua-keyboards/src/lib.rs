@@ -178,6 +178,11 @@ pub fn seen_in(text: &str) -> Vec<Keyboard> {
         if id.starts_with("0000:") {
             continue;
         }
+        // NOR KEYD'S OWN OUTPUT (`KEYD_VENDOR`): it is every keyboard at once,
+        // not one of them, and a rule for it would be keyd remapping itself.
+        if id.starts_with(KEYD_VENDOR) {
+            continue;
+        }
         let built_in = matches!(bus, Some(0x0011 | 0x0019 | 0x0006));
         let board = Keyboard { id, name, built_in };
         if !out.iter().any(|k| k.id == board.id) {
@@ -683,6 +688,10 @@ B: KEY=402000007 ff803078f800d001 feffffdfffcfffff fffffffffffffffe
             seen_in(two).iter().filter(|k| k.id == "046d:c31c").count(),
             1,
             "keyd's grain: one model"
+        );
+        assert!(
+            seen_in(two).iter().all(|k| !k.id.starts_with(KEYD_VENDOR)),
+            "keyd's own output is no keyboard in the list either"
         );
         let units = units_in(two);
         assert_eq!(units.len(), 2, "two units, and keyd's own output is none");

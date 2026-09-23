@@ -712,8 +712,8 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   assento só (GTK, Qt) responde só ao primeiro; e **dois mouses do MESMO modelo são um cursor
   só** — o identificador é `vendor:produto:nome` e o `attach` recebe identificador, então nada
   deste lado os separa (medido na VM: dois virtio-mouse, um assento).
-  **E O TECLADO ESCREVE ONDE O CURSOR 1 FOCOU**, a menos que se escolha outro (`typing.rs`,
-  a linha `A digitação vai para`): os teclados ficam no `seat0`, e só o foco DELE recebe tecla.
+  **E O TECLADO ESCREVE ONDE O ÚLTIMO CURSOR A CLICAR FOCOU** — o padrão, escolha do dono
+  (`typing.rs`, a linha `A digitação vai para`, que também aceita o cursor 1 ou um fixo): os teclados ficam no `seat0`, e só o foco DELE recebe tecla.
   Seguir outro cursor NÃO move teclado nenhum — o evento `focus` do compositor sai para QUALQUER
   assento, e comando por IPC roda no `seat0` (`execute_command` sem assento), então quando o
   cursor seguido foca uma janela o rodapé pede ao `seat0` que foque a mesma. Só na MUDANÇA do
@@ -728,7 +728,22 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   como `…_Touchpad` e `…_Mouse`, e a segunda fica parada — um cursor para cada deixava um
   cursor morto ao lado do touchpad. **E a `.#vm` só mostra vários cursores com `-- --pointers`**:
   o QEMU junta todo ponteiro do host num aparelho emulado, e cada um passado como
-  `virtio-input-host-pci` chega ao convidado como ele mesmo (e fica PRESO a ele até ela fechar).
+  `virtio-input-host-pci` chega ao convidado como ele mesmo (e fica PRESO a ele até ela fechar) —
+  menos o touchpad EMBUTIDO, que fica com o host e é o que sai da janela — com TODAS as
+  interfaces dele (o mesmo pai no `/sys`): o `…Mouse` que nunca se move, passado sozinho, era
+  um cursor parado. **Os ponteiros do
+  próprio QEMU são EMULADOS** (`RONOCTUA_POINTERS_EMULATED`, `nix/modules/vm.nix`): um cursor
+  só, DESLIGADO enquanto houver uma mão de verdade e ligado quando são o único ponteiro, e a
+  linha do `LEADER s i` os liga. **Cursor que nada move não é desenhado**: o assento desenha
+  o cursor enquanto tiver QUALQUER ponteiro, até desligado, e não há *detach* — então ele
+  ganha `hide_cursor 100` NO assento dele, depois do `seat *` que o compositor mescla em todos.
+  **O número de um cursor é MEMÓRIA, e a tela não o desenha** (`plan::Shown`): um dispositivo
+  ausente guarda o dele para voltar ao mesmo cursor, e desenhado como é isso abria buracos
+  (cursor 1, cursor 3). As duas telas numeram os cursores que EXISTEM 1, 2, 3… e traduzem de
+  volta pela MESMA numeração — a do teclado, na fronteira do hospedeiro, guardada com o que
+  foi mandado. **E `Todo mouse e touchpad move um cursor só` é o interruptor de verdade**
+  (`together`): põe todo dispositivo no cursor 1 SEM esquecer onde cada um estava — o
+  `Dispositivo novo ganha cursor próprio` só decide onde um NOVO vai.
   **`LEADER s i` são os ajustes** (`pointers.rs`, duas portas: `s i i` e `s i w`): detecção
   automática, cada cursor (ligado, cor, que dispositivos move — `RET` num dispositivo o passa ao
   próximo cursor ou a um novo), todo ajuste que o libinput diz que AQUELE dispositivo tem (os que
@@ -742,9 +757,9 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   dois lados): cada teclado UNIDADE é agarrado (`EVIOCGRAB`) e reemitido por um gêmeo uinput
   próprio (`ronoctua keyboard <identidade>`, vendor 0, e a identidade é o `phys`+`uniq` — dois
   do mesmo modelo são dois), que o `ronoctua-pointers` prende ao assento do cursor dele, com
-  layout, repetição, remaps e tecla leader PRÓPRIOS. **Trocar de modo é PROVISÓRIO** (o molde
-  das telas): um remapeador que não sobe é uma máquina sem teclado, então a troca pergunta, com
-  o cursor em "voltar" e 15 s de relógio monotônico. **Morrer DEVOLVE o teclado**: o kernel
+  layout, repetição, remaps e tecla leader PRÓPRIOS. **Trocar de modo é NA HORA**, a pedido
+  do dono: a troca já perguntou, com 15 s para voltar sozinha, por medo de um remapeador que não
+  sobe — e essa máquina sem teclado não acontece, porque **morrer DEVOLVE o teclado**: o kernel
   solta o grab quando o descritor fecha, e um que não volta chama o keyd (`OnFailure=`). **E
   nesse modo o rodapé NUNCA pede o teclado Wayland**: uma layer `exclusive` toma o de TODOS os
   assentos (`layer_shell.c:130`), então o toque da leader de um teclado vai ao rodapé pelo

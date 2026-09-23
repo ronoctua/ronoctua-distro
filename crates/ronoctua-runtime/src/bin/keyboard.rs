@@ -42,11 +42,6 @@ const ON_PURPOSE: &[(&str, &str)] = &[
          wrap like the one about the global settings.",
     ),
     (
-        "keyboard-keep-note",
-        "the question's sentence after a switch of mode, a line of its own \
-         under the title and above the countdown.",
-    ),
-    (
         "keyboard-same-model",
         "the warning that two keyboards of one model answer to one rule. Same \
          shape as the one above, and it appears under the keys.",
@@ -451,7 +446,7 @@ fn main() -> Result<()> {
         unit("0a1b2c3d", "Bluetooth Keyboard", true, 2),
         unit("4e5f6a7b", "USB Keyboard", false, 1),
     ];
-    inst.event(&Input::Keyboards(independent.clone()))?;
+    inst.event(&Input::Keyboards(independent))?;
     let list = look(&mut inst)?;
     if drawing {
         draw(&list, COLUMNS, "Independent mode: every unit");
@@ -500,30 +495,6 @@ fn main() -> Result<()> {
     };
     if change.unit != "0a1b2c3d" || change.setting != UnitSetting::Cursor(3) {
         bail!("the cursor ring handed back {change:?}");
-    }
-
-    // ---- THE QUESTION AFTER A SWITCH ----
-    let mut asking = independent;
-    asking.asking = 12;
-    inst.event(&Input::Keyboards(asking))?;
-    let question = look(&mut inst)?;
-    if drawing {
-        draw(&question, COLUMNS, "the question after a switch of mode");
-    }
-    let said = keys(&question);
-    for wanted in ["keyboard-keep-title", "keyboard-go-back", "keyboard-keep"] {
-        if !said.iter().any(|k| k == wanted) {
-            bail!("the question does not say `{wanted}`: {said:?}");
-        }
-    }
-    // AND THE FIRST `RET` GOES BACK: a question that appears by itself
-    // answers NO.
-    let effects = inst.event(&Input::Confirm)?;
-    if !effects
-        .iter()
-        .any(|e| matches!(e, Effect::KeyboardMode(KeyboardMode::Together)))
-    {
-        bail!("the first `RET` on the question did not go back: {effects:?}");
     }
 
     ronoctua_runtime::driven::every_label_fits(&i18n, ON_PURPOSE, COLUMNS)?;

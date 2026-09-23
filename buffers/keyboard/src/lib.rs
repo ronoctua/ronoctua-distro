@@ -94,12 +94,6 @@ mod key {
     pub const MACHINES: &str = "keyboard-machines";
     /// "The compositor's" — a repeat nobody chose for this unit.
     pub const COMPOSITORS: &str = "keyboard-compositors";
-    /// The question after a switch of mode.
-    pub const KEEP_TITLE: &str = "keyboard-keep-title";
-    pub const KEEP_NOTE: &str = "keyboard-keep-note";
-    pub const SECONDS: &str = "keyboard-seconds";
-    pub const GO_BACK: &str = "keyboard-go-back";
-    pub const KEEP: &str = "keyboard-keep";
 }
 
 /// The repeat rates a unit's ring turns through, per second — zero is the
@@ -176,10 +170,6 @@ struct State {
     list_top: u16,
     /// How many rows of it are on the screen.
     list_lines: u16,
-    /// Which answer of the keep-the-mode question the cursor is on — zero is
-    /// "go back", where it starts: a question that appears by itself answers
-    /// NO to the next `RET`.
-    answer: usize,
 }
 
 thread_local! {
@@ -217,11 +207,6 @@ impl State {
                 b.boards.len()
             }
         })
-    }
-
-    /// Is a switch of mode waiting to be kept?
-    fn asking(&self) -> bool {
-        self.boards.as_ref().is_some_and(|b| b.asking > 0)
     }
 
     /// The keyboard the cursor is about, on either level.
@@ -407,9 +392,6 @@ impl State {
     /// row is the row's own key, which is the rule the file manager already
     /// has written down and the one the owner asked to be absolute.
     fn confirm(&mut self) -> Vec<Effect> {
-        if self.asking() {
-            return self.answer_it();
-        }
         match self.level {
             Level::List if self.cursor == 0 => vec![Effect::KeyboardMode(self.other_mode())],
             Level::List if self.independent() => {
@@ -436,17 +418,6 @@ impl State {
                 .map(Effect::UnitChange)
                 .into_iter()
                 .collect(),
-        }
-    }
-
-    /// The keep-the-mode question, answered where its cursor is.
-    fn answer_it(&mut self) -> Vec<Effect> {
-        let back = self.answer == 0;
-        self.answer = 0;
-        if back {
-            vec![Effect::KeyboardMode(KeyboardMode::Together)]
-        } else {
-            vec![Effect::KeyboardModeKept]
         }
     }
 
@@ -655,9 +626,6 @@ impl State {
             self.level = Level::List;
             self.cursor = 0;
         }
-        if !self.asking() {
-            self.answer = 0;
-        }
     }
 }
 
@@ -755,39 +723,6 @@ impl State {
                 // drew over the sentence.
                 screen.put(line, Run::label(&b.trouble).accent());
                 line += 2;
-            }
-
-            // THE QUESTION AFTER A SWITCH, and nothing else until it is
-            // answered: the keyboards just changed under the person, and the
-            // one thing on the screen is whether to keep that.
-            if b.asking > 0 {
-                screen.put(line, Run::label(key::KEEP_TITLE).accent());
-                line += 1;
-                screen.put(line, Run::label(key::KEEP_NOTE).quiet().within(body));
-                line += 1;
-                screen.put(line, Run::datum(&b.asking.to_string()).accent());
-                screen.put(
-                    line,
-                    Run::label(key::SECONDS)
-                        .quiet()
-                        .at(4)
-                        .within(body.saturating_sub(4)),
-                );
-                line += 2;
-                s.list_top = line;
-                s.list_lines = 2;
-                for (n, answer) in [key::GO_BACK, key::KEEP].into_iter().enumerate() {
-                    let here = n == s.answer;
-                    if here {
-                        screen.ground_in(line, 0, body, Role::Band);
-                    } else if let Some(seat) = s.hover_on(n) {
-                        screen.ground_in(line, 0, body, Role::hover_of(seat));
-                    }
-                    let run = Run::label(answer).within(body);
-                    screen.put(line, if here { run.accent() } else { run });
-                    line += 1;
-                }
-                return screen.finish_wit();
             }
 
             match s.level {
@@ -1071,26 +1006,6 @@ impl State {
                     s.cursor = 0;
                     vec![Effect::Redraw]
                 }
-                // THE QUESTION HAS TWO ANSWERS, and the arrows move between
-                // them while it is up.
-                Input::Down | Input::Up if s.asking() => {
-                    s.answer = usize::from(matches!(e, Input::Down));
-                    vec![Effect::Redraw]
-                }
-                Input::Click(p) if s.asking() => match s.row_at(p.line) {
-                    Some(n) if n == s.answer => s.answer_it(),
-                    Some(n) => {
-                        s.answer = n.min(1);
-                        vec![Effect::Redraw]
-                    }
-                    None => Vec::new(),
-                },
-                // `Esc` ON THE QUESTION IS "GO BACK", the answer that is safe
-                // to give without reading it.
-                Input::Cancel if s.asking() => {
-                    s.answer = 0;
-                    s.answer_it()
-                }
                 Input::Down => {
                     if s.cursor + 1 < s.rows() {
                         s.cursor += 1;
@@ -1308,7 +1223,6 @@ mod tests {
                         variants: Vec::new(),
                     },
                 ],
-                asking: 0,
             }),
             ..State::default()
         }
@@ -1396,32 +1310,6 @@ mod tests {
         let _ = s.act(Input::Cancel);
         assert!(matches!(s.level, super::Level::List));
         assert_eq!(s.cursor, 2);
-    }
-
-    /// FAILS IF: the question after a switch does not start on "go back", or
-    /// `Esc` on it keeps the new mode.
-    #[test]
-    fn the_question_answers_no_first() {
-        let mut s = independent();
-        if let Some(b) = s.boards.as_mut() {
-            b.asking = 12;
-        }
-        drawn(&mut s, 20, 80);
-        assert_eq!(s.list_lines, 2);
-        assert!(matches!(
-            s.act(Input::Confirm)[..],
-            [Effect::KeyboardMode(KeyboardMode::Together)]
-        ));
-        let _ = s.act(Input::Down);
-        assert!(matches!(
-            s.act(Input::Confirm)[..],
-            [Effect::KeyboardModeKept]
-        ));
-        let _ = s.act(Input::Down);
-        assert!(matches!(
-            s.act(Input::Cancel)[..],
-            [Effect::KeyboardMode(KeyboardMode::Together)]
-        ));
     }
 
     /// Draws the frame the way `render` does, so the state learns where its

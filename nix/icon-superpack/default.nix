@@ -17,6 +17,7 @@
   papirus-icon-theme,
   kdePackages,
   hicolor-icon-theme,
+  gtk3,
 }:
 
 let
@@ -80,7 +81,14 @@ stdenvNoCC.mkDerivation {
   nativeBuildInputs = [
     py
     hicolor-icon-theme
+    # Only for `gtk-update-icon-cache`, at build time: the output does not
+    # refer to it.
+    gtk3
   ];
+
+  # THE CACHE IS WRITTEN BELOW, and gtk3's setup hook deletes every
+  # `icon-theme.cache` it finds unless told not to.
+  dontDropIconThemeCache = true;
 
   dontUnpack = true;
   dontConfigure = true;
@@ -88,6 +96,16 @@ stdenvNoCC.mkDerivation {
   buildPhase = ''
     runHook preBuild
     python3 ${../scripts/merge-icons.py} ${srcArgs} --theme-name noctua --out $out
+
+    # THE THEME CARRIES ITS OWN INDEX. Without `icon-theme.cache` GTK opens
+    # every one of the theme's directories on every launch of every GTK app —
+    # 335 254 entries. Measured in the VM, where the store is read over 9p:
+    # Ghostty spent 18.7 of its 19.4 s to a window there, nearly idle, before it
+    # drew anything. And NixOS cannot write the cache for us: the system
+    # profile links `share/icons/noctua` straight to this package, read-only.
+    gtk-update-icon-cache --force --quiet $out/share/icons/noctua
+    test -s $out/share/icons/noctua/icon-theme.cache \
+      || { echo "no icon-theme.cache was written" >&2; exit 1; }
     runHook postBuild
   '';
 

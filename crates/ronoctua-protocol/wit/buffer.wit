@@ -369,15 +369,9 @@ interface types {
         // can read it, and restarts the daemon.
         remap(remap),
         // Switch how the keyboards work together. Needs
-        // `capability::keyboard`.
-        //
-        // PROVISIONAL, and the host is what makes it so: a remapper that fails
-        // to start is a machine with no keyboard, so the host switches, puts a
-        // countdown on `boards.asking`, and switches BACK on its own unless
-        // `keyboard-mode-kept` arrives first.
+        // `capability::keyboard`. At once: a remapper that dies gives every
+        // keyboard back to the compositor, and keyd takes over by itself.
         keyboard-mode(keyboard-mode),
-        // Keep the mode the countdown is about.
-        keyboard-mode-kept,
         // One setting of one keyboard unit, in Independent mode. Needs
         // `capability::keyboard`.
         unit-change(unit-change),
@@ -974,9 +968,6 @@ interface types {
         cursors: list<u16>,
         // The layouts this machine's xkeyboard-config has.
         layouts: list<layout-word>,
-        // Seconds left before a switch of mode undoes itself; zero when no
-        // switch is waiting to be kept.
-        asking: u16,
     }
 
     // HOW THE KEYBOARDS WORK TOGETHER.

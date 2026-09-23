@@ -638,6 +638,12 @@ impl PowerWindow {
         let Some(press) = press_of(&event) else {
             return;
         };
+        self.pressed(press);
+    }
+
+    /// What one key means — from the keyboard, or `RET` from a second click
+    /// on the row the cursor is already on (invariant 19).
+    fn pressed(&mut self, press: crate::power::Press) {
         self.message = None;
         // THE WIDTH THIS WINDOW DRAWS AT, so the key acts on the row on
         // screen — see `power::View::key`.
@@ -1230,13 +1236,18 @@ impl PowerWindow {
             self.ask_paint();
             return;
         }
-        // THE MOUSE AIMS, THE KEYS ACT — a click puts the cursor on the row,
-        // and `RET` is what applies, arms and confirms.
+        // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19: a click
+        // puts the cursor on the row, and a click on the row it is already on
+        // is that row's `RET`, through the same `pressed` a key goes through.
         if let Some(row) = clicked {
             let rows = self.rows();
-            self.view.clicked(row, &rows);
+            let again = self.view.clicked(row, &rows);
             self.follow(rows.len());
-            self.ask_paint();
+            if again {
+                self.pressed(crate::power::Press::Enter);
+            } else {
+                self.ask_paint();
+            }
             return;
         }
         if turned {

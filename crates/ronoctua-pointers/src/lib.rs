@@ -34,7 +34,7 @@ use std::sync::mpsc;
 use anyhow::{Context as _, Result};
 use ronoctua_compositor::{Compositor, Device, DeviceKind, FocusFollows, Seat, SeatAsk, Setting};
 
-pub use plan::{CursorPlan, DevicePlan, Plan};
+pub use plan::{CursorPlan, DevicePlan, Plan, Shown};
 pub use prefs::{COLOURS, FIRST, Preferences};
 pub use typing::Typing;
 
@@ -98,6 +98,11 @@ pub enum Order {
     Typing(Typing),
     /// Forget a device that is not plugged in.
     Forget(String),
+    /// Whether a virtual machine's own pointers move anything while a real
+    /// one is present.
+    Emulated(bool),
+    /// Whether every mouse and touchpad moves one cursor.
+    Together(bool),
 }
 
 /// What the thread says.
@@ -135,6 +140,27 @@ impl Handle {
 /// `only-the-composition-root-names-the-compositor` counts it.
 fn open_the_compositor() -> Result<Box<dyn Compositor>> {
     ronoctua_scroll::Scroll::open()
+}
+
+/// The numbers the screens draw right now ([`Shown`]), from one read of the
+/// compositor — for a door that draws cursor numbers and has no thread of
+/// its own. A keyboard's seat counts only in Independent mode, which is the
+/// only one where a keyboard has a seat.
+#[must_use]
+pub fn shown_now() -> Shown {
+    let prefs = prefs::store().read();
+    let devices = open_the_compositor()
+        .and_then(|mut wm| wm.devices())
+        .unwrap_or_default();
+    let plan = plan::plan(&devices, &prefs);
+    let prefs = plan::remembered(prefs, &plan);
+    let keys = ronoctua_keyboards::store().read();
+    let seats: Vec<u16> = if keys.mode == ronoctua_keyboards::Mode::Independent {
+        keys.units.values().filter_map(|u| u.cursor).collect()
+    } else {
+        Vec::new()
+    };
+    Shown::of(&plan, &prefs, &seats)
 }
 
 /// Starts the thread.
@@ -264,7 +290,7 @@ fn listen(
 /// The file is read on every focus event, and that is the cost of "each
 /// order reads the file": the setting changes in another thread, and a copy
 /// kept here would be a second place for it. With typing on the first
-/// cursor, which is the default, nothing else is asked.
+/// cursor nothing else is asked.
 fn follow_typing(
     open: fn() -> Result<Box<dyn Compositor>>,
     asks: &mut Option<Box<dyn Compositor>>,
@@ -272,13 +298,15 @@ fn follow_typing(
     store: &ronoctua_store::Store<Preferences>,
 ) {
     let chosen = store.read().typing;
-    // IN INDEPENDENT MODE EVERY KEYBOARD IS ON ITS OWN CURSOR'S SEAT, and
-    // types where that cursor chose without anything asked of the
-    // compositor: moving `seat0`'s focus there would move a keyboard nobody
-    // pressed.
-    let independent =
-        ronoctua_keyboards::store().read().mode == ronoctua_keyboards::Mode::Independent;
-    if chosen == Typing::First || independent {
+    // THE BORDER IS `seat0`'S FOCUS, in both keyboard modes: the compositor
+    // draws `client.focused` for the seat that runs commands, which is `seat0`
+    // whenever none is running. So another cursor's click moves the border
+    // only through here — and this used to stop in Independent mode, on the
+    // grounds that moving `seat0` moves cursor 1's keyboards too. That is
+    // true and it is the price of the choice: the owner picked a value that
+    // is not cursor 1, and got cursor 1 anyway, with nothing on the screen
+    // saying why. `First` still asks nothing of anybody.
+    if chosen == Typing::First {
         before.clear();
         return;
     }
@@ -483,6 +511,8 @@ fn changed(mut p: Preferences, order: &Order, plan: &Plan) -> Preferences {
         Order::Forget(id) => {
             p.devices.remove(id);
         }
+        Order::Emulated(on) => p.emulated = *on,
+        Order::Together(on) => p.together = *on,
     }
     p
 }
@@ -567,6 +597,10 @@ fn apply(
     }
     wm.ask_seat("*", SeatAsk::HideAfter(prefs.hide_after_ms))?;
     wm.ask_seat("*", SeatAsk::HideWhileTyping(prefs.hide_while_typing))?;
+    // AFTER the wildcard, which the compositor merges onto every seat.
+    for c in plan.cursors.iter().filter(|c| !c.shown) {
+        wm.ask_seat(&c.seat, SeatAsk::HideAfter(fragment::HIDDEN_MS))?;
+    }
     wm.ask_focus(prefs.focus)?;
     for d in &plan.devices {
         for s in d.to_ask() {

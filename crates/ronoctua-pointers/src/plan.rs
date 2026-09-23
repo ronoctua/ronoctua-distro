@@ -52,6 +52,11 @@ pub struct CursorPlan {
     pub colour: u8,
     /// Whether it is on.
     pub enabled: bool,
+    /// Whether it is DRAWN: on, and with a present device on it that is on.
+    /// A seat shows its cursor for as long as any pointer is attached to it,
+    /// switched off or not — so a cursor nobody can move is hidden on
+    /// purpose (`fragment::HIDDEN_MS`), or it stands still on the screen.
+    pub shown: bool,
     /// The identifiers of the present devices driving it.
     pub devices: Vec<String>,
 }
@@ -69,6 +74,11 @@ pub struct DevicePlan {
     pub cursor: u16,
     /// Whether it is switched on by its own choice.
     pub enabled: bool,
+    /// Whether it is a virtual machine's own pointer (see [`EMULATED`]).
+    pub emulated: bool,
+    /// Whether it moves anything: its own switch, its cursor's, and — for an
+    /// emulated one — [`Preferences::emulated`].
+    pub on: bool,
     /// The settings it should have, only the ones it supports.
     pub settings: PointerSettings,
     /// The settings it has right now.
@@ -122,6 +132,22 @@ fn one_physical(id: &str) -> Option<&str> {
     (!vp.starts_with("0:")).then_some(vp)
 }
 
+/// Where the names of a virtual machine's own pointers come from, `|`
+/// between them: set by the module that knows the machine is one.
+pub const EMULATED: &str = "RONOCTUA_POINTERS_EMULATED";
+
+/// The emulated pointers' names, from [`EMULATED`].
+#[must_use]
+pub fn emulated_names() -> Vec<String> {
+    std::env::var(EMULATED)
+        .unwrap_or_default()
+        .split('|')
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The compositor's name for cursor `n`'s seat.
 #[must_use]
 pub fn seat_of(n: u16) -> String {
@@ -135,7 +161,29 @@ pub fn seat_of(n: u16) -> String {
 /// The plan for these devices under these choices.
 #[must_use]
 pub fn plan(devices: &[Device], prefs: &Preferences) -> Plan {
+    plan_with(devices, prefs, &emulated_names())
+}
+
+/// [`plan`], with the emulated pointers' names given.
+///
+/// # An emulated pointer is OFF while a real hand is here
+///
+/// A virtual machine's tablet carries the host's pointer in; once the host's
+/// own mice are handed to the guest one by one, it is a cursor that only the
+/// pointers the host kept can move. So it is off unless
+/// [`Preferences::emulated`] says otherwise — and ON when it is the only
+/// pointer there is, because a machine with no pointer at all is not a
+/// default anyone chose.
+#[must_use]
+pub fn plan_with(devices: &[Device], prefs: &Preferences, emulated: &[String]) -> Plan {
     let mut out = Plan::default();
+    let is_emulated = |d: &Device| emulated.contains(&d.name);
+    let a_real_hand = devices.iter().any(|d| {
+        d.kind.points()
+            && !is_emulated(d)
+            && !follows_the_keyboards(&d.id)
+            && ronoctua_keys::wire::unit_of_twin(&d.id).is_none()
+    });
     // THE NUMBERS ALREADY TAKEN, by any device ever remembered — present or
     // not — so a number is never handed to a newcomer while its owner is in
     // a drawer.
@@ -145,6 +193,14 @@ pub fn plan(devices: &[Device], prefs: &Preferences) -> Plan {
         .filter(|(id, _)| !follows_the_keyboards(id))
         .filter_map(|(_, d)| d.cursor)
         .collect();
+    // THE VIRTUAL MACHINE'S POINTERS ARE ONE HAND: its tablet and its two
+    // mice are fed by the same host pointer, and only one of them gets the
+    // motion at a time — apart, the others are cursors that stand still.
+    let mut emulated_cursor: Option<u16> = devices
+        .iter()
+        .filter(|d| d.kind.points() && is_emulated(d))
+        .filter_map(|d| prefs.devices.get(&d.id).and_then(|p| p.cursor))
+        .min();
     let mut seen = BTreeSet::new();
     let mut by_cursor: BTreeMap<u16, Vec<String>> = BTreeMap::new();
     // WHERE EACH PHYSICAL DEVICE ALREADY IS, so its other interfaces join it
@@ -170,7 +226,8 @@ pub fn plan(devices: &[Device], prefs: &Preferences) -> Plan {
             continue;
         }
         let own = prefs.devices.get(&d.id).cloned().unwrap_or_default();
-        let cursor = match own.cursor {
+        let emulated = is_emulated(d);
+        let cursor = match emulated_cursor.filter(|_| emulated).or(own.cursor) {
             Some(n) => n,
             None => {
                 let sibling = one_physical(&d.id).and_then(|vp| physical.get(vp).copied());
@@ -196,6 +253,16 @@ pub fn plan(devices: &[Device], prefs: &Preferences) -> Plan {
         if let Some(vp) = one_physical(&d.id) {
             physical.entry(vp.to_owned()).or_insert(cursor);
         }
+        if emulated {
+            emulated_cursor.get_or_insert(cursor);
+            if own.cursor.is_some_and(|n| n != cursor) {
+                out.placed.push((d.id.clone(), cursor));
+            }
+        }
+        // ONE CURSOR FOR EVERY HAND: the place just found is REMEMBERED (it is
+        // in `placed` already) and not used, so turning `together` off gives
+        // every device back the cursor it had.
+        let cursor = if prefs.together { FIRST } else { cursor };
         let kind_default = match d.kind {
             DeviceKind::Touchpad => &prefs.touchpads,
             _ => &prefs.mice,
@@ -204,7 +271,8 @@ pub fn plan(devices: &[Device], prefs: &Preferences) -> Plan {
             .only_where(&d.settings)
             .under(&own.settings.only_where(&d.settings));
         let cursor_on = prefs.cursor(cursor).enabled;
-        if (!own.enabled || !cursor_on) && d.settings.send_events.is_some() {
+        let on = own.enabled && cursor_on && (!emulated || prefs.emulated || !a_real_hand);
+        if !on && d.settings.send_events.is_some() {
             settings.send_events = Some(SendEvents::Disabled);
         } else if settings.send_events == Some(SendEvents::Disabled) {
             // A DISABLED DEVICE IS SAID BY `enabled`, never by a leftover
@@ -221,6 +289,8 @@ pub fn plan(devices: &[Device], prefs: &Preferences) -> Plan {
             kind: d.kind,
             cursor,
             enabled: own.enabled,
+            emulated,
+            on,
             settings,
             now: d.settings,
         });
@@ -229,15 +299,85 @@ pub fn plan(devices: &[Device], prefs: &Preferences) -> Plan {
     by_cursor.entry(FIRST).or_default();
     for (number, ids) in by_cursor {
         let c = prefs.cursor(number);
+        let shown = c.enabled && out.devices.iter().any(|d| d.cursor == number && d.on);
         out.cursors.push(CursorPlan {
             number,
             seat: seat_of(number),
             colour: c.colour,
             enabled: c.enabled,
+            shown,
             devices: ids,
         });
     }
     out
+}
+
+/// The numbers the screens DRAW, which are not the numbers kept.
+///
+/// A cursor's number is memory: a device that goes away keeps its own, so it
+/// comes back to the same cursor. Drawn as it is, that leaves holes — cursor 1,
+/// then cursor 3 — every time a device is away or two cursors become one. So
+/// every screen draws the cursors that exist as 1, 2, 3…, in the order of
+/// their numbers, and turns a drawn number back into a kept one. The first
+/// cursor is always 1: it is the first seat's, and it is always there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shown {
+    /// The kept numbers of the cursors that exist, in order.
+    numbers: Vec<u16>,
+    /// The kept number a NEW cursor would take — past every number held,
+    /// present or not.
+    next: u16,
+}
+
+impl Shown {
+    /// The cursors of `plan`, plus the ones in `also` (a keyboard's seat has
+    /// a cursor with no pointer on it), against every number `prefs` holds.
+    #[must_use]
+    pub fn of(plan: &Plan, prefs: &Preferences, also: &[u16]) -> Self {
+        let numbers: BTreeSet<u16> = plan
+            .cursors
+            .iter()
+            .map(|c| c.number)
+            .chain(also.iter().copied())
+            .chain([FIRST])
+            .collect();
+        let held = prefs
+            .devices
+            .values()
+            .filter_map(|d| d.cursor)
+            .chain(prefs.cursors.keys().copied())
+            .chain(numbers.iter().copied())
+            .max()
+            .unwrap_or(FIRST);
+        Self {
+            numbers: numbers.into_iter().collect(),
+            next: held + 1,
+        }
+    }
+
+    /// What cursor `n` is drawn as; `None` for one that does not exist now.
+    #[must_use]
+    pub fn label(&self, n: u16) -> Option<u16> {
+        let at = self.numbers.iter().position(|x| *x == n)?;
+        u16::try_from(at + 1).ok()
+    }
+
+    /// The kept number behind a drawn one — one past the last is a new cursor.
+    #[must_use]
+    pub fn number(&self, label: u16) -> Option<u16> {
+        let at = usize::from(label.checked_sub(1)?);
+        match at.cmp(&self.numbers.len()) {
+            std::cmp::Ordering::Less => Some(self.numbers[at]),
+            std::cmp::Ordering::Equal => Some(self.next),
+            std::cmp::Ordering::Greater => None,
+        }
+    }
+
+    /// Every drawn number, and the one a new cursor would be.
+    #[must_use]
+    pub fn labels(&self) -> Vec<u16> {
+        (1..=u16::try_from(self.numbers.len() + 1).unwrap_or(u16::MAX)).collect()
+    }
 }
 
 /// `prefs` with what `plan` placed written in, and every present device's
@@ -374,6 +514,130 @@ mod tests {
             again.devices.iter().map(|d| d.cursor).collect::<Vec<_>>(),
             cursors
         );
+    }
+
+    #[test]
+    fn an_emulated_pointer_is_off_while_a_real_hand_is_here() {
+        let tablet = "QEMU QEMU USB Tablet".to_owned();
+        let mut devices = vec![Device {
+            name: tablet.clone(),
+            ..device("1591:1:QEMU_QEMU_USB_Tablet", DeviceKind::Mouse)
+        }];
+        // ALONE, it is the machine's only pointer, and it moves.
+        let alone = plan_with(&devices, &detecting(), std::slice::from_ref(&tablet));
+        assert!(alone.devices[0].on && alone.cursors[0].shown);
+        // With a real mouse beside it, it is off and its cursor is not drawn.
+        devices.push(device("3:3:dongle-mouse", DeviceKind::Mouse));
+        let p = plan_with(&devices, &detecting(), std::slice::from_ref(&tablet));
+        let t = &p.devices[0];
+        assert!(t.emulated && !t.on);
+        assert_eq!(t.settings.send_events, Some(SendEvents::Disabled));
+        assert!(!p.cursors[0].shown, "a cursor nobody can move is hidden");
+        assert!(p.cursors[1].shown);
+        // Its two mice join it, even where they were remembered apart.
+        let mut two = devices.clone();
+        let mouse = "VirtualPS/2 VMware VMMouse".to_owned();
+        two.push(Device {
+            name: mouse.clone(),
+            ..device("2:19:VirtualPS/2_VMware_VMMouse", DeviceKind::Mouse)
+        });
+        let mut apart = detecting();
+        apart.devices.insert(
+            "2:19:VirtualPS/2_VMware_VMMouse".into(),
+            DevicePrefs {
+                cursor: Some(5),
+                ..DevicePrefs::default()
+            },
+        );
+        let names = [tablet.clone(), mouse];
+        let first = plan_with(&two, &apart, &names);
+        let again = plan_with(&two, &remembered(apart, &first), &names);
+        let theirs: Vec<u16> = again
+            .devices
+            .iter()
+            .filter(|d| d.emulated)
+            .map(|d| d.cursor)
+            .collect();
+        assert_eq!(theirs.len(), 2);
+        assert_eq!(theirs[0], theirs[1], "{theirs:?}");
+        // And the switch turns it back on.
+        let on = Preferences {
+            emulated: true,
+            ..detecting()
+        };
+        let p = plan_with(&devices, &on, std::slice::from_ref(&tablet));
+        assert!(p.devices[0].on && p.cursors[0].shown);
+    }
+
+    #[test]
+    fn together_puts_every_hand_on_one_cursor_and_forgets_nothing() {
+        let apart = plan(&laptop(), &detecting());
+        let prefs = remembered(detecting(), &apart);
+        let one = plan(
+            &laptop(),
+            &Preferences {
+                together: true,
+                ..prefs.clone()
+            },
+        );
+        assert!(one.devices.iter().all(|d| d.cursor == FIRST));
+        assert_eq!(one.cursors.len(), 1);
+        // And off again, each is where it was.
+        let again = plan(&laptop(), &prefs);
+        assert_eq!(
+            again.devices.iter().map(|d| d.cursor).collect::<Vec<_>>(),
+            apart.devices.iter().map(|d| d.cursor).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn the_screen_numbers_the_cursors_there_are_with_no_hole() {
+        let mut prefs = detecting();
+        // Number 2 held by a mouse that is not plugged in.
+        prefs.devices.insert(
+            "9:9:away".into(),
+            DevicePrefs {
+                cursor: Some(2),
+                ..DevicePrefs::default()
+            },
+        );
+        let p = plan(&laptop(), &prefs);
+        let kept: Vec<u16> = p.cursors.iter().map(|c| c.number).collect();
+        assert_eq!(kept, vec![1, 3, 4], "the kept numbers skip the away one");
+        let shown = Shown::of(&p, &remembered(prefs, &p), &[]);
+        assert_eq!(shown.label(1), Some(1));
+        assert_eq!(shown.label(3), Some(2));
+        assert_eq!(shown.label(4), Some(3));
+        assert_eq!(shown.label(2), None, "the away one is not drawn");
+        assert_eq!(shown.number(2), Some(3));
+        assert_eq!(shown.number(4), Some(5), "one past the last is a new one");
+        assert_eq!(shown.number(5), None);
+        assert_eq!(shown.labels(), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_switched_off_cursor_is_not_drawn() {
+        let mut prefs = detecting();
+        prefs.cursors.insert(
+            FIRST + 1,
+            CursorPrefs {
+                enabled: false,
+                colour: 1,
+            },
+        );
+        let p = plan(&laptop(), &prefs);
+        assert!(p.cursors[0].shown);
+        assert!(!p.cursors[1].shown);
+    }
+
+    #[test]
+    fn the_first_seat_with_no_hand_is_not_drawn() {
+        // Only the keyboards' own pointer: it stays on the first seat and is
+        // no hand, so that seat's cursor would stand still in a corner.
+        let devices = vec![device("4012:6878:keyd_virtual_pointer", DeviceKind::Mouse)];
+        let p = plan(&devices, &detecting());
+        assert_eq!(p.cursors.len(), 1);
+        assert!(!p.cursors[0].shown);
     }
 
     #[test]

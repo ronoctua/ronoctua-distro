@@ -14120,8 +14120,8 @@ impl Footer {
                 self.draw_and_paint();
             }
             Some(Click::Network(n)) => {
-                // THE MOUSE AIMS, THE KEYS ACT — the power view's rule, and
-                // the same reason: forgetting a network is not one click away.
+                // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19: a
+                // click on the row the cursor is already on is that row's `RET`.
                 let width = self.screen_columns();
                 let wire = self.network_wire.take();
                 let seen: &[ronoctua_network::Network] =
@@ -14138,11 +14138,16 @@ impl Footer {
                         &self.texts,
                     )
                 });
-                if let (Some(v), Some(rows)) = (self.network.as_mut(), rows) {
-                    v.clicked(n, &rows);
-                }
+                let again = match (self.network.as_mut(), rows) {
+                    (Some(v), Some(rows)) => v.clicked(n, &rows),
+                    _ => false,
+                };
                 self.network_wire = wire;
-                self.draw_and_paint();
+                if again {
+                    self.network_press(crate::network::Press::Enter);
+                } else {
+                    self.draw_and_paint();
+                }
             }
             Some(Click::Bluetooth(n)) => {
                 // A CLICK IS THE `RET` OF THE ROW IT LANDS ON.
@@ -14188,17 +14193,22 @@ impl Footer {
                 }
             }
             Some(Click::Display(n)) => {
-                // THE MOUSE AIMS, THE KEYS ACT — the rule every view here
-                // follows. It moves the cursor and nothing else.
+                // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19: a
+                // click on the row the cursor is already on is that row's `RET`.
                 let columns = self.screen_columns();
                 let moment = std::time::Instant::now();
+                let mut again = false;
                 if let Some(v) = self.display.take() {
                     let mut v = v;
                     let rows = v.rows(&self.display_snapshot, columns, moment, &self.texts);
-                    v.clicked(n, &rows);
+                    again = v.clicked(n, &rows);
                     self.display = Some(v);
                 }
-                self.draw_and_paint();
+                if again {
+                    self.display_press(crate::display::Press::Enter);
+                } else {
+                    self.draw_and_paint();
+                }
             }
             Some(Click::Locale(n)) => {
                 // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19,
@@ -14230,32 +14240,42 @@ impl Footer {
             Some(Click::Geo(n)) => {
                 let width = self.screen_columns();
                 let texts = std::rc::Rc::clone(&self.texts);
-                let errand = self.geo.as_mut().map(|v| {
+                // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19. It
+                // acted on the FIRST, which is a list you cannot point at.
+                let errand = self.geo.as_mut().and_then(|v| {
                     let rows = v.rows(width, &texts);
-                    v.clicked(n, &rows);
-                    v.press(crate::geo::Press::Enter, width, &texts)
+                    v.clicked(n, &rows)
+                        .then(|| v.press(crate::geo::Press::Enter, width, &texts))
                 });
                 if let Some(errand) = errand {
                     self.geo_errand(errand);
+                } else {
+                    self.draw_and_paint();
                 }
             }
             Some(Click::Syncthing(n)) => {
                 let width = self.screen_columns();
                 let snapshot = self.syncthing_snapshot.take();
+                let mut again = false;
                 if let Some(v) = self.syncthing.as_mut() {
                     let rows = v.rows(snapshot.as_ref(), width, &self.texts);
-                    v.clicked(n, &rows, snapshot.as_ref(), width, &self.texts);
+                    again = v.clicked(n, &rows, snapshot.as_ref(), width, &self.texts);
                 }
                 self.syncthing_snapshot = snapshot;
-                self.draw_and_paint();
+                // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19.
+                if again {
+                    self.syncthing_press(crate::syncthing::Press::Enter);
+                } else {
+                    self.draw_and_paint();
+                }
             }
             Some(Click::Pointers(n)) => {
                 // THE MOUSE AIMS, AND THE SECOND CLICK ACTS — invariant 19.
                 let width = self.screen_columns();
-                let already = self.pointer_view.as_ref().is_some_and(|v| v.cursor() == n);
+                let mut already = false;
                 if let Some(v) = self.pointer_view.as_mut() {
                     let rows = v.rows(self.pointer_snapshot.as_ref(), width, &self.texts);
-                    v.clicked(n, &rows);
+                    already = v.clicked(n, &rows);
                 }
                 if already {
                     self.pointers_press(crate::pointers::Press::Enter);
@@ -14264,24 +14284,33 @@ impl Footer {
                 }
             }
             Some(Click::Audio(n)) => {
-                // THE MOUSE AIMS, THE KEYS ACT — and here it also moves a
-                // microphone: the meter follows the cursor, and a click is a
-                // way of moving the cursor.
+                // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19: a
+                // click on the row the cursor is already on is that row's `RET`.
+                // And here a click also moves a microphone: the meter follows
+                // the cursor, and a click is a way of moving the cursor.
                 let width = self.screen_columns();
                 let snapshot = self.audio_snapshot.take();
+                let mut again = false;
                 if let Some(v) = self.audio.as_mut() {
                     let rows = v.rows(snapshot.as_ref(), width, &self.texts);
-                    v.clicked(n, &rows, snapshot.as_ref(), width, &self.texts);
+                    again = v.clicked(n, &rows, snapshot.as_ref(), width, &self.texts);
                 }
                 self.audio_snapshot = snapshot;
                 self.follow_the_microphone();
-                self.draw_and_paint();
+                if again {
+                    self.audio_press(crate::audio::Press::Enter);
+                } else {
+                    self.draw_and_paint();
+                }
             }
             Some(Click::Power(n)) => {
-                // THE MOUSE AIMS, THE KEYS ACT: a click puts the cursor on the
-                // row, and `RET` is what applies, arms and confirms — the four
-                // things here that empty the screen are not one click away.
+                // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19: a
+                // click on the row the cursor is already on is that row's `RET`.
+                // The four things here that empty the screen stay two steps
+                // away even so: the second click ARMS them, as `RET` does, and
+                // only a third on the armed row confirms.
                 let width = self.screen_columns();
+                let mut again = false;
                 if let Some(v) = self.power.as_mut() {
                     let rows = v.rows(
                         self.power_snapshot.as_ref(),
@@ -14289,7 +14318,11 @@ impl Footer {
                         width,
                         &self.texts,
                     );
-                    v.clicked(n, &rows);
+                    again = v.clicked(n, &rows);
+                }
+                if again {
+                    self.power_press(crate::power::Press::Enter);
+                } else {
                     self.draw_and_paint();
                 }
             }
@@ -18534,6 +18567,15 @@ impl Footer {
                 self.pointer_view = None;
                 self.first_page();
                 self.apply_geometry(self.interactivity());
+            }
+            // THE VIEW CLOSES FIRST, as a notification's command does: the
+            // region is this view's while it is open, and what the command
+            // opens would be refused by `region_is_free`.
+            crate::pointers::Errand::Run(id) => {
+                self.pointer_view = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+                self.run_with(id, None);
             }
         }
         self.draw_and_paint();

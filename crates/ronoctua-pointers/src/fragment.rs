@@ -46,6 +46,16 @@ pub fn theme_name(colour: u8) -> String {
     format!("ronoctua-pointer-{}", u16::from(colour) + 1)
 }
 
+/// How soon a cursor nobody can move is hidden — the least the compositor
+/// takes (it raises anything under 100 to 100).
+///
+/// A seat draws its cursor while any pointer is attached to it, even one
+/// switched off, and nothing detaches a device. So an off cursor is hidden
+/// the only way the compositor offers: a timeout on THAT seat, which the
+/// cursor never wakes from because nothing on it moves. It is written after
+/// the `seat *` lines, which the compositor merges onto every seat.
+pub const HIDDEN_MS: u32 = 100;
+
 /// The text of the fragment.
 ///
 /// # Errors
@@ -91,6 +101,13 @@ pub fn text_of(plan: &Plan, prefs: &Preferences) -> Result<String> {
                 }
             )?
         );
+        if !c.shown {
+            let _ = writeln!(
+                out,
+                "{}",
+                wire::seat_command(&c.seat, &SeatAsk::HideAfter(HIDDEN_MS))?
+            );
+        }
     }
     for d in &plan.devices {
         for s in d.settings.present() {
@@ -256,6 +273,29 @@ input "1133:50498:Logitech_Wireless_Receiver_Mouse" dwt enabled
 input "1133:50498:Logitech_Wireless_Receiver_Mouse" dwtp disabled
 "#
         );
+    }
+
+    #[test]
+    fn a_cursor_nobody_moves_is_hidden_after_the_wildcard() {
+        let mut prefs = Preferences {
+            detect: true,
+            ..Preferences::default()
+        };
+        prefs.cursors.insert(
+            2,
+            crate::prefs::CursorPrefs {
+                enabled: false,
+                colour: 1,
+            },
+        );
+        let devices = vec![mouse("1:1:First_Mouse"), mouse("2:2:Second_Mouse")];
+        let prefs = crate::plan::remembered(prefs.clone(), &plan(&devices, &prefs));
+        let text = text_of(&plan(&devices, &prefs), &prefs).unwrap();
+        let hide = text
+            .find("seat ronoctua-cursor-2 hide_cursor 100")
+            .expect(&text);
+        assert!(text.find("seat * hide_cursor").unwrap() < hide, "{text}");
+        assert!(!text.contains("seat seat0 hide_cursor 100"), "{text}");
     }
 
     #[test]

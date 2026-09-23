@@ -88,6 +88,10 @@ pub enum Target {
     Nothing,
     /// Whether a new device gets its own cursor.
     Detect(bool),
+    /// Whether a virtual machine's own pointers move.
+    Emulated(bool),
+    /// Whether every mouse and touchpad moves one cursor.
+    Together(bool),
     /// A cursor switched on or off.
     CursorOn(u16, bool),
     /// A cursor's colour.
@@ -110,12 +114,14 @@ pub enum Target {
     Typing(ronoctua_pointers::Typing),
     /// A device that is not connected.
     Away(String),
+    /// The door to the keyboards' own screen (`LEADER s k`).
+    Keyboards,
 }
 
 impl Target {
     /// Whether `←`/`→` mean anything here.
     const fn turns(&self) -> bool {
-        !matches!(self, Self::Nothing | Self::Away(_))
+        !matches!(self, Self::Nothing | Self::Away(_) | Self::Keyboards)
     }
 }
 
@@ -158,6 +164,8 @@ pub enum Errand {
     Order(Order),
     /// Shut the view.
     Close,
+    /// Run a command of the registry — the door to the keyboards' screen.
+    Run(&'static str),
 }
 
 /// Where the rows start and how wide they are — the one arithmetic every
@@ -213,11 +221,17 @@ impl View {
     }
 
     /// Put the cursor on a row, if that row is one.
-    pub fn clicked(&mut self, n: usize, rows: &[Row]) {
+    ///
+    /// Answers whether the cursor was ALREADY on that row: that is the second
+    /// click, which the door turns into `RET` (invariant 19).
+    pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
         if rows.get(n).is_some_and(|r| !r.heading) {
+            let again = self.cursor == n;
             self.moved = true;
             self.cursor = n;
+            return again;
         }
+        false
     }
 
     /// Put the cursor somewhere real after the rows changed under it.
@@ -306,6 +320,12 @@ impl View {
                 .map_or(Errand::Nothing, Errand::Copy),
             (Press::Forget, _) | (_, Target::Nothing | Target::Away(_)) => Errand::Nothing,
             (_, Target::Detect(on)) => Errand::Order(Order::Detect(!on)),
+            (_, Target::Emulated(on)) => Errand::Order(Order::Emulated(!on)),
+            // A DOOR OPENS ON `RET` — which is also the second click — and the
+            // arrows have nothing to turn on it.
+            (Press::Enter, Target::Keyboards) => Errand::Run(KEYBOARDS),
+            (_, Target::Keyboards) => Errand::Nothing,
+            (_, Target::Together(on)) => Errand::Order(Order::Together(!on)),
             (_, Target::CursorOn(n, on)) => Errand::Order(Order::CursorOn(n, !on)),
             (_, Target::CursorColour(n, c)) => {
                 Errand::Order(Order::CursorColour(n, turned(c, prefs::COLOURS, forward)))
@@ -403,6 +423,7 @@ impl View {
         }
         general(&mut b, s);
         away(&mut b, s);
+        keyboards(&mut b);
         b.out
     }
 }
@@ -410,8 +431,29 @@ impl View {
 /// The waits a still cursor can hide after, in milliseconds; `0` is never.
 const HIDE_AFTER: [u32; 5] = [0, 1_000, 3_000, 5_000, 10_000];
 
+/// The numbers this screen draws — see [`ronoctua_pointers::Shown`].
+fn shown_of(s: &Snapshot) -> ronoctua_pointers::Shown {
+    let keyboards: Vec<u16> = s.keyboards.iter().map(|k| k.cursor).collect();
+    ronoctua_pointers::Shown::of(&s.plan, &s.prefs, &keyboards)
+}
+
+/// "cursor N" for kept number `n`, drawn as the screen numbers it — or, for
+/// a cursor that is not there now, "a cursor of its own".
+fn on_cursor(b: &Builder<'_>, shown: &ronoctua_pointers::Shown, n: u16) -> String {
+    shown.label(n).map_or_else(
+        || b.texts.t(ronoctua_i18n::key::POINTERS_OWN_CURSOR),
+        |l| {
+            b.texts.t_with(
+                ronoctua_i18n::key::POINTERS_ON_CURSOR_VALUE,
+                &[("number", &l.to_string())],
+            )
+        },
+    )
+}
+
 /// The cursors, and the devices on each.
 fn cursors(b: &mut Builder<'_>, s: &Snapshot) {
+    let shown = shown_of(s);
     b.heading(ronoctua_i18n::key::POINTERS_HEADING_CURSORS);
     b.note(ronoctua_i18n::key::POINTERS_ABOUT_CURSORS);
     if !s.connected {
@@ -421,21 +463,45 @@ fn cursors(b: &mut Builder<'_>, s: &Snapshot) {
         b.note(ronoctua_i18n::key::POINTERS_SETTINGS_FAILED);
     }
     b.pair(
+        b.texts.t(ronoctua_i18n::key::POINTERS_TOGETHER),
+        on_off(s.prefs.together, b.texts),
+        Target::Together(s.prefs.together),
+        "together".to_owned(),
+    );
+    b.pair(
         b.texts.t(ronoctua_i18n::key::POINTERS_DETECT),
         on_off(s.prefs.detect, b.texts),
         Target::Detect(s.prefs.detect),
         "detect".to_owned(),
     );
+    // ONLY WHERE THERE IS ONE: a switch for devices a machine does not have
+    // is a row that changes nothing.
+    if s.plan.devices.iter().any(|d| d.emulated) {
+        b.note(ronoctua_i18n::key::POINTERS_ABOUT_EMULATED);
+        b.pair(
+            b.texts.t(ronoctua_i18n::key::POINTERS_EMULATED),
+            on_off(s.prefs.emulated, b.texts),
+            Target::Emulated(s.prefs.emulated),
+            "emulated".to_owned(),
+        );
+    }
     for c in &s.plan.cursors {
         let title = b.texts.t_with(
             ronoctua_i18n::key::POINTERS_CURSOR,
-            &[("number", &c.number.to_string())],
+            &[(
+                "number",
+                &shown.label(c.number).unwrap_or(c.number).to_string(),
+            )],
         );
         b.under(
             tokens::icon::POINTERS_CURSOR,
             fill_of(c.colour),
             title,
-            (c.number == FIRST).then(|| b.texts.t(ronoctua_i18n::key::POINTERS_IS_FIRST)),
+            if !c.shown {
+                Some(b.texts.t(ronoctua_i18n::key::POINTERS_NOT_DRAWN))
+            } else {
+                (c.number == FIRST).then(|| b.texts.t(ronoctua_i18n::key::POINTERS_IS_FIRST))
+            },
         );
         b.pair(
             b.texts.t(ronoctua_i18n::key::POINTERS_CURSOR_ON),
@@ -459,13 +525,17 @@ fn cursors(b: &mut Builder<'_>, s: &Snapshot) {
                 .iter()
                 .find(|d| &d.id == id)
                 .map_or_else(|| id.clone(), |d| d.name.clone());
+            // ONE CURSOR FOR EVERY HAND: where a device goes is kept and
+            // not used, so the row says where it is and moves nothing.
+            let target = if s.prefs.together {
+                Target::Nothing
+            } else {
+                Target::Place(id.clone(), c.number)
+            };
             b.pair(
                 name,
-                b.texts.t_with(
-                    ronoctua_i18n::key::POINTERS_ON_CURSOR_VALUE,
-                    &[("number", &c.number.to_string())],
-                ),
-                Target::Place(id.clone(), c.number),
+                on_cursor(b, &shown, c.number),
+                target,
                 format!("place-{id}"),
             );
         }
@@ -590,9 +660,14 @@ fn general(b: &mut Builder<'_>, s: &Snapshot) {
     b.note(ronoctua_i18n::key::POINTERS_ABOUT_TYPING);
     let typing = match s.prefs.typing {
         ronoctua_pointers::Typing::First => b.texts.t(ronoctua_i18n::key::POINTERS_TYPING_FIRST),
-        ronoctua_pointers::Typing::Cursor(n) => b.texts.t_with(
-            ronoctua_i18n::key::POINTERS_TYPING_CURSOR,
-            &[("number", &n.to_string())],
+        ronoctua_pointers::Typing::Cursor(n) => shown_of(s).label(n).map_or_else(
+            || b.texts.t(ronoctua_i18n::key::POINTERS_OWN_CURSOR),
+            |l| {
+                b.texts.t_with(
+                    ronoctua_i18n::key::POINTERS_TYPING_CURSOR,
+                    &[("number", &l.to_string())],
+                )
+            },
         ),
         ronoctua_pointers::Typing::Latest => b.texts.t(ronoctua_i18n::key::POINTERS_TYPING_LATEST),
     };
@@ -645,20 +720,37 @@ fn away(b: &mut Builder<'_>, s: &Snapshot) {
     }
     b.heading(ronoctua_i18n::key::POINTERS_HEADING_AWAY);
     b.note(ronoctua_i18n::key::POINTERS_ABOUT_AWAY);
+    let shown = shown_of(s);
     for (id, d) in gone {
         let name = if d.name.is_empty() {
             id.clone()
         } else {
             d.name.clone()
         };
-        let value = d.cursor.map_or_else(String::new, |n| {
-            b.texts.t_with(
-                ronoctua_i18n::key::POINTERS_ON_CURSOR_VALUE,
-                &[("number", &n.to_string())],
-            )
-        });
+        let value = d
+            .cursor
+            .map_or_else(String::new, |n| on_cursor(b, &shown, n));
         b.pair(name, value, Target::Away(id.clone()), format!("away-{id}"));
     }
+}
+
+/// The command behind the door to the keyboards' screen.
+const KEYBOARDS: &str = "keyboard-open";
+
+/// Last, the door to the keyboards: a keyboard can type through a cursor of
+/// its own, and that is set on THEIR screen — which this one would otherwise
+/// never mention.
+fn keyboards(b: &mut Builder<'_>) {
+    b.heading(ronoctua_i18n::key::POINTERS_HEADING_KEYBOARDS);
+    b.note(ronoctua_i18n::key::POINTERS_ABOUT_KEYBOARDS);
+    // AN ACTION HAS NO VALUE: the value column is the row's answer everywhere
+    // else on this screen, and a door has none.
+    b.pair(
+        b.texts.t(ronoctua_i18n::key::POINTERS_OPEN_KEYBOARDS),
+        String::new(),
+        Target::Keyboards,
+        "keyboards".to_owned(),
+    );
 }
 
 /// `n` turned one step round a ring of `size`.
@@ -1146,6 +1238,42 @@ mod tests {
         assert_eq!(
             v.key(Press::Enter, Some(&s), 100, &tx),
             Errand::Order(Order::Detect(false))
+        );
+    }
+
+    /// The first click selects, a click on the row already selected is its
+    /// `RET` — and the doors ask for exactly that (invariant 19).
+    #[test]
+    fn the_second_click_on_a_row_is_its_return() {
+        let s = a_laptop();
+        let tx = texts();
+        let mut v = View::fresh();
+        let rows = v.rows(Some(&s), 100, &tx);
+        let at = rows.iter().position(|r| r.spot == "together").unwrap();
+        assert_ne!(v.cursor(), at, "the cursor must start somewhere else");
+        assert!(!v.clicked(at, &rows), "the first click only selects");
+        assert!(v.clicked(at, &rows), "the second one acts");
+        assert_eq!(
+            v.key(Press::Enter, Some(&s), 100, &tx),
+            Errand::Order(Order::Together(true))
+        );
+    }
+
+    /// The last rows are the door to the keyboards' screen, and `RET` on it
+    /// runs that screen's command; the arrows turn nothing there.
+    #[test]
+    fn the_door_to_the_keyboards_opens_them() {
+        let s = a_laptop();
+        let tx = texts();
+        let mut v = View::fresh();
+        let rows = v.rows(Some(&s), 100, &tx);
+        let at = rows.iter().position(|r| r.spot == "keyboards").unwrap();
+        assert_eq!(at, rows.len() - 1, "the door is the last row");
+        let _ = v.clicked(at, &rows);
+        assert_eq!(v.key(Press::More, Some(&s), 100, &tx), Errand::Nothing);
+        assert_eq!(
+            v.key(Press::Enter, Some(&s), 100, &tx),
+            Errand::Run("keyboard-open")
         );
     }
 

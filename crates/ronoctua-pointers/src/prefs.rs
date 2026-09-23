@@ -58,6 +58,13 @@ pub struct Preferences {
     pub focus: FocusFollows,
     /// Which cursor the keyboards type through.
     pub typing: crate::typing::Typing,
+    /// Whether a virtual machine's own pointers move anything while a real
+    /// one is present (`plan::plan_with`). OFF, the owner's choice.
+    pub emulated: bool,
+    /// Every mouse and touchpad moves ONE cursor, whatever each remembers.
+    /// Where each device was is kept, so turning this off puts every hand
+    /// back on its own cursor.
+    pub together: bool,
 }
 
 impl Default for Preferences {
@@ -86,7 +93,11 @@ impl Default for Preferences {
             // hand that only crossed it is a surprise, and with several
             // cursors it is several.
             focus: FocusFollows::No,
-            typing: crate::typing::Typing::First,
+            // EVERY CURSOR'S CLICK MOVES THE FOCUS, the owner's choice: the
+            // border and cursor 1's keyboards go where the last click went.
+            typing: crate::typing::Typing::Latest,
+            emulated: false,
+            together: false,
         }
     }
 }

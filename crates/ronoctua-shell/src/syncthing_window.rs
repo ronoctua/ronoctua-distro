@@ -588,6 +588,12 @@ impl SyncthingWindow {
         let Some(press) = press_of(&event, self.mods.shift) else {
             return;
         };
+        self.pressed(press);
+    }
+
+    /// What one key means — from the keyboard, or `RET` from a second click
+    /// on the row the cursor is already on (invariant 19).
+    fn pressed(&mut self, press: crate::syncthing::Press) {
         self.message = None;
         let errand = self
             .view
@@ -1201,11 +1207,12 @@ impl SyncthingWindow {
             self.ask_paint();
             return;
         }
-        // THE MOUSE AIMS, THE KEYS ACT — a click puts the cursor on the row,
-        // and `RET` is what applies, arms and confirms.
+        // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19: a click
+        // puts the cursor on the row, and a click on the row it is already on
+        // is that row's `RET`, through the same `pressed` a key goes through.
         if let Some(row) = clicked {
             let rows = self.rows();
-            self.view.clicked(
+            let again = self.view.clicked(
                 row,
                 &rows,
                 self.snapshot.as_ref(),
@@ -1217,7 +1224,11 @@ impl SyncthingWindow {
             // the list BEFORE that, so the list is asked again.
             let rows = self.rows().len();
             self.follow(rows);
-            self.ask_paint();
+            if again {
+                self.pressed(crate::syncthing::Press::Enter);
+            } else {
+                self.ask_paint();
+            }
             return;
         }
         if turned {

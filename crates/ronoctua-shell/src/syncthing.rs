@@ -551,6 +551,9 @@ impl View {
     /// `rows` is what the door DREW and `columns` is the width it drew them
     /// at; the two travel together, because everything downstream rebuilds
     /// the list to find the row again.
+    ///
+    /// Answers whether the cursor was ALREADY on that row: that is the second
+    /// click, which the door turns into `RET` (invariant 19).
     pub fn clicked(
         &mut self,
         n: usize,
@@ -558,12 +561,14 @@ impl View {
         snap: Option<&Snapshot>,
         columns: u16,
         texts: &ronoctua_i18n::Texts,
-    ) {
+    ) -> bool {
         let Some(row) = rows.get(n).filter(|r| !r.heading) else {
-            return;
+            return false;
         };
+        let again = self.cursor == n;
         self.moved = true;
         self.aim_at(&row.spot, snap, columns, texts);
+        again
     }
 
     /// Put the cursor somewhere real.

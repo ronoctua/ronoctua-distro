@@ -86,20 +86,20 @@
   # installed system keeps the plane: on real hardware it is the right answer.
   systemd.user.services.scroll.environment.WLR_NO_HARDWARE_CURSORS = "1";
 
-  # QEMU'S OWN POINTERS STEP ASIDE WHEN THE HOST'S ARE HERE.
+  # QEMU'S OWN POINTERS ARE NAMED, and the screen decides what they do.
   #
   # `nix run .#vm -- --pointers` hands the host's mice and touchpads to the
   # guest one by one, and QEMU grabs them — so the tablet that carries the
-  # host's pointer in, and the PS/2 mouse beside it, receive nothing for as
-  # long as the VM runs. Left to libinput they are pointers like any other,
-  # each a cursor that no hand can move: measured, a sixth cursor for five
-  # devices. The runner says it passed them through with a kernel flag, and
-  # this is the only reader of it. Without the flag nothing changes, because
-  # then the tablet IS the host's mouse.
-  services.udev.extraRules = ''
-    SUBSYSTEM=="input", IMPORT{cmdline}="ronoctua_pointers"
-    SUBSYSTEM=="input", ENV{ronoctua_pointers}=="1", ATTRS{name}=="QEMU QEMU USB Tablet|VirtualPS/2 VMware VMMouse|ImExPS/2 Generic Explorer Mouse", ENV{LIBINPUT_IGNORE_DEVICE}="1"
-  '';
+  # host's pointer in, and the PS/2 mouse beside it, are moved only by what the
+  # host kept (its built-in touchpad). Each is a cursor, and one that nothing
+  # moves stands still on the screen: measured, a sixth cursor for five hands.
+  # They used to be hidden from libinput outright, which also took away the
+  # only way to leave the window. Named here instead, `ronoctua-pointers`
+  # treats them as EMULATED: off while a real hand is present, their cursor not
+  # drawn, and a switch at `LEADER s i` turns them back on. Alone — a VM run
+  # without `--pointers` — they are the machine's only pointer, and they move.
+  systemd.user.services.ronoctua-footer.environment.RONOCTUA_POINTERS_EMULATED =
+    "QEMU QEMU USB Tablet|VirtualPS/2 VMware VMMouse|ImExPS/2 Generic Explorer Mouse";
 
   # NO ANDROID IN THE DEV VM.
   #

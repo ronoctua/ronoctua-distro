@@ -281,8 +281,12 @@ impl View {
     }
 
     /// Puts the cursor on row `n`, when it is a row one can stand on.
-    pub fn clicked(&mut self, n: usize, rows: &[Row]) {
+    ///
+    /// Answers whether the cursor was ALREADY on that row: that is the second
+    /// click, which the door turns into `RET` (invariant 19).
+    pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
         if rows.get(n).is_some_and(|r| !r.heading) {
+            let again = n == self.cursor;
             // MOVING DISARMS, by the mouse as by the arrows: the question was
             // about the row that was left, and the pointer is not a second
             // vocabulary — clicking only does what a key does.
@@ -290,7 +294,9 @@ impl View {
                 self.armed = None;
             }
             self.cursor = n;
+            return again;
         }
+        false
     }
 
     /// Keeps the cursor on a row that EXISTS.

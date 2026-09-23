@@ -875,7 +875,6 @@ fn val_of_boards(b: &ronoctua_protocol::Boards) -> wasmtime::component::Val {
                     .collect(),
             ),
         ),
-        ("asking".into(), Val::U16(b.asking)),
     ])
 }
 
@@ -1453,7 +1452,6 @@ fn effects_from(v: &wasmtime::component::Val) -> Vec<ronoctua_protocol::Effect> 
                     )),
                     _ => None,
                 },
-                "keyboard-mode-kept" => Some(Effect::KeyboardModeKept),
                 "unit-change" => unit_change_from(payload.as_deref()).map(Effect::UnitChange),
                 otherwise => {
                     tracing::warn!(effect = otherwise, "an unknown effect");

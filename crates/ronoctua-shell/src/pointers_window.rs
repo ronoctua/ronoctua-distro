@@ -423,6 +423,13 @@ impl PointersWindow {
                 self.quit = true;
                 return;
             }
+            // THIS DOOR SENDS IT rather than telling somebody to go to the
+            // footer: the control socket is how a window runs a command.
+            Errand::Run(id) => {
+                if let Err(e) = crate::leader::send_it(&format!("command {id}")) {
+                    tracing::warn!(id, error = %e, "the footer did not take the command");
+                }
+            }
             Errand::Order(order) => match &self.pointers_thread {
                 Some(h) => h.send(order),
                 None => {
@@ -528,6 +535,12 @@ impl PointersWindow {
         let Some(press) = press_of(&event) else {
             return;
         };
+        self.pressed(press);
+    }
+
+    /// What one key means — from the keyboard, or `RET` from a second click
+    /// on the row the cursor is already on (invariant 19).
+    fn pressed(&mut self, press: crate::pointers::Press) {
         self.message = None;
         let errand = self
             .view
@@ -1128,15 +1141,20 @@ impl PointersWindow {
             self.ask_paint();
             return;
         }
-        // THE MOUSE AIMS, THE KEYS ACT — a click puts the cursor on the row,
-        // and `RET` is what applies, arms and confirms.
+        // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19: a click
+        // puts the cursor on the row, and a click on the row it is already on
+        // is that row's `RET`, through the same `pressed` a key goes through.
         if let Some(row) = clicked {
             let rows = self.rows();
-            self.view.clicked(row, &rows);
+            let again = self.view.clicked(row, &rows);
             // THE LIST FOLLOWS THE CURSOR the click just put down.
             let rows = self.rows().len();
             self.follow(rows);
-            self.ask_paint();
+            if again {
+                self.pressed(crate::pointers::Press::Enter);
+            } else {
+                self.ask_paint();
+            }
             return;
         }
         if turned {

@@ -1456,8 +1456,9 @@
           # itself, and the guest gives it a cursor of its own.
           #
           # OPT-IN, because QEMU GRABS what it is given: while the VM runs, the
-          # host's pointers move nothing on the host. They come back when the
-          # VM closes. The keyboard is left alone.
+          # host's pointers move nothing on the host, except its built-in
+          # touchpad, which is kept. They come back when the VM closes. The
+          # keyboard is left alone.
           #
           # BY UDEV, never by a name: `ID_INPUT_MOUSE` and `ID_INPUT_TOUCHPAD`
           # are what the host's own stack decided the device is. keyd's
@@ -1475,6 +1476,18 @@
           done
           if [ "''${pointers:-}" = yes ]; then
             found=0
+            # THE BUILT-IN TOUCHPAD'S PARENTS, found before anything is passed:
+            # a touchpad reaches the system as TWO devices under one parent —
+            # `…Touchpad`, which moves, and `…Mouse`, a compatibility interface
+            # that never does — and handing the second over while the first
+            # stays gave the guest a cursor nothing could move.
+            kept=""
+            for dev in /dev/input/event*; do
+              props=$(${pkgs.systemd}/bin/udevadm info -q property -n "$dev" 2>/dev/null) || continue
+              if grep -qE '^ID_INPUT_TOUCHPAD_INTEGRATION=internal$' <<< "$props"; then
+                kept="$kept $(readlink -f "/sys/class/input/''${dev##*/}/device/device" || true)"
+              fi
+            done
             for dev in /dev/input/event*; do
               props=$(${pkgs.systemd}/bin/udevadm info -q property -n "$dev" 2>/dev/null) || continue
               if ! grep -qE '^ID_INPUT_(MOUSE|TOUCHPAD)=1$' <<< "$props"; then
@@ -1490,6 +1503,21 @@
               case "$name" in
                 *keyd*) continue ;;
               esac
+              # THE BUILT-IN TOUCHPAD STAYS WITH THE HOST, every interface of it
+              # (`kept` above), the way `--keyboards`
+              # keeps the built-in keyboard: a pointer the host still holds is
+              # the one that leaves QEMU's window, and inside the guest it moves
+              # QEMU's tablet — off until `LEADER s i` turns the virtual
+              # machine's own pointers on.
+              parent=$(readlink -f "/sys/class/input/''${dev##*/}/device/device" || true)
+              if [ -n "$parent" ]; then
+                case " $kept " in
+                  *" $parent "*)
+                    echo "vm: $name stays with the host"
+                    continue
+                    ;;
+                esac
+              fi
               # READ ACCESS, asked for once and only where it is missing: the
               # node is `root:input 0660`, and an ACL for this user is the
               # narrowest thing that opens it. It lasts until the device is
@@ -1506,10 +1534,6 @@
               echo "vm: --pointers found no mouse or touchpad on this host" >&2
             else
               echo "vm: $found pointer(s) are the guest's until it closes"
-              # AND QEMU'S OWN step aside: grabbed, the host's pointers no
-              # longer reach its emulated tablet, which would be a cursor no
-              # hand moves. `nix/modules/vm.nix` is the reader of this flag.
-              export QEMU_KERNEL_PARAMS="''${QEMU_KERNEL_PARAMS:-} ronoctua_pointers"
             fi
           fi
           # `--keyboards`: EVERY EXTERNAL KEYBOARD OF THE HOST, EACH ITS OWN —

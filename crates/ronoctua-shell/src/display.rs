@@ -1200,16 +1200,21 @@ impl View {
         self.at = (*target != Target::Nothing).then(|| target.clone());
     }
 
-    /// The mouse aims; the keys act. It only moves the cursor.
-    pub fn clicked(&mut self, n: usize, rows: &[Row]) {
+    /// Puts the cursor where a click landed.
+    ///
+    /// Answers whether the cursor was ALREADY on that row: that is the second
+    /// click, which the door turns into `RET` (invariant 19).
+    pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
         let Some(row) = rows.get(n) else {
-            return;
+            return false;
         };
         if row.heading {
-            return;
+            return false;
         }
+        let again = self.cursor == n;
         self.cursor = n;
         self.remember(&row.target);
+        again
     }
 
     /// A key.

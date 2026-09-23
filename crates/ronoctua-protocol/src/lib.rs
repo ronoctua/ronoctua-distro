@@ -210,13 +210,9 @@ pub enum Effect {
     /// what it wants, and the host writes the file, asks keyd whether it can
     /// read it, and restarts the daemon.
     Remap(Remap),
-    /// Switch how the keyboards work together, provisionally. Needs
-    /// [`Capability::Keyboard`]: the host switches, counts down on
-    /// [`Boards::asking`], and switches back unless [`Effect::KeyboardModeKept`]
-    /// arrives first — a remapper that fails is a machine with no keyboard.
+    /// Switch how the keyboards work together, at once. Needs
+    /// [`Capability::Keyboard`].
     KeyboardMode(KeyboardMode),
-    /// Keep the mode the countdown is about.
-    KeyboardModeKept,
     /// One setting of one keyboard unit, in Independent mode.
     UnitChange(UnitChange),
 }
@@ -249,10 +245,9 @@ impl Effect {
             // system, and a buffer that asked for nothing must not get to
             // change that quietly.
             Self::Tune(_) => Some(Capability::Brain),
-            Self::Remap(_)
-            | Self::KeyboardMode(_)
-            | Self::KeyboardModeKept
-            | Self::UnitChange(_) => Some(Capability::Keyboard),
+            Self::Remap(_) | Self::KeyboardMode(_) | Self::UnitChange(_) => {
+                Some(Capability::Keyboard)
+            }
             // AND THESE COST NOTHING, each for a reason that is worth being
             // able to check rather than assume: redrawing, closing and saying
             // which state one is in are the buffer talking about ITSELF;
@@ -617,8 +612,6 @@ pub struct Boards {
     pub cursors: Vec<u16>,
     /// The layouts this machine has.
     pub layouts: Vec<LayoutWord>,
-    /// Seconds left before a switch of mode undoes itself; zero when none.
-    pub asking: u16,
 }
 
 /// How the keyboards work together.
