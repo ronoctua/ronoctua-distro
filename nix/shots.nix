@@ -512,6 +512,24 @@ pkgs.testers.runNixOSTest {
             machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
 
+    if wanted("pointers"):
+        with subtest("mice, touchpads and cursors, with the cursor in its own colour"):
+            control("pointers-open")
+            shot("33-pointers", lines=15)
+            # A TIGHT FUZZ: `state.accent` sits about fifty-four units from
+            # this fill in owl, which the default twelve per cent (fifty-three)
+            # would all but let answer for it — a line of accent TEXT would
+            # pass. A glyph's interior is the token exactly.
+            has_colour(
+                "#" + token_hex("cursor.fill.one"),
+                at_least=8,
+                of="/tmp/33-pointers.png",
+                fuzz=4,
+            )
+            focus_compositor()
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
+            machine.sleep(1)
+
     if wanted("tor"):
         with subtest("Tor: the section exists with the daemon STOPPED"):
             # -----------------------------------------------------------------

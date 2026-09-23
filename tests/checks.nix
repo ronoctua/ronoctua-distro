@@ -65,6 +65,9 @@
   # file for why the order and the default stopped being one fact.
   defaultTheme,
   themed,
+  # The Xcursor themes, one per cursor colour: `scroll.nix` installs them, so
+  # every machine that imports it needs them.
+  cursors,
   # The notification catalogue, for the two checks that read it: the table's
   # own shape, and the text keys it demands of both languages.
   notificationsRs,
@@ -459,6 +462,7 @@ let
       # and default became two facts in `assets/themes/themes.nix`, and it went
       # unseen because these tests are in `most`, which had not been run since.
       inherit themes themed defaultTheme;
+      inherit cursors;
 
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
@@ -1962,6 +1966,7 @@ let
     ronoctua = {
       inherit fonts fontconfigConf;
       inherit themes themed defaultTheme;
+      inherit cursors;
 
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
@@ -1978,6 +1983,7 @@ let
     ronoctua = {
       inherit fonts fontconfigConf;
       inherit themes themed defaultTheme;
+      inherit cursors;
 
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
@@ -1993,6 +1999,7 @@ let
     ronoctua = {
       inherit fonts fontconfigConf;
       inherit themes themed defaultTheme;
+      inherit cursors;
 
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
@@ -2008,6 +2015,7 @@ let
     ronoctua = {
       inherit fonts fontconfigConf;
       inherit themes themed defaultTheme;
+      inherit cursors;
 
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
@@ -4396,7 +4404,9 @@ let
     host = code_of((shell / "buffer.rs").read_text())
     gaps = []
 
-    frame = must(body_of(host, "pointer_frame"), "`pointer_frame`")
+    # `pointer_frame_here`: the trait method only makes the pointer that
+    # spoke `here` (`crate::seats`); what answers the events is this.
+    frame = must(body_of(host, "pointer_frame_here"), "`pointer_frame_here`")
 
     # 1) THE POINTER AT REST IS ANSWERED, and by the CELL.
     #
@@ -4420,7 +4430,10 @@ let
         # window ends in a footer places that block from the bottom edge), and
         # a needle spelling out `Self::` reported that the hover had gone away.
         (".cell_at(", "hover does not go through the same `cell_at` the click does"),
-        ("self.cell_under_pointer", "the host no longer remembers which cell the pointer is on"),
+        # `self.here`: the cell of THE POINTER THAT SPOKE, one per cursor
+        # (`crate::seats`) — a single field would be two hands taking one
+        # highlight from each other.
+        ("self.here.cell_under_pointer", "the host no longer remembers which cell each pointer is on"),
         ("Input::Hover", "motion no longer reaches the buffer"),
     ):
         if wanted not in motion:
@@ -4428,7 +4441,7 @@ let
     # AND ONLY WHEN THE CELL CHANGED. Without the comparison this is an event
     # per pointer report, which is the objection the old "there is no hover"
     # rule made and the only thing that would have made it true.
-    if not re.search(r"if\s+now\s*!=\s*self\.cell_under_pointer", motion):
+    if not re.search(r"if\s+now\s*!=\s*self\.here\.cell_under_pointer", motion):
         gaps.append("the host delivers a hover without asking whether the CELL changed")
     # AND THE MARGIN IS NOT CELL ZERO. `cell_at` answers `None` there, and
     # lighting the first row whenever a hand crossed the border is what sending
@@ -4442,10 +4455,12 @@ let
     if "Input::Unhover" not in leave:
         gaps.append("the pointer can leave the window with the highlight still lit")
 
-    # 3) THE WALL CARRIES IT, in the same `position` record the click uses.
+    # 3) THE WALL CARRIES IT, in a `pointed` record — the click's `position`
+    #    and WHICH CURSOR, because every cursor is a seat and each keeps its
+    #    own highlight; and `unhover` names the one that left.
     wit = (root / "crates" / "ronoctua-protocol" / "wit" / "buffer.wit").read_text()
     said = must(scope(wit, r"variant input"), "`variant input`")
-    for case in ("hover(position)", "unhover"):
+    for case in ("hover(pointed)", "unhover(u16)"):
         if case not in said:
             gaps.append("`variant input` no longer carries `" + case + "`")
     lower = code_of((root / "crates" / "ronoctua-runtime" / "src" / "lib.rs").read_text())
@@ -4456,12 +4471,16 @@ let
         if arm not in lowering:
             gaps.append("the runtime does not lower `" + arm + "`")
 
-    # 4) AND A BUFFER CAN DRAW IT. `surface.hover` had no role, so a buffer
-    #    could not name the ground every other window in the shell draws.
+    # 4) AND A BUFFER CAN DRAW IT — and draw EACH cursor's in its own colour.
+    #    `surface.hover` had no role once, so a buffer could not name the
+    #    ground every other window in the shell draws; `HoverOf` is the same
+    #    ground per cursor.
     lib = code_of((root / "crates" / "ronoctua-design" / "src" / "lib.rs").read_text())
     guest = code_of((root / "crates" / "ronoctua-design" / "src" / "guest.rs").read_text())
     if "Role::Hover" not in lib or "SurfaceHover" not in guest:
         gaps.append("no role reaches `surface.hover`, so a buffer cannot draw the row under the pointer")
+    if "Role::HoverOf" not in lib or "CursorHoverOne" not in guest:
+        gaps.append("no role reaches a cursor's own hover, so two hands on a buffer look like one")
 
     if gaps:
         print("ERROR: the pointer cannot be followed, or is followed too dearly.", file=sys.stderr)
@@ -4554,7 +4573,9 @@ let
 
         # 5) AND THE PRESS ASKS WITH A POINT, not with a cell. `shut_at` reads the
         #    call's own arguments, by its parentheses.
-        frame = must(body_of(host, "pointer_frame"), "`pointer_frame`")
+        # `pointer_frame_here`: the trait method only makes the pointer that
+        # spoke `here` (`crate::seats`); what answers the events is this.
+        frame = must(body_of(host, "pointer_frame_here"), "`pointer_frame_here`")
         call = "self.bar_under("
         if call not in frame:
             gaps.append("the press no longer asks whether it landed on a bar")
@@ -8262,6 +8283,7 @@ let
                 "bluetooth",
                 "power",
                 "audio",
+                "pointer_view",
                 "display",
                 "notifications_open",
                 "mx",
@@ -10713,6 +10735,61 @@ let
     END
   '';
 
+  # EVERY DOOR HEARS EVERY CURSOR.
+  #
+  # A cursor is a SEAT (`ronoctua-pointers` puts every pointing device on
+  # one), and a Wayland client is offered every seat. Every door of this shell
+  # used to keep ONE pointer — `if cap == Capability::Pointer &&
+  # self.pointer.is_none()` — so a second mouse moved a cursor that no window
+  # of ours answered: no hover, no click. The owner measured exactly that.
+  #
+  # So a door that takes pointers takes them through `crate::seats`: it hands
+  # each one to `Seats::took`, and its frame starts with `switch_to`, which is
+  # what keeps one cursor's drag, hover and wheel out of another's.
+  every-door-hears-every-seat = mkCheck "every-door-hears-every-seat" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a door is a file, and the question is whether ANY pointer it
+    # is offered is dropped — about the file, not one function. The frame is
+    # narrowed with `body_of`, because `switch_to` has to be where the events
+    # are handled and not merely somewhere in the file.
+    wrong = []
+    doors = 0
+    for path in sorted(pathlib.Path("${../crates/ronoctua-shell/src}").glob("*.rs")):
+        code = code_of(without_tests(path.read_text()))
+        if not re.search(r"impl SeatHandler for \w+", code):
+            continue
+        if "Capability::Pointer" not in code:
+            continue  # a door with no pointer at all — the terminal
+        doors += 1
+        name = path.name
+        if re.search(r"\bpointer\s*:\s*Option<\s*wl_pointer::WlPointer\s*>", code):
+            wrong.append(f"{name}: keeps ONE pointer (`pointer: Option<WlPointer>`)")
+        # The branch that takes a pointer asks WHAT was offered and nothing
+        # else: any second clause — `self.pointer.is_none()` was the old one —
+        # is a condition under which a cursor is dropped.
+        for cond in re.findall(r"\bif\s+([^{]*Capability::Pointer[^{]*)\{", code):
+            if not re.fullmatch(r"\s*\w+\s*==\s*Capability::Pointer\s*", cond):
+                wrong.append(f"{name}: takes a pointer only when `{cond.strip()}`")
+        if ".took(&seat" not in code:
+            wrong.append(f"{name}: never hands a pointer to `Seats::took`")
+        frame = body_of(code, "pointer_frame")
+        if frame is None or "switch_to(" not in frame:
+            wrong.append(f"{name}: its `pointer_frame` does not start from `switch_to`")
+    floor(doors, 15, "doors that take pointers")
+    if wrong:
+        print("ERROR: a door that drops a cursor:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        print("      Every pointer goes through `crate::seats`, or a second mouse", file=sys.stderr)
+        print("      moves a cursor this window does not answer.", file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {doors} doors, and every one hears every cursor")
+    END
+  '';
+
   every-window-repeats = mkCheck "every-window-repeats" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
@@ -11476,7 +11553,10 @@ let
     # the row and the ground it wears. Written out in full it broke the day the
     # band gained a column and a width — a change this check has no opinion
     # about, and a check that argues with every edit argues with none of them.
-    grep -E 'Selection \{ line: 3,.*surface-hover' hovered.txt > /dev/null \
+    # A CURSOR'S OWN HOVER: a buffer paints every hand in its colour, and
+    # it is the HOST that turns one lone cursor back into the neutral hover —
+    # this list is what the buffer drew, before the host.
+    grep -E 'Selection \{ line: 3,.*cursor-hover-one' hovered.txt > /dev/null \
       || { echo "ERROR: the pointer rested on a row and nothing lit under it." >&2; exit 1; }
     grep -q 'surface-selection' hovered.txt \
       || { echo "ERROR: the cursor's own band went away with the hover." >&2; exit 1; }
@@ -15700,6 +15780,7 @@ let
       # and default became two facts in `assets/themes/themes.nix`, and it went
       # unseen because these tests are in `most`, which had not been run since.
       inherit themes themed defaultTheme;
+      inherit cursors;
       inherit scroll;
       shell = rust.shell;
     };
@@ -15731,6 +15812,7 @@ let
       # and default became two facts in `assets/themes/themes.nix`, and it went
       # unseen because these tests are in `most`, which had not been run since.
       inherit themes themed defaultTheme;
+      inherit cursors;
       inherit scroll;
       shell = rust.shell;
       filesRoot = rust.filesRoot;
@@ -15750,6 +15832,7 @@ let
       # and default became two facts in `assets/themes/themes.nix`, and it went
       # unseen because these tests are in `most`, which had not been run since.
       inherit themes themed defaultTheme;
+      inherit cursors;
       inherit scroll;
       shell = rust.shell;
       filesRoot = rust.filesRoot;
@@ -15785,6 +15868,7 @@ let
       # and default became two facts in `assets/themes/themes.nix`, and it went
       # unseen because these tests are in `most`, which had not been run since.
       inherit themes themed defaultTheme;
+      inherit cursors;
       inherit scroll;
       shell = rust.shell;
     };
@@ -17107,6 +17191,98 @@ let
     echo "OK: the compositor reads every line of the config it will run"
   '';
 
+  # THE POINTERS FRAGMENT, IN FRONT OF A REAL COMPOSITOR — the sibling of
+  # `display-fragment-validates`, and for the same measured reason: an
+  # `include` that fails to parse fails in silence (`load_include_configs` is
+  # `void`), so a misspelt setting is a device that simply does not take it.
+  #
+  # What is validated is `every_line_the_writer_can_emit` — every one of the
+  # nineteen settings, the seat lines and the header — pinned by the writer's
+  # own test, so this reads what `text_of` really emits and not a copy.
+  pointers-fragment-validates =
+    mkCheck "pointers-fragment-validates"
+      [
+        pkgs.python3
+        scroll
+      ]
+      ''
+        python3 - <<'END'
+        import pathlib, sys
+        exec(open("${pyPrelude}").read())
+
+        # FILE-WIDE: what is read here is a raw literal pinned inside a test,
+        # found by the test's name, and `uncommented` keeps literals —
+        # `code_of` would empty the very text being validated.
+        source = uncommented(
+            pathlib.Path("${../crates/ronoctua-pointers/src}/fragment.rs").read_text()
+        )
+        floor(len(source), 2000, "characters of the pointers fragment.rs")
+        PINNED = "fn every_line_the_writer_can_emit"
+        at = source.find(PINNED)
+        begin = source.find('r#"', at)
+        # FROM PAST THE OPENING: the fragment starts with its `#` header, so
+        # `r#"#` itself contains the closing `"#`.
+        end = source.find('"#', begin + 3)
+        if at < 0 or begin < 0 or end < 0:
+            print(f"ERROR: {PINNED} no longer pins a raw literal", file=sys.stderr)
+            sys.exit(1)
+        text = source[begin + 3 : end]
+        # EVERY SPELLING HAS TO BE IN IT, or this validates a file that
+        # exercises nothing. The list is `wire::input_command`'s own.
+        missing = [
+            w
+            for w in (
+                "focus_follows_mouse ", "hide_cursor ", "when-typing ", " attach ",
+                "xcursor_theme ", " events ", "pointer_accel ", "accel_profile ",
+                "natural_scroll ", "left_handed ", "scroll_factor ", " tap ",
+                "tap_button_map ", " drag ", "drag_lock ", "three_finger_drag ",
+                "click_method ", "clickfinger_button_map ", "middle_emulation ",
+                "scroll_method ", "scroll_button ", "scroll_button_lock ", " dwt ",
+                " dwtp ",
+            )
+            if w not in text
+        ]
+        if missing:
+            print("ERROR: the pinned fragment does not exercise " + ", ".join(missing), file=sys.stderr)
+            sys.exit(1)
+        pathlib.Path("fragment.conf").write_text(text)
+        print(text)
+        END
+
+        export XDG_RUNTIME_DIR="$PWD/run"
+        mkdir -p "$XDG_RUNTIME_DIR"
+        export WLR_BACKENDS=headless
+        export WLR_RENDERER=pixman
+
+        # THE VERDICT IS THE OUTPUT, not the exit status — an include's errors
+        # never reach it (see `display-fragment-validates`).
+        printf 'include "%s/fragment.conf"\n' "$PWD" > with-fragment.conf
+        scroll --validate --config with-fragment.conf > said.txt 2>&1 || true
+        if grep -q 'Error' said.txt; then
+          echo "ERROR: the compositor REFUSED the fragment the pointer settings write." >&2
+          echo "       Every line it could not read is a setting a device never took." >&2
+          cat said.txt >&2
+          exit 1
+        fi
+
+        # AND A BROKEN ONE IS REFUSED. `pointer_accel` is a `strtof` with a
+        # range check, so a word there is certainly a refusal.
+        sed 's/pointer_accel -0.250/pointer_accel fast/' fragment.conf > broken.conf
+        if cmp -s fragment.conf broken.conf; then
+          echo "ERROR: the sabotage changed nothing; the refusal below would prove nothing." >&2
+          exit 1
+        fi
+        printf 'include "%s/broken.conf"\n' "$PWD" > with-broken.conf
+        scroll --validate --config with-broken.conf > broke.txt 2>&1 || true
+        if ! grep -q 'Error' broke.txt; then
+          echo "ERROR: the compositor said nothing about a speed that is a word," >&2
+          echo "       so the pass above proves nothing at all." >&2
+          cat broke.txt >&2
+          exit 1
+        fi
+        echo "OK: the compositor reads every line the pointer settings write, and refuses a broken one"
+      '';
+
   display-fragment-validates =
     mkCheck "display-fragment-validates"
       [
@@ -17722,81 +17898,90 @@ let
     #
     # `uncommented` for the Rust, because the NAME is the string literal being
     # read out; `hashless` for the Nix, whose comment is `#`.
-    rust = uncommented(pathlib.Path("${../crates/ronoctua-display/src/fragment.rs}").read_text())
-    floor(len(rust), 200, "characters of fragment.rs")
-    m = re.search(r'pub const FILE: &str = "([^"]+)";', rust)
-    if not m:
-        print("ERROR: `fragment::FILE` is not there to compare against.", file=sys.stderr)
-        raise SystemExit(1)
-    name = m.group(1)
-
-    # AN `include` LINE, not a mention. `scroll-display.conf` appears in
-    # `nix/modules/scroll.nix` twice — once inside an error message and once in
-    # the real include — so deleting the include left the compositor reading
-    # nothing while this check stayed green on the sentence. Same shape in the
-    # VM test, where one of the two is a comment.
-    # AND THE LINE IS CODE, NOT PROSE.
-    #
-    # The header above says "an `include` LINE, not a mention" and then read
-    # raw text, so the sentence was not enforced: deleting the real include and
-    # leaving `# we used to include scroll-display.conf here` kept this green,
-    # which is exactly the state the error message below describes.
-    # This was a local `code_of` that took a `#` off each line and handed back
-    # a LIST. It is `hashless` now — the prelude's, which answers with text —
-    # and the name no longer shadows the Rust-shaped stripper of the same name.
-
-    # AND THE WHOLE PATH, NOT THE BASENAME.
-    #
-    # `name` is `scroll-display.conf`, and the shell writes it into
-    # `ronoctua_store::config_dir()`. An include of the same basename in ANOTHER
-    # directory — `~/.config/scroll/` is the plausible one, since the theme
-    # fragment lives there — matches on the basename and reads a file nobody
-    # writes. So the directory the shell writes to has to be in the line too.
-    # THE SEGMENT, JOINED TO THE NAME, and not the word on its own: these
-    # lines interpolate `config.ronoctua.user`, so a path through
-    # `.config/scroll/` still has "ronoctua" somewhere in it and a bare word
-    # test passes over exactly the swap it is meant to catch.
-    where_written = "ronoctua/" + name
-    wrong = []
-    for label, path in (
-        ("nix/modules/scroll.nix", "${../nix/modules/scroll.nix}"),
-        ("nix/dev.nix", "${../nix/dev.nix}"),
-        ("tests/display-vm.nix", "${../tests/display-vm.nix}"),
+    # TWO FRAGMENTS NOW, under the same rule: the screens (`ronoctua-display`)
+    # and the pointers (`ronoctua-pointers`). One loop, so the second is held
+    # to exactly what the first was — a sibling check copied beside it would
+    # be the next thing to drift.
+    for crate_label, fragment_rs, lib_rs in (
+        ("crates/ronoctua-display", "${../crates/ronoctua-display/src/fragment.rs}", "${../crates/ronoctua-display/src}/lib.rs"),
+        ("crates/ronoctua-pointers", "${../crates/ronoctua-pointers/src/fragment.rs}", "${../crates/ronoctua-pointers/src}/lib.rs"),
     ):
-        lines = [
-            l
-            for l in hashless(pathlib.Path(path).read_text()).splitlines()
-            if "include" in l and name in l
-        ]
-        if not lines:
-            wrong.append(label)
-        elif not any(where_written in l for l in lines):
+        rust = uncommented(pathlib.Path(fragment_rs).read_text())
+        floor(len(rust), 200, "characters of fragment.rs")
+        m = re.search(r'pub const FILE: &str = "([^"]+)";', rust)
+        if not m:
+            print("ERROR: `fragment::FILE` is not there to compare against in " + crate_label, file=sys.stderr)
+            raise SystemExit(1)
+        name = m.group(1)
+
+        # AN `include` LINE, not a mention. `scroll-display.conf` appears in
+        # `nix/modules/scroll.nix` twice — once inside an error message and once in
+        # the real include — so deleting the include left the compositor reading
+        # nothing while this check stayed green on the sentence. Same shape in the
+        # VM test, where one of the two is a comment.
+        # AND THE LINE IS CODE, NOT PROSE.
+        #
+        # The header above says "an `include` LINE, not a mention" and then read
+        # raw text, so the sentence was not enforced: deleting the real include and
+        # leaving `# we used to include scroll-display.conf here` kept this green,
+        # which is exactly the state the error message below describes.
+        # This was a local `code_of` that took a `#` off each line and handed back
+        # a LIST. It is `hashless` now — the prelude's, which answers with text —
+        # and the name no longer shadows the Rust-shaped stripper of the same name.
+
+        # AND THE WHOLE PATH, NOT THE BASENAME.
+        #
+        # `name` is `scroll-display.conf`, and the shell writes it into
+        # `ronoctua_store::config_dir()`. An include of the same basename in ANOTHER
+        # directory — `~/.config/scroll/` is the plausible one, since the theme
+        # fragment lives there — matches on the basename and reads a file nobody
+        # writes. So the directory the shell writes to has to be in the line too.
+        # THE SEGMENT, JOINED TO THE NAME, and not the word on its own: these
+        # lines interpolate `config.ronoctua.user`, so a path through
+        # `.config/scroll/` still has "ronoctua" somewhere in it and a bare word
+        # test passes over exactly the swap it is meant to catch.
+        where_written = "ronoctua/" + name
+        wrong = []
+        for label, path in (
+            ("nix/modules/scroll.nix", "${../nix/modules/scroll.nix}"),
+            ("nix/dev.nix", "${../nix/dev.nix}"),
+            ("tests/display-vm.nix", "${../tests/display-vm.nix}"),
+        ):
+            lines = [
+                l
+                for l in hashless(pathlib.Path(path).read_text()).splitlines()
+                if "include" in l and name in l
+            ]
+            if not lines:
+                wrong.append(label)
+            elif not any(where_written in l for l in lines):
+                wrong.append(
+                    label + f" (includes `{name}` from a directory that is not the "
+                    f"one the shell writes to, which has `{where_written}` in it)"
+                )
+
+        # AND THE WRITER USES THE CONSTANT. Proving the constant exists says
+        # nothing about the file the shell actually opens: a literal at the one
+        # `write_atomically` reproduces the whole defect with every name in place.
+        #
+        # ASKED OF THE CALL, not of the file. `"fragment::FILE" in crate` is true
+        # while the constant is merely MENTIONED — in the read-back one line above
+        # the write, or in a comment — so swapping the write itself for a literal
+        # left this green, and a later rename then writes one name and includes
+        # another. That is the one scenario this whole check exists for.
+        crate = code_of(pathlib.Path(lib_rs).read_text())
+        floor(len(crate), 2000, crate_label + "'s lib.rs characters")
+        writes = re.findall(r"write_atomically\(([^;]*?)\)\s*(?:\.|;|$)", crate, re.S)
+        frag = [w for w in writes if "fragment::FILE" in w]
+        if not writes:
+            wrong.append(crate_label + " (no `write_atomically` to read)")
+        elif not frag:
             wrong.append(
-                label + f" (includes `{name}` from a directory that is not the "
-                f"one the shell writes to, which has `{where_written}` in it)"
+                crate_label + " (no `write_atomically` names "
+                "`fragment::FILE`, so the fragment is written under some other name)"
             )
-
-    # AND THE WRITER USES THE CONSTANT. Proving the constant exists says
-    # nothing about the file the shell actually opens: a literal at the one
-    # `write_atomically` reproduces the whole defect with every name in place.
-    #
-    # ASKED OF THE CALL, not of the file. `"fragment::FILE" in crate` is true
-    # while the constant is merely MENTIONED — in the read-back one line above
-    # the write, or in a comment — so swapping the write itself for a literal
-    # left this green, and a later rename then writes one name and includes
-    # another. That is the one scenario this whole check exists for.
-    crate = code_of(pathlib.Path("${../crates/ronoctua-display/src}/lib.rs").read_text())
-    floor(len(crate), 2000, "characters of ronoctua-display's lib.rs")
-    writes = re.findall(r"write_atomically\(([^;]*?)\)\s*(?:\.|;|$)", crate, re.S)
-    frag = [w for w in writes if "fragment::FILE" in w]
-    if not writes:
-        wrong.append("crates/ronoctua-display/src/lib.rs (no `write_atomically` to read)")
-    elif not frag:
-        wrong.append(
-            "crates/ronoctua-display/src/lib.rs (no `write_atomically` names "
-            "`fragment::FILE`, so the fragment is written under some other name)"
-        )
-
+        if wrong:
+            break
     if wrong:
         print(f"ERROR: the shell writes `{name}` and these do not include it:", file=sys.stderr)
         print("", file=sys.stderr)
@@ -22087,6 +22272,7 @@ let
       a-note-is-wrapped-and-not-cut
       the-shots-script-fits-in-an-argument
       every-window-repeats
+      every-door-hears-every-seat
       every-window-knows-its-scale
       every-list-window-has-a-bar
       every-window-header-opens
@@ -22171,6 +22357,7 @@ let
       a-note-is-wrapped-and-not-cut
       the-shots-script-fits-in-an-argument
       every-window-repeats
+      every-door-hears-every-seat
       every-window-knows-its-scale
       every-list-window-has-a-bar
       every-window-header-opens
@@ -22255,6 +22442,7 @@ let
       the-session-reaches-its-target
       only-the-composition-root-names-the-compositor
       display-fragment-validates
+      pointers-fragment-validates
       display-fragment-has-one-name
       one-text-size
       bluetooth-bus-policy-is-open

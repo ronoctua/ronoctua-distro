@@ -69,6 +69,12 @@
   # THE SCENE'S ASSERTION IS A COLOUR, because the report was. A count of rows
   # or a word on screen would have passed the whole time the defect existed.
   { id = "history"; }
+  # MICE, TOUCHPADS AND EVERY CURSOR (`LEADER s i i`). The machine has one
+  # pointer — the X11 backend's own — so the view shows one cursor, and its
+  # glyph is painted in that cursor's colour. THE ASSERTION IS THAT COLOUR:
+  # a view that drew no cursor, or drew it in the text's tone, would photograph
+  # as a list of words and pass any assertion about words.
+  { id = "pointers"; }
   # THE OTHER HALF OF WHAT THE OWNER REPORTED: he could not find a way to turn
   # Tor on. The section lived behind `if let Some(scene)`, and the control
   # socket only answers when Tor is already running — so a stopped Tor drew no

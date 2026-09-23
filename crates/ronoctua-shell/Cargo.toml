@@ -91,6 +91,9 @@ ronoctua-power = { path = "../ronoctua-power" }
 ronoctua-clock = { path = "../ronoctua-clock" }
 # The screens: what they can do, how bright they are, and how big the text is.
 ronoctua-display = { path = "../ronoctua-display" }
+# The pointing devices and the seat each is on: the settings view, and the
+# colour every cursor's hover band is painted in.
+ronoctua-pointers = { path = "../ronoctua-pointers" }
 # THE ONE BOUNDARY WITH PIPEWIRE. The modeline draws two marks off it at
 # rest and the bare volume keys act through it with no view open, so the
 # footer holds its threads for the whole session — the power crate's

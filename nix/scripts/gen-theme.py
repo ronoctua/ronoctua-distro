@@ -721,6 +721,29 @@ CHART_COUNT, CHART_MEASURE_L, CHART_CHROMA = 8, 0.72, 0.75
 #: the shape the reference gives every ramp ("backgrounds carrying full chroma
 #: look garish and text carrying it looks cheap").
 LEVEL_TOP_L = 0.90
+#: THE CURSORS: one per seat, eight colours, and a ninth cursor reuses the
+#: first (the owner's choice — past eight, colours stop being told apart at
+#: the size of a cursor). The inside is BRIGHT and the outline DARK in both
+#: polarities, because a cursor is drawn over anything — a photograph, a
+#: terminal, the other theme's windows — and the pair that reads on every
+#: ground is the classic one: light inside, dark rim. The hues are spaced at
+#: equal ΔE from the accent, like the chart set, but at ONE lightness: here
+#: the colour is the only thing telling two cursors apart, and a ramp would
+#: let two of them differ mostly by how light they are.
+CURSOR_COUNT, CURSOR_L, CURSOR_CHROMA, CURSOR_OUTLINE_L = 8, 0.80, 0.70, 0.16
+#: THE SAME EIGHT IN EVERY THEME, from a fixed hue rather than the accent. A
+#: cursor's colour is how a person tells WHICH HAND is which, and a theme
+#: switch that repainted every cursor would unlearn that; it also makes the
+#: cursor images eight builds instead of eight per theme (`nix/cursors.nix`).
+#: Only the hover band is per theme — it lies on the theme's own surfaces.
+CURSOR_START_HUE = 265.0
+#: And the band each cursor's hover paints in the shell: its hue at the
+#: lightness the neutral hover row already sits at, with enough chroma to say
+#: WHOSE hover it is. PER POLARITY, measured: near black the chroma a hue can
+#: carry is small, so a dark theme needs nearly all of it for eight bands to
+#: be told apart (evilside's closest pair was ΔE 0.019 at 0.80); near white
+#: the same share carries the yellow band onto the film's `#FFFF00`.
+CURSOR_HOVER_CHROMA = {"dark": 0.95, "light": 0.60}
 
 
 def shaped_tokens(theme: Theme) -> dict[str, Resolved]:
@@ -753,6 +776,17 @@ def shaped_tokens(theme: Theme) -> dict[str, Resolved]:
         l = 0.50 + theme.rising * 0.40 * i / (CHART_COUNT - 1)
         lch, rgb8 = cs.screen_colour(l, hue, rel)
         put(f"chart.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, L {l:.2f}, equal ΔE arcs from the accent"), "computed")
+
+    cursor_rel = CURSOR_CHROMA
+    cursor_hues = cs.even_delta_e_hues(CURSOR_COUNT, CURSOR_START_HUE, CURSOR_L, cursor_rel)
+    hover_l = theme.primitive("neutral", "hover").lch[0]
+    for i, hue in enumerate(cursor_hues):
+        lch, rgb8 = cs.screen_colour(CURSOR_L, hue, cursor_rel)
+        put(f"cursor.fill.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, L {CURSOR_L:.2f}, equal ΔE arcs from the accent"), "computed")
+        lch, rgb8 = cs.screen_colour(hover_l, hue, CURSOR_HOVER_CHROMA["dark" if theme.rising > 0.0 else "light"])
+        put(f"cursor.hover.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, at the neutral hover's L {hover_l:.3f}"), "computed")
+    lch, rgb8 = cs.screen_colour(CURSOR_OUTLINE_L, CURSOR_START_HUE, 0.0)
+    put("cursor.outline", Swatch(lch, rgb8, f"achromatic, L {CURSOR_OUTLINE_L:.2f}"), "computed")
 
     bottom = theme.primitive("accent", "ground").lch[0]
     # AND THE FAR END OF THE ORDINAL RAMP IS MIRRORED WITH IT. `LEVEL_TOP_L` is
@@ -1149,6 +1183,18 @@ CONTENT_GROUNDS = ("surface.buffer", "surface.chrome", "surface.container")
 #: between 15 and 20 — the dark end of the ramp on a card, in cyber, midnight,
 #: industrial, owl and darkside. Those are warns, and they are true.
 CHART_ON_GROUND = (15, 20)
+#: Two cursors' insides: STRICTER than two chart colours (which fail only
+#: under a JND), since a cursor is smaller than any chart mark — and not
+#: stricter than eight hues at one lightness can be. Measured: at L 0.80 the
+#: closest pair of eight equal-ΔE hues lands between 0.053 and 0.065.
+CURSOR_GAP = (0.05, 0.06)
+#: A cursor's inside against its own rim — the edge that makes it a shape.
+CURSOR_RIM = (60, 70)
+#: A hover band against the surface it is drawn on, the `surface.hover`
+#: separation this family stands in for.
+CURSOR_HOVER_BAND = (0.02, 0.03)
+#: Two cursors' hover bands, told apart from each other.
+CURSOR_HOVER_GAP = (cs.JND, 0.03)
 #: THE LOUD END OF AN ORDINAL RAMP, which is the half of it that has to read.
 #: The floor every signal in this file carries; measured 83.2 to 87.0.
 LEVEL_TOP_FLOOR = (45, 50)
@@ -1267,6 +1313,25 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
         for b in charts[i + 1 :]:
             v = de(a, b)
             findings.append(Finding(_level(v, *CHART_GAP), "categorical", f"{a} vs {b}", v, f"ΔE ≥ {CHART_GAP[0]}"))
+    # THE CURSORS: every pair of fills tells two cursors apart, every fill
+    # reads against its own outline, and every hover band is a band — told
+    # apart from the ground it lies on and from the other cursors' bands.
+    fills = [f"cursor.fill.{WORDS[i + 1]}" for i in range(CURSOR_COUNT)]
+    for i, a in enumerate(fills):
+        for b in fills[i + 1 :]:
+            v = de(a, b)
+            findings.append(Finding(_level(v, *CURSOR_GAP), "cursors", f"{a} vs {b}", v, f"ΔE ≥ {CURSOR_GAP[0]}"))
+        v = lc(a, "cursor.outline")
+        findings.append(Finding(_level(v, *CURSOR_RIM), "cursors", f"{a} on cursor.outline", v, f"Lc ≥ {CURSOR_RIM[0]}"))
+    hovers = [f"cursor.hover.{WORDS[i + 1]}" for i in range(CURSOR_COUNT)]
+    for i, a in enumerate(hovers):
+        for ground in ("surface.chrome", "surface.buffer"):
+            v = de(a, ground)
+            findings.append(Finding(_level(v, *CURSOR_HOVER_BAND), "cursors", f"{a} on {ground}", v, f"ΔE ≥ {CURSOR_HOVER_BAND[0]}"))
+        for b in hovers[i + 1 :]:
+            v = de(a, b)
+            findings.append(Finding(_level(v, *CURSOR_HOVER_GAP), "cursors", f"{a} vs {b}", v, f"ΔE ≥ {CURSOR_HOVER_GAP[0]}"))
+
     levels = [f"level.{WORDS[k]}" for k in range(11)]
     for a, b in zip(levels, levels[1:]):
         v = de(a, b)
@@ -1366,6 +1431,12 @@ def write_fragments(directory: pathlib.Path, theme_id: str, mode: str, tokens: d
     (directory / "compositor-border-active").write_text(hexes["border.active"])
     (directory / "compositor-border-inactive").write_text(hexes["border.inactive"])
     (directory / "compositor-background").write_text(hexes["surface.base"])
+    # THE CURSORS, for `nix/cursors.nix`: one line per colour, the inside and
+    # the rim, in the order the numbers go. A file and not a read of the JSON
+    # so the cursor build depends on exactly these bytes.
+    (directory / "cursor-colours").write_text(
+        "".join(f"{hexes[f'cursor.fill.{WORDS[i + 1]}']} {hexes['cursor.outline']}\n" for i in range(CURSOR_COUNT))
+    )
     for name, desk in (
         ("scroll-black.conf", BLACK),
         ("scroll-backdrop.conf", hexes["surface.backdrop"]),

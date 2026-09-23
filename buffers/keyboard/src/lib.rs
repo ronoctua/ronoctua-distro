@@ -120,7 +120,7 @@ struct State {
     /// the next frame.
     follows: bool,
     /// The cell the pointer is on, if it is on one.
-    hover: Option<(u16, u16)>,
+    hover: ronoctua_design::Hovers,
     /// WHERE THE LIST WAS DRAWN, remembered where it was measured.
     ///
     /// The first line depends on the heading's own arithmetic, which depends
@@ -277,9 +277,16 @@ impl State {
         vec![Effect::Redraw]
     }
 
-    /// Which row of the list the pointer is on, if it is on one.
-    fn hovered_row(&self) -> Option<usize> {
-        let (_, line) = self.hover?;
+    /// WHOSE HAND is on row `n`, if any: a cursor per seat rests on this
+    /// buffer, and the row takes the colour of the first one on it
+    /// (`Hovers::first`).
+    fn hover_on(&self, n: usize) -> Option<u16> {
+        self.hover
+            .first(|(_, line)| self.row_of_line(line) == Some(n))
+    }
+
+    /// Which row of the list a line of the window is, if it is one.
+    fn row_of_line(&self, line: u16) -> Option<usize> {
         self.row_at(line)
     }
 
@@ -441,12 +448,12 @@ impl State {
                         let here = n == s.cursor;
                         if here {
                             screen.ground_in(line, 0, body, Role::Band);
-                        } else if s.hovered_row() == Some(n) {
+                        } else if let Some(seat) = s.hover_on(n) {
                             // THE ROW UNDER THE POINTER, in a tone of its own:
                             // the cursor is where the KEYBOARD is and the hover
                             // is where a click would land, and every window in
                             // the shell answers the two separately.
-                            screen.ground_in(line, 0, body, Role::Hover);
+                            screen.ground_in(line, 0, body, Role::hover_of(seat));
                         }
                         let name = Run::datum(&board.name).within(second.saturating_sub(1));
                         screen.put(line, if here { name.accent() } else { name });
@@ -534,8 +541,8 @@ impl State {
                         let here = n == s.cursor;
                         if here {
                             screen.ground_in(line, 0, body, Role::Band);
-                        } else if s.hovered_row() == Some(n) {
-                            screen.ground_in(line, 0, body, Role::Hover);
+                        } else if let Some(seat) = s.hover_on(n) {
+                            screen.ground_in(line, 0, body, Role::hover_of(seat));
                         }
                         let label = Run::label(&word.text).within(second.saturating_sub(1));
                         screen.put(line, if here { label.accent() } else { label });
@@ -658,18 +665,17 @@ impl State {
                     None => Vec::new(),
                 },
                 Input::Hover(p) => {
-                    let now = Some((p.column, p.line));
-                    if s.hover == now {
+                    // PER CURSOR: `p.seat` says which hand, and each keeps its own cell.
+                    if !s.hover.set(p.seat, (p.at.column, p.at.line)) {
                         return Vec::new();
                     }
-                    s.hover = now;
                     vec![Effect::Redraw]
                 }
-                Input::Unhover => {
-                    if s.hover.is_none() {
+                Input::Unhover(seat) => {
+                    // ONLY THAT HAND'S: another cursor resting here keeps its row lit.
+                    if !s.hover.clear(seat) {
                         return Vec::new();
                     }
-                    s.hover = None;
                     vec![Effect::Redraw]
                 }
                 // THE WHEEL SCROLLS THE WINDOW and leaves the cursor where it

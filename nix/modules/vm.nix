@@ -70,6 +70,37 @@
     };
   };
 
+  # EVERY CURSOR IS DRAWN INTO THE PICTURE, in the VM and nowhere else.
+  #
+  # The compositor puts a seat's cursor on the GPU's cursor PLANE when it can,
+  # and QEMU's window does not draw that plane where the guest put it: with an
+  # absolute device present — the tablet that carries the host's pointer in —
+  # `gd_mouse_set` (`ui/gtk.c`) returns early and the window shows the cursor
+  # image at the HOST pointer's position. So a second mouse passed through to
+  # the guest moved seat0's cursor where nobody could see it, and its clicks
+  # landed there, read as "they act on the touchpad's cursor". Found testing
+  # two seats: the second seat's cursor was visible only because the plane
+  # holds one, and the other was drawn into the picture.
+  #
+  # Drawn by the compositor, every cursor is where the guest says it is. The
+  # installed system keeps the plane: on real hardware it is the right answer.
+  systemd.user.services.scroll.environment.WLR_NO_HARDWARE_CURSORS = "1";
+
+  # QEMU'S OWN POINTERS STEP ASIDE WHEN THE HOST'S ARE HERE.
+  #
+  # `nix run .#vm -- --pointers` hands the host's mice and touchpads to the
+  # guest one by one, and QEMU grabs them — so the tablet that carries the
+  # host's pointer in, and the PS/2 mouse beside it, receive nothing for as
+  # long as the VM runs. Left to libinput they are pointers like any other,
+  # each a cursor that no hand can move: measured, a sixth cursor for five
+  # devices. The runner says it passed them through with a kernel flag, and
+  # this is the only reader of it. Without the flag nothing changes, because
+  # then the tablet IS the host's mouse.
+  services.udev.extraRules = ''
+    SUBSYSTEM=="input", IMPORT{cmdline}="ronoctua_pointers"
+    SUBSYSTEM=="input", ENV{ronoctua_pointers}=="1", ATTRS{name}=="QEMU QEMU USB Tablet|VirtualPS/2 VMware VMMouse|ImExPS/2 Generic Explorer Mouse", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+  '';
+
   # NO ANDROID IN THE DEV VM.
   #
   # Android Studio is a ~1,5 GB unfree download from Google's CDN, and it is the

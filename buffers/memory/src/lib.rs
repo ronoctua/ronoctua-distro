@@ -196,7 +196,7 @@ struct State {
     /// drag and the bar all count in it.
     list_lines: u16,
     /// The cell the pointer is on, if it is on one.
-    hover: Option<(u16, u16)>,
+    hover: ronoctua_design::Hovers,
 }
 
 impl State {
@@ -211,7 +211,7 @@ impl State {
             lines: 24,
             list_top: None,
             list_lines: 0,
-            hover: None,
+            hover: ronoctua_design::Hovers::new(),
         }
     }
 }
@@ -463,7 +463,7 @@ fn entry(screen: &mut Screen<Wit>, e: Entry) {
 /// length and it is what one came to read; a path cut at twenty cells with
 /// sixty empty ones beside it is the spacing complaint this whole change came
 /// from, seen from the other side.
-fn consumer(screen: &mut Screen<Wit>, c: &Consumer, focused: bool, under: bool) {
+fn consumer(screen: &mut Screen<Wit>, c: &Consumer, focused: bool, under: Option<u16>) {
     if !above_the_footer(screen) {
         return;
     }
@@ -475,8 +475,10 @@ fn consumer(screen: &mut Screen<Wit>, c: &Consumer, focused: bool, under: bool) 
         // THE SELECTION IS A LINE, not a box: there is no rectangle in this
         // protocol, and a box would be the card invariant 15 refuses.
         screen.ground_in(at, 0, body, Role::Band);
-    } else if under {
-        screen.ground_in(at, 0, body, Role::Hover);
+    } else if let Some(seat) = under {
+        // IN THAT CURSOR'S COLOUR — the host keeps it neutral while there
+        // is only one.
+        screen.ground_in(at, 0, body, Role::hover_of(seat));
     }
     // AND THE COLUMNS ARE MEASURED IN WHAT IS LEFT, not in the whole width:
     // the lane above is kept for the bar, and a row laid out against the full
@@ -620,7 +622,7 @@ impl State {
             line_of(screen, Run::label(waiting(s)).quiet());
         } else {
             for c in s.consumers.iter().take(BIGGEST) {
-                consumer(screen, c, false, false);
+                consumer(screen, c, false, None);
             }
         }
 
@@ -715,7 +717,7 @@ impl State {
                     // cursor is where the KEYBOARD is and the hover is where a
                     // click would land, and every window in the shell answers
                     // the two separately.
-                    let under = self.hovered_row() == Some(i);
+                    let under = self.hover_on(i);
                     consumer(screen, c, i == self.cursor, under);
                 }
                 // AND THE BAR, over the rows it belongs to. A list one cannot
@@ -895,9 +897,16 @@ impl State {
         }
     }
 
-    /// Which row of the list the pointer is on, if it is on one.
-    fn hovered_row(&self) -> Option<usize> {
-        let (_, line) = self.hover?;
+    /// WHOSE HAND is on row `n`, if any: a cursor per seat rests on this
+    /// buffer, and the row takes the colour of the first one on it
+    /// (`Hovers::first`).
+    fn hover_on(&self, n: usize) -> Option<u16> {
+        self.hover
+            .first(|(_, line)| self.row_of_line(line) == Some(n))
+    }
+
+    /// Which row of the list a line of the window is, if it is one.
+    fn row_of_line(&self, line: u16) -> Option<usize> {
         let first = self.list_top?;
         if line < first || line >= first.saturating_add(self.list_lines) {
             return None;
@@ -1249,19 +1258,18 @@ impl State {
             // not get to guess it.
             // THE POINTER AT REST, and the two gestures that move the window.
             // A panel only the keyboard can drive is half a panel.
+            // PER CURSOR: `p.seat` says which hand, each keeps its own cell,
+            // and one leaving puts out only its own.
             Input::Hover(p) => {
-                let now = Some((p.column, p.line));
-                if s.hover == now {
+                if !s.hover.set(p.seat, (p.at.column, p.at.line)) {
                     return vec![];
                 }
-                s.hover = now;
                 vec![Effect::Redraw]
             }
-            Input::Unhover => {
-                if s.hover.is_none() {
+            Input::Unhover(seat) => {
+                if !s.hover.clear(seat) {
                     return vec![];
                 }
-                s.hover = None;
                 vec![Effect::Redraw]
             }
             // THE WHEEL SCROLLS THE WINDOW and leaves the cursor where it is:

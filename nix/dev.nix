@@ -40,6 +40,8 @@
   atlasData,
   # Roots the flake's downloads before anything builds (nix/kept-sources.nix).
   keepSources,
+  # One Xcursor theme per cursor colour (nix/cursors.nix).
+  cursors,
   themed,
   themes,
   defaultTheme,
@@ -159,10 +161,8 @@ let
         xkb_file "${nestedKeymap}"
     }
 
-    input type:touchpad {
-        tap enabled
-        natural_scroll enabled
-    }
+    # No `type:touchpad` block: the touchpad defaults are `ronoctua-pointers`'
+    # (see the same note in `nix/modules/scroll.nix`).
 
     # THE COLOURS COME FROM THE TOKENS (invariant 9), spliced from the solved
     # palette by the derivation below — the same three files `.#dev` and
@@ -579,6 +579,9 @@ let
         # above sets the nested output's mode, and a block for the person's
         # own monitor simply does not match it.
         echo "include \"''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-display.conf\""
+        # AND THE POINTERS: which seat every pointing device is on, and the
+        # cursor each seat draws.
+        echo "include \"''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-pointers.conf\""
       } >> "$cfg_themed"
 
       # ── THE HOST'S OWN PIXELS ────────────────────────────────────────────
@@ -869,6 +872,9 @@ let
       # In the background, and not `exec`: the script stays up to supervise
       # the footer and the watcher.
       compositor_log=$(mktemp -t ronoctua-compositor-XXXXXX.log)
+      # THE CURSOR THEMES, where the compositor looks for the one each seat is
+      # given (`nix/cursors.nix`) — the same path the installed unit sets.
+      export XCURSOR_PATH="${cursors}/share/icons''${XCURSOR_PATH:+:$XCURSOR_PATH}"
       scroll --config "$cfg" > "$compositor_log" 2>&1 &
       compositor_pid=$!
       # AND THE WATCHER IS TOLD WHICH PROCESS THAT IS.

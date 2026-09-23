@@ -2657,13 +2657,19 @@ pub enum Input {
         column: u16,
         /// The row, from the buffer's (0,0) cell.
         line: u16,
+        /// Which cursor — its colour number, from 0 (`pointed` in the WIT).
+        seat: u16,
     },
     /// The pointer left the window.
     ///
     /// Its own case rather than a `Hover` with no position: "gone" and
     /// "somewhere I cannot place" are different answers, and only the first one
-    /// should put a highlight out.
-    Unhover,
+    /// should put a highlight out. It names the cursor that left, so another
+    /// cursor's highlight stays.
+    Unhover {
+        /// Which cursor left.
+        seat: u16,
+    },
 }
 
 #[cfg(test)]

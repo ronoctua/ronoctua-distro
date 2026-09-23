@@ -211,7 +211,7 @@
       keepSources = "${
         pkgs.callPackage ./nix/kept-sources.nix {
           inherit inputs;
-          downloads = atlasData.sources;
+          downloads = atlasData.sources ++ [ pkgs.bibata-cursors.src ];
         }
       }/bin/ronoctua-keep-sources";
 
@@ -276,6 +276,9 @@
         themesDir = ./assets/themes;
         recipesFile = ./assets/tokens/colors.nix;
       };
+
+      # THE CURSORS, one Xcursor theme per cursor colour. See nix/cursors.nix.
+      cursors = pkgs.callPackage ./nix/cursors.nix { inherit themed defaultTheme; };
 
       tokensRs = pkgs.callPackage ./nix/tokens.nix {
         inherit glyphdb themed defaultTheme;
@@ -565,6 +568,7 @@
         inherit
           atlasData
           keepSources
+          cursors
           graphicsHost
           reloadApp
           scroll
@@ -787,6 +791,9 @@
               # palettes (files the modules splice or point at; never read at
               # evaluation).
               inherit themes themed defaultTheme;
+              # THE CURSORS, one Xcursor theme per cursor colour: the
+              # compositor module puts them where the compositor looks.
+              inherit cursors;
               # The shell's binary: the compositor module generates the chord
               # binds from its command table.
               #
@@ -893,6 +900,7 @@
         tokens-rs = tokensRs;
         # The solved palettes, their fragments and the gates' report.
         themes = themed;
+        inherit cursors;
         mime-db = mimeDb;
         notifications-rs = notificationsRs;
         bluetooth-profiles-rs = bluetoothProfilesRs;
@@ -1166,6 +1174,7 @@
           themes
           themed
           defaultTheme
+          cursors
           ;
         inherit
           pkgs
@@ -1429,7 +1438,71 @@
               <cachedir prefix="xdg">fontconfig</cachedir>
             </fontconfig>
           ''}
-          exec ${self.nixosConfigurations.vm.config.system.build.vm}/bin/run-${self.nixosConfigurations.vm.config.networking.hostName}-vm "$@"
+          # `--pointers`: EVERY MOUSE AND TOUCHPAD OF THE HOST, EACH ITS OWN.
+          #
+          # QEMU's window gathers every host pointer into ONE emulated device,
+          # so without this the guest sees one mouse however many are on the
+          # desk, and every one of them moves the same cursor — which is
+          # exactly what a multi-cursor desktop cannot be tried with. Each
+          # device passed as `virtio-input-host-pci` arrives in the guest as
+          # itself, and the guest gives it a cursor of its own.
+          #
+          # OPT-IN, because QEMU GRABS what it is given: while the VM runs, the
+          # host's pointers move nothing on the host. They come back when the
+          # VM closes. The keyboard is left alone.
+          #
+          # BY UDEV, never by a name: `ID_INPUT_MOUSE` and `ID_INPUT_TOUCHPAD`
+          # are what the host's own stack decided the device is. keyd's
+          # virtual devices (vendor 0fac) are the keyboards' output and not a
+          # hand, and are left on the host.
+          pass=()
+          for a in "$@"; do
+            if [ "$a" = "--pointers" ]; then
+              pointers=yes
+            else
+              pass+=("$a")
+            fi
+          done
+          if [ "''${pointers:-}" = yes ]; then
+            found=0
+            for dev in /dev/input/event*; do
+              props=$(${pkgs.systemd}/bin/udevadm info -q property -n "$dev" 2>/dev/null) || continue
+              if ! grep -qE '^ID_INPUT_(MOUSE|TOUCHPAD)=1$' <<< "$props"; then
+                continue
+              fi
+              if grep -qiE '^ID_VENDOR_ID=0fac$' <<< "$props"; then
+                continue
+              fi
+              name=$(${pkgs.gawk}/bin/awk -F= '$1 == "NAME" { gsub(/"/, "", $2); print $2 }' <<< "$props")
+              if [ -z "$name" ]; then
+                name=$(cat "/sys/class/input/''${dev##*/}/device/name" 2>/dev/null || echo "$dev")
+              fi
+              case "$name" in
+                *keyd*) continue ;;
+              esac
+              # READ ACCESS, asked for once and only where it is missing: the
+              # node is `root:input 0660`, and an ACL for this user is the
+              # narrowest thing that opens it. It lasts until the device is
+              # replugged or the host reboots.
+              if [ ! -r "$dev" ] || [ ! -w "$dev" ]; then
+                echo "vm: $name ($dev) needs read access; asking sudo for it"
+                sudo ${pkgs.acl}/bin/setfacl -m "u:$(id -un):rw" "$dev"
+              fi
+              echo "vm: passing $name ($dev) to the guest as a pointer of its own"
+              export QEMU_OPTS="''${QEMU_OPTS:-} -device virtio-input-host-pci,evdev=$dev"
+              found=$((found + 1))
+            done
+            if [ "$found" = 0 ]; then
+              echo "vm: --pointers found no mouse or touchpad on this host" >&2
+            else
+              echo "vm: $found pointer(s) are the guest's until it closes"
+              # AND QEMU'S OWN step aside: grabbed, the host's pointers no
+              # longer reach its emulated tablet, which would be a cursor no
+              # hand moves. `nix/modules/vm.nix` is the reader of this flag.
+              export QEMU_KERNEL_PARAMS="''${QEMU_KERNEL_PARAMS:-} ronoctua_pointers"
+            fi
+          fi
+          exec ${self.nixosConfigurations.vm.config.system.build.vm}/bin/run-${self.nixosConfigurations.vm.config.networking.hostName}-vm "''${pass[@]}"
         '';
 
         # Packs the fonts for a GitHub Release — the free way to publish 4,1 GB.

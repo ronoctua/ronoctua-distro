@@ -311,7 +311,8 @@ pub fn host_it(unit: &str) -> Result<()> {
         seats: SeatState::new(&globals, &qh),
         _compositor: compositor,
         keyboard: None,
-        pointer: None,
+        pointers: crate::seats::Seats::default(),
+        here: PerSeat::default(),
         layer,
         asked: (0, height),
         width: 0,
@@ -325,7 +326,6 @@ pub fn host_it(unit: &str) -> Result<()> {
         fallen: Fallen::of(unit),
         unit: unit.to_owned(),
         placed: Vec::new(),
-        under_pointer: None,
         said: None,
         texts,
         quit: false,
@@ -378,7 +378,11 @@ struct Lifeline {
     seats: SeatState,
     _compositor: CompositorState,
     keyboard: Option<wl_keyboard::WlKeyboard>,
-    pointer: Option<wl_pointer::WlPointer>,
+    /// Every pointer this window was offered — one per cursor — with the
+    /// state of each while another is `here`. See `crate::seats`.
+    pointers: crate::seats::Seats<PerSeat>,
+    /// The state of the pointer whose events are being handled now.
+    here: PerSeat,
     layer: LayerSurface,
     /// What the compositor configured, kept apart from what the buffer can
     /// show — see `crate::hidpi`.
@@ -398,13 +402,18 @@ struct Lifeline {
     /// and `modeline_placed` already follow: what the cursor is over has to be
     /// what was drawn.
     placed: Vec<Placed>,
-    under_pointer: Option<Doing>,
     /// What the last gesture had to say — the refusal of the option that is not
     /// built yet, most of the time.
     said: Option<String>,
     texts: std::rc::Rc<ronoctua_i18n::Texts>,
     quit: bool,
     owed: bool,
+}
+
+/// What this window keeps for ONE pointer — see `crate::seats`.
+#[derive(Debug, Default)]
+struct PerSeat {
+    under_pointer: Option<Doing>,
 }
 
 impl Lifeline {
@@ -705,10 +714,15 @@ impl Lifeline {
                 // look like the three that work.
                 color: if doing == Doing::Ai {
                     tokens::color::TEXT_DIM
-                } else if self.under_pointer == Some(doing) {
+                } else if self
+                    .pointers
+                    .lit(&self.here)
+                    .any(|(_, s)| s.under_pointer == Some(doing))
+                {
                     // AND THE POINTER LIGHTS THE ONE IT IS ON, which is the
                     // only thing on this line that says the mouse is being
-                    // listened to at all.
+                    // listened to at all — ANY cursor's, since every one of
+                    // them can press it.
                     tokens::color::TEXT_HERE_ACTS
                 } else {
                     crate::chrome::Register::Prose.color()
@@ -907,9 +921,13 @@ impl SeatHandler for Lifeline {
                 Err(e) => tracing::warn!(error = %e, "no keyboard"),
             }
         }
-        if capability == Capability::Pointer && self.pointer.is_none() {
+        if capability == Capability::Pointer {
             match self.seats.get_pointer(qh, &seat) {
-                Ok(p) => self.pointer = Some(p),
+                Ok(p) => {
+                    // EVERY POINTER, and not only the first: one per cursor.
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.pointers.took(&seat, p, name.as_deref());
+                }
                 Err(e) => tracing::warn!(error = %e, "no pointer"),
             }
         }
@@ -919,7 +937,7 @@ impl SeatHandler for Lifeline {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: wl_seat::WlSeat,
+        seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
         if capability == Capability::Keyboard
@@ -927,10 +945,8 @@ impl SeatHandler for Lifeline {
         {
             k.release();
         }
-        if capability == Capability::Pointer
-            && let Some(p) = self.pointer.take()
-        {
-            p.release();
+        if capability == Capability::Pointer {
+            self.pointers.lost(&seat, &mut self.here);
         }
     }
 
@@ -1027,21 +1043,37 @@ impl KeyboardHandler for Lifeline {
 }
 
 impl PointerHandler for Lifeline {
+    /// EVERY CURSOR HAS ITS OWN STATE: the pointer that spoke is made `here`
+    /// first, so a drag, a hover or a wheel's leftover never crosses from
+    /// one cursor to another. See `crate::seats`.
     fn pointer_frame(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        self.pointers.switch_to(pointer, &mut self.here);
+        self.pointer_frame_here(conn, qh, events);
+    }
+}
+
+impl Lifeline {
+    /// One pointer's frame, with its state already `here`.
+    fn pointer_frame_here(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
-        let before = self.under_pointer;
+        let before = self.here.under_pointer;
         let mut pressed = None;
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    self.under_pointer = self.at(e.position.0, e.position.1);
+                    self.here.under_pointer = self.at(e.position.0, e.position.1);
                 }
-                PointerEventKind::Leave { .. } => self.under_pointer = None,
+                PointerEventKind::Leave { .. } => self.here.under_pointer = None,
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
                     pressed = self.at(e.position.0, e.position.1);
                 }
@@ -1054,7 +1086,7 @@ impl PointerHandler for Lifeline {
         }
         // A FRAME ONLY WHEN THE ACCENT MOVED. A `Motion` arrives per pixel, and
         // the only thing the pointer draws here is which option it is on.
-        if before != self.under_pointer {
+        if before != self.here.under_pointer {
             self.ask_paint();
         }
     }

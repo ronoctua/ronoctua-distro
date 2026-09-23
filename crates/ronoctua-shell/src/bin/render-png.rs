@@ -129,7 +129,8 @@ usage: ronoctua-render-png <component.wasm> [options]
   --scale <n>         physical px per logical   (default: 1)
 
   --mind <file>       a brain mind, as JSON, delivered before drawing
-  --hover <col,line>  rests the pointer on a cell before drawing
+  --hover <col,line[,cursor]>  rests a pointer on a cell; the cursor number
+                      (from 0) lets two hands rest at once
   --list              prints the display list instead of drawing it
   --state <id>        enters a state before drawing
   --command <id>      fires a command of the buffer
@@ -295,14 +296,23 @@ fn parse() -> Result<Ask> {
             // photographer. The wall grew a pointer at rest and this is how it
             // is driven, the same way `--click` would be if anything needed
             // one: the host sends a cell, so the picture takes a cell.
+            //
+            // `column,line,cursor` names WHICH cursor rests there (its colour
+            // number, from 0), so a picture can hold two hovers at once — the
+            // one thing a single pointer could never photograph.
             "--hover" => {
                 let at = value()?;
-                let (column, line) = at
-                    .split_once(',')
-                    .with_context(|| format!("`--hover` wants `column,line`, not `{at}`"))?;
+                let mut parts = at.split(',');
+                let (Some(column), Some(line)) = (parts.next(), parts.next()) else {
+                    anyhow::bail!("`--hover` wants `column,line[,cursor]`, not `{at}`");
+                };
                 me.inputs.push(Input::Hover {
                     column: column.trim().parse().context("the hover's column")?,
                     line: line.trim().parse().context("the hover's line")?,
+                    seat: parts
+                        .next()
+                        .map_or(Ok(0), |c| c.trim().parse())
+                        .context("the hover's cursor")?,
                 });
             }
             "--state" => me.inputs.push(Input::EnterState(value()?)),

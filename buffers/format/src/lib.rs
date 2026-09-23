@@ -1330,7 +1330,7 @@ impl State {
             | Input::Queue(_)
             | Input::Mind(_)
             | Input::Hover { .. }
-            | Input::Unhover
+            | Input::Unhover(_)
             // NOTHING SCROLLS HERE — three questions, each of which fits.
             | Input::Wheel(_)
             | Input::Scrolled(_)

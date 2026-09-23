@@ -198,7 +198,11 @@ struct Host {
     _compositor: CompositorState,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     /// The pointer, so the click reaches the buffer's items.
-    pointer: Option<wl_pointer::WlPointer>,
+    /// Every pointer this window was offered — one per cursor — with the
+    /// state of each while another is `here`. See `crate::seats`.
+    pointers: crate::seats::Seats<PerSeat>,
+    /// The state of the pointer whose events are being handled now.
+    here: PerSeat,
     mods: Modifiers,
     window: Window,
     /// The window's size in LOGICAL pixels — what the compositor configured
@@ -226,36 +230,6 @@ struct Host {
     /// the matching size, and the only such commit is the present inside
     /// `Gpu::frame` — see [`crate::hidpi::told_before_present`].
     scale_told: i32,
-    /// What the wheel has earned and not yet spent, in LINES.
-    ///
-    /// The fraction has to survive between events or a slow gesture moves
-    /// nothing and then jumps — see [`crate::surface::wheel_arrived`], which
-    /// carries the whole of that argument and is the only place this is added
-    /// to.
-    wheel_left: f64,
-    /// Which cell of the BUFFER the pointer is resting on.
-    ///
-    /// `None` when it is outside the window or on the margin. It is kept so an
-    /// event crosses the wall only when the cell CHANGES — the pointer arrives
-    /// in pixels and there are a few dozen of them to a cell.
-    cell_under_pointer: Option<(u16, u16)>,
-    /// Which bar of the last frame is being dragged, and where its block is.
-    ///
-    /// # Why the host answers a drag at all
-    ///
-    /// Because it is the only side that CAN. The thumb is a fraction of a
-    /// track in pixels, and a component counts cells (invariant 11) — so the
-    /// bar crosses as three numbers and the host resolves it, which is the
-    /// whole argument `ronoctua_design::Scroll` is written on. The inverse
-    /// belongs on the same side as the forward: `Scroll::offset_at`.
-    ///
-    /// The owner reported the missing half in one sentence — *"o clicar e
-    /// arrastar a scrollbar com o mouse não está funcionando"* — and the wheel
-    /// already crossed, so the shape was there.
-    ///
-    /// It holds the bar's own `Command::Bar` numbers, copied at the press: the
-    /// list is rebuilt on every frame and the drag outlives a frame.
-    dragging: Option<DraggedBar>,
     /// A frame is owed, and it is drawn once the queue is empty.
     ///
     /// # Why the pointer does not draw where it is handled
@@ -376,6 +350,41 @@ struct Host {
     current: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// `Esc`: whether it is down, and whether it has been used as a modifier.
     escape: Escape,
+}
+
+/// What this window keeps for ONE pointer — see `crate::seats`.
+#[derive(Debug, Default)]
+struct PerSeat {
+    /// What the wheel has earned and not yet spent, in LINES.
+    ///
+    /// The fraction has to survive between events or a slow gesture moves
+    /// nothing and then jumps — see [`crate::surface::wheel_arrived`], which
+    /// carries the whole of that argument and is the only place this is added
+    /// to.
+    wheel_left: f64,
+    /// Which cell of the BUFFER the pointer is resting on.
+    ///
+    /// `None` when it is outside the window or on the margin. It is kept so an
+    /// event crosses the wall only when the cell CHANGES — the pointer arrives
+    /// in pixels and there are a few dozen of them to a cell.
+    cell_under_pointer: Option<(u16, u16)>,
+    /// Which bar of the last frame is being dragged, and where its block is.
+    ///
+    /// # Why the host answers a drag at all
+    ///
+    /// Because it is the only side that CAN. The thumb is a fraction of a
+    /// track in pixels, and a component counts cells (invariant 11) — so the
+    /// bar crosses as three numbers and the host resolves it, which is the
+    /// whole argument `ronoctua_design::Scroll` is written on. The inverse
+    /// belongs on the same side as the forward: `Scroll::offset_at`.
+    ///
+    /// The owner reported the missing half in one sentence — *"o clicar e
+    /// arrastar a scrollbar com o mouse não está funcionando"* — and the wheel
+    /// already crossed, so the shape was there.
+    ///
+    /// It holds the bar's own `Command::Bar` numbers, copied at the press: the
+    /// list is rebuilt on every frame and the drag outlives a frame.
+    dragging: Option<DraggedBar>,
 }
 
 /// `Esc` held, and what has happened while it was.
@@ -1012,10 +1021,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     let mut cycle: EventLoop<Host> = EventLoop::try_new().context("calloop")?;
     let mut state = Host {
         handle: cycle.handle(),
-        wheel_left: 0.0,
         owed: false,
-        cell_under_pointer: None,
-        dragging: None,
         system,
         queue,
         disks,
@@ -1033,7 +1039,8 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         seats: SeatState::new(&globals, &qh),
         _compositor: compositor,
         keyboard: None,
-        pointer: None,
+        pointers: crate::seats::Seats::default(),
+        here: PerSeat::default(),
         mods: Modifiers::default(),
         window,
         width: 0,
@@ -1862,13 +1869,26 @@ impl Host {
     /// never at a count of lines times a line.
     fn selections(&self) -> Vec<ronoctua_render::quad::Quad> {
         let (columns, _) = self.context_of();
-        quads_of(
+        let mut quads = quads_of(
             &self.list,
             self.width as f32,
             self.height as f32,
             &self.texts,
             columns,
-        )
+        );
+        // ONE CURSOR KEEPS THE NEUTRAL HOVER. A buffer paints every hover in
+        // its cursor's colour (`Role::HoverOf`), because it cannot know how
+        // many cursors this window has; the host does, and spends colour only
+        // where it tells two hands apart — the rule of every other window
+        // (`crate::seats::band_colour`).
+        if !self.pointers.many() {
+            for q in &mut quads {
+                if crate::seats::is_a_cursor_hover(q.color) {
+                    q.color = tokens::color::SURFACE_HOVER;
+                }
+            }
+        }
+        quads
     }
 
     /// Which cell OF THE BUFFER a point in the window landed in.
@@ -3154,9 +3174,13 @@ impl SeatHandler for Host {
                 Err(e) => tracing::warn!(error = %e, "no keyboard; the buffer takes no input"),
             }
         }
-        if cap == Capability::Pointer && self.pointer.is_none() {
+        if cap == Capability::Pointer {
             match self.seats.get_pointer(qh, &seat) {
-                Ok(p) => self.pointer = Some(p),
+                Ok(p) => {
+                    // EVERY POINTER, and not only the first: one per cursor.
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.pointers.took(&seat, p, name.as_deref());
+                }
                 // With no pointer the buffer works entirely through the keyboard: the
                 // click is a shortcut, not the only path.
                 Err(e) => tracing::warn!(error = %e, "no pointer; the click will not work"),
@@ -3168,7 +3192,7 @@ impl SeatHandler for Host {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: wl_seat::WlSeat,
+        seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
         if cap == Capability::Keyboard
@@ -3176,10 +3200,8 @@ impl SeatHandler for Host {
         {
             k.release();
         }
-        if cap == Capability::Pointer
-            && let Some(p) = self.pointer.take()
-        {
-            p.release();
+        if cap == Capability::Pointer {
+            self.pointers.lost(&seat, &mut self.here);
         }
     }
 
@@ -3509,6 +3531,22 @@ impl ProvidesRegistryState for Host {
 const LEFT_BUTTON: u32 = 0x110;
 
 impl PointerHandler for Host {
+    /// EVERY CURSOR HAS ITS OWN STATE: the pointer that spoke is made `here`
+    /// first, so a drag, a hover or a wheel's leftover never crosses from
+    /// one cursor to another. See `crate::seats`.
+    fn pointer_frame(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        self.pointers.switch_to(pointer, &mut self.here);
+        self.pointer_frame_here(conn, qh, events);
+    }
+}
+
+impl Host {
     /// The click becomes a CELL and goes to the component.
     ///
     /// The left button only, and only on the press. The others do nothing on
@@ -3537,11 +3575,12 @@ impl PointerHandler for Host {
     /// KEYBOARD is; the hover is where a click would land. Every view in the
     /// system draws both, in two different tones, because they answer two
     /// different questions.
-    fn pointer_frame(
+    ///
+    /// One pointer's frame, with its state already `here`.
+    fn pointer_frame_here(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
         for e in events {
@@ -3549,8 +3588,9 @@ impl PointerHandler for Host {
             // `Motion` move it, and only across a cell boundary.
             match e.kind {
                 PointerEventKind::Leave { .. } => {
-                    if self.cell_under_pointer.take().is_some() {
-                        self.deliver(&ronoctua_protocol::Input::Unhover);
+                    if self.here.cell_under_pointer.take().is_some() {
+                        let seat = self.pointers.colour_number_here();
+                        self.deliver(&ronoctua_protocol::Input::Unhover { seat });
                     }
                     // AND THE DRAG ENDS WITH THE POINTER. Wayland's implicit
                     // grab usually delivers the release, but a broken grab
@@ -3558,7 +3598,7 @@ impl PointerHandler for Host {
                     // ENTER, with no button held, throw the list to wherever
                     // the pointer came in. The five list windows all carry
                     // this line; see `audio_window.rs`.
-                    self.dragging = None;
+                    self.here.dragging = None;
                     continue;
                 }
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
@@ -3566,7 +3606,7 @@ impl PointerHandler for Host {
                     // not: the pointer is on the control, not on a row, and a
                     // highlight following it down the track would light every
                     // row the drag passed over.
-                    if let Some(bar) = self.dragging {
+                    if let Some(bar) = self.here.dragging {
                         let first = self.row_dragged_to(bar, e.position.1);
                         self.deliver(&ronoctua_protocol::Input::Scrolled {
                             column: bar.column,
@@ -3576,17 +3616,20 @@ impl PointerHandler for Host {
                         continue;
                     }
                     let now = self.cell_at(e.position.0, e.position.1);
-                    if now != self.cell_under_pointer {
-                        self.cell_under_pointer = now;
+                    if now != self.here.cell_under_pointer {
+                        self.here.cell_under_pointer = now;
+                        // WHICH CURSOR, so a buffer lights one row per hand.
+                        let seat = self.pointers.colour_number_here();
                         match now {
-                            Some((column, line)) => {
-                                self.deliver(&ronoctua_protocol::Input::Hover { column, line })
-                            }
+                            Some((column, line)) => self
+                                .deliver(&ronoctua_protocol::Input::Hover { column, line, seat }),
                             // THE MARGIN IS NOT THE WINDOW. A pointer resting
                             // on the inset is on no cell, and saying "cell
                             // zero" there would light the first row whenever
                             // somebody's hand crossed the border.
-                            None => self.deliver(&ronoctua_protocol::Input::Unhover),
+                            None => {
+                                self.deliver(&ronoctua_protocol::Input::Unhover { seat });
+                            }
                         }
                     }
                     continue;
@@ -3608,8 +3651,8 @@ impl PointerHandler for Host {
                 // move at all: five windows each wrote `(px / line) * 3`,
                 // threw the fraction away, and the owner read the result off
                 // the screen as a page that jumps.
-                crate::surface::wheel_arrived(&mut self.wheel_left, vertical, horizontal);
-                let lines = crate::surface::wheel_lines(&mut self.wheel_left);
+                crate::surface::wheel_arrived(&mut self.here.wheel_left, vertical, horizontal);
+                let lines = crate::surface::wheel_lines(&mut self.here.wheel_left);
                 if lines == 0 {
                     continue;
                 }
@@ -3653,7 +3696,7 @@ impl PointerHandler for Host {
             if let PointerEventKind::Release { button, .. } = e.kind
                 && button == LEFT_BUTTON
             {
-                self.dragging = None;
+                self.here.dragging = None;
                 continue;
             }
             let PointerEventKind::Press { button, .. } = e.kind else {
@@ -3671,7 +3714,7 @@ impl PointerHandler for Host {
             // cell is what loses a bar drawn in the right margin, which is
             // every bar in the last column. See `Host::bar_under`.
             if let Some(bar) = self.bar_under(e.position.0, e.position.1) {
-                self.dragging = Some(bar);
+                self.here.dragging = Some(bar);
                 let first = self.row_dragged_to(bar, e.position.1);
                 tracing::debug!(
                     column = bar.column,

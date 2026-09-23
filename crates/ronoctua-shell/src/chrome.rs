@@ -1336,6 +1336,18 @@ impl Default for Hinted {
 }
 
 impl Hinted {
+    /// Swaps in the per-pointer half of this header: whether a pointer is
+    /// dragging the drawer's bar.
+    ///
+    /// A door calls it twice around every pointer frame, with the state of
+    /// the pointer that spoke (`crate::seats`): in, so the header answers
+    /// that pointer, and out, so the drag is kept for that pointer and no
+    /// other. Without it a second cursor moving over the header would carry
+    /// the first one's drag along.
+    pub fn swap_hand(&mut self, hand: &mut bool) {
+        std::mem::swap(&mut self.dragging, hand);
+    }
+
     /// The same, for a door that draws the line over SEVERAL rows and so
     /// collects the marks itself — the file manager's window, whose hint line
     /// opens into a drawer.
@@ -1815,6 +1827,47 @@ pub fn list_scroll(total: usize, lines: usize, offset: usize) -> ronoctua_design
         offset,
         top: 0,
     }
+}
+
+/// The hover bands of a list: one per row a pointer rests on, in the colour
+/// of that pointer's cursor (`crate::seats`).
+///
+/// `lit` is every pointer's row with its colour, in the order the pointers
+/// arrived; a row two pointers rest on takes the FIRST one's colour, so the
+/// picture is the same on every frame. A row past `total` — the empty room
+/// under a short list — gets no band: there is nothing there to click.
+///
+/// Full width, flat, no border and no radius (invariant 15), and drawn
+/// before the text like every band.
+#[must_use]
+pub fn hover_bands(
+    lit: impl Iterator<Item = (tokens::Color, Option<usize>)>,
+    offset: usize,
+    room: usize,
+    total: usize,
+    first_line: u16,
+    width: f32,
+) -> Vec<ronoctua_render::quad::Quad> {
+    let line_px = tokens::metrics::line_height(tokens::text::size());
+    let mut seen = Vec::new();
+    let mut out = Vec::new();
+    for (color, row) in lit {
+        let Some(row) = row else { continue };
+        if row < offset || row >= offset + room || row >= total || seen.contains(&row) {
+            continue;
+        }
+        seen.push(row);
+        let line = usize::from(first_line) + (row - offset);
+        #[allow(clippy::cast_precision_loss)]
+        out.push(ronoctua_render::quad::Quad {
+            x: 0.0,
+            y: line as f32 * line_px,
+            width,
+            height: line_px,
+            color,
+        });
+    }
+    out
 }
 
 /// That list's bar, as a rectangle — `None` when the list fits.

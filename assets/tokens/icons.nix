@@ -587,6 +587,14 @@
   # `x`, a cog or the ⌘ key: the wrong thing said clearly).
   bluetooth-device-keyboard = "md-keyboard";
   bluetooth-device-mouse = "md-mouse";
+
+  # THE POINTER SETTINGS (`LEADER s i`). The cursor's glyph is drawn in the
+  # colour that cursor wears (`cursor.fill.*`), so a cursor's heading on the
+  # screen is the same colour as the arrow on the desktop — which is how a
+  # person tells which of the listed cursors is the one in their hand.
+  pointers-cursor = "md-cursor_default";
+  pointers-mouse = "md-mouse";
+  pointers-touchpad = "md-gesture_two_tap";
   bluetooth-device-gamepad = "md-gamepad";
   bluetooth-device-tablet = "md-tablet_android";
   bluetooth-device-phone = "md-cellphone";

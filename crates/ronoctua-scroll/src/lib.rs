@@ -33,7 +33,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
-use ronoctua_compositor::{Ask, Compositor, Deed, Event, Events, Output, Window};
+use ronoctua_compositor::{
+    Ask, Compositor, Deed, Device, Event, Events, FocusFollows, Output, Seat, SeatAsk, Setting,
+    Window,
+};
 use serde_json::Value;
 
 /// The variable the compositor exports with its socket's path.
@@ -217,6 +220,28 @@ impl Compositor for Scroll {
         self.run("reload")
     }
 
+    fn devices(&mut self) -> Result<Vec<Device>> {
+        Ok(read::devices_in(&self.request(wire::Kind::Inputs, "")?))
+    }
+
+    fn seats(&mut self) -> Result<Vec<Seat>> {
+        Ok(read::seats_in(&self.request(wire::Kind::Seats, "")?))
+    }
+
+    fn ask_input(&mut self, device: &str, setting: Setting) -> Result<()> {
+        let command = wire::input_command(device, setting)?;
+        self.run(&command)
+    }
+
+    fn ask_seat(&mut self, seat: &str, ask: SeatAsk) -> Result<()> {
+        let command = wire::seat_command(seat, &ask)?;
+        self.run(&command)
+    }
+
+    fn ask_focus(&mut self, follows: FocusFollows) -> Result<()> {
+        self.run(wire::focus_command(follows))
+    }
+
     fn close_window(&mut self) -> Result<()> {
         self.run("kill")
     }
@@ -266,7 +291,7 @@ impl Watching {
             // WINDOW, OUTPUT AND SHUTDOWN, AND NOTHING ELSE. Every other
             // subscription is a wake and a repaint for something no part of
             // this shell reads.
-            r#"["window","output","shutdown"]"#,
+            r#"["window","output","shutdown","input"]"#,
         )?;
         let mut waiting = std::collections::VecDeque::new();
         // The subscribe's own reply, and anything that raced it.
@@ -357,6 +382,14 @@ fn event_of(kind: u32, body: &str) -> Option<Event> {
     match kind {
         wire::EVENT_OUTPUT => Some(Event::ScreensChanged),
         wire::EVENT_SHUTDOWN => Some(Event::Leaving),
+        // ADDED, REMOVED OR RECONFIGURED, and all three mean the same thing
+        // to a reader: read the devices again. The keymap changes that ride
+        // the same event are a keyboard's business, and a keyboard is not
+        // something this reading configures.
+        wire::EVENT_INPUT => match said.get("change").and_then(Value::as_str) {
+            Some("added" | "removed" | "libinput_config") => Some(Event::DevicesChanged),
+            _ => Some(Event::Ignored),
+        },
         wire::EVENT_WINDOW => {
             let change = said.get("change").and_then(Value::as_str)?;
             let container = said.get("container")?;
@@ -471,6 +504,25 @@ mod tests {
         assert_eq!(
             event_of(wire::EVENT_OUTPUT, r#"{"change":"unspecified"}"#),
             Some(Event::ScreensChanged)
+        );
+    }
+
+    #[test]
+    fn a_device_coming_or_going_is_one_event_with_nothing_in_it() {
+        for change in ["added", "removed", "libinput_config"] {
+            assert_eq!(
+                event_of(
+                    wire::EVENT_INPUT,
+                    &format!(r#"{{"change":"{change}","input":{{}}}}"#)
+                ),
+                Some(Event::DevicesChanged),
+                "{change}"
+            );
+        }
+        assert_eq!(
+            event_of(wire::EVENT_INPUT, r#"{"change":"xkb_layout","input":{}}"#),
+            Some(Event::Ignored),
+            "a keyboard's layout is not a pointer's business"
         );
     }
 

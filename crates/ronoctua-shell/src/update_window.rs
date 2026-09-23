@@ -919,7 +919,8 @@ pub fn host_it() -> Result<()> {
         seats: SeatState::new(&globals, &qh),
         _compositor: compositor,
         keyboard: None,
-        pointer: None,
+        pointers: crate::seats::Seats::default(),
+        here: PerSeat::default(),
         mods: Modifiers::default(),
         window,
         width: 0,
@@ -937,8 +938,6 @@ pub fn host_it() -> Result<()> {
         gpu: None,
         text: None,
         quads: None,
-        dragging: false,
-        lines_owed: 0.0,
         texts,
         steps: declared::steps(),
         verdicts: Verdicts::read(),
@@ -947,7 +946,6 @@ pub fn host_it() -> Result<()> {
         cursor: 0,
         step_offset: 0,
         output_up: 0,
-        row_under_pointer: None,
         children,
     };
 
@@ -992,7 +990,11 @@ struct UpdateWindow {
     seats: SeatState,
     _compositor: CompositorState,
     keyboard: Option<wl_keyboard::WlKeyboard>,
-    pointer: Option<wl_pointer::WlPointer>,
+    /// Every pointer this window was offered — one per cursor — with the
+    /// state of each while another is `here`. See `crate::seats`.
+    pointers: crate::seats::Seats<PerSeat>,
+    /// The state of the pointer whose events are being handled now.
+    here: PerSeat,
     mods: Modifiers,
     window: Window,
     /// The window's size in LOGICAL pixels — what the compositor configured
@@ -1039,19 +1041,6 @@ struct UpdateWindow {
     gpu: Option<ronoctua_render::gpu::Gpu>,
     text: Option<ronoctua_render::Text>,
     quads: Option<ronoctua_render::quad::Quads>,
-    /// Is the pointer dragging the output's bar?
-    ///
-    /// Held, because a drag is three events: the press that grabs it, every
-    /// motion until the release, and the release.
-    dragging: bool,
-    /// How many LINES the wheel and the touchpad have asked for and not yet
-    /// been paid.
-    ///
-    /// LINES, and the unit is in the name: the footer's accumulator holds
-    /// DETENTS. See `surface::wheel_arrived` — spending only the whole part and
-    /// keeping the rest is what makes a slow gesture move at the speed of the
-    /// finger instead of standing still and then jumping.
-    lines_owed: f64,
     texts: ronoctua_i18n::Texts,
     /// The declared sequence, from the one table there is.
     steps: &'static [ronoctua_brain::Step],
@@ -1067,9 +1056,27 @@ struct UpdateWindow {
     step_offset: usize,
     /// How many lines above the tail the output is showing. Zero follows.
     output_up: usize,
-    row_under_pointer: Option<usize>,
     /// The two `journalctl -f`, so they can be killed.
     children: Vec<std::process::Child>,
+}
+
+/// What this window keeps for ONE pointer — see `crate::seats`.
+#[derive(Debug, Default)]
+struct PerSeat {
+    /// Is the pointer dragging the output's bar?
+    ///
+    /// Held, because a drag is three events: the press that grabs it, every
+    /// motion until the release, and the release.
+    dragging: bool,
+    /// How many LINES the wheel and the touchpad have asked for and not yet
+    /// been paid.
+    ///
+    /// LINES, and the unit is in the name: the footer's accumulator holds
+    /// DETENTS. See `surface::wheel_arrived` — spending only the whole part and
+    /// keeping the rest is what makes a slow gesture move at the speed of the
+    /// finger instead of standing still and then jumping.
+    lines_owed: f64,
+    row_under_pointer: Option<usize>,
 }
 
 impl UpdateWindow {
@@ -1403,12 +1410,15 @@ impl UpdateWindow {
             // `Enter` runs". The file manager was reported for exactly that and
             // the split is the owner's: the focus keeps `surface.selection` and
             // the pointer takes the weaker `surface.hover`.
+            // EVERY CURSOR'S HOVER in its own colour (`crate::seats`); the
+            // first pointer to rest on a row gives it its colour.
             let band = if row == self.cursor {
                 Some(tokens::color::SURFACE_SELECTION)
-            } else if self.row_under_pointer == Some(row) {
-                Some(tokens::color::SURFACE_HOVER)
             } else {
-                None
+                self.pointers
+                    .lit(&self.here)
+                    .find(|(_, s)| s.row_under_pointer == Some(row))
+                    .map(|(color, _)| color)
             };
             if let Some(color) = band {
                 quads.push(ronoctua_render::quad::Quad {
@@ -1652,9 +1662,13 @@ impl SeatHandler for UpdateWindow {
                 Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
         }
-        if cap == Capability::Pointer && self.pointer.is_none() {
+        if cap == Capability::Pointer {
             match self.seats.get_pointer(qh, &seat) {
-                Ok(p) => self.pointer = Some(p),
+                Ok(p) => {
+                    // EVERY POINTER, and not only the first: one per cursor.
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.pointers.took(&seat, p, name.as_deref());
+                }
                 Err(e) => tracing::warn!(error = %e, "no pointer; keyboard only"),
             }
         }
@@ -1664,7 +1678,7 @@ impl SeatHandler for UpdateWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: wl_seat::WlSeat,
+        seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
         if cap == Capability::Keyboard
@@ -1672,10 +1686,8 @@ impl SeatHandler for UpdateWindow {
         {
             k.release();
         }
-        if cap == Capability::Pointer
-            && let Some(p) = self.pointer.take()
-        {
-            p.release();
+        if cap == Capability::Pointer {
+            self.pointers.lost(&seat, &mut self.here);
         }
     }
 
@@ -1757,14 +1769,30 @@ impl KeyboardHandler for UpdateWindow {
 }
 
 impl PointerHandler for UpdateWindow {
+    /// EVERY CURSOR HAS ITS OWN STATE: the pointer that spoke is made `here`
+    /// first, so a drag, a hover or a wheel's leftover never crosses from
+    /// one cursor to another. See `crate::seats`.
     fn pointer_frame(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        self.pointers.switch_to(pointer, &mut self.here);
+        self.pointer_frame_here(conn, qh, events);
+    }
+}
+
+impl UpdateWindow {
+    /// One pointer's frame, with its state already `here`.
+    fn pointer_frame_here(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
-        let before = (self.row_under_pointer, self.cursor, self.output_up);
+        let before = (self.here.row_under_pointer, self.cursor, self.output_up);
         let mut turned = false;
         let mut over_the_steps = false;
         // THE OUTPUT'S BAR IS A CONTROL. This window counts from the TAIL, so
@@ -1782,7 +1810,7 @@ impl PointerHandler for UpdateWindow {
             let (px, py) = (e.position.0 as f32, e.position.1 as f32);
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    if self.dragging {
+                    if self.here.dragging {
                         dragged = Some(crate::chrome::list_offset_at(
                             scroll,
                             self.output_top(),
@@ -1791,17 +1819,17 @@ impl PointerHandler for UpdateWindow {
                             py,
                         ));
                     } else {
-                        self.row_under_pointer = self.at(e.position.0, e.position.1);
+                        self.here.row_under_pointer = self.at(e.position.0, e.position.1);
                     }
                 }
                 PointerEventKind::Leave { .. } => {
                     // AND THE DRAG ENDS WITH THE POINTER — see the same arm
                     // in the four list windows.
-                    self.dragging = false;
-                    self.row_under_pointer = None;
+                    self.here.dragging = false;
+                    self.here.row_under_pointer = None;
                 }
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
-                    self.dragging = false;
+                    self.here.dragging = false;
                 }
                 // A CLICK MOVES THE CURSOR, which is what an arrow does. There
                 // is nothing else on this window to do to a step: switching one
@@ -1816,7 +1844,7 @@ impl PointerHandler for UpdateWindow {
                         px,
                         py,
                     ) {
-                        self.dragging = true;
+                        self.here.dragging = true;
                         dragged = Some(crate::chrome::list_offset_at(
                             scroll,
                             self.output_top(),
@@ -1836,7 +1864,11 @@ impl PointerHandler for UpdateWindow {
                 } => {
                     over_the_steps = self.at(e.position.0, e.position.1).is_some();
                     // THE ARITHMETIC IS SHARED — see `surface::wheel_arrived`.
-                    crate::surface::wheel_arrived(&mut self.lines_owed, &vertical, &horizontal);
+                    crate::surface::wheel_arrived(
+                        &mut self.here.lines_owed,
+                        &vertical,
+                        &horizontal,
+                    );
                     turned = true;
                 }
                 _ => {}
@@ -1848,13 +1880,13 @@ impl PointerHandler for UpdateWindow {
             // which the other four windows avoid by returning here.
             self.output_up = total.saturating_sub(offset + room);
             self.follow_the_tail();
-            if before != (self.row_under_pointer, self.cursor, self.output_up) {
+            if before != (self.here.row_under_pointer, self.cursor, self.output_up) {
                 self.ask_paint();
             }
             return;
         }
         let by = if turned {
-            crate::surface::wheel_lines(&mut self.lines_owed)
+            crate::surface::wheel_lines(&mut self.here.lines_owed)
         } else {
             0
         };
@@ -1887,7 +1919,7 @@ impl PointerHandler for UpdateWindow {
         // Only redraws if something CHANGED: a `Motion` arrives on every pixel
         // of movement, and painting per pixel would spend the GPU drawing the
         // same thing.
-        if before != (self.row_under_pointer, self.cursor, self.output_up) {
+        if before != (self.here.row_under_pointer, self.cursor, self.output_up) {
             self.ask_paint();
         }
     }

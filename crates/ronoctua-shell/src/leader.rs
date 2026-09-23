@@ -992,6 +992,42 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "audio-default",
             label: key::CMD_AUDIO_DEFAULT,
         },
+        // MICE, TOUCHPADS AND EVERY CURSOR — `s i i` in the footer and `s i w`
+        // in a window, the doubled letter and the `w` every view of this
+        // shape uses. `i` for INPUT: `s p` is power and `s m` memory.
+        Command {
+            id: "pointers-open",
+            label: key::CMD_POINTERS_OPEN,
+        },
+        Command {
+            id: "pointers-window",
+            label: key::CMD_POINTERS_WINDOW,
+        },
+        // AND THE VIEW'S OWN GESTURES, reached through `pointers::OF_THE_VIEW`.
+        Command {
+            id: "pointers-up",
+            label: key::CMD_POINTERS_UP,
+        },
+        Command {
+            id: "pointers-down",
+            label: key::CMD_POINTERS_DOWN,
+        },
+        Command {
+            id: "pointers-enter",
+            label: key::CMD_POINTERS_ENTER,
+        },
+        Command {
+            id: "pointers-less",
+            label: key::CMD_POINTERS_LESS,
+        },
+        Command {
+            id: "pointers-more",
+            label: key::CMD_POINTERS_MORE,
+        },
+        Command {
+            id: "pointers-forget",
+            label: key::CMD_POINTERS_FORGET,
+        },
         // THE KEYBOARD'S OWN TOP ROW. No leader: see `actions::media` for why
         // these seven are a family of their own and not four more emergencies.
         Command {
@@ -2165,6 +2201,8 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // the view on the thresholds.
         ("s a a", "audio-open", None),
         ("s a w", "audio-window", None),
+        ("s i i", "pointers-open", None),
+        ("s i w", "pointers-window", None),
         ("s p p", "power-open", None),
         ("s p w", "power-window", None),
         ("s p e", "power-profile-performance", None),
@@ -2347,6 +2385,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("s s", key::GROUP_SYNCTHING),
         ("s d", key::GROUP_DISPLAY),
         ("s a", key::GROUP_AUDIO),
+        ("s i", key::GROUP_POINTERS),
         ("s p", key::GROUP_POWER),
         ("s b", key::GROUP_BLUETOOTH),
         ("s l", key::GROUP_LOCALE),
@@ -2532,6 +2571,7 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     );
     out.extend(crate::power::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(crate::audio::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
+    out.extend(crate::pointers::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::syncthing::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     // THE KEYBOARD'S TOP ROW, which the compositor binds directly — the same
     // arrangement as the four emergency keys just above.
@@ -3206,6 +3246,14 @@ mod tests {
             "audio-more",
             "audio-mute",
             "audio-default",
+            "pointers-open",
+            "pointers-window",
+            "pointers-up",
+            "pointers-down",
+            "pointers-enter",
+            "pointers-less",
+            "pointers-more",
+            "pointers-forget",
             "volume-up",
             "volume-down",
             "volume-mute",

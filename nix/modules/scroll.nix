@@ -141,10 +141,11 @@ let
         xkb_options "${keyboard.options}"
     }
 
-    input type:touchpad {
-        tap enabled
-        natural_scroll enabled
-    }
+    # NO `type:touchpad` BLOCK. Tapping and natural scrolling used to be
+    # written here by hand; they are now the touchpad defaults in
+    # `ronoctua-pointers` (`prefs.rs`), which writes them per device into the
+    # pointers fragment included below — one home, and the screen at
+    # `LEADER s i` can change them.
 
     # --- how it looks -------------------------------------------------
     #
@@ -314,6 +315,7 @@ let
     {
       echo 'include "''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-theme.conf"'
       echo 'include "''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-display.conf"'
+      echo 'include "''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-pointers.conf"'
     } >> $out
   '';
 in
@@ -321,6 +323,9 @@ in
   config = {
     environment.systemPackages = [
       compositor
+      # THE CURSORS, one theme per cursor colour (`nix/cursors.nix`), so an
+      # app that asks for them by name finds them in the profile too.
+      ronoctua.cursors
       # THE FOOTER. It was not here, and the effect was the whole system with no
       # chrome at all in production: nothing brought the surface up and the
       # leader's bind spawned a name that did not exist in the session's PATH.
@@ -487,6 +492,13 @@ in
         # declared door for personal settings is the two includes at the end
         # of the generated file.
         ExecStart = "${compositor}/bin/scroll -c /etc/scroll/config";
+        # WHERE THE CURSOR THEMES ARE, for the compositor itself: every seat
+        # loads the theme `ronoctua-pointers` names by searching this path, and
+        # a user unit is not given the login shell's variables. The profile's
+        # own icons come after, for a theme somebody installed by hand.
+        Environment = [
+          "XCURSOR_PATH=${ronoctua.cursors}/share/icons:/run/current-system/sw/share/icons"
+        ];
         Restart = "on-failure";
         Slice = "session.slice";
         # Written out although it is the default: it is what makes `Restart=`

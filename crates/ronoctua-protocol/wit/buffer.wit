@@ -1445,6 +1445,24 @@ interface types {
         line: u16,
     }
 
+    // WHERE A POINTER IS, AND WHICH ONE.
+    //
+    // Every cursor is a seat, and the host answers every one of them
+    // (`crate::seats` in the shell): two cursors can rest on a buffer at
+    // once, each on its own row. `seat` is the cursor's COLOUR number, from 0
+    // — what a buffer paints that cursor's hover with (`color::cursor-hover-*`
+    // through `Role::HoverOf`), and nothing a buffer has to understand beyond
+    // "two different numbers are two different hands".
+    //
+    // A RECORD AROUND `position` and not a third field on it: `position` is
+    // what a click and a wheel carry too, and those do not need to say which
+    // hand. `wasmtime` lowers a record POSITIONALLY, so the nesting is the
+    // shape, and the runtime writes it exactly this way.
+    record pointed {
+        at: position,
+        seat: u16,
+    }
+
     // ONE key the buffer declared, with the text the host resolved for it.
     //
     // # Why a buffer receives a translated string at all
@@ -1639,11 +1657,12 @@ interface types {
         // It carries a `position` and not two fields for the same reason
         // `click` does: `wasmtime` lowers a record POSITIONALLY, and a flat
         // pair here would lower cleanly into the wrong shape.
-        hover(position),
+        hover(pointed),
         // The pointer LEFT. Distinct from a hover nobody can place, because
         // absence and "somewhere I cannot name" are different answers: one
-        // clears the highlight and the other keeps it.
-        unhover,
+        // clears the highlight and the other keeps it. It names WHICH pointer
+        // — one cursor leaving must not put out another's highlight.
+        unhover(u16),
     }
 }
 
@@ -1656,7 +1675,7 @@ interface view {
     // reachable only from inside a `variant` ends up out of scope.
     use types.{
         band-command, capability, command, grid-command, text-command,
-        heights, context, color, descriptor, effect, input, binding, position, segment,
+        heights, context, color, descriptor, effect, input, binding, position, pointed, segment,
         text,
         // `phrase` is reachable only from inside `input`, which is exactly the
         // case this list exists for.

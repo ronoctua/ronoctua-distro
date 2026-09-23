@@ -412,14 +412,22 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
         // THE POINTER AT REST, in the same `position` record the click uses —
         // it is the same question asked without a button, and giving it a
         // shape of its own would be two answers to "where is the mouse".
-        Input::Hover { column, line } => (
+        // AND WHICH POINTER: `pointed` is the position NESTED with the
+        // cursor's number beside it, the shape the WIT declares.
+        Input::Hover { column, line, seat } => (
             "hover",
             Some(Val::Record(vec![
-                ("column".into(), Val::U16(*column)),
-                ("line".into(), Val::U16(*line)),
+                (
+                    "at".into(),
+                    Val::Record(vec![
+                        ("column".into(), Val::U16(*column)),
+                        ("line".into(), Val::U16(*line)),
+                    ]),
+                ),
+                ("seat".into(), Val::U16(*seat)),
             ])),
         ),
-        Input::Unhover => ("unhover", None),
+        Input::Unhover { seat } => ("unhover", Some(Val::U16(*seat))),
         // THE WHEEL, and it carries a `position` RECORD the way `click` does —
         // a nested record and not two more fields, because that is the shape
         // the WIT declares and `wasmtime` lowers a record POSITIONALLY. Two

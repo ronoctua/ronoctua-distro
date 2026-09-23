@@ -149,7 +149,8 @@ pub fn host_it() -> Result<()> {
         seats: SeatState::new(&globals, &qh),
         _compositor: compositor,
         keyboard: None,
-        pointer: None,
+        pointers: crate::seats::Seats::default(),
+        here: PerSeat::default(),
         window,
         width: 0,
         height: 0,
@@ -167,12 +168,9 @@ pub fn host_it() -> Result<()> {
         gpu: None,
         text: None,
         quads: None,
-        dragging: false,
-        lines_owed: 0.0,
         view: crate::locale::View::fresh(),
         zone: ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
         texts,
-        row_under_pointer: None,
         hinted: crate::chrome::Hinted::default(),
         offset: 0,
         message: None,
@@ -210,7 +208,11 @@ struct LocaleWindow {
     seats: SeatState,
     _compositor: CompositorState,
     keyboard: Option<wl_keyboard::WlKeyboard>,
-    pointer: Option<wl_pointer::WlPointer>,
+    /// Every pointer this window was offered — one per cursor — with the
+    /// state of each while another is `here`. See `crate::seats`.
+    pointers: crate::seats::Seats<PerSeat>,
+    /// The state of the pointer whose events are being handled now.
+    here: PerSeat,
     window: Window,
     /// The window's size in LOGICAL pixels — what the compositor configured
     /// it to, what the columns are counted from, what the pointer arrives in.
@@ -256,6 +258,25 @@ struct LocaleWindow {
     /// It had none — see `chrome::list_bar` for what that cost — and the wheel
     /// was the only way down a list that does not fit.
     quads: Option<ronoctua_render::quad::Quads>,
+    view: crate::locale::View,
+    /// The last reading, from this process's own threads.
+    /// The orders thread, when the daemons were there.
+    /// The profile the person chose (or the distro's floor) — drawn as a
+    /// mark beside the profile rows.
+    /// The machine's zone, read once — a TZif file is a table of
+    /// transitions and the answer changes twice a year.
+    zone: ronoctua_files::when::Zone,
+    texts: std::rc::Rc<ronoctua_i18n::Texts>,
+    /// The hint line, and the shortcut the pointer is resting on it.
+    hinted: crate::chrome::Hinted,
+    /// The first visible row. A window has no page: it scrolls.
+    offset: usize,
+    message: Option<String>,
+}
+
+/// What this window keeps for ONE pointer — see `crate::seats`.
+#[derive(Debug, Default)]
+struct PerSeat {
     /// Is the pointer dragging the bar?
     ///
     /// Held, because a drag is three events: the press that grabs it, every
@@ -276,21 +297,10 @@ struct LocaleWindow {
     /// speed of the finger instead of standing still and then jumping — the
     /// reason is written over `surface::wheel_arrived`.
     lines_owed: f64,
-    view: crate::locale::View,
-    /// The last reading, from this process's own threads.
-    /// The orders thread, when the daemons were there.
-    /// The profile the person chose (or the distro's floor) — drawn as a
-    /// mark beside the profile rows.
-    /// The machine's zone, read once — a TZif file is a table of
-    /// transitions and the answer changes twice a year.
-    zone: ronoctua_files::when::Zone,
-    texts: std::rc::Rc<ronoctua_i18n::Texts>,
     row_under_pointer: Option<usize>,
-    /// The hint line, and the shortcut the pointer is resting on it.
-    hinted: crate::chrome::Hinted,
-    /// The first visible row. A window has no page: it scrolls.
-    offset: usize,
-    message: Option<String>,
+    /// Whether this pointer is dragging the header's drawer bar — the
+    /// per-pointer half of `chrome::Hinted`, swapped in around every frame.
+    hint_drag: bool,
 }
 
 impl LocaleWindow {
@@ -624,6 +634,18 @@ impl LocaleWindow {
         // THE BAR, from the same `Scroll` every other bar in this system uses.
         let scroll = crate::chrome::list_scroll(rows.len(), self.room(), self.offset);
         #[allow(clippy::cast_precision_loss)]
+        // EVERY CURSOR'S HOVER, in its own colour — see `crate::seats`.
+        #[allow(clippy::cast_precision_loss)]
+        let bands = crate::chrome::hover_bands(
+            self.pointers
+                .lit(&self.here)
+                .map(|(color, s)| (color, s.row_under_pointer)),
+            self.offset,
+            self.room(),
+            self.rows().len(),
+            self.first_of_list(),
+            self.width as f32,
+        );
         let mut bar: Vec<ronoctua_render::quad::Quad> = crate::chrome::list_bar(
             scroll,
             self.first_of_list(),
@@ -632,6 +654,7 @@ impl LocaleWindow {
         )
         .into_iter()
         .collect();
+        bar.splice(0..0, bands);
         // AND THE HEADER'S OWN, when its drawer is open and the wrap ran past
         // it. Two bars, two lists, and neither is the other's.
         #[allow(clippy::cast_precision_loss)]
@@ -801,9 +824,13 @@ impl SeatHandler for LocaleWindow {
                 Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
         }
-        if cap == Capability::Pointer && self.pointer.is_none() {
+        if cap == Capability::Pointer {
             match self.seats.get_pointer(qh, &seat) {
-                Ok(p) => self.pointer = Some(p),
+                Ok(p) => {
+                    // EVERY POINTER, and not only the first: one per cursor.
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.pointers.took(&seat, p, name.as_deref());
+                }
                 Err(e) => tracing::warn!(error = %e, "no pointer; keyboard only"),
             }
         }
@@ -813,7 +840,7 @@ impl SeatHandler for LocaleWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: wl_seat::WlSeat,
+        seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
         if cap == Capability::Keyboard
@@ -821,10 +848,8 @@ impl SeatHandler for LocaleWindow {
         {
             k.release();
         }
-        if cap == Capability::Pointer
-            && let Some(p) = self.pointer.take()
-        {
-            p.release();
+        if cap == Capability::Pointer {
+            self.pointers.lost(&seat, &mut self.here);
         }
     }
 
@@ -915,14 +940,32 @@ impl KeyboardHandler for LocaleWindow {
 }
 
 impl PointerHandler for LocaleWindow {
+    /// EVERY CURSOR HAS ITS OWN STATE: the pointer that spoke is made `here`
+    /// first, so a drag, a hover or a wheel's leftover never crosses from
+    /// one cursor to another. See `crate::seats`.
     fn pointer_frame(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        self.pointers.switch_to(pointer, &mut self.here);
+        self.hinted.swap_hand(&mut self.here.hint_drag);
+        self.pointer_frame_here(conn, qh, events);
+        self.hinted.swap_hand(&mut self.here.hint_drag);
+    }
+}
+
+impl LocaleWindow {
+    /// One pointer's frame, with its state already `here`.
+    fn pointer_frame_here(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
-        let before = self.row_under_pointer;
+        let before = self.here.row_under_pointer;
         let mut clicked: Option<usize> = None;
         let mut turned = false;
         // THE BAR IS A CONTROL, and a drag is three events. `Scroll::offset_at`
@@ -933,7 +976,7 @@ impl PointerHandler for LocaleWindow {
         // deliberately skip a REPAINT on motion because it "spent a GPU frame
         // per row crossed". Building the whole list to answer "is the pointer
         // on the bar?" would spend the more expensive half of that anyway.
-        let bar_in_play = self.dragging
+        let bar_in_play = self.here.dragging
             || events.iter().any(|e| {
                 matches!(e.kind, PointerEventKind::Press { button, .. } if button == LEFT_BUTTON)
             });
@@ -977,7 +1020,7 @@ impl PointerHandler for LocaleWindow {
                         .and_then(|id| crate::chrome::hint_sentence(id, &self.texts));
                     explained |= self.hinted.say(now);
                     #[allow(clippy::cast_possible_truncation)]
-                    if self.dragging {
+                    if self.here.dragging {
                         dragged = Some(crate::chrome::list_offset_at(
                             scroll,
                             self.first_of_list(),
@@ -986,7 +1029,7 @@ impl PointerHandler for LocaleWindow {
                             e.position.1 as f32,
                         ));
                     } else {
-                        self.row_under_pointer = self.row_at(e.position.1);
+                        self.here.row_under_pointer = self.row_at(e.position.1);
                     }
                 }
                 PointerEventKind::Leave { .. } => {
@@ -998,12 +1041,12 @@ impl PointerHandler for LocaleWindow {
                     // unmap or a broken grab drops it — and a `dragging` left
                     // true makes the next ENTER, with no button held, jump the
                     // list to wherever the pointer came in.
-                    self.dragging = false;
+                    self.here.dragging = false;
                     self.hinted.let_go();
-                    self.row_under_pointer = None;
+                    self.here.row_under_pointer = None;
                 }
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
-                    self.dragging = false;
+                    self.here.dragging = false;
                     self.hinted.let_go();
                 }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
@@ -1022,7 +1065,7 @@ impl PointerHandler for LocaleWindow {
                         e.position.0 as f32,
                         e.position.1 as f32,
                     ) {
-                        self.dragging = true;
+                        self.here.dragging = true;
                         dragged = Some(crate::chrome::list_offset_at(
                             scroll,
                             self.first_of_list(),
@@ -1032,8 +1075,8 @@ impl PointerHandler for LocaleWindow {
                         ));
                         continue;
                     }
-                    self.row_under_pointer = self.row_at(e.position.1);
-                    clicked = self.row_under_pointer;
+                    self.here.row_under_pointer = self.row_at(e.position.1);
+                    clicked = self.here.row_under_pointer;
                 }
                 PointerEventKind::Axis {
                     vertical,
@@ -1044,7 +1087,11 @@ impl PointerHandler for LocaleWindow {
                     // Written out here it was `(pixels / line) * 3`, which
                     // moved nothing for a slow gesture and three lines for the
                     // next one: a list that jumps.
-                    crate::surface::wheel_arrived(&mut self.lines_owed, &vertical, &horizontal);
+                    crate::surface::wheel_arrived(
+                        &mut self.here.lines_owed,
+                        &vertical,
+                        &horizontal,
+                    );
                     wheel_at = Some(e.position.1);
                     turned = true;
                 }
@@ -1078,7 +1125,7 @@ impl PointerHandler for LocaleWindow {
             return;
         }
         if turned {
-            let by = crate::surface::wheel_lines(&mut self.lines_owed);
+            let by = crate::surface::wheel_lines(&mut self.here.lines_owed);
             // A WHEEL OVER THE OPEN DRAWER WALKS THE DRAWER, and not the list
             // under it: the gesture belongs to what is under the pointer.
             if by != 0 && wheel_at.is_some_and(|y| self.hinted.turned(head, y, by)) {
@@ -1106,17 +1153,17 @@ impl PointerHandler for LocaleWindow {
         }
         // EXCEPT THE LINE UNDER THE HINT, which IS drawn from the pointer:
         // resting on a shortcut spells it out, and moving off it takes the
-        // sentence away. The paragraph below still holds for the ROW under the
-        // pointer, which nothing here draws.
+        // sentence away. The ROW under the pointer is the
+        // paragraph below.
         if explained {
             self.ask_paint();
         }
-        // NO FRAME FOR A POINTER THAT CHANGED NOTHING. Nothing on this
-        // screen is drawn from `row_under_pointer` — the click reads it, and
-        // the paint does not — so repainting when it moved spent a GPU frame
-        // per row crossed, on an identical picture. The footer's own hover
-        // band IS drawn, which is why it repaints there and not here.
-        let _ = before;
+        // A FRAME ONLY WHEN SOMETHING THAT IS DRAWN MOVED. The row under the
+        // pointer is drawn now — every cursor's in its own colour — so a new
+        // row is a new picture; a pointer moving inside the same row is not.
+        if before != self.here.row_under_pointer {
+            self.ask_paint();
+        }
     }
 }
 

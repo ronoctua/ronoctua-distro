@@ -39,6 +39,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod input;
+
+pub use input::{
+    AccelProfile, ButtonMap, ClickMethod, Device, DeviceKind, DragLock, FingerDrag, FocusFollows,
+    PointerSettings, ScrollMethod, Seat, SeatAsk, SendEvents, Setting,
+};
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -496,6 +503,11 @@ pub enum Event {
     /// An answer that arrives at the point of the gesture is worth more than
     /// one that arrives later on another thread.
     ScreensChanged,
+    /// A device was plugged in, taken out, or had a setting changed.
+    ///
+    /// The same shape as [`Self::ScreensChanged`]: THAT something moved,
+    /// never what, so the answer is to read [`Compositor::devices`] again.
+    DevicesChanged,
     /// The compositor is going away, and said so before the socket died.
     ///
     /// It is the difference between a clean end and a stream that simply
@@ -601,6 +613,23 @@ pub trait Compositor: Send {
     /// happened is the reading that follows.
     fn reread(&mut self) -> Result<()>;
 
+    /// Every input device it can see.
+    fn devices(&mut self) -> Result<Vec<Device>>;
+
+    /// Every seat, with the devices attached to each.
+    fn seats(&mut self) -> Result<Vec<Seat>>;
+
+    /// Change one setting of one device, right now.
+    ///
+    /// Transient like [`Self::ask`]: a re-read puts back what the files say.
+    fn ask_input(&mut self, device: &str, setting: Setting) -> Result<()>;
+
+    /// Change something about a seat, creating it if it does not exist.
+    fn ask_seat(&mut self, seat: &str, ask: SeatAsk) -> Result<()>;
+
+    /// Whether focus follows the pointer — ONE setting for every seat.
+    fn ask_focus(&mut self, follows: FocusFollows) -> Result<()>;
+
     /// Close the focused window.
     ///
     /// "The focused one" and not an id: between reading the id and sending the
@@ -682,6 +711,21 @@ impl Compositor for Absent {
     fn reread(&mut self) -> Result<()> {
         Self::nothing_there()
     }
+    fn devices(&mut self) -> Result<Vec<Device>> {
+        Ok(Vec::new())
+    }
+    fn seats(&mut self) -> Result<Vec<Seat>> {
+        Ok(Vec::new())
+    }
+    fn ask_input(&mut self, _device: &str, _setting: Setting) -> Result<()> {
+        Self::nothing_there()
+    }
+    fn ask_seat(&mut self, _seat: &str, _ask: SeatAsk) -> Result<()> {
+        Self::nothing_there()
+    }
+    fn ask_focus(&mut self, _follows: FocusFollows) -> Result<()> {
+        Self::nothing_there()
+    }
     fn close_window(&mut self) -> Result<()> {
         Self::nothing_there()
     }
@@ -719,6 +763,10 @@ pub struct Scripted {
     pub windows: Vec<Window>,
     /// The connector [`Compositor::focused_output`] will name.
     pub focused: Option<String>,
+    /// What [`Compositor::devices`] will answer.
+    pub devices: Vec<Device>,
+    /// What [`Compositor::seats`] will answer.
+    pub seats: Vec<Seat>,
     /// Everything it has been told to do, in order.
     pub told: Vec<Said>,
     /// Events [`Compositor::watch`] will hand out, oldest first.
@@ -737,6 +785,12 @@ pub enum Said {
     Deed(&'static str, Option<String>),
     /// A re-read, which is also the whole of undo.
     Reread,
+    /// A setting asked of a device.
+    Input(String, Setting),
+    /// Something asked of a seat.
+    Seat(String, SeatAsk),
+    /// Focus-follows-mouse set.
+    Focus(FocusFollows),
     /// The focused window was closed.
     Closed,
     /// A window was focused by id.
@@ -802,6 +856,45 @@ impl Compositor for Scripted {
     fn reread(&mut self) -> Result<()> {
         self.allowed()?;
         self.told.push(Said::Reread);
+        Ok(())
+    }
+    fn devices(&mut self) -> Result<Vec<Device>> {
+        self.allowed()?;
+        Ok(self.devices.clone())
+    }
+    fn seats(&mut self) -> Result<Vec<Seat>> {
+        self.allowed()?;
+        Ok(self.seats.clone())
+    }
+    fn ask_input(&mut self, device: &str, setting: Setting) -> Result<()> {
+        self.allowed()?;
+        self.told.push(Said::Input(device.to_owned(), setting));
+        Ok(())
+    }
+    fn ask_seat(&mut self, seat: &str, ask: SeatAsk) -> Result<()> {
+        self.allowed()?;
+        // A SEAT ASKED FOR IS A SEAT THAT EXISTS, and an attach MOVES the
+        // device — the compositor's own rules, kept here so a test that
+        // attaches and then reads the seats sees what a live one would.
+        if let SeatAsk::Attach(id) = &ask {
+            for other in &mut self.seats {
+                other.devices.retain(|d| d != id);
+            }
+            match self.seats.iter_mut().find(|x| x.name == seat) {
+                Some(here) => here.devices.push(id.clone()),
+                None => self.seats.push(Seat {
+                    name: seat.to_owned(),
+                    devices: vec![id.clone()],
+                    focus: None,
+                }),
+            }
+        }
+        self.told.push(Said::Seat(seat.to_owned(), ask));
+        Ok(())
+    }
+    fn ask_focus(&mut self, follows: FocusFollows) -> Result<()> {
+        self.allowed()?;
+        self.told.push(Said::Focus(follows));
         Ok(())
     }
     fn close_window(&mut self) -> Result<()> {
@@ -890,7 +983,7 @@ impl State {
             // A MONITOR MOVING SAYS NOTHING ABOUT THE WINDOWS, and neither
             // does the session ending: both are listened to elsewhere, and
             // here they have to be as inert as an unknown event.
-            Event::ScreensChanged | Event::Leaving | Event::Ignored => {}
+            Event::ScreensChanged | Event::DevicesChanged | Event::Leaving | Event::Ignored => {}
         }
     }
 

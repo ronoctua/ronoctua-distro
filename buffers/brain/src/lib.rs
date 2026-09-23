@@ -372,7 +372,7 @@ struct State {
     /// them.
     phrases: Phrases,
     /// Which cell the pointer is resting on, if it is in the window.
-    hover: Option<(u16, u16)>,
+    hover: ronoctua_design::Hovers,
     /// The blocks the last `render` divided the window into.
     ///
     /// Recorded rather than computed, for the reason the memory panel's own
@@ -434,7 +434,7 @@ impl State {
             lines: 24,
             columns: 80,
             phrases: Phrases::empty(),
-            hover: None,
+            hover: ronoctua_design::Hovers::new(),
             blocks: Blocks::new(),
         }
     }
@@ -916,28 +916,32 @@ impl State {
         }
     }
 
-    /// Whether the pointer is resting on this cell of this block.
+    /// Whether ANY pointer is resting on this cell of this block — a control
+    /// lights for whichever hand is on it.
     fn hovering(&self, region: Region, row: u16, column: u16) -> bool {
-        let Some((at, line)) = self.hover else {
-            return false;
-        };
-        region.row_at(line) == Some(row) && at == column
+        self.hover
+            .first(|(at, line)| region.row_at(line) == Some(row) && at == column)
+            .is_some()
     }
 
-    /// Which row of a block the pointer is on, if it is on one at all.
-    fn hovered_row(&self, region: Region) -> Option<u16> {
-        let (_, line) = self.hover?;
-        region.row_at(line)
+    /// Every row of a block a pointer is on, with WHOSE hand it is — one
+    /// cursor per seat rests on this buffer (`Hovers`).
+    fn hovered_rows(&self, region: Region) -> Vec<(u16, u16)> {
+        self.hover
+            .cells()
+            .filter_map(|(seat, (_, line))| region.row_at(line).map(|row| (row, seat)))
+            .collect()
     }
 
-    /// Whether the pointer is resting on this rung.
+    /// Whether any pointer is resting on this rung.
     fn on_rung(&self, rung: &Rung) -> bool {
-        let Some((at, line)) = self.hover else {
-            return false;
-        };
-        self.blocks.head.row_at(line) == Some(rung.row)
-            && at >= rung.at
-            && at < rung.at.saturating_add(rung.cells)
+        self.hover
+            .first(|(at, line)| {
+                self.blocks.head.row_at(line) == Some(rung.row)
+                    && at >= rung.at
+                    && at < rung.at.saturating_add(rung.cells)
+            })
+            .is_some()
     }
 
     /// THE WARNING: one line, in the one colour that alarms, and ONLY when
@@ -1323,7 +1327,7 @@ impl State {
     /// line counter through this function, which is how it came to be measured
     /// against a number the footer had already claimed.
     fn home(&mut self, screen: &mut Screen<Wit>) {
-        let hovered = self.hovered_row(self.blocks.body);
+        let hovered = self.hovered_rows(self.blocks.body);
         let tasks: Vec<TaskState> = self.mind.tasks.clone();
         let cursor = self.task;
         let pane = self.pane;
@@ -1368,12 +1372,12 @@ impl State {
             }
             if n == cursor && pane == Pane::Tasks {
                 pen.band(row_at);
-            } else if hovered == Some(row_at) {
-                // THE ROW UNDER THE POINTER, in a tone of its own. Not the
+            } else if let Some(seat) = seat_on(&hovered, row_at) {
+                // THE ROW UNDER A POINTER, in that cursor's own tone. Not the
                 // cursor's band — that is where the KEYBOARD is, and the two
                 // are different questions every other window in the shell has
                 // always answered separately.
-                pen.ground(row_at, Role::Hover);
+                pen.ground(row_at, Role::hover_of(seat));
             }
             let role = kind_role(task.kind);
             let Some(mut row) = pen.row_of(row_at, &layout) else {
@@ -1449,7 +1453,7 @@ impl State {
                     .saturating_sub(shown.min(self.mind.activity.len())),
             );
         }
-        let hovered = self.hovered_row(self.blocks.log);
+        let hovered = self.hovered_rows(self.blocks.log);
         let from = self.log_from;
         let cursor = self.log;
         let pane = self.pane;
@@ -1523,8 +1527,8 @@ impl State {
             let at = from + n;
             if at == cursor && pane == Pane::Log {
                 pen.band(row);
-            } else if hovered == Some(row) {
-                pen.ground(row, Role::Hover);
+            } else if let Some(seat) = seat_on(&hovered, row) {
+                pen.ground(row, Role::hover_of(seat));
             }
             let Some(mut line) = pen.row_of(row, &layout) else {
                 break;
@@ -1614,15 +1618,21 @@ struct At {
     row: u16,
     /// Which spot this is, counted from the top of the page.
     spot: usize,
-    /// Which row of the block the pointer is on, if any.
+    /// Whose hand is on this row, if any — the cursor's colour number.
     hovered: Option<u16>,
 }
 
 impl At {
-    /// Whether the pointer is resting on this row.
-    const fn under_pointer(&self) -> bool {
-        matches!(self.hovered, Some(h) if h == self.row)
+    /// Whose pointer is resting on this row, if any.
+    const fn under_pointer(&self) -> Option<u16> {
+        self.hovered
     }
+}
+
+/// Whose hand is on `row`, among every pointer's row — the first to arrive
+/// on a shared row gives it its colour.
+fn seat_on(hovered: &[(u16, u16)], row: u16) -> Option<u16> {
+    hovered.iter().find(|(r, _)| *r == row).map(|(_, s)| *s)
 }
 
 /// The columns of a row that names a value and says which key changes it.
@@ -1933,7 +1943,7 @@ impl State {
         // there. The three layouts above already do it; these are the runs
         // that are placed by hand.
         let body = columns.saturating_sub(1);
-        let hovered = self.hovered_row(block);
+        let hovered = self.hovered_rows(block);
         let mut pen = screen.region(block);
         if pen.empty() {
             return;
@@ -2001,7 +2011,7 @@ impl State {
                     let at = At {
                         row: line,
                         spot: spot_n,
-                        hovered,
+                        hovered: seat_on(&hovered, line),
                     };
                     self.field(&mut pen, &task, &at, &fields, *spot);
                     spot_n += 1;
@@ -2011,7 +2021,7 @@ impl State {
                     let at = At {
                         row: line,
                         spot: spot_n,
-                        hovered,
+                        hovered: seat_on(&hovered, line),
                     };
                     self.step(&mut pen, &task, &at, &steps, *n);
                     spot_n += 1;
@@ -2021,7 +2031,7 @@ impl State {
                     let at = At {
                         row: line,
                         spot: spot_n,
-                        hovered,
+                        hovered: seat_on(&hovered, line),
                     };
                     self.ran(&mut pen, &task, &at, &history, *n);
                     spot_n += 1;
@@ -2137,8 +2147,8 @@ impl State {
         let n = at.spot;
         if self.spot == n {
             pen.band(line);
-        } else if at.under_pointer() {
-            pen.ground(line, Role::Hover);
+        } else if let Some(seat) = at.under_pointer() {
+            pen.ground(line, Role::hover_of(seat));
         }
         let Some(mut row) = pen.row_of(line, layout) else {
             return;
@@ -2279,8 +2289,8 @@ impl State {
         };
         if self.spot == n {
             pen.band(line);
-        } else if at.under_pointer() {
-            pen.ground(line, Role::Hover);
+        } else if let Some(seat) = at.under_pointer() {
+            pen.ground(line, Role::hover_of(seat));
         }
         let Some(mut row) = pen.row_of(line, layout) else {
             return;
@@ -2328,8 +2338,8 @@ impl State {
         };
         if self.spot == n {
             pen.band(line);
-        } else if at.under_pointer() {
-            pen.ground(line, Role::Hover);
+        } else if let Some(seat) = at.under_pointer() {
+            pen.ground(line, Role::hover_of(seat));
         }
         let Some(mut row) = pen.row_of(line, layout) else {
             return;
@@ -3195,19 +3205,19 @@ impl State {
             // this is the second half of the same economy — a hover that
             // redrew on every arrival would repaint whenever the pointer
             // jittered inside one cell.
+            //
+            // PER CURSOR: `p.seat` says which hand, each keeps its own cell,
+            // and one leaving puts out only its own.
             Input::Hover(p) => {
-                let now = Some((p.column, p.line));
-                if self.hover == now {
+                if !self.hover.set(p.seat, (p.at.column, p.at.line)) {
                     return Vec::new();
                 }
-                self.hover = now;
                 vec![Effect::Redraw]
             }
-            Input::Unhover => {
-                if self.hover.is_none() {
+            Input::Unhover(seat) => {
+                if !self.hover.clear(seat) {
                     return Vec::new();
                 }
-                self.hover = None;
                 vec![Effect::Redraw]
             }
             // THE WORDS FOR THE KEYS THIS BUFFER TEACHES, so the header can

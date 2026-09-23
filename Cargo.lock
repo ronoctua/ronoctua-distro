@@ -2964,6 +2964,19 @@ name = "ronoctua-options"
 version = "0.1.0"
 
 [[package]]
+name = "ronoctua-pointers"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-compositor",
+ "ronoctua-scroll",
+ "ronoctua-store",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "ronoctua-power"
 version = "0.1.0"
 dependencies = [
@@ -3071,6 +3084,7 @@ dependencies = [
  "ronoctua-network",
  "ronoctua-notify",
  "ronoctua-options",
+ "ronoctua-pointers",
  "ronoctua-power",
  "ronoctua-protocol",
  "ronoctua-render",

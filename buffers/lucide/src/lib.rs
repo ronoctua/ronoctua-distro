@@ -2191,7 +2191,7 @@ impl State {
             | Input::Rack(_)
             | Input::Mind(_)
             | Input::Hover { .. }
-            | Input::Unhover
+            | Input::Unhover(_)
             | Input::Keyboards(_)
             | Input::Formatted(_)
             // A CATALOGUE PAGES, it does not scroll — and a bar it does not
@@ -2859,7 +2859,7 @@ impl State {
                 | Input::Rack(_)
                 | Input::Mind(_)
             | Input::Hover { .. }
-            | Input::Unhover
+            | Input::Unhover(_)
                 | Input::Formatted(_)
                 | Input::Keyboards(_)
                 // A CATALOGUE PAGES, it does not scroll: `C-,` turns the

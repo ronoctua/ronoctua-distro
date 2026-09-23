@@ -79,6 +79,7 @@ let
     scrollnag_command -
 
     include "/root/.config/ronoctua/scroll-display.conf"
+    include "/root/.config/ronoctua/scroll-pointers.conf"
   '';
 in
 pkgs.testers.runNixOSTest {

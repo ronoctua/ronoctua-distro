@@ -173,7 +173,41 @@ struct KeyboardHold {
     wanted: bool,
     /// Is a `leave` still owed to the acquisition just made?
     owed_a_leave: bool,
+    /// A `leave` that came while the footer held the keyboard, waiting to see
+    /// whether the `enter` that gives it back follows — see [`Leave::Settling`].
+    /// The number tells one wait from the next, so a timer armed for an old
+    /// leave never closes the region over a new one.
+    pending: Option<u64>,
+    /// How many settling waits there have been.
+    waits: u64,
 }
+
+/// What a keyboard `leave` means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Leave {
+    /// The one owed to the acquisition just made — see the type's header.
+    Forgiven,
+    /// A `leave` while the footer HOLDS the keyboard, and so probably not a
+    /// loss at all: with focus following the mouse, every window a pointer
+    /// passes over is focused, and the compositor clears and restores the
+    /// exclusive layer's focus around it — `leave`, then `enter`, on every
+    /// window crossed (`seat_set_focus`, `sway/input/seat.c`). Closing on the
+    /// first half closed M-x, the files and the leader whenever the mouse
+    /// moved onto a window above the footer, which is what the owner saw. So
+    /// it waits [`SETTLE`] for the `enter`; only a `leave` that is still
+    /// standing then is a keyboard really taken away.
+    Settling(u64),
+    /// A keyboard the footer was not holding went away.
+    Lost,
+}
+
+/// How long a `leave` waits for its `enter` before it counts as a loss.
+///
+/// The compositor sends the pair in one call, so the `enter` comes within a
+/// frame; a quarter of a second is room for a loaded machine, and short
+/// enough that a keyboard really taken — another exclusive surface, a VT
+/// switch — closes what was open before anybody reaches for it.
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
 
 impl KeyboardHold {
     /// A geometry was asked for, with or without the keyboard.
@@ -184,18 +218,35 @@ impl KeyboardHold {
         self.wanted = exclusive;
     }
 
-    /// The compositor granted it.
+    /// The compositor granted it — and a `leave` waiting to settle was only
+    /// the first half of a pair.
     fn entered(&mut self) {
         self.owed_a_leave = false;
+        self.pending = None;
     }
 
-    /// The compositor withdrew it. `true` when that is a real loss.
-    fn left(&mut self) -> bool {
+    /// The compositor withdrew it.
+    fn left(&mut self) -> Leave {
         if self.owed_a_leave {
             self.owed_a_leave = false;
-            return false;
+            return Leave::Forgiven;
         }
-        true
+        if self.wanted {
+            self.waits += 1;
+            self.pending = Some(self.waits);
+            return Leave::Settling(self.waits);
+        }
+        Leave::Lost
+    }
+
+    /// The wait numbered `wait` is over: `true` when no `enter` came, which
+    /// makes it a real loss.
+    fn settled(&mut self, wait: u64) -> bool {
+        if self.pending == Some(wait) {
+            self.pending = None;
+            return true;
+        }
+        false
     }
 }
 
@@ -255,17 +306,16 @@ struct Footer {
     // --- leader and keyboard (section 7.4) ---
     seats: SeatState,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    /// The seat the keyboard is on — a click reads its modifiers only from a
+    /// pointer on the SAME seat, so Ctrl held on one keyboard never turns
+    /// another cursor's click into a Ctrl+click. See `crate::seats`.
+    keyboard_seat: Option<wl_seat::WlSeat>,
     /// Modifiers held RIGHT NOW. The key event does not carry them; they arrive in
     /// an event of their own and hold until the next one.
     mods: Modifiers,
     /// Entries carried out of the listing, and drops landing in it. See
     /// [`crate::carry`].
     carrying: Option<crate::carry::Carrying>,
-    /// The serial of the press a drag would start from.
-    ///
-    /// `start_drag` takes the PRESS's own serial and the compositor refuses
-    /// any other, with no error on this side.
-    pressed_at: u32,
     /// The ones already held when the footer gained the keyboard.
     ///
     /// # Why they have to be discounted
@@ -426,8 +476,6 @@ struct Footer {
     /// has to be the bar that was painted, and the wrap depends on a width
     /// only the painter knows.
     fold_scroll: ronoctua_design::Scroll,
-    /// Whether the opened line's bar is being dragged.
-    dragging_fold: bool,
     /// How many rows the line's text came to at the last width it was DRAWN at.
     ///
     /// The height is measured ONCE, when the band opens, and the content is
@@ -457,7 +505,11 @@ struct Footer {
     /// It came to need one for ONE reason — the manual's scrollbar only shows up
     /// when the mouse is over the surface, and knowing that requires receiving the
     /// events.
-    pointer: Option<wl_pointer::WlPointer>,
+    /// Every pointer this window was offered — one per cursor — with the
+    /// state of each while another is `here`. See `crate::seats`.
+    pointers: crate::seats::Seats<PerSeat>,
+    /// The state of the pointer whose events are being handled now.
+    here: PerSeat,
     /// The transfer queue's panel, when it is open. `None` = it is not.
     transfers: Option<crate::transfers::View>,
     /// The last list the queue sent, KEPT even with the panel closed.
@@ -495,8 +547,6 @@ struct Footer {
     /// cannot be wrong: what the pointer is over is what was DRAWN, not what a
     /// second calculation says would be drawn.
     modeline_placed: Vec<(&'static str, u16, u16)>,
-    /// Which segment the pointer is over.
-    segment_under_pointer: Option<&'static str>,
     /// What the band's control under the pointer says, already translated.
     ///
     /// On the MESSAGE LINE and never in a tooltip: a floating surface is what
@@ -530,57 +580,6 @@ struct Footer {
     /// have the same size and are different images — and the screen would show the
     /// previous one.
     clip_version: u64,
-    /// How many LINES the wheel and the touchpad have asked for and not yet
-    /// been paid — the same unit the five windows keep.
-    ///
-    /// Without it the touchpad does not scroll: each of its events is worth a
-    /// small fraction, and truncating event by event would give zero forever.
-    /// Keeping the remainder, the pieces add up — which is what turns the
-    /// continuous gesture into movement.
-    ///
-    /// LINES AND NOT DETENTS, which it used to hold. This region has two
-    /// modes, and it was the paginating one that set the unit: a page per
-    /// detent. So the scrolling one spent three lines at a stroke and stood
-    /// still in between — the stutter the five windows were cured of, alive in
-    /// the door the report was about. The mode's STEP is where the difference
-    /// belongs, and that is where it is now.
-    lines_owed: f64,
-    /// Is the pointer OVER the footer right now?
-    under_pointer: bool,
-    /// The scrollbar is being DRAGGED right now.
-    ///
-    /// Without this state, the button pressed over the bar fell into the same path
-    /// as a click on an item: the list scrolled and a command was run along with
-    /// it, which is the worst kind of surprise — the person wanted to look and the
-    /// system acted.
-    dragging: bool,
-    /// Which of the manager's sections has the thumb, when one does.
-    ///
-    /// The listing's bar is this door's own (`dragging`); the sidebar's and the
-    /// facts' belong to the view, and until this existed they were drawn and
-    /// nothing listened — the owner tried the facts' with the mouse in both
-    /// doors and neither moved.
-    dragging_section: Option<(crate::files::Pane, crate::files::Axis)>,
-    /// Which SHELF of the network view has the thumb, when one does.
-    ///
-    /// A shelf's bar is drawn at its CONTAINER's right edge and the region's
-    /// at the surface's (`chrome::shelf_box`), so a press is answered by the
-    /// bar drawn in that column at that height — and once grabbed it has to
-    /// keep answering until the button comes up, or the drag would move the
-    /// shelf only where the pointer was pressed.
-    dragging_shelf: Option<crate::network::Shelf>,
-    /// Which line of the visible PAGE is under the pointer.
-    ///
-    /// An index into the page, and not into the whole list: it is what the drawing
-    /// positions, and converting here would avoid a second scroll calculation.
-    row_under_pointer: Option<usize>,
-    /// Which CELL of that row, counting from the region's left edge.
-    ///
-    /// Only the file manager needs it, and it needs it badly: ten of its cells
-    /// are separate permission bits, and a row index alone cannot tell the
-    /// group's `w` from the owner's `r`. It is what makes both the explanation
-    /// on hover and the click on a bit possible at all.
-    cell_under_pointer: Option<u16>,
     /// Is the shortcut manual open?
     ///
     /// It is the fourth use of the expanded region, and the second MODAL one:
@@ -816,6 +815,13 @@ struct Footer {
     audio_orders: Option<ronoctua_audio::Handle>,
     /// The sound view, when open — `LEADER s a a`.
     audio: Option<crate::audio::View>,
+    /// The mice, touchpads and cursors view (`LEADER s i i`), when it is open.
+    pointer_view: Option<crate::pointers::View>,
+    /// The last reading of the pointer thread.
+    pointer_snapshot: Option<ronoctua_pointers::Snapshot>,
+    /// The pointer thread — started with the footer, because it is what gives
+    /// a device plugged in with no view open a cursor of its own.
+    pointer_thread: Option<ronoctua_pointers::Handle>,
     /// Which source this door has asked to have open.
     ///
     /// It shadows `View::listening` so the order goes out when it CHANGES.
@@ -963,17 +969,6 @@ struct Footer {
     files_wound: crate::thumbs::Wind,
     /// The player that tours the film under the POINTER.
     files_touring: Option<crate::motion::Player>,
-    /// Where the pointer was when it last moved a shape.
-    ///
-    /// A gesture of the door's own and NOT a fourth `Axis`: `drag_to` inverts
-    /// a track — one scalar, one direction — and turning something is two
-    /// deltas with no track behind them. Beside `dragging_section` because it
-    /// is the same kind of thing: a press that owns the pointer until it is
-    /// let go.
-    spinning: Option<(f64, f64)>,
-    /// Where the pointer was when it took hold of the GLOBE. A field of its
-    /// own and not `spinning` — see the press handler.
-    dragging_globe: Option<(f64, f64)>,
     /// Who the numeric ids belong to, read ONCE.
     ///
     /// `/etc/passwd` and `/etc/group` do not change while a listing is on
@@ -1022,6 +1017,87 @@ struct Footer {
     icons_requested: std::collections::HashSet<String>,
     /// The icon thread's queue.
     icon_queue: Option<std::sync::mpsc::Sender<crate::apps::Request>>,
+}
+
+/// What this window keeps for ONE pointer — see `crate::seats`.
+#[derive(Debug, Default)]
+struct PerSeat {
+    /// Whether this pointer rests on the notification band — the band's clock
+    /// stops while ANY pointer does.
+    on_band: bool,
+    /// Whether this pointer rests on the glance line, by the same rule.
+    on_glance: bool,
+    /// Which CELL of that row, counting from the region's left edge.
+    ///
+    /// Only the file manager needs it, and it needs it badly: ten of its cells
+    /// are separate permission bits, and a row index alone cannot tell the
+    /// group's `w` from the owner's `r`. It is what makes both the explanation
+    /// on hover and the click on a bit possible at all.
+    cell_under_pointer: Option<u16>,
+    /// The scrollbar is being DRAGGED right now.
+    ///
+    /// Without this state, the button pressed over the bar fell into the same path
+    /// as a click on an item: the list scrolled and a command was run along with
+    /// it, which is the worst kind of surprise — the person wanted to look and the
+    /// system acted.
+    dragging: bool,
+    /// Whether the opened line's bar is being dragged.
+    dragging_fold: bool,
+    /// Where the pointer was when it took hold of the GLOBE. A field of its
+    /// own and not `spinning` — see the press handler.
+    dragging_globe: Option<(f64, f64)>,
+    /// Which of the manager's sections has the thumb, when one does.
+    ///
+    /// The listing's bar is this door's own (`dragging`); the sidebar's and the
+    /// facts' belong to the view, and until this existed they were drawn and
+    /// nothing listened — the owner tried the facts' with the mouse in both
+    /// doors and neither moved.
+    dragging_section: Option<(crate::files::Pane, crate::files::Axis)>,
+    /// Which SHELF of the network view has the thumb, when one does.
+    ///
+    /// A shelf's bar is drawn at its CONTAINER's right edge and the region's
+    /// at the surface's (`chrome::shelf_box`), so a press is answered by the
+    /// bar drawn in that column at that height — and once grabbed it has to
+    /// keep answering until the button comes up, or the drag would move the
+    /// shelf only where the pointer was pressed.
+    dragging_shelf: Option<crate::network::Shelf>,
+    /// How many LINES the wheel and the touchpad have asked for and not yet
+    /// been paid — the same unit the five windows keep.
+    ///
+    /// Without it the touchpad does not scroll: each of its events is worth a
+    /// small fraction, and truncating event by event would give zero forever.
+    /// Keeping the remainder, the pieces add up — which is what turns the
+    /// continuous gesture into movement.
+    ///
+    /// LINES AND NOT DETENTS, which it used to hold. This region has two
+    /// modes, and it was the paginating one that set the unit: a page per
+    /// detent. So the scrolling one spent three lines at a stroke and stood
+    /// still in between — the stutter the five windows were cured of, alive in
+    /// the door the report was about. The mode's STEP is where the difference
+    /// belongs, and that is where it is now.
+    lines_owed: f64,
+    /// The serial of the press a drag would start from.
+    ///
+    /// `start_drag` takes the PRESS's own serial and the compositor refuses
+    /// any other, with no error on this side.
+    pressed_at: u32,
+    /// Which line of the visible PAGE is under the pointer.
+    ///
+    /// An index into the page, and not into the whole list: it is what the drawing
+    /// positions, and converting here would avoid a second scroll calculation.
+    row_under_pointer: Option<usize>,
+    /// Which segment the pointer is over.
+    segment_under_pointer: Option<&'static str>,
+    /// Where the pointer was when it last moved a shape.
+    ///
+    /// A gesture of the door's own and NOT a fourth `Axis`: `drag_to` inverts
+    /// a track — one scalar, one direction — and turning something is two
+    /// deltas with no track behind them. Beside `dragging_section` because it
+    /// is the same kind of thing: a press that owns the pointer until it is
+    /// let go.
+    spinning: Option<(f64, f64)>,
+    /// Is the pointer OVER the footer right now?
+    under_pointer: bool,
 }
 
 /// What the expanded region is showing RIGHT NOW.
@@ -1082,6 +1158,10 @@ enum ViewState {
     /// the radio for the radio's own reason — a pairing question is waiting
     /// for an answer, and a volume row is not.
     Audio,
+    /// Mice, touchpads and cursors — `LEADER s i i`. Ranked beside the sound
+    /// view and for its reason: a cursor over a list of settings holds
+    /// nothing a person built by hand.
+    Pointers,
     /// Syncthing — `LEADER s s s`.
     Syncthing,
     /// The shell's history — `LEADER s h h`.
@@ -1366,6 +1446,8 @@ enum Click {
     Power(usize),
     /// A row of the sound view: the cursor goes there, `RET` acts.
     Audio(usize),
+    /// A row of the pointers view: the cursor goes there, `RET` acts.
+    Pointers(usize),
     /// A row of the Syncthing view.
     Syncthing(usize),
     /// A row of the language and region view.
@@ -2188,8 +2270,8 @@ pub fn run() -> Result<()> {
         windows: ronoctua_compositor::State::default(),
         seats: SeatState::new(&globals, &qh),
         keyboard: None,
+        keyboard_seat: None,
         mods: Modifiers::default(),
-        pressed_at: 0,
         inheritance: Inheritance::default(),
         leader: Leader::default(),
         texts: std::rc::Rc::new(crate::language::texts()),
@@ -2226,7 +2308,6 @@ pub fn run() -> Result<()> {
         hint_said: None,
         fold: crate::fold::Fold::default(),
         fold_control: None,
-        dragging_fold: false,
         fold_wrapped: 0,
         fold_scroll: ronoctua_design::Scroll {
             total: 0,
@@ -2238,12 +2319,12 @@ pub fn run() -> Result<()> {
         leader_label: crate::leader(),
         echo: None,
         mx: crate::minibuffer::Minibuffer::default(),
-        pointer: None,
+        pointers: crate::seats::Seats::default(),
+        here: PerSeat::default(),
         transfers: None,
         jobs: Vec::new(),
         states: std::collections::HashMap::new(),
         modeline_placed: Vec::new(),
-        segment_under_pointer: None,
         state_pending: false,
         state_menu: Vec::new(),
         clipboard: ronoctua_clipboard::Queue::default(),
@@ -2252,13 +2333,6 @@ pub fn run() -> Result<()> {
         clip_qr: None,
         clip_image: None,
         clip_version: 0,
-        lines_owed: 0.0,
-        under_pointer: false,
-        dragging: false,
-        dragging_section: None,
-        dragging_shelf: None,
-        row_under_pointer: None,
-        cell_under_pointer: None,
         manual: false,
         offset: 0,
         right_ctrl: false,
@@ -2300,6 +2374,9 @@ pub fn run() -> Result<()> {
         audio_snapshot: None,
         audio_orders: None,
         audio: None,
+        pointer_view: None,
+        pointer_snapshot: None,
+        pointer_thread: None,
         audio_listening: None,
         audio_prefs: ronoctua_audio::prefs::store().read(),
         sound: None,
@@ -2349,8 +2426,6 @@ pub fn run() -> Result<()> {
         files_winding: None,
         files_wound: crate::thumbs::Wind(Vec::new()),
         files_touring: None,
-        spinning: None,
-        dragging_globe: None,
         // Read ONCE, at startup. Neither answer changes while a listing is on
         // screen, and asking per row would put two hundred opens inside the
         // frame that draws it.
@@ -3016,6 +3091,27 @@ pub fn run() -> Result<()> {
     // scale or a re-read as well as on a hotplug, where Wayland only says a
     // global came and went. Neither says WHAT moved, so both answer the same
     // way — read the screens again.
+    // THE POINTERS, on a thread of their own, and DETECTING: this is the door
+    // that is alive for the whole session, so it is the one that gives a
+    // mouse plugged in with no view open a cursor of its own
+    // (`ronoctua-pointers`). A window's thread only reads and asks.
+    let (pointer_sender, pointer_events) = channel::channel::<ronoctua_pointers::Event>();
+    match ronoctua_pointers::watch(true, move |e| {
+        let _ = pointer_sender.send(e);
+    }) {
+        Ok(h) => state.pointer_thread = Some(h),
+        Err(e) => {
+            tracing::warn!(error = %e, "no pointer thread; new devices keep the first cursor")
+        }
+    }
+    handle
+        .insert_source(pointer_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(e) = event {
+                state.pointer_event(e);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the pointers' channel: {e}"))?;
+
     let (display_sender, display_events) = channel::channel::<ronoctua_display::Event>();
     match ronoctua_display::watch(move |e| {
         let _ = display_sender.send(e);
@@ -3943,7 +4039,7 @@ impl Footer {
         // numbers the mark itself draws by.
         if let Some(i) = crate::bluetooth::POOL
             .iter()
-            .position(|p| Some(*p) == self.segment_under_pointer)
+            .position(|p| Some(*p) == self.here.segment_under_pointer)
         {
             let shown = crate::bluetooth::modeline(&self.bluetooth_scene);
             let at = shown.get(i)?;
@@ -3964,7 +4060,7 @@ impl Footer {
                 ),
             });
         }
-        match self.segment_under_pointer? {
+        match self.here.segment_under_pointer? {
             // A LINK THAT LEADS NOWHERE says WHICH nowhere: a login page in
             // the way is a different thing to do about it than an uplink
             // that is down, and the mark cannot say which.
@@ -4559,13 +4655,18 @@ impl SeatHandler for Footer {
                 Ok(k) => {
                     tracing::debug!("the seat's keyboard is ready");
                     self.keyboard = Some(k);
+                    self.keyboard_seat = Some(seat.clone());
                 }
                 Err(e) => tracing::warn!(error = %e, "no keyboard; the leader will not work"),
             }
         }
-        if cap == Capability::Pointer && self.pointer.is_none() {
+        if cap == Capability::Pointer {
             match self.seats.get_pointer(qh, &seat) {
-                Ok(p) => self.pointer = Some(p),
+                Ok(p) => {
+                    // EVERY POINTER, and not only the first: one per cursor.
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.pointers.took(&seat, p, name.as_deref());
+                }
                 // With no pointer the footer works whole: what is lost is the
                 // scrollbar, which is a visual hint, not a path.
                 Err(e) => {
@@ -4584,7 +4685,7 @@ impl SeatHandler for Footer {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: wl_seat::WlSeat,
+        seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
         if cap == Capability::Keyboard
@@ -4592,11 +4693,8 @@ impl SeatHandler for Footer {
         {
             k.release();
         }
-        if cap == Capability::Pointer
-            && let Some(p) = self.pointer.take()
-        {
-            p.release();
-            self.under_pointer = false;
+        if cap == Capability::Pointer {
+            self.pointers.lost(&seat, &mut self.here);
         }
     }
 
@@ -4876,25 +4974,18 @@ impl KeyboardHandler for Footer {
         // measurement. The modifiers above are zeroed either way: the `enter`
         // that follows announces them again, and it is that announcement that
         // becomes the session's inheritance.
-        if !self.keyboard_hold.left() {
-            tracing::debug!("a keyboard leave answering the acquisition, not a loss");
-            return;
+        match self.keyboard_hold.left() {
+            Leave::Forgiven => {
+                tracing::debug!("a keyboard leave answering the acquisition, not a loss");
+                return;
+            }
+            Leave::Settling(wait) => {
+                self.wait_for_the_keyboard(wait);
+                return;
+            }
+            Leave::Lost => {}
         }
-        if self.grabbing() {
-            tracing::debug!("keyboard focus lost; closing what was open");
-            self.mx.close_it();
-            self.manual = false;
-            self.apps = None;
-            // THE MANAGER GOES TOO, and it is the one that loses the most: a
-            // directory, a set of marks, an armed confirmation. Leaving it open
-            // without the keyboard would be worse — a listing on screen that
-            // answers nothing, with an armed `delete` nobody can see is armed.
-            self.files = None;
-            self.rest_the_watch();
-            self.first_page();
-            self.close_leader();
-            self.draw_and_paint();
-        }
+        self.lost_the_keyboard();
     }
 
     fn press_key(
@@ -5059,23 +5150,40 @@ impl Footer {
 }
 
 impl PointerHandler for Footer {
+    /// EVERY CURSOR HAS ITS OWN STATE: the pointer that spoke is made `here`
+    /// first, so a drag, a hover or a wheel's leftover never crosses from
+    /// one cursor to another. See `crate::seats`.
+    fn pointer_frame(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        self.pointers.switch_to(pointer, &mut self.here);
+        self.pointer_frame_here(conn, qh, events);
+    }
+}
+
+impl Footer {
     /// The pointer serves ONE thing: knowing whether it is over the footer.
     ///
     /// There is no click, no drag and no target — the footer has nothing
     /// clickable (invariant 14). The manual's scrollbar shows up while the mouse
     /// goes over it and disappears when it leaves, which is the behavior one
     /// expects from a bar that stays hidden.
-    fn pointer_frame(
+    ///
+    /// One pointer's frame, with its state already `here`.
+    fn pointer_frame_here(
         &mut self,
         _: &Connection,
         qh: &QueueHandle<Self>,
-        _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
         let before = (
-            self.under_pointer,
-            self.row_under_pointer,
-            self.cell_under_pointer,
+            self.here.under_pointer,
+            self.here.row_under_pointer,
+            self.here.cell_under_pointer,
             // AND THE SHORTCUT'S SENTENCE, which changes WITHIN one row of the
             // minibuffer: moving from `C-v` to `C-i` never leaves the line, so
             // none of the three above would notice, and the line under them
@@ -5087,7 +5195,7 @@ impl PointerHandler for Footer {
             // scroll of the file manager.
             self.current_offset(),
         );
-        let segment_before = self.segment_under_pointer;
+        let segment_before = self.here.segment_under_pointer;
         let mut clicked = None;
         let mut menu = false;
         // THE MODELINE'S OWN TWO CLICKS, kept apart from `clicked` and `menu`
@@ -5129,13 +5237,13 @@ impl PointerHandler for Footer {
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    self.under_pointer = true;
-                    self.row_under_pointer = self.row_at(e.position.0, e.position.1);
-                    self.cell_under_pointer = self.cell_at(e.position.0);
+                    self.here.under_pointer = true;
+                    self.here.row_under_pointer = self.row_at(e.position.0, e.position.1);
+                    self.here.cell_under_pointer = self.cell_at(e.position.0);
                     // AND WHICH THUMBNAIL, so a film under the hand starts its
                     // tour. It opens no file — see `View::hover_thumb`.
                     self.hover_a_thumbnail();
-                    self.segment_under_pointer = self.segment_at(e.position.0, e.position.1);
+                    self.here.segment_under_pointer = self.segment_at(e.position.0, e.position.1);
                     // WHAT THE BAND'S CONTROL SAYS, on the message line and
                     // never in a tooltip — the precedent the file manager set,
                     // and what keeps invariant 14 standing now that the band is
@@ -5163,12 +5271,8 @@ impl PointerHandler for Footer {
                     // are part of it. `band_row_at` is the region; `band_at`
                     // above is the drawn piece, and the two answer different
                     // questions.
-                    let on_the_band = self.band_row_at(e.position.0, e.position.1).is_some();
-                    if on_the_band {
-                        held_changed |= self.notifications.hold(std::time::Instant::now());
-                    } else {
-                        held_changed |= self.notifications.release(std::time::Instant::now());
-                    }
+                    self.here.on_band = self.band_row_at(e.position.0, e.position.1).is_some();
+                    held_changed |= self.hold_the_band_if_anyone_reads_it();
                     // AND THE GLANCE'S CLOCK, by the same rule and for the
                     // same reason: what is being read is the line, and the
                     // gaps between its places are as much of it as the words.
@@ -5204,8 +5308,8 @@ impl PointerHandler for Footer {
                     // the last fact — so the pointer crossing those answered
                     // "nowhere", and the expand button in the corner went out
                     // before the hand could reach it. See `files::View::pane_at`.
-                    let where_ = self.row_under_pointer;
-                    let cell = self.cell_under_pointer.unwrap_or(0);
+                    let where_ = self.here.row_under_pointer;
+                    let cell = self.here.cell_under_pointer.unwrap_or(0);
                     let wide = self.screen_columns();
                     let deep = self.grid().lines;
                     if let Some(v) = self.files.as_ref() {
@@ -5217,7 +5321,7 @@ impl PointerHandler for Footer {
                     // idea how big a pixel is; a whole screen's width is about
                     // half a turn, which is the ratio that makes a piece feel
                     // attached to the pointer rather than geared to it.
-                    if let Some((was_x, was_y)) = self.dragging_globe {
+                    if let Some((was_x, was_y)) = self.here.dragging_globe {
                         #[allow(clippy::cast_possible_truncation)]
                         let moved = self.files.as_mut().is_some_and(|v| {
                             v.pan_globe(
@@ -5225,12 +5329,12 @@ impl PointerHandler for Footer {
                                 (e.position.1 - was_y) as f32,
                             )
                         });
-                        self.dragging_globe = Some(e.position);
+                        self.here.dragging_globe = Some(e.position);
                         if moved {
                             spun = true;
                         }
                     }
-                    if let Some((was_x, was_y)) = self.spinning {
+                    if let Some((was_x, was_y)) = self.here.spinning {
                         let wide = self
                             .screens
                             .iter()
@@ -5249,20 +5353,20 @@ impl PointerHandler for Footer {
                                 ((e.position.1 - was_y) * by) as f32,
                             )
                         });
-                        self.spinning = Some(e.position);
+                        self.here.spinning = Some(e.position);
                         if turned {
                             spun = true;
                         }
                     }
                     // DRAGGING: the pointer's position BECOMES the offset.
-                    if let Some((pane, axis)) = self.dragging_section {
+                    if let Some((pane, axis)) = self.here.dragging_section {
                         self.drag_section_to(pane, axis, e.position.0, e.position.1);
-                    } else if let Some(which) = self.dragging_shelf {
+                    } else if let Some(which) = self.here.dragging_shelf {
                         self.drag_shelf_to(which, e.position.1);
-                    } else if self.dragging {
+                    } else if self.here.dragging {
                         self.drag_to(e.position.1);
                     } else if let (Some(line), Some(cell)) =
-                        (self.row_under_pointer, self.cell_under_pointer)
+                        (self.here.row_under_pointer, self.here.cell_under_pointer)
                     {
                         // AND A BUTTON THAT IS DOWN ON THE LISTING IS A GESTURE
                         // NOW, or still a click — see `files::View::moved_to`.
@@ -5288,22 +5392,23 @@ impl PointerHandler for Footer {
                     // AND THE HAND LEAVING STOPS THE FILM, which is the other
                     // half of starting it: a child process for a cell nobody is
                     // over is a pipe for nothing.
-                    self.cell_under_pointer = None;
-                    self.row_under_pointer = None;
+                    self.here.cell_under_pointer = None;
+                    self.here.row_under_pointer = None;
                     self.hover_a_thumbnail();
                     // THE CLOCK GOES ON. A pointer that leaves the surface
                     // sends no motion event on the way out, so without this a
                     // notification held at the edge would stay held until the
                     // hand came back — which is for ever, if it does not.
-                    held_changed |= self.notifications.release(std::time::Instant::now());
+                    self.here.on_band = false;
+                    held_changed |= self.hold_the_band_if_anyone_reads_it();
                     // AND THE GLANCE'S, for the reason just above: a pointer
                     // that leaves sends no motion on the way out, so a glance
                     // held at the edge would stay held for ever.
                     held_changed |= self.glance_lets_go();
-                    self.under_pointer = false;
-                    self.row_under_pointer = None;
-                    self.cell_under_pointer = None;
-                    self.segment_under_pointer = None;
+                    self.here.under_pointer = false;
+                    self.here.row_under_pointer = None;
+                    self.here.cell_under_pointer = None;
+                    self.here.segment_under_pointer = None;
                     self.band_hint = None;
                     self.brain_hint = None;
                     // THE LINE GOES WITH THE POINTER, which is the whole of
@@ -5311,8 +5416,8 @@ impl PointerHandler for Footer {
                     // way out, so without this the explanation of a key nobody
                     // is pointing at would stay on screen for ever.
                     self.hint_said = None;
-                    self.dragging = false;
-                    self.dragging_shelf = None;
+                    self.here.dragging = false;
+                    self.here.dragging_shelf = None;
                     // AND A BAND ENDS WHERE THE HAND LEFT IT. What it took was
                     // drawn, entry by entry, the whole way — undoing that
                     // silently is the worse of the two answers.
@@ -5339,8 +5444,8 @@ impl PointerHandler for Footer {
                 // The middle button still does nothing: pasting text into a
                 // list of commands would be a command run by mistake.
                 PointerEventKind::Press { button, .. } if button == RIGHT_BUTTON => {
-                    self.row_under_pointer = self.row_at(e.position.0, e.position.1);
-                    self.cell_under_pointer = self.cell_at(e.position.0);
+                    self.here.row_under_pointer = self.row_at(e.position.0, e.position.1);
+                    self.here.cell_under_pointer = self.cell_at(e.position.0);
                     // THE MODELINE FIRST, because it is not a row: a press on
                     // line 0 has no `ExpansionRow` behind it, and everything
                     // below asks the row what it is.
@@ -5377,16 +5482,16 @@ impl PointerHandler for Footer {
                     // THE PRESS'S OWN SERIAL, kept because a drag started from
                     // any other is refused by the compositor with nothing said
                     // on this side — see `carry::Carrying::begin`.
-                    self.pressed_at = serial;
-                    self.row_under_pointer = self.row_at(e.position.0, e.position.1);
-                    self.cell_under_pointer = self.cell_at(e.position.0);
+                    self.here.pressed_at = serial;
+                    self.here.row_under_pointer = self.row_at(e.position.0, e.position.1);
+                    self.here.cell_under_pointer = self.cell_at(e.position.0);
                     // WHAT THE LISTING'S GESTURE NEEDS, taken before the view
                     // is borrowed at the end of this arm: the width and the
                     // height the region is drawn at, the modifiers, and the
                     // texts. See `chrome::held` for why the pointer reads the
                     // modifiers straight.
                     let (columns, room) = (self.screen_columns(), self.grid().lines);
-                    let held = crate::chrome::held(self.mods);
+                    let held = crate::chrome::held(self.pointer_mods());
                     let texts = std::rc::Rc::clone(&self.texts);
                     // THE BAND FIRST, because it is above everything and is not
                     // a row: its lines have no `ExpansionRow` behind them, and
@@ -5464,7 +5569,7 @@ impl PointerHandler for Footer {
                     // listing's does not know about them.
                     let section = self.files_bar_at_point(e.position.0, e.position.1);
                     if let Some((pane, axis)) = section {
-                        self.dragging_section = Some((pane, axis));
+                        self.here.dragging_section = Some((pane, axis));
                         self.drag_section_to(pane, axis, e.position.0, e.position.1);
                     } else if let Some(which) = self.shelf_bar_at(e.position.0, e.position.1) {
                         // A SHELF'S BAR FIRST. It is drawn at its container's
@@ -5473,10 +5578,10 @@ impl PointerHandler for Footer {
                         // spans the whole height, so asking it first would let
                         // it answer for a press that landed on a container's
                         // thumb and drag the page instead of the shelf.
-                        self.dragging_shelf = Some(which);
+                        self.here.dragging_shelf = Some(which);
                         self.drag_shelf_to(which, e.position.1);
                     } else if self.on_thumb(e.position.0, e.position.1) {
-                        self.dragging = true;
+                        self.here.dragging = true;
                         self.drag_to(e.position.1);
                     } else if self
                         .files_target()
@@ -5492,7 +5597,7 @@ impl PointerHandler for Footer {
                         // and the click would otherwise open the file — which
                         // is what pressing a picture does, and is exactly what
                         // somebody about to turn it does not want.
-                        self.spinning = Some(e.position);
+                        self.here.spinning = Some(e.position);
                     } else if self
                         .files_target()
                         .is_some_and(|t| matches!(t.hit, crate::files::Hit::Globe))
@@ -5510,10 +5615,10 @@ impl PointerHandler for Footer {
                         // drag there could never become that press. It is the
                         // scrollbar's rule: the thumb is a target, the trough
                         // is a drag.
-                        self.dragging_globe = Some(e.position);
+                        self.here.dragging_globe = Some(e.position);
                     } else if let (Some(line), Some(cell), Some(v)) = (
-                        self.row_under_pointer,
-                        self.cell_under_pointer,
+                        self.here.row_under_pointer,
+                        self.here.cell_under_pointer,
                         self.files.as_mut(),
                     ) && v.pressed(columns, room, line, cell, held, &texts)
                     {
@@ -5523,16 +5628,16 @@ impl PointerHandler for Footer {
                         // three gestures it is. The click fires on the RELEASE
                         // — see `files::View::pressed`.
                     } else {
-                        clicked = self.row_under_pointer;
+                        clicked = self.here.row_under_pointer;
                     }
                 }
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
-                    self.dragging = false;
-                    self.dragging_section = None;
-                    self.dragging_globe = None;
-                    self.dragging_shelf = None;
-                    self.dragging_fold = false;
-                    self.spinning = None;
+                    self.here.dragging = false;
+                    self.here.dragging_section = None;
+                    self.here.dragging_globe = None;
+                    self.here.dragging_shelf = None;
+                    self.here.dragging_fold = false;
+                    self.here.spinning = None;
                     // AND A PRESS THAT NEVER BECAME A GESTURE IS A CLICK.
                     //
                     // `clicked` is a line, and the arm it reaches re-resolves
@@ -5540,7 +5645,7 @@ impl PointerHandler for Footer {
                     // too: the pointer has not moved out of its slack, so the
                     // line it is on is the line it was pressed on.
                     if self.files.as_mut().is_some_and(|v| v.let_go().is_some()) {
-                        clicked = self.row_under_pointer;
+                        clicked = self.here.row_under_pointer;
                     }
                 }
                 // THE WHEEL AND THE TOUCHPAD GESTURE.
@@ -5558,7 +5663,7 @@ impl PointerHandler for Footer {
                     // THE SAME ARITHMETIC THE FIVE WINDOWS USE, including the
                     // `stop` that zeroes what was left and the horizontal axis
                     // — see `wheel_arrived`.
-                    wheel_arrived(&mut self.lines_owed, &vertical, &horizontal);
+                    wheel_arrived(&mut self.here.lines_owed, &vertical, &horizontal);
                     // WHERE THE WHEEL WAS, because the opened line is drawn
                     // above the region and `row_under_pointer` answers `None`
                     // up there — see `pointer_on_fold`.
@@ -5597,9 +5702,11 @@ impl PointerHandler for Footer {
         // else: from here on the compositor owns the pointer.
         if let Some((paths, copies)) = carried {
             let surface = self.screens.first().map(|t| t.layer.wl_surface().clone());
-            let serial = self.pressed_at;
+            let serial = self.here.pressed_at;
             if let (Some(surface), Some(c)) = (surface, self.carrying.as_mut()) {
-                c.begin(qh, &surface, serial, paths, copies);
+                // ON THE SEAT THAT PRESSED — see `carry::Carrying`.
+                let seat = self.pointers.seat_here().cloned();
+                c.begin(qh, seat.as_ref(), &surface, serial, paths, copies);
             }
             return;
         }
@@ -5627,7 +5734,7 @@ impl PointerHandler for Footer {
             self.draw_and_paint();
         }
         if dragging_fold {
-            self.dragging_fold = true;
+            self.here.dragging_fold = true;
         }
         if fold_toggle {
             self.toggle_fold();
@@ -5683,9 +5790,9 @@ impl PointerHandler for Footer {
         // IT TAKES LINES, which is what the accumulator holds.
         if self.fold.open && wheel_at.is_some_and(|y| self.pointer_on_fold(y)) {
             #[allow(clippy::cast_possible_truncation)]
-            let whole = self.lines_owed.trunc() as i32;
+            let whole = self.here.lines_owed.trunc() as i32;
             if whole != 0 {
-                self.lines_owed -= f64::from(whole);
+                self.here.lines_owed -= f64::from(whole);
                 self.scroll_fold(whole);
                 self.owes_paint = true;
             }
@@ -5711,9 +5818,9 @@ impl PointerHandler for Footer {
             Navigation::Scroll => 1.0,
         };
         #[allow(clippy::cast_possible_truncation)]
-        let whole = (self.lines_owed / per_step).trunc() as i32;
+        let whole = (self.here.lines_owed / per_step).trunc() as i32;
         if whole != 0 {
-            self.lines_owed -= f64::from(whole) * per_step;
+            self.here.lines_owed -= f64::from(whole) * per_step;
             // A SHELF DOES NOT TAKE THE WHEEL, and that is a correction.
             //
             // It did, on the manager's rule that the gesture scrolls the
@@ -5735,7 +5842,7 @@ impl PointerHandler for Footer {
             // touchpad's scroll gestures over the info region, EVERYTHING ends
             // up scrolling"*.
             let columns = self.screen_columns();
-            let cell = self.cell_under_pointer.unwrap_or(0);
+            let cell = self.here.cell_under_pointer.unwrap_or(0);
             // BELOW THE LISTING IS THE STRIP, and down there the same cell
             // belongs to a panel rather than to the listing — see
             // `Panes::section_at`. `row_at` counts from the top of the region,
@@ -5743,6 +5850,7 @@ impl PointerHandler for Footer {
             let strip = self.files_strip();
             let in_strip = strip > 0
                 && self
+                    .here
                     .row_under_pointer
                     .is_some_and(|r| r >= self.grid().lines);
             // AND EACH SECTION SCROLLS INSIDE ITS OWN HEIGHT, which is what
@@ -5772,12 +5880,12 @@ impl PointerHandler for Footer {
         // It only redraws if something CHANGED: a `Motion` arrives on every pixel
         // of movement, and painting a frame per pixel would spend the GPU drawing
         // exactly the same thing.
-        if segment_before != self.segment_under_pointer
+        if segment_before != self.here.segment_under_pointer
             || before
                 != (
-                    self.under_pointer,
-                    self.row_under_pointer,
-                    self.cell_under_pointer,
+                    self.here.under_pointer,
+                    self.here.row_under_pointer,
+                    self.here.cell_under_pointer,
                     self.hint_said.clone(),
                     self.current_offset(),
                 )
@@ -6318,6 +6426,18 @@ impl Footer {
             | "syncthing-forget" => {
                 if let Some(press) = crate::syncthing::press_of(id) {
                     self.syncthing_press(press);
+                }
+            }
+            "pointers-open" => self.open_pointers(),
+            "pointers-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["pointers".to_owned()], None);
+                }
+            }
+            "pointers-up" | "pointers-down" | "pointers-enter" | "pointers-less"
+            | "pointers-more" | "pointers-forget" => {
+                if let Some(press) = crate::pointers::press_of(id) {
+                    self.pointers_press(press);
                 }
             }
             "audio-open" => self.open_audio(),
@@ -7465,12 +7585,19 @@ impl Footer {
         // `self`, and `as_mut` holds it.
         let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
         let top = f64::from(self.above_line_at()) * line_height;
+        if self.glance.is_none() {
+            return false;
+        }
+        let on_it = line_height > 0.0 && x >= 0.0 && y >= top && y < top + line_height;
+        self.here.on_glance = on_it;
+        // ANY CURSOR ON IT HOLDS IT, not only the one that just moved: the
+        // clock stops while somebody is reading, whichever hand that is.
+        let anyone = self.pointers.lit(&self.here).any(|(_, p)| p.on_glance);
         let Some(showing) = self.glance.as_mut() else {
             return false;
         };
-        let on_it = line_height > 0.0 && x >= 0.0 && y >= top && y < top + line_height;
         let was = showing.held();
-        if on_it {
+        if anyone {
             showing.hold(std::time::Instant::now());
         } else {
             showing.release(std::time::Instant::now());
@@ -7479,13 +7606,96 @@ impl Footer {
     }
 
     /// The pointer left the surface: the glance's clock goes on.
+    /// The keyboard really went away: close what only works with it.
+    fn lost_the_keyboard(&mut self) {
+        if self.grabbing() {
+            tracing::debug!("keyboard focus lost; closing what was open");
+            self.mx.close_it();
+            self.manual = false;
+            self.apps = None;
+            // THE MANAGER GOES TOO, and it is the one that loses the most: a
+            // directory, a set of marks, an armed confirmation. Leaving it open
+            // without the keyboard would be worse — a listing on screen that
+            // answers nothing, with an armed `delete` nobody can see is armed.
+            self.files = None;
+            self.rest_the_watch();
+            self.first_page();
+            self.close_leader();
+            self.draw_and_paint();
+        }
+    }
+
+    /// A `leave` while the footer held the keyboard: wait [`SETTLE`] for the
+    /// `enter` the compositor sends back, and only then call it a loss — see
+    /// [`Leave::Settling`].
+    ///
+    /// A ONE-SHOT TIMER, armed for this leave and no other: the number it
+    /// carries is what `KeyboardHold::settled` compares, so a second leave
+    /// before the first settles re-arms rather than letting the old timer
+    /// decide about the new one.
+    fn wait_for_the_keyboard(&mut self, wait: u64) {
+        let Some(handle) = self.repeat.clone() else {
+            // NO LOOP TO WAIT ON — a unit test's footer: decide now.
+            if self.keyboard_hold.settled(wait) {
+                self.lost_the_keyboard();
+            }
+            return;
+        };
+        let armed = handle.insert_source(
+            calloop::timer::Timer::from_duration(SETTLE),
+            move |_, (), state: &mut Self| {
+                if state.keyboard_hold.settled(wait) {
+                    state.lost_the_keyboard();
+                }
+                calloop::timer::TimeoutAction::Drop
+            },
+        );
+        if let Err(e) = armed {
+            tracing::warn!(error = %e, "could not wait for the keyboard; treating the leave as a loss");
+            if self.keyboard_hold.settled(wait) {
+                self.lost_the_keyboard();
+            }
+        }
+    }
+
+    /// The modifiers a click of the pointer `here` carries: the keyboard's
+    /// when the keyboard is on that pointer's seat, and none otherwise.
+    fn pointer_mods(&self) -> Modifiers {
+        if self.pointers.here_is_on(self.keyboard_seat.as_ref()) {
+            self.mods
+        } else {
+            Modifiers::default()
+        }
+    }
+
     fn glance_lets_go(&mut self) -> bool {
+        self.here.on_glance = false;
+        // ANOTHER CURSOR MAY STILL BE READING IT: the clock goes on only when
+        // no hand is left on the line.
+        if self.pointers.lit(&self.here).any(|(_, p)| p.on_glance) {
+            return false;
+        }
         let Some(showing) = self.glance.as_mut() else {
             return false;
         };
         let was = showing.held();
         showing.release(std::time::Instant::now());
         showing.held() != was
+    }
+
+    /// Stops the notification's clock while ANY cursor rests on the band, and
+    /// lets it go on only when none does. `true` if that changed anything.
+    ///
+    /// Every cursor says where it is (`on_band`, per pointer — `crate::seats`)
+    /// and this reads them all: one hand leaving must not restart the clock
+    /// under another hand that is still reading.
+    fn hold_the_band_if_anyone_reads_it(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        if self.pointers.lit(&self.here).any(|(_, p)| p.on_band) {
+            self.notifications.hold(now)
+        } else {
+            self.notifications.release(now)
+        }
     }
 
     /// Takes the glance away when its time is up. `true` if it went.
@@ -9135,8 +9345,9 @@ impl Footer {
         let columns = self.screen_columns();
         let room = self.grid().lines;
         let at = self
+            .here
             .row_under_pointer
-            .map(|line| (line, self.cell_under_pointer.unwrap_or(0)));
+            .map(|line| (line, self.here.cell_under_pointer.unwrap_or(0)));
         if let Some(view) = self.files.as_mut() {
             view.hover_thumb(columns, room, at);
         }
@@ -9728,6 +9939,19 @@ impl Footer {
             };
             if let Some(press) = press {
                 self.history_press(press);
+            }
+            return;
+        }
+
+        if self.view() == ViewState::Pointers {
+            use ronoctua_keymap::Sym;
+            // BOTH DOORS THROUGH ONE TABLE — `pointers::OF_THE_VIEW`.
+            let press = match key.sym {
+                Sym::Esc => Some(crate::pointers::Press::Escape),
+                other => crate::pointers::pressed(&ronoctua_keymap::Key::simple(other).notation()),
+            };
+            if let Some(press) = press {
+                self.pointers_press(press);
             }
             return;
         }
@@ -10800,6 +11024,8 @@ impl Footer {
             ViewState::History
         } else if self.audio.is_some() {
             ViewState::Audio
+        } else if self.pointer_view.is_some() {
+            ViewState::Pointers
         } else if self.display.is_some() {
             ViewState::Display
         } else if self.files.is_some() {
@@ -12297,6 +12523,22 @@ impl Footer {
                 })
                 .collect();
         }
+        if self.view() == ViewState::Pointers
+            && let Some(v) = self.pointer_view.as_ref()
+        {
+            let width = self.screen_columns();
+            return v
+                .rows(self.pointer_snapshot.as_ref(), width, &self.texts)
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::Pointers(n)),
+                    fields: r.fields,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
         if self.view() == ViewState::Audio
             && let Some(v) = self.audio.as_ref()
         {
@@ -13154,8 +13396,8 @@ impl Footer {
     /// which list a `y` belonged to, and the owner found every one of them.
     fn files_target(&self) -> Option<crate::files::Target> {
         let view = self.files.as_ref()?;
-        let line = self.row_under_pointer?;
-        let cell = self.cell_under_pointer.unwrap_or(0);
+        let line = self.here.row_under_pointer?;
+        let cell = self.here.cell_under_pointer.unwrap_or(0);
         view.hit(
             self.screen_columns(),
             self.grid().lines,
@@ -13806,7 +14048,7 @@ impl Footer {
             Some(Click::Notifications(n)) => {
                 // WHICH CELL decides whether this was a target or just aiming —
                 // the row alone cannot say, because the row has two of them.
-                let cell = self.cell_under_pointer;
+                let cell = self.here.cell_under_pointer;
                 let width = self.screen_columns();
                 let records = self.notifications.history().to_vec();
                 let errand = {
@@ -13858,7 +14100,7 @@ impl Footer {
                 // keyboard there — otherwise the second column would answer
                 // `TAB` and nothing else, and the rule is that the mouse
                 // reaches what the keyboard reaches.
-                let cell = self.cell_under_pointer;
+                let cell = self.here.cell_under_pointer;
                 let scene = std::mem::take(&mut self.bluetooth_scene);
                 let mut asking = false;
                 if let Some(v) = self.bluetooth.as_mut() {
@@ -13946,6 +14188,20 @@ impl Footer {
                 self.syncthing_snapshot = snapshot;
                 self.draw_and_paint();
             }
+            Some(Click::Pointers(n)) => {
+                // THE MOUSE AIMS, AND THE SECOND CLICK ACTS — invariant 19.
+                let width = self.screen_columns();
+                let already = self.pointer_view.as_ref().is_some_and(|v| v.cursor() == n);
+                if let Some(v) = self.pointer_view.as_mut() {
+                    let rows = v.rows(self.pointer_snapshot.as_ref(), width, &self.texts);
+                    v.clicked(n, &rows);
+                }
+                if already {
+                    self.pointers_press(crate::pointers::Press::Enter);
+                } else {
+                    self.draw_and_paint();
+                }
+            }
             Some(Click::Audio(n)) => {
                 // THE MOUSE AIMS, THE KEYS ACT — and here it also moves a
                 // microphone: the meter follows the cursor, and a click is a
@@ -13981,7 +14237,7 @@ impl Footer {
                 // the row is shared by the two, and the colon's column is the
                 // seam the grid drew them on either side of.
                 let grid = self.grid();
-                let cell = self.cell_under_pointer.unwrap_or(0) % grid.width.max(1);
+                let cell = self.here.cell_under_pointer.unwrap_or(0) % grid.width.max(1);
                 let on_the_right = cell >= grid.colon;
                 if let Some(v) = self.theme_chooser.as_mut() {
                     // THE POINTER PREVIEWS WHAT THE ARROWS DO — the whole pair,
@@ -14020,7 +14276,7 @@ impl Footer {
                 };
                 // WHAT IS HELD, taken before the view is borrowed — see
                 // `chrome::held`.
-                let held = crate::chrome::held(self.mods);
+                let held = crate::chrome::held(self.pointer_mods());
                 let Some(view) = self.files.as_mut() else {
                     return;
                 };
@@ -14224,6 +14480,10 @@ impl Footer {
                 .map(crate::theme_chooser::View::row),
             ViewState::Power => self.power.as_ref().map(crate::power::View::cursor),
             ViewState::Audio => self.audio.as_ref().map(crate::audio::View::cursor),
+            ViewState::Pointers => self
+                .pointer_view
+                .as_ref()
+                .map(crate::pointers::View::cursor),
             ViewState::Syncthing => self.syncthing.as_ref().map(crate::syncthing::View::cursor),
             // THE ROW THE VIEW DREW, and not `clip_cursor`, which counts
             // ENTRIES: the drawn list has a heading above them, so the two are
@@ -14796,6 +15056,8 @@ impl Footer {
         let (records, book) = (self.notifications.history(), &self.book);
         let power = &self.power;
         let audio = &self.audio;
+        let pointer_view = &self.pointer_view;
+        let pointer_snapshot = self.pointer_snapshot.as_ref();
         // THE READING TOO: this view's hint depends on which row the cursor
         // is on, and which rows exist depends on what PipeWire reported.
         let sound = self.audio_snapshot.as_ref();
@@ -14860,6 +15122,9 @@ impl Footer {
                 // SOUND: the keys it teaches depend on the row, so a cursor
                 // on a setting is not told about `m`.
                 ViewState::Audio => audio.as_ref().map(|v| v.hint(sound, hint_columns, texts)),
+                ViewState::Pointers => pointer_view
+                    .as_ref()
+                    .map(|v| v.hint(pointer_snapshot, hint_columns, texts)),
                 ViewState::Syncthing => syncthing
                     .as_ref()
                     .map(|v| v.hint(syncthing_state, hint_columns, texts)),
@@ -15001,7 +15266,8 @@ impl Footer {
                     .map(|t| vec![crate::chrome::Piece::said(t)])
             })
             .or_else(|| {
-                self.row_under_pointer
+                self.here
+                    .row_under_pointer
                     .and_then(|i| visible.get(i))
                     .and_then(|l| l.description.clone())
                     .map(|t| vec![crate::chrome::Piece::said(t)])
@@ -15017,7 +15283,7 @@ impl Footer {
                 if !self.notifications_open {
                     return None;
                 }
-                let row = self.row_under_pointer?;
+                let row = self.here.row_under_pointer?;
                 let records = self.notifications.history();
                 let lists = crate::notifications::Lists::of(records, &self.book);
                 self.manager
@@ -15025,7 +15291,7 @@ impl Footer {
                         &lists,
                         self.screen_columns(),
                         row,
-                        self.cell_under_pointer,
+                        self.here.cell_under_pointer,
                         &self.texts,
                     )
                     .map(|t| vec![crate::chrome::Piece::said(t)])
@@ -15097,7 +15363,7 @@ impl Footer {
                 // The `click` the row already carries is the list's index, put
                 // there by `expansion()`. Reading it back is the only
                 // arrangement in which the two cannot drift.
-                let row = self.row_under_pointer?;
+                let row = self.here.row_under_pointer?;
                 let view = self.transfers.as_ref()?;
                 let Some(Click::Transfers(n)) = visible.get(row)?.click else {
                     return None;
@@ -15194,26 +15460,40 @@ impl Footer {
         // (`files_window.rs`), and it answers a PANE and that pane's own line.
         // With it, `band_belongs` — the rule that keeps a band off a
         // photograph — is asked about the pane the pointer is really in.
-        let under_the_pointer = match self.files.as_ref() {
-            Some(v) => self.row_under_pointer.and_then(|line| {
-                let cell = self.cell_under_pointer.unwrap_or(0);
-                let (pane, at) = v.band_row(self.screen_columns(), grid.lines, line, cell)?;
-                v.band_belongs(pane).then_some(at)
-            }),
-            None => self.row_under_pointer,
+        //
+        // EVERY CURSOR ASKS THE SAME QUESTION (`crate::seats`), and each band
+        // is painted in its own cursor's colour; a place two cursors share
+        // takes the first one's, so the picture is the same on every frame.
+        let columns_now = self.screen_columns();
+        let mut under_the_pointers: Vec<(tokens::Color, Option<usize>, Option<u16>, _)> =
+            Vec::new();
+        for (color, p) in self.pointers.lit(&self.here) {
+            let place = match self.files.as_ref() {
+                Some(v) => p.row_under_pointer.and_then(|line| {
+                    let cell = p.cell_under_pointer.unwrap_or(0);
+                    let (pane, at) = v.band_row(columns_now, grid.lines, line, cell)?;
+                    v.band_belongs(pane).then_some(at)
+                }),
+                None => p.row_under_pointer,
+            }
+            .filter(|i| visible.get(*i).is_some_and(|l| l.click.is_some()))
+            .map(place_of)
+            // ONE BAND WHERE IT IS ONE ROW. Painting the weaker colour over the
+            // stronger would dim the very row one is standing on, which is the
+            // opposite of what either band is for.
+            .filter(|p| Some(*p) != focused_row);
+            if let Some(place) = place
+                && !under_the_pointers.iter().any(|(_, _, _, q)| *q == place)
+            {
+                under_the_pointers.push((color, p.row_under_pointer, p.cell_under_pointer, place));
+            }
         }
-        .filter(|i| visible.get(*i).is_some_and(|l| l.click.is_some()))
-        .map(place_of)
-        // ONE BAND WHERE IT IS ONE ROW. Painting the weaker colour over the
-        // stronger would dim the very row one is standing on, which is the
-        // opposite of what either band is for.
-        .filter(|p| Some(*p) != focused_row);
         // Does the footer have the keyboard? It is what decides whether the
         // accent stays on the window (the compositor's border) or comes to the
         // buffer's name.
         let with_keyboard = self.grabbing();
         // ALWAYS, WHEN THE LIST WAS CUT — and not only once the pointer has
-        // found it. It used to read `self.under_pointer && self.has_bar()`,
+        // found it. It used to read `self.here.under_pointer && self.has_bar()`,
         // which made the one thing on screen that says "there is more below"
         // depend on already suspecting there was. The manager's per-section
         // bars have never hidden; this is the same rule for the other eight
@@ -15720,9 +16000,10 @@ impl Footer {
             // being drawn — it cannot be found from inside this loop. See
             // `files::lit_with`.
             let lit_hit = self
+                .here
                 .row_under_pointer
                 .and_then(|r| visible.get(r))
-                .zip(self.cell_under_pointer)
+                .zip(self.here.cell_under_pointer)
                 .and_then(|(line, c)| {
                     crate::files::lit_field(&line.fields, c).map(|k| line.fields[k].hit.clone())
                 });
@@ -15750,14 +16031,15 @@ impl Footer {
                     //
                     // A COLOUR and not a box: invariant 15, and the same choice
                     // the focused row already makes.
-                    let on_this_row = self.row_under_pointer == Some(i);
+                    let on_this_row = self.here.row_under_pointer == Some(i);
                     // WHICH field, asked ONCE and by the walk the click makes.
                     // See `files::Row::field_index_at`: `covers` answers "may
                     // this field own the cell", and two packed fields both say
                     // yes to the cell between them.
                     let alight = on_this_row
                         .then(|| {
-                            self.cell_under_pointer
+                            self.here
+                                .cell_under_pointer
                                 .and_then(|c| crate::files::lit_field(&line.fields, c))
                         })
                         .flatten();
@@ -16341,7 +16623,7 @@ impl Footer {
             // radius, no shadow (invariant 15). It goes BEFORE the scrollbar in
             // the list of quads, so the bar stays on top of it.
             // THE FOCUS FIRST, and the pointer over it: they are never the
-            // same row (`under_the_pointer` filters it out), so the order only
+            // same row (`under_the_pointers` filters it out), so the order only
             // decides which is drawn under the scrollbar — and both are.
             // A CONTAINER'S GROUND, BEFORE EVERY BAND DRAWN ON IT.
             //
@@ -16453,7 +16735,7 @@ impl Footer {
                     color: tokens::color::SURFACE_HOVER,
                 });
             }
-            if let Some((base, grid_y)) = under_the_pointer {
+            for &(color, row_p, cell_p, (base, grid_y)) in &under_the_pointers {
                 let cell = tokens::metrics::cell_width(tokens::text::size());
                 // AND IT STOPS AT THE SIDEBAR'S EDGE.
                 //
@@ -16483,7 +16765,7 @@ impl Footer {
                             v.panes(columns),
                             crate::chrome::FIELDS_LEAD,
                             grid.width,
-                            self.cell_under_pointer,
+                            cell_p,
                             cell,
                             width as f32,
                         )
@@ -16501,15 +16783,10 @@ impl Footer {
                 let (band_at, band_wide) = self
                     .files
                     .as_ref()
-                    .zip(self.row_under_pointer)
+                    .zip(row_p)
                     .and_then(|(v, line)| {
-                        v.band_cells_at(
-                            columns,
-                            grid.lines,
-                            line,
-                            self.cell_under_pointer.unwrap_or(0),
-                        )
-                        .map(|c| crate::files::band_px(c, crate::chrome::FIELDS_LEAD, cell))
+                        v.band_cells_at(columns, grid.lines, line, cell_p.unwrap_or(0))
+                            .map(|c| crate::files::band_px(c, crate::chrome::FIELDS_LEAD, cell))
                     })
                     .unwrap_or((band_at, band_wide));
                 #[allow(clippy::cast_precision_loss)]
@@ -16518,8 +16795,8 @@ impl Footer {
                         v.band_lines_at(
                             columns,
                             grid.lines,
-                            self.row_under_pointer.unwrap_or(0),
-                            self.cell_under_pointer.unwrap_or(0),
+                            row_p.unwrap_or(0),
+                            cell_p.unwrap_or(0),
                         )
                     }) as f32;
                 backgrounds.push(ronoctua_render::quad::Quad {
@@ -16530,7 +16807,7 @@ impl Footer {
                     // would light the three neighboring lines together.
                     width: band_wide,
                     height: tall,
-                    color: tokens::color::SURFACE_HOVER,
+                    color,
                 });
             }
 
@@ -18102,6 +18379,93 @@ impl Footer {
         {
             Ok(child) => drop(child),
             Err(e) => tracing::warn!(error = %e, %program, "could not run the media player"),
+        }
+    }
+
+    /// Opens the mice, touchpads and cursors view in the footer.
+    fn open_pointers(&mut self) {
+        if self.pointer_view.is_some() {
+            self.follow_cursor();
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+            return;
+        }
+        if !self.region_is_free("pointers-open") {
+            return;
+        }
+        let columns = self.screen_columns();
+        let mut v = crate::pointers::View::fresh();
+        v.settle_in(self.pointer_snapshot.as_ref(), columns, &self.texts);
+        self.pointer_view = Some(v);
+        // AND A FRESH READING, so the view does not open on what the thread
+        // saw minutes ago.
+        if let Some(h) = self.pointer_thread.as_ref() {
+            h.send(ronoctua_pointers::Order::Look);
+        }
+        self.first_page();
+        self.follow_cursor();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// A key in the pointers view.
+    fn pointers_press(&mut self, press: crate::pointers::Press) {
+        let columns = self.screen_columns();
+        let Some(v) = self.pointer_view.as_mut() else {
+            return;
+        };
+        let errand = v.key(press, self.pointer_snapshot.as_ref(), columns, &self.texts);
+        self.region_resized();
+        self.follow_cursor();
+        match errand {
+            crate::pointers::Errand::Nothing => {}
+            crate::pointers::Errand::Copy(text) => {
+                let said = crate::chrome::copied(&text, &self.texts);
+                self.echo_message(said);
+            }
+            crate::pointers::Errand::Order(order) => match self.pointer_thread.as_ref() {
+                Some(h) => h.send(order),
+                None => {
+                    let said = self.texts.t(ronoctua_i18n::key::POINTERS_NO_COMPOSITOR);
+                    self.echo_message(said);
+                }
+            },
+            crate::pointers::Errand::Close => {
+                self.pointer_view = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+            }
+        }
+        self.draw_and_paint();
+    }
+
+    /// What the pointer thread says.
+    fn pointer_event(&mut self, e: ronoctua_pointers::Event) {
+        match e {
+            ronoctua_pointers::Event::Snapshot(s) => {
+                let columns = self.screen_columns();
+                // THE CURSOR STAYS ON ITS ROW BY IDENTITY — a device plugged
+                // in adds rows above it, and an index would drift.
+                let spot = self.pointer_view.as_ref().and_then(|v| {
+                    v.rows(self.pointer_snapshot.as_ref(), columns, &self.texts)
+                        .get(v.cursor())
+                        .map(|r| r.spot.clone())
+                });
+                self.pointer_snapshot = Some(*s);
+                if let Some(v) = self.pointer_view.as_mut() {
+                    if let Some(spot) = spot {
+                        v.follow(&spot, self.pointer_snapshot.as_ref(), columns, &self.texts);
+                    }
+                    v.settle_in(self.pointer_snapshot.as_ref(), columns, &self.texts);
+                    self.settle_region();
+                    self.draw_and_paint();
+                }
+            }
+            ronoctua_pointers::Event::Done { refused, .. } => {
+                if let Some(words) = refused {
+                    self.echo_message(words);
+                }
+            }
         }
     }
 
@@ -19895,7 +20259,7 @@ fn narrow_buffer_keymap(
 
 #[cfg(test)]
 mod tests {
-    use super::KeyboardHold;
+    use super::{KeyboardHold, Leave};
 
     /// THE LEADER DOES NOT CLOSE IN THE INSTANT IT OPENS.
     ///
@@ -19907,8 +20271,9 @@ mod tests {
     fn the_acquisitions_own_leave_is_not_a_loss() {
         let mut hold = KeyboardHold::default();
         hold.asked_for(true);
-        assert!(
-            !hold.left(),
+        assert_eq!(
+            hold.left(),
+            Leave::Forgiven,
             "the first half of the pair was taken for a loss"
         );
         hold.entered();
@@ -19924,7 +20289,11 @@ mod tests {
         let mut hold = KeyboardHold::default();
         hold.asked_for(true);
         hold.entered();
-        assert!(hold.left(), "a real loss was forgiven");
+        // NOT FORGIVEN — it waits for its `enter`, and none comes.
+        let Leave::Settling(wait) = hold.left() else {
+            panic!("a leave while holding the keyboard did not wait");
+        };
+        assert!(hold.settled(wait), "a real loss was forgiven");
     }
 
     /// AND A SECOND `leave` IS A LOSS EVEN WITHOUT AN `enter`.
@@ -19937,8 +20306,11 @@ mod tests {
     fn only_one_leave_is_forgiven_per_acquisition() {
         let mut hold = KeyboardHold::default();
         hold.asked_for(true);
-        assert!(!hold.left());
-        assert!(hold.left(), "the second leave was forgiven too");
+        assert_eq!(hold.left(), Leave::Forgiven);
+        let Leave::Settling(wait) = hold.left() else {
+            panic!("the second leave was forgiven too");
+        };
+        assert!(hold.settled(wait), "and with no `enter` it is a loss");
     }
 
     /// AND NARROWING THE LIST IS NOT AN ACQUISITION.
@@ -19954,7 +20326,11 @@ mod tests {
         hold.entered();
         // `LEADER h`: same keyboard, a shorter list.
         hold.asked_for(true);
-        assert!(hold.left(), "narrowing armed the forgiveness");
+        assert_ne!(
+            hold.left(),
+            Leave::Forgiven,
+            "narrowing armed the forgiveness"
+        );
     }
 
     /// AND LETTING THE KEYBOARD GO ARMS IT AGAIN.
@@ -19970,12 +20346,67 @@ mod tests {
         hold.asked_for(false);
         // And the leader again.
         hold.asked_for(true);
-        assert!(
-            !hold.left(),
+        assert_eq!(
+            hold.left(),
+            Leave::Forgiven,
             "the second opening was not forgiven its leave"
         );
         hold.entered();
-        assert!(hold.left());
+        assert_ne!(hold.left(), Leave::Forgiven);
+    }
+
+    /// THE POINTER CROSSING WINDOWS DOES NOT CLOSE WHAT IS OPEN.
+    ///
+    /// With focus following the mouse, every window the pointer passes over
+    /// takes the focus for an instant, and the compositor answers the footer
+    /// with `leave` and then `enter` for each — the owner saw M-x close as the
+    /// mouse went up to a window. Ten windows crossed are ten pairs, and none
+    /// of them is a loss.
+    #[test]
+    fn a_pointer_crossing_windows_is_not_a_loss() {
+        let mut hold = KeyboardHold::default();
+        hold.asked_for(true);
+        hold.entered();
+        let mut waits = Vec::new();
+        for _ in 0..10 {
+            let Leave::Settling(wait) = hold.left() else {
+                panic!("a leave while holding the keyboard did not wait");
+            };
+            hold.entered();
+            waits.push(wait);
+        }
+        assert!(
+            waits.iter().all(|w| !hold.settled(*w)),
+            "a crossing whose `enter` came was taken for a loss"
+        );
+    }
+
+    /// AND A LOSS STILL CLOSES — and an old timer does not decide a new wait.
+    #[test]
+    fn a_leave_with_no_enter_is_still_a_loss() {
+        let mut hold = KeyboardHold::default();
+        hold.asked_for(true);
+        hold.entered();
+        let Leave::Settling(first) = hold.left() else {
+            panic!("did not wait");
+        };
+        hold.entered();
+        let Leave::Settling(second) = hold.left() else {
+            panic!("did not wait");
+        };
+        assert!(
+            !hold.settled(first),
+            "the first timer decided the second wait"
+        );
+        assert!(hold.settled(second), "a leave with no enter was not a loss");
+    }
+
+    /// A KEYBOARD THE FOOTER WAS NOT HOLDING going away is a plain loss.
+    #[test]
+    fn a_leave_while_not_holding_is_lost_at_once() {
+        let mut hold = KeyboardHold::default();
+        hold.asked_for(false);
+        assert_eq!(hold.left(), Leave::Lost);
     }
 
     /// THE FOOTER DOES NOT GROW WHEN A KEY EXPLAINS ITSELF.

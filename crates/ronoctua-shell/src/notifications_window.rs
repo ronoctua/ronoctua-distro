@@ -186,7 +186,8 @@ pub fn host_it() -> Result<()> {
         seats: SeatState::new(&globals, &qh),
         _compositor: compositor,
         keyboard: None,
-        pointer: None,
+        pointers: crate::seats::Seats::default(),
+        here: PerSeat::default(),
         mods: Modifiers::default(),
         window,
         width: 0,
@@ -204,8 +205,6 @@ pub fn host_it() -> Result<()> {
         gpu: None,
         text: None,
         quads: None,
-        dragging: false,
-        lines_owed: 0.0,
         // THE MACHINE'S CLOCK, read once and carried — an open record shows
         // when it arrived, and a `View` that read `/etc/localtime` itself would
         // be a `View` no test could pin to a date.
@@ -216,9 +215,7 @@ pub fn host_it() -> Result<()> {
         book: ronoctua_notify::Book::distro(),
         notes: ronoctua_notify::store::Where::of_env(),
         texts,
-        row_under_pointer: None,
         hinted: crate::chrome::Hinted::default(),
-        cell_under_pointer: None,
         offset: 0,
         message: None,
     };
@@ -258,7 +255,11 @@ struct NotificationsWindow {
     seats: SeatState,
     _compositor: CompositorState,
     keyboard: Option<wl_keyboard::WlKeyboard>,
-    pointer: Option<wl_pointer::WlPointer>,
+    /// Every pointer this window was offered — one per cursor — with the
+    /// state of each while another is `here`. See `crate::seats`.
+    pointers: crate::seats::Seats<PerSeat>,
+    /// The state of the pointer whose events are being handled now.
+    here: PerSeat,
     mods: Modifiers,
     window: Window,
     /// The window's size in LOGICAL pixels — what the compositor configured
@@ -310,6 +311,30 @@ struct NotificationsWindow {
     /// It had none — see `chrome::list_bar` for what that cost — and the wheel
     /// was the only way down a list that does not fit.
     quads: Option<ronoctua_render::quad::Quads>,
+    view: crate::notifications::View,
+    /// The history, as it was last read off disk.
+    records: Vec<ronoctua_notify::Record>,
+    /// The catalogue, the distro's filters and the person's.
+    book: ronoctua_notify::Book,
+    /// Where this process persists — the two directories, found ONCE.
+    ///
+    /// A SEPARATE PROCESS from the footer, with its own copy of both files;
+    /// carrying the roots rather than finding them per write is what keeps a
+    /// test from reaching the real home. See `sidebar::Sidebar`'s `store` for
+    /// the incident that made it a rule.
+    notes: ronoctua_notify::store::Where,
+    texts: std::rc::Rc<ronoctua_i18n::Texts>,
+    /// The hint line, and the shortcut the pointer is resting on it.
+    hinted: crate::chrome::Hinted,
+    /// The first visible row. A window has no page: it scrolls, like the
+    /// locator and the manual.
+    offset: usize,
+    message: Option<String>,
+}
+
+/// What this window keeps for ONE pointer — see `crate::seats`.
+#[derive(Debug, Default)]
+struct PerSeat {
     /// Is the pointer dragging the bar?
     ///
     /// Held, because a drag is three events: the press that grabs it, every
@@ -330,22 +355,7 @@ struct NotificationsWindow {
     /// speed of the finger instead of standing still and then jumping — the
     /// reason is written over `surface::wheel_arrived`.
     lines_owed: f64,
-    view: crate::notifications::View,
-    /// The history, as it was last read off disk.
-    records: Vec<ronoctua_notify::Record>,
-    /// The catalogue, the distro's filters and the person's.
-    book: ronoctua_notify::Book,
-    /// Where this process persists — the two directories, found ONCE.
-    ///
-    /// A SEPARATE PROCESS from the footer, with its own copy of both files;
-    /// carrying the roots rather than finding them per write is what keeps a
-    /// test from reaching the real home. See `sidebar::Sidebar`'s `store` for
-    /// the incident that made it a rule.
-    notes: ronoctua_notify::store::Where,
-    texts: std::rc::Rc<ronoctua_i18n::Texts>,
     row_under_pointer: Option<usize>,
-    /// The hint line, and the shortcut the pointer is resting on it.
-    hinted: crate::chrome::Hinted,
     /// Which CELL along that row, which the message line needs and the click
     /// already asked for.
     ///
@@ -353,10 +363,9 @@ struct NotificationsWindow {
     /// alone cannot say what the pointer is over — see
     /// `notifications::View::about_at`.
     cell_under_pointer: Option<u16>,
-    /// The first visible row. A window has no page: it scrolls, like the
-    /// locator and the manual.
-    offset: usize,
-    message: Option<String>,
+    /// Whether this pointer is dragging the header's drawer bar — the
+    /// per-pointer half of `chrome::Hinted`, swapped in around every frame.
+    hint_drag: bool,
 }
 
 impl NotificationsWindow {
@@ -846,8 +855,8 @@ impl NotificationsWindow {
                 self.view.about_at(
                     &lists,
                     self.columns,
-                    self.row_under_pointer?,
-                    self.cell_under_pointer,
+                    self.here.row_under_pointer?,
+                    self.here.cell_under_pointer,
                     &self.texts,
                 )
             });
@@ -921,6 +930,52 @@ impl NotificationsWindow {
             }
         }
 
+        // EVERY CURSOR'S HOVER, in its own colour — see `crate::seats`. Side
+        // by side a drawn line is TWO records, one per column, so a band
+        // lights only the column the pointer is in: a band across the whole
+        // line would say both records are under it.
+        #[allow(clippy::cast_precision_loss)]
+        let bands: Vec<ronoctua_render::quad::Quad> = {
+            let cell = crate::chrome::Frame::of(self.width as f32, self.height as f32, 0).cell();
+            let split = f32::from(margin + crate::notifications::split_at(self.columns)) * cell;
+            let two = crate::notifications::two_columns(self.columns);
+            // ONE CURSOR AT A TIME, so each band keeps the column of the
+            // pointer that made it; two cursors on one line but in different
+            // columns are two bands, and on the same half the first wins.
+            let mut seen: Vec<(usize, bool)> = Vec::new();
+            let mut out = Vec::new();
+            for (color, s) in self.pointers.lit(&self.here) {
+                let right = two
+                    && s.cell_under_pointer
+                        .is_some_and(|c| f32::from(margin + c) * cell >= split);
+                let Some(row) = s.row_under_pointer else {
+                    continue;
+                };
+                if seen.contains(&(row, right)) {
+                    continue;
+                }
+                seen.push((row, right));
+                for mut band in crate::chrome::hover_bands(
+                    std::iter::once((color, Some(row))),
+                    self.offset,
+                    self.room(),
+                    rows.len(),
+                    self.first_of_list(),
+                    self.width as f32,
+                ) {
+                    if two {
+                        if right {
+                            band.x = split;
+                            band.width = self.width as f32 - split;
+                        } else {
+                            band.width = split;
+                        }
+                    }
+                    out.push(band);
+                }
+            }
+            out
+        };
         // THE BAR, from the same `Scroll` every other bar in this system uses.
         let scroll = crate::chrome::list_scroll(rows.len(), self.room(), self.offset);
         #[allow(clippy::cast_precision_loss)]
@@ -932,6 +987,7 @@ impl NotificationsWindow {
         )
         .into_iter()
         .collect();
+        bar.splice(0..0, bands);
         // AND THE HEADER'S OWN, when its drawer is open and the wrap ran past
         // it. Two bars, two lists, and neither is the other's.
         #[allow(clippy::cast_precision_loss)]
@@ -1122,9 +1178,13 @@ impl SeatHandler for NotificationsWindow {
                 Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
         }
-        if cap == Capability::Pointer && self.pointer.is_none() {
+        if cap == Capability::Pointer {
             match self.seats.get_pointer(qh, &seat) {
-                Ok(p) => self.pointer = Some(p),
+                Ok(p) => {
+                    // EVERY POINTER, and not only the first: one per cursor.
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.pointers.took(&seat, p, name.as_deref());
+                }
                 Err(e) => tracing::warn!(error = %e, "no pointer; keyboard only"),
             }
         }
@@ -1134,7 +1194,7 @@ impl SeatHandler for NotificationsWindow {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: wl_seat::WlSeat,
+        seat: wl_seat::WlSeat,
         cap: Capability,
     ) {
         if cap == Capability::Keyboard
@@ -1142,10 +1202,8 @@ impl SeatHandler for NotificationsWindow {
         {
             k.release();
         }
-        if cap == Capability::Pointer
-            && let Some(p) = self.pointer.take()
-        {
-            p.release();
+        if cap == Capability::Pointer {
+            self.pointers.lost(&seat, &mut self.here);
         }
     }
 
@@ -1241,14 +1299,32 @@ impl KeyboardHandler for NotificationsWindow {
 }
 
 impl PointerHandler for NotificationsWindow {
+    /// EVERY CURSOR HAS ITS OWN STATE: the pointer that spoke is made `here`
+    /// first, so a drag, a hover or a wheel's leftover never crosses from
+    /// one cursor to another. See `crate::seats`.
     fn pointer_frame(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        self.pointers.switch_to(pointer, &mut self.here);
+        self.hinted.swap_hand(&mut self.here.hint_drag);
+        self.pointer_frame_here(conn, qh, events);
+        self.hinted.swap_hand(&mut self.here.hint_drag);
+    }
+}
+
+impl NotificationsWindow {
+    /// One pointer's frame, with its state already `here`.
+    fn pointer_frame_here(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
-        let before = self.row_under_pointer;
+        let before = self.here.row_under_pointer;
         // THE CELL TRAVELS WITH THE ROW. A row has two targets on it — the
         // envelope and the bin — so the row alone cannot say what was clicked,
         // and looking the position up again later would be a second answer to
@@ -1263,7 +1339,7 @@ impl PointerHandler for NotificationsWindow {
         // deliberately skip a REPAINT on motion because it "spent a GPU frame
         // per row crossed". Building the whole list to answer "is the pointer
         // on the bar?" would spend the more expensive half of that anyway.
-        let bar_in_play = self.dragging
+        let bar_in_play = self.here.dragging
             || events.iter().any(|e| {
                 matches!(e.kind, PointerEventKind::Press { button, .. } if button == LEFT_BUTTON)
             });
@@ -1307,7 +1383,7 @@ impl PointerHandler for NotificationsWindow {
                         .and_then(|id| crate::chrome::hint_sentence(id, &self.texts));
                     explained |= self.hinted.say(now);
                     #[allow(clippy::cast_possible_truncation)]
-                    if self.dragging {
+                    if self.here.dragging {
                         dragged = Some(crate::chrome::list_offset_at(
                             scroll,
                             self.first_of_list(),
@@ -1316,8 +1392,8 @@ impl PointerHandler for NotificationsWindow {
                             e.position.1 as f32,
                         ));
                     } else {
-                        self.row_under_pointer = self.row_at(e.position.1);
-                        self.cell_under_pointer = self.cell_at(e.position.0);
+                        self.here.row_under_pointer = self.row_at(e.position.1);
+                        self.here.cell_under_pointer = self.cell_at(e.position.0);
                     }
                 }
                 PointerEventKind::Leave { .. } => {
@@ -1332,12 +1408,12 @@ impl PointerHandler for NotificationsWindow {
                     // unmap or a broken grab drops it — and a `dragging` left
                     // true makes the next ENTER, with no button held, jump the
                     // list to wherever the pointer came in.
-                    self.dragging = false;
-                    self.row_under_pointer = None;
+                    self.here.dragging = false;
+                    self.here.row_under_pointer = None;
                 }
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
                     self.hinted.let_go();
-                    self.dragging = false;
+                    self.here.dragging = false;
                 }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
                     // THE HEADER'S CONTROLS FIRST: the chevron that opens the
@@ -1355,7 +1431,7 @@ impl PointerHandler for NotificationsWindow {
                         e.position.0 as f32,
                         e.position.1 as f32,
                     ) {
-                        self.dragging = true;
+                        self.here.dragging = true;
                         dragged = Some(crate::chrome::list_offset_at(
                             scroll,
                             self.first_of_list(),
@@ -1365,8 +1441,9 @@ impl PointerHandler for NotificationsWindow {
                         ));
                         continue;
                     }
-                    self.row_under_pointer = self.row_at(e.position.1);
+                    self.here.row_under_pointer = self.row_at(e.position.1);
                     clicked = self
+                        .here
                         .row_under_pointer
                         .map(|r| (r, self.cell_at(e.position.0)));
                 }
@@ -1382,7 +1459,11 @@ impl PointerHandler for NotificationsWindow {
                     // Written out here it was `(pixels / line) * 3`, which
                     // moved nothing for a slow gesture and three lines for the
                     // next one: a list that jumps.
-                    crate::surface::wheel_arrived(&mut self.lines_owed, &vertical, &horizontal);
+                    crate::surface::wheel_arrived(
+                        &mut self.here.lines_owed,
+                        &vertical,
+                        &horizontal,
+                    );
                     wheel_at = Some(e.position.1);
                     turned = true;
                 }
@@ -1416,7 +1497,7 @@ impl PointerHandler for NotificationsWindow {
             return;
         }
         if turned {
-            let by = crate::surface::wheel_lines(&mut self.lines_owed);
+            let by = crate::surface::wheel_lines(&mut self.here.lines_owed);
             // A WHEEL OVER THE OPEN DRAWER WALKS THE DRAWER, and not the list
             // under it: the gesture belongs to what is under the pointer.
             if by != 0 && wheel_at.is_some_and(|y| self.hinted.turned(head, y, by)) {
@@ -1449,17 +1530,17 @@ impl PointerHandler for NotificationsWindow {
         }
         // EXCEPT THE LINE UNDER THE HINT, which IS drawn from the pointer:
         // resting on a shortcut spells it out, and moving off it takes the
-        // sentence away. The paragraph below still holds for the ROW under the
-        // pointer, which nothing here draws.
+        // sentence away. The ROW under the pointer is the
+        // paragraph below.
         if explained {
             self.ask_paint();
         }
-        // NO FRAME FOR A POINTER THAT CHANGED NOTHING. Nothing on this
-        // screen is drawn from `row_under_pointer` — the click reads it, and
-        // the paint does not — so repainting when it moved spent a GPU frame
-        // per row crossed, on an identical picture. The footer's own hover
-        // band IS drawn, which is why it repaints there and not here.
-        let _ = before;
+        // A FRAME ONLY WHEN SOMETHING THAT IS DRAWN MOVED. The row under the
+        // pointer is drawn now — every cursor's in its own colour — so a new
+        // row is a new picture.
+        if before != self.here.row_under_pointer {
+            self.ask_paint();
+        }
     }
 }
 impl CompositorHandler for NotificationsWindow {

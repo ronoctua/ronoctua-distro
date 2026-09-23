@@ -7,7 +7,10 @@
 
 use std::collections::BTreeMap;
 
-use ronoctua_compositor::{Logical, Mode, Output, Transform, Window};
+use ronoctua_compositor::{
+    AccelProfile, ButtonMap, ClickMethod, Device, DeviceKind, DragLock, FingerDrag, Logical, Mode,
+    Output, PointerSettings, ScrollMethod, Seat, SendEvents, Transform, Window,
+};
 use serde_json::Value;
 
 /// Every window in a tree, flattened.
@@ -184,8 +187,206 @@ fn turn_of(word: &str) -> Option<Transform> {
     })
 }
 
+/// Every input device in a `get_inputs` reply.
+///
+/// A device the compositor calls anything but a pointer, a touchpad or a
+/// keyboard is [`DeviceKind::Other`]: it is listed, and nothing configures it.
+#[must_use]
+pub fn devices_in(reply: &Value) -> Vec<Device> {
+    reply
+        .as_array()
+        .map(|all| all.iter().filter_map(device_of).collect())
+        .unwrap_or_default()
+}
+
+fn device_of(v: &Value) -> Option<Device> {
+    let id = v.get("identifier").and_then(Value::as_str)?.to_owned();
+    let name = v
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or(&id)
+        .to_owned();
+    let kind = match v.get("type").and_then(Value::as_str) {
+        Some("pointer") => DeviceKind::Mouse,
+        Some("touchpad") => DeviceKind::Touchpad,
+        Some("keyboard") => DeviceKind::Keyboard,
+        _ => DeviceKind::Other,
+    };
+    let mut settings = v.get("libinput").map(settings_of).unwrap_or_default();
+    // THE SCROLL FACTOR IS THE COMPOSITOR'S, not libinput's: it sits beside
+    // the `libinput` object rather than in it, and every pointer has one.
+    settings.scroll_factor = v.get("scroll_factor").and_then(Value::as_f64);
+    Some(Device {
+        id,
+        name,
+        kind,
+        settings,
+    })
+}
+
+/// A field that is present only when the device supports it, and says
+/// `unknown` when libinput could not tell — which is read as absent.
+fn word<'a>(li: &'a Value, key: &str) -> Option<&'a str> {
+    li.get(key)
+        .and_then(Value::as_str)
+        .filter(|w| *w != "unknown")
+}
+
+fn flag(li: &Value, key: &str) -> Option<bool> {
+    match word(li, key)? {
+        "enabled" => Some(true),
+        "disabled" => Some(false),
+        _ => None,
+    }
+}
+
+fn map_of(li: &Value, key: &str) -> Option<ButtonMap> {
+    match word(li, key)? {
+        "lrm" => Some(ButtonMap::Lrm),
+        "lmr" => Some(ButtonMap::Lmr),
+        _ => None,
+    }
+}
+
+fn settings_of(li: &Value) -> PointerSettings {
+    PointerSettings {
+        send_events: match word(li, "send_events") {
+            Some("enabled") => Some(SendEvents::Enabled),
+            Some("disabled") => Some(SendEvents::Disabled),
+            Some("disabled_on_external_mouse") => Some(SendEvents::DisabledOnExternalMouse),
+            _ => None,
+        },
+        accel_speed: li.get("accel_speed").and_then(Value::as_f64),
+        accel_profile: match word(li, "accel_profile") {
+            Some("flat") => Some(AccelProfile::Flat),
+            Some("adaptive") => Some(AccelProfile::Adaptive),
+            _ => None,
+        },
+        natural_scroll: flag(li, "natural_scroll"),
+        left_handed: flag(li, "left_handed"),
+        tap: flag(li, "tap"),
+        tap_button_map: map_of(li, "tap_button_map"),
+        tap_drag: flag(li, "tap_drag"),
+        tap_drag_lock: match word(li, "tap_drag_lock") {
+            Some("enabled") => Some(DragLock::Enabled),
+            Some("enabled_sticky") => Some(DragLock::Sticky),
+            Some("disabled") => Some(DragLock::Disabled),
+            _ => None,
+        },
+        finger_drag: match word(li, "three_finger_drag") {
+            Some("three_finger") => Some(FingerDrag::ThreeFinger),
+            Some("four_finger") => Some(FingerDrag::FourFinger),
+            Some("disabled") => Some(FingerDrag::Disabled),
+            _ => None,
+        },
+        click_method: match word(li, "click_method") {
+            Some("none") => Some(ClickMethod::None),
+            Some("button_areas") => Some(ClickMethod::ButtonAreas),
+            Some("clickfinger") => Some(ClickMethod::Clickfinger),
+            _ => None,
+        },
+        clickfinger_button_map: map_of(li, "clickfinger_button_map"),
+        middle_emulation: flag(li, "middle_emulation"),
+        scroll_method: match word(li, "scroll_method") {
+            Some("none") => Some(ScrollMethod::None),
+            Some("two_finger") => Some(ScrollMethod::TwoFinger),
+            Some("edge") => Some(ScrollMethod::Edge),
+            Some("on_button_down") => Some(ScrollMethod::OnButtonDown),
+            _ => None,
+        },
+        scroll_button: li
+            .get("scroll_button")
+            .and_then(Value::as_u64)
+            .and_then(|b| u32::try_from(b).ok()),
+        scroll_button_lock: flag(li, "scroll_button_lock"),
+        disable_while_typing: flag(li, "dwt"),
+        disable_while_trackpointing: flag(li, "dwtp"),
+        scroll_factor: None,
+    }
+}
+
+/// Every seat in a `get_seats` reply.
+#[must_use]
+pub fn seats_in(reply: &Value) -> Vec<Seat> {
+    let Some(all) = reply.as_array() else {
+        return Vec::new();
+    };
+    all.iter()
+        .filter_map(|s| {
+            let name = s.get("name").and_then(Value::as_str)?.to_owned();
+            let devices = s
+                .get("devices")
+                .and_then(Value::as_array)
+                .map(|ds| {
+                    ds.iter()
+                        .filter_map(|d| d.get("identifier").and_then(Value::as_str))
+                        .map(ToOwned::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            // `focus` is a container id, and 0 is the compositor's "nothing".
+            let focus = s.get("focus").and_then(Value::as_u64).filter(|f| *f != 0);
+            Some(Seat {
+                name,
+                devices,
+                focus,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_device_says_only_what_it_supports() {
+        // The shape measured from the pinned compositor's `ipc-json.c`: the
+        // `libinput` object carries a key only when the device has it, and
+        // `unknown` when libinput could not answer.
+        let reply: serde_json::Value = serde_json::from_str(
+            r#"[
+              {"identifier":"1133:50498:Logitech_Wireless_Receiver_Mouse","name":"Logitech Wireless Receiver Mouse",
+               "type":"pointer","scroll_factor":1.0,
+               "libinput":{"send_events":"enabled","accel_speed":0.0,"accel_profile":"adaptive",
+                           "natural_scroll":"disabled","left_handed":"disabled","middle_emulation":"disabled",
+                           "scroll_method":"on_button_down","scroll_button":274,"scroll_button_lock":"disabled"}},
+              {"identifier":"11311:39:SNSL0027:00_2C2F:0027_Touchpad","name":"SNSL0027:00 2C2F:0027 Touchpad",
+               "type":"touchpad","scroll_factor":1.0,
+               "libinput":{"send_events":"enabled","tap":"enabled","tap_button_map":"lrm","tap_drag":"enabled",
+                           "tap_drag_lock":"enabled_sticky","three_finger_drag":"unknown","accel_speed":0.2,
+                           "click_method":"clickfinger","dwt":"enabled","scroll_method":"two_finger"}},
+              {"identifier":"1:1:AT_Translated_Set_2_keyboard","name":"AT Translated Set 2 keyboard","type":"keyboard"}
+            ]"#,
+        )
+        .unwrap();
+        let ds = super::devices_in(&reply);
+        assert_eq!(ds.len(), 3);
+        let mouse = &ds[0];
+        assert_eq!(mouse.kind, super::DeviceKind::Mouse);
+        assert_eq!(mouse.settings.scroll_button, Some(274));
+        assert_eq!(mouse.settings.tap, None, "a mouse has no tapping");
+        let pad = &ds[1];
+        assert_eq!(pad.kind, super::DeviceKind::Touchpad);
+        assert_eq!(pad.settings.tap, Some(true));
+        assert_eq!(pad.settings.tap_drag_lock, Some(super::DragLock::Sticky));
+        assert_eq!(pad.settings.finger_drag, None, "`unknown` is absent");
+        assert_eq!(ds[2].kind, super::DeviceKind::Keyboard);
+    }
+
+    #[test]
+    fn a_seat_lists_its_devices_and_nothing_focused_is_none() {
+        let reply: serde_json::Value = serde_json::from_str(
+            r#"[{"name":"seat0","capabilities":3,"focus":0,
+                 "devices":[{"identifier":"1:1:kb"},{"identifier":"2:2:mouse"}]},
+                {"name":"ronoctua-cursor-2","capabilities":1,"focus":42,
+                 "devices":[{"identifier":"3:3:pebble"}]}]"#,
+        )
+        .unwrap();
+        let ss = super::seats_in(&reply);
+        assert_eq!(ss[0].devices, vec!["1:1:kb", "2:2:mouse"]);
+        assert_eq!(ss[0].focus, None);
+        assert_eq!(ss[1].focus, Some(42));
+    }
+
     use super::*;
     use serde_json::json;
 

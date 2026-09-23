@@ -179,7 +179,7 @@ struct State {
     /// How many rows of it the last frame drew, for the wheel and the bar.
     list_lines: u16,
     /// The cell the pointer is on, if it is on one.
-    hover: Option<(u16, u16)>,
+    hover: ronoctua_design::Hovers,
 }
 
 impl State {
@@ -193,7 +193,7 @@ impl State {
             asked: false,
             list_top: None,
             list_lines: 0,
-            hover: None,
+            hover: ronoctua_design::Hovers::new(),
         }
     }
 }
@@ -722,11 +722,11 @@ impl State {
             }
             if Some(job.id) == self.on {
                 screen.ground_in(line, 0, body, Role::Band);
-            } else if self.hovered_row() == Some(n) {
+            } else if let Some(seat) = self.hover_on(n) {
                 // THE ROW UNDER THE POINTER, in a tone of its own: the cursor
                 // is where the KEYBOARD is and the hover is where a click
                 // would land.
-                screen.ground_in(line, 0, body, Role::Hover);
+                screen.ground_in(line, 0, body, Role::hover_of(seat));
             }
             line = line.saturating_add(row(screen, line, job, &layout));
         }
@@ -749,9 +749,16 @@ impl State {
         );
     }
 
-    /// Which row of the list the pointer is on, if it is on one.
-    fn hovered_row(&self) -> Option<usize> {
-        let (_, line) = self.hover?;
+    /// WHOSE HAND is on row `n`, if any: a cursor per seat rests on this
+    /// buffer, and the row takes the colour of the first one on it
+    /// (`Hovers::first`).
+    fn hover_on(&self, n: usize) -> Option<u16> {
+        self.hover
+            .first(|(_, line)| self.row_of_line(line) == Some(n))
+    }
+
+    /// Which row of the list a line of the window is, if it is one.
+    fn row_of_line(&self, line: u16) -> Option<usize> {
         let first = self.list_top?;
         if line < first || line >= first.saturating_add(self.list_lines) {
             return None;
@@ -1150,18 +1157,17 @@ impl State {
             Input::Toggle => s.command("transfers-detail"),
             // THE POINTER AT REST, and the two gestures that move the window.
             Input::Hover(p) => {
-                let now = Some((p.column, p.line));
-                if s.hover == now {
+                // PER CURSOR: `p.seat` says which hand, and each keeps its own cell.
+                if !s.hover.set(p.seat, (p.at.column, p.at.line)) {
                     return Vec::new();
                 }
-                s.hover = now;
                 vec![Effect::Redraw]
             }
-            Input::Unhover => {
-                if s.hover.is_none() {
+            Input::Unhover(seat) => {
+                // ONLY THAT HAND'S: another cursor resting here keeps its row lit.
+                if !s.hover.clear(seat) {
                     return Vec::new();
                 }
-                s.hover = None;
                 vec![Effect::Redraw]
             }
             // THE WHEEL SCROLLS THE WINDOW and leaves the cursor where it is:

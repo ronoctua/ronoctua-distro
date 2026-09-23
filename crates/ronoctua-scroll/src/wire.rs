@@ -7,7 +7,10 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 
 use anyhow::{Context as _, Result, bail};
-use ronoctua_compositor::{Arity, Ask, Deed, Transform};
+use ronoctua_compositor::{
+    AccelProfile, Arity, Ask, ButtonMap, ClickMethod, Deed, DragLock, FingerDrag, FocusFollows,
+    ScrollMethod, SeatAsk, SendEvents, Setting, Transform,
+};
 
 /// The six bytes that start every message, in both directions.
 ///
@@ -36,6 +39,10 @@ pub enum Kind {
     Tree = 4,
     /// What the compositor calls itself.
     Version = 7,
+    /// Every input device.
+    Inputs = 100,
+    /// Every seat.
+    Seats = 101,
 }
 
 /// An event's kind, as it comes back.
@@ -50,6 +57,8 @@ pub const EVENT_WINDOW: u32 = EVENT_BIT | 3;
 pub const EVENT_OUTPUT: u32 = EVENT_BIT | 1;
 /// The compositor is going away.
 pub const EVENT_SHUTDOWN: u32 = EVENT_BIT | 6;
+/// A device was added, removed or reconfigured.
+pub const EVENT_INPUT: u32 = EVENT_BIT | 21;
 
 /// Writes one message.
 pub fn send(to: &mut UnixStream, kind: Kind, payload: &str) -> Result<()> {
@@ -148,6 +157,138 @@ pub const fn word_of(t: Transform) -> &'static str {
         Transform::Flipped90 => "flipped-90",
         Transform::Flipped180 => "flipped-180",
         Transform::Flipped270 => "flipped-270",
+    }
+}
+
+/// A word that can stand in a command without quotes: what an identifier or
+/// a seat name must be before it is put between them.
+///
+/// An identifier is `vendor:product:name` with the name's spaces already
+/// turned into `_` by the compositor, so a legitimate one never needs
+/// anything outside this set — and a quote, `;` or `,` inside one would end
+/// the command early.
+fn safe_word(w: &str) -> Result<&str> {
+    if !w.is_empty()
+        && w.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._:+-/".contains(c))
+    {
+        Ok(w)
+    } else {
+        bail!("`{w}` is not a name a command can carry")
+    }
+}
+
+const fn on_off(b: bool) -> &'static str {
+    if b { "enabled" } else { "disabled" }
+}
+
+const fn map_word(m: ButtonMap) -> &'static str {
+    match m {
+        ButtonMap::Lrm => "lrm",
+        ButtonMap::Lmr => "lmr",
+    }
+}
+
+/// The command that sets one [`Setting`] on one device.
+pub fn input_command(device: &str, setting: Setting) -> Result<String> {
+    let at = safe_word(device)?;
+    let tail = match setting {
+        Setting::SendEvents(e) => format!(
+            "events {}",
+            match e {
+                SendEvents::Enabled => "enabled",
+                SendEvents::Disabled => "disabled",
+                SendEvents::DisabledOnExternalMouse => "disabled_on_external_mouse",
+            }
+        ),
+        // THE DOT IS THE PARSER'S, never the locale's: `parse_float` is
+        // `strtof`, and a comma would end the command besides.
+        Setting::AccelSpeed(v) => format!("pointer_accel {:.3}", v.clamp(-1.0, 1.0)),
+        Setting::AccelProfile(p) => format!(
+            "accel_profile {}",
+            match p {
+                AccelProfile::Flat => "flat",
+                AccelProfile::Adaptive => "adaptive",
+            }
+        ),
+        Setting::NaturalScroll(b) => format!("natural_scroll {}", on_off(b)),
+        Setting::LeftHanded(b) => format!("left_handed {}", on_off(b)),
+        Setting::Tap(b) => format!("tap {}", on_off(b)),
+        Setting::TapButtonMap(m) => format!("tap_button_map {}", map_word(m)),
+        Setting::TapDrag(b) => format!("drag {}", on_off(b)),
+        Setting::TapDragLock(l) => format!(
+            "drag_lock {}",
+            match l {
+                DragLock::Disabled => "disabled",
+                DragLock::Enabled => "enabled",
+                DragLock::Sticky => "enabled_sticky",
+            }
+        ),
+        Setting::FingerDrag(d) => format!(
+            "three_finger_drag {}",
+            match d {
+                FingerDrag::Disabled => "disabled",
+                FingerDrag::ThreeFinger => "three_finger",
+                FingerDrag::FourFinger => "four_finger",
+            }
+        ),
+        Setting::ClickMethod(m) => format!(
+            "click_method {}",
+            match m {
+                ClickMethod::None => "none",
+                ClickMethod::ButtonAreas => "button_areas",
+                ClickMethod::Clickfinger => "clickfinger",
+            }
+        ),
+        Setting::ClickfingerButtonMap(m) => format!("clickfinger_button_map {}", map_word(m)),
+        Setting::MiddleEmulation(b) => format!("middle_emulation {}", on_off(b)),
+        Setting::ScrollMethod(m) => format!(
+            "scroll_method {}",
+            match m {
+                ScrollMethod::None => "none",
+                ScrollMethod::TwoFinger => "two_finger",
+                ScrollMethod::Edge => "edge",
+                ScrollMethod::OnButtonDown => "on_button_down",
+            }
+        ),
+        // A LINUX EVENT CODE, which `get_mouse_bindcode` takes as a number;
+        // zero is the parser's own word for "none".
+        Setting::ScrollButton(0) => "scroll_button disable".to_owned(),
+        Setting::ScrollButton(code) => format!("scroll_button {code}"),
+        Setting::ScrollButtonLock(b) => format!("scroll_button_lock {}", on_off(b)),
+        Setting::DisableWhileTyping(b) => format!("dwt {}", on_off(b)),
+        Setting::DisableWhileTrackpointing(b) => format!("dwtp {}", on_off(b)),
+        Setting::ScrollFactor(v) => format!("scroll_factor {:.3}", v.clamp(0.1, 10.0)),
+    };
+    Ok(format!("input \"{at}\" {tail}"))
+}
+
+/// The command that asks one thing of one seat.
+pub fn seat_command(seat: &str, ask: &SeatAsk) -> Result<String> {
+    // `*` IS THE COMPOSITOR'S "EVERY SEAT", and it is the one word outside the
+    // safe set a seat name may be: it cannot end a command.
+    let at = if seat == "*" { seat } else { safe_word(seat)? };
+    let tail = match ask {
+        SeatAsk::Attach(id) => format!("attach \"{}\"", safe_word(id)?),
+        SeatAsk::Cursor { theme, size } => {
+            format!("xcursor_theme {} {size}", safe_word(theme)?)
+        }
+        SeatAsk::HideAfter(ms) => format!("hide_cursor {ms}"),
+        SeatAsk::HideWhileTyping(b) => format!(
+            "hide_cursor when-typing {}",
+            if *b { "enable" } else { "disable" }
+        ),
+    };
+    Ok(format!("seat {at} {tail}"))
+}
+
+/// The command for focus-follows-mouse.
+#[must_use]
+pub const fn focus_command(f: FocusFollows) -> &'static str {
+    match f {
+        FocusFollows::No => "focus_follows_mouse no",
+        FocusFollows::Yes => "focus_follows_mouse yes",
+        FocusFollows::Always => "focus_follows_mouse always",
     }
 }
 
@@ -281,6 +422,68 @@ mod tests {
                 "`{said}` carries a separator: the compositor would read it as two commands"
             );
         }
+    }
+
+    #[test]
+    fn every_setting_is_one_command_with_no_separator() {
+        use ronoctua_compositor::PointerSettings;
+        let all = PointerSettings {
+            send_events: Some(SendEvents::DisabledOnExternalMouse),
+            accel_speed: Some(-0.25),
+            accel_profile: Some(AccelProfile::Flat),
+            natural_scroll: Some(true),
+            left_handed: Some(false),
+            tap: Some(true),
+            tap_button_map: Some(ButtonMap::Lmr),
+            tap_drag: Some(true),
+            tap_drag_lock: Some(DragLock::Sticky),
+            finger_drag: Some(FingerDrag::ThreeFinger),
+            click_method: Some(ClickMethod::Clickfinger),
+            clickfinger_button_map: Some(ButtonMap::Lrm),
+            middle_emulation: Some(true),
+            scroll_method: Some(ScrollMethod::OnButtonDown),
+            scroll_button: Some(274),
+            scroll_button_lock: Some(true),
+            disable_while_typing: Some(true),
+            disable_while_trackpointing: Some(false),
+            scroll_factor: Some(1.5),
+        };
+        let id = "1133:50498:Logitech_Wireless_Receiver_Mouse";
+        for s in all.present() {
+            let said = input_command(id, s).unwrap();
+            assert!(said.starts_with(&format!("input \"{id}\" ")), "{said}");
+            assert!(!said.contains(',') && !said.contains(';'), "{said}");
+        }
+        assert_eq!(
+            input_command(id, Setting::AccelSpeed(-0.25)).unwrap(),
+            format!("input \"{id}\" pointer_accel -0.250")
+        );
+        assert_eq!(
+            input_command(id, Setting::TapDragLock(DragLock::Sticky)).unwrap(),
+            format!("input \"{id}\" drag_lock enabled_sticky")
+        );
+    }
+
+    #[test]
+    fn a_name_that_could_end_the_command_is_refused() {
+        assert!(input_command("a\";exit", Setting::Tap(true)).is_err());
+        assert!(seat_command("seat1; exit", &SeatAsk::HideAfter(0)).is_err());
+        assert!(seat_command("seat1", &SeatAsk::Attach("x,y".into())).is_err());
+        assert_eq!(
+            seat_command("ronoctua-cursor-2", &SeatAsk::Attach("1:2:Mouse".into())).unwrap(),
+            "seat ronoctua-cursor-2 attach \"1:2:Mouse\""
+        );
+        assert_eq!(
+            seat_command(
+                "seat0",
+                &SeatAsk::Cursor {
+                    theme: "ronoctua-owl-1".into(),
+                    size: 24
+                }
+            )
+            .unwrap(),
+            "seat seat0 xcursor_theme ronoctua-owl-1 24"
+        );
     }
 
     #[test]

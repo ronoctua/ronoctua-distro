@@ -65,12 +65,19 @@ const PATIENCE: std::time::Duration = std::time::Duration::from_millis(250);
 /// The drag-and-drop machinery a door owns.
 ///
 /// One per door, because a `wl_data_device` is per SEAT and per CLIENT and each
-/// door is its own client. What it holds is the manager, the seat's device, and
-/// the source while a drag of ours is running.
+/// door is its own client. What it holds is the manager, ONE DEVICE PER SEAT,
+/// and the source while a drag of ours is running.
+///
+/// Per seat because every cursor is a seat (`crate::seats`), and a drag is
+/// started on the device of the seat whose button was pressed — the serial
+/// belongs to that seat, and the compositor refuses a drag begun on another
+/// seat's device with nothing said on this side. One device, replaced by
+/// whichever seat arrived last, was exactly that refusal for every cursor but
+/// the last.
 #[derive(Debug)]
 pub struct Carrying {
     manager: DataDeviceManagerState,
-    device: Option<DataDevice>,
+    devices: Vec<(WlSeat, DataDevice)>,
     source: Option<DragSource>,
     /// The paths this door is OFFERING, frozen when the drag began.
     ///
@@ -95,7 +102,7 @@ impl Carrying {
         match DataDeviceManagerState::bind(globals, qh) {
             Ok(manager) => Some(Self {
                 manager,
-                device: None,
+                devices: Vec::new(),
                 source: None,
                 offering: Vec::new(),
             }),
@@ -114,7 +121,12 @@ impl Carrying {
                 smithay_client_toolkit::data_device_manager::data_device::DataDeviceData,
             > + 'static,
     {
-        self.device = Some(self.manager.get_data_device(qh, seat));
+        use smithay_client_toolkit::reexports::client::Proxy as _;
+        if self.devices.iter().any(|(s, _)| s.id() == seat.id()) {
+            return;
+        }
+        let device = self.manager.get_data_device(qh, seat);
+        self.devices.push((seat.clone(), device));
     }
 
     /// STARTS A DRAG, with the paths frozen and the action the modifier asked
@@ -126,6 +138,7 @@ impl Carrying {
     pub fn begin<D>(
         &mut self,
         qh: &QueueHandle<D>,
+        seat: Option<&WlSeat>,
         surface: &WlSurface,
         serial: u32,
         paths: Vec<PathBuf>,
@@ -136,7 +149,13 @@ impl Carrying {
                 smithay_client_toolkit::data_device_manager::data_source::DataSourceData<()>,
             > + 'static,
     {
-        let Some(device) = self.device.as_ref() else {
+        use smithay_client_toolkit::reexports::client::Proxy as _;
+        // THE PRESSING SEAT'S DEVICE — see the struct.
+        let device = seat
+            .and_then(|seat| self.devices.iter().find(|(s, _)| s.id() == seat.id()))
+            .or_else(|| self.devices.first())
+            .map(|(_, d)| d);
+        let Some(device) = device else {
             return;
         };
         if paths.is_empty() {

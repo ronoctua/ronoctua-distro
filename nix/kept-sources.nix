@@ -65,6 +65,12 @@ writeShellApplication {
   text = ''
     roots="''${XDG_STATE_HOME:-$HOME/.local/state}/ronoctua/gcroots"
     mkdir -p "$roots"
-    nix-store --realise --add-root "$roots/sources" --indirect ${kept} > /dev/null
+    # A SAFEGUARD, NEVER A GATE: where there is no store to talk to — a build
+    # sandbox, a machine whose daemon is down — the session it guards still
+    # has to start. Under `errexit` a bare failure here ended `.#dev` before
+    # it had installed its own cleanup, so it says so and carries on.
+    if ! nix-store --realise --add-root "$roots/sources" --indirect ${kept} > /dev/null; then
+      echo "warning: could not root the flake's sources; a garbage collection may take them" >&2
+    fi
   '';
 }

@@ -94,9 +94,12 @@ mod network_words;
 mod notifications;
 mod notifications_window;
 mod paint;
+mod pointers;
+mod pointers_window;
 mod power;
 mod power_window;
 mod power_words;
+mod seats;
 // A NAME TOO LONG FOR ITS COLUMN, walking sideways a cell at a time.
 mod slide;
 mod sound;
@@ -315,6 +318,10 @@ fn main() -> Result<()> {
         }
         Some("audio") => {
             return audio_window::host_it().context("host the sound view");
+        }
+        // MICE, TOUCHPADS AND EVERY CURSOR, in a window of their own.
+        Some("pointers") => {
+            return pointers_window::host_it().context("host the pointers view");
         }
         Some("locale") => {
             return locale_window::host_it().context("host the language and region view");

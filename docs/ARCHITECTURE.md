@@ -2824,6 +2824,54 @@ houver, tem de haver um check que o busque.
 **Fluent, e não gettext:** plural, gênero e ordem de argumento são do IDIOMA. Em gettext viram regra
 numérica dentro do Rust; em Fluent ficam no `.ftl`, onde quem traduz mexe.
 
+### Ponteiros: um assento por dispositivo, e toda porta ouve todos
+
+O compositor desenha um cursor por ASSENTO, e cada assento tem o próprio foco. Isso é o suporte a
+vários cursores, e ele é do compositor desde o fork do sway; o que faltava era a distro usá-lo.
+
+**Um dispositivo apontador, um assento.** O `ronoctua-pointers` vê os dispositivos pelo contrato
+(`Compositor::devices`, `seats`, e o evento `DevicesChanged`) e decide, num plano puro
+(`plan.rs`), em que assento cada um fica. O primeiro ponteiro que a máquina viu fica no `seat0`,
+com os teclados; os seguintes ganham `ronoctua-cursor-N`. O número fica ANOTADO em
+`pointers.json`, e um número de um dispositivo lembrado não é dado a outro — o mouse que volta da
+gaveta volta ao mesmo cursor, com a mesma cor. Dois mouses idênticos têm o mesmo identificador
+(`vendor:product:nome`), e o `seat … attach` recebe identificador: são um dispositivo só, e a
+tela diz isso em vez de oferecer uma escolha que o compositor não honraria.
+
+**Tirar um dispositivo de um assento é um RELOAD, e é o único caminho.** O `attach` MOVE o
+dispositivo e o compositor não tem *detach* nem remoção de assento. O que tira é reler a
+configuração: o fragmento (`scroll-pointers.conf`) já não nomeia aquele assento, o reload destrói
+o assento sem configuração, e o dispositivo cai no *fallback*, que é o `seat0`. Por isso o
+fragmento nunca escreve `attach` para o primeiro cursor: voltar a ele é NÃO ser nomeado.
+
+**Cada ordem lê o arquivo, muda uma coisa e escreve.** Duas portas rodam a thread — o rodapé e a
+janela —, e a tela de monitores pagou duas vezes por guardar uma cópia das preferências entre
+ordens (`wrote_the_screens`). Aqui cópia nenhuma sobrevive a uma ordem. E só o rodapé DETECTA: é
+ele que está vivo a sessão inteira, e duas portas numerando o mesmo mouse brigariam.
+
+**As cores são as mesmas em todo tema.** A cor do cursor é como a pessoa sabe qual mão é qual; um
+tema que repintasse os cursores desfaria isso. Oito matizes a ΔE iguais a partir de uma matiz fixa,
+numa luminosidade só (numa rampa, dois cursores difeririam sobretudo em quão claros são), com o
+portão `cursors` do `gen-theme.py`. O hover de cada cursor é por tema, porque deita na superfície
+do tema — e só aparece colorido com mais de um cursor: sozinho, é o `surface.hover` de sempre.
+
+**As formas são do Bibata, recoloridas na build.** Recusado: desenhar trinta e cinco cursores à
+mão, com o animado. Aceito: a fonte SVG que o nixpkgs já pina, com os três marcadores de cor
+trocados pelos tokens e o `ctgen` fazendo o Xcursor. Oito temas, quatro tamanhos, 43 MB — com 16 e
+96 px eram 92, e os bitmaps de 96 eram metade.
+
+**Por que cada porta troca o estado em vez de reescrever a lógica.** As quinze portas guardavam
+um ponteiro, e cada uma tem centenas de linhas lendo `self.row_under_pointer`, `self.dragging`.
+Reescrever cada uma para um mapa por assento era reescrever a lógica de ponteiro da shell inteira.
+O `Seats::switch_to` guarda o estado do ponteiro anterior e traz o do que falou antes de a porta
+ler qualquer coisa — a lógica fica como está e passa a valer por cursor.
+
+**O que não se cruza sem patch do compositor (inv. 3)**, e está escrito aqui para não virar
+promessa: `focus_follows_mouse` é global; só o foco de um assento (o do último comando) ganha a
+borda `client.focused`; `send_unfocus` desativa uma janela quando um assento a deixa, mesmo com
+outro nela; uma superfície `exclusive` toma o teclado de todos os assentos; e app estrangeiro que
+ouve um assento só responde só ao primeiro.
+
 ---
 
 ## 5. Buffers nativos e o protocolo

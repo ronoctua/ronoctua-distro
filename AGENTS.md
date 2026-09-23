@@ -694,6 +694,53 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   de arrasto é da `View::spin`**, que fala em ONDE A MÃO FOI (`right`/`down`): yaw maior escorrega a
   peça para a ESQUERDA, então puxar para a esquerda é yaw MENOR — escrito em dois sítios, saiu
   invertido num.
+- **Todo cursor é um ASSENTO, e toda porta ouve todos eles** (`seats.rs`). O compositor desenha um
+  cursor por *seat* e cada um move o próprio foco — duas janelas focadas ao mesmo tempo, uma por
+  mão —, e o `ronoctua-pointers` põe cada mouse e cada touchpad num assento próprio ao ser plugado
+  (`seat0` fica com os teclados; os outros são `ronoctua-cursor-N`). As 15 portas guardavam UM
+  ponteiro (`if self.pointer.is_none()`), e o dono mediu o resultado: o segundo cursor andava e
+  nada respondia. Agora cada porta agrupa o estado de ponteiro num `PerSeat` e o
+  `Seats::switch_to` o troca no começo de todo `pointer_frame`, então a lógica da porta roda
+  inalterada sobre o estado DO cursor que falou — dois arrastos, dois hovers, dois restos de roda,
+  sem um enxergar o outro. O hover de cada um é pintado na cor dele (`cursor.hover.*`) só quando
+  há mais de um; sozinho, é o `surface.hover` de sempre. O arrasto de arquivo usa o
+  `wl_data_device` DO assento que apertou, e um clique só lê os modificadores do teclado do mesmo
+  assento. Cobra o `every-door-hears-every-seat`. **E cinco limites são do compositor, e não se
+  cruzam sem patch** (inv. 3): `focus_follows_mouse` é global; só o foco de UM assento ganha a
+  borda `client.focused`; um cursor que sai de uma janela a desativa mesmo com outro em cima;
+  uma superfície `exclusive` toma o teclado de TODOS os assentos; app estrangeiro que ouve um
+  assento só (GTK, Qt) responde só ao primeiro; e **dois mouses do MESMO modelo são um cursor
+  só** — o identificador é `vendor:produto:nome` e o `attach` recebe identificador, então nada
+  deste lado os separa (medido na VM: dois virtio-mouse, um assento).
+  **E O TECLADO ESCREVE ONDE O CURSOR 1 FOCOU**, a menos que se escolha outro (`typing.rs`,
+  a linha `A digitação vai para`): os teclados ficam no `seat0`, e só o foco DELE recebe tecla.
+  Seguir outro cursor NÃO move teclado nenhum — o evento `focus` do compositor sai para QUALQUER
+  assento, e comando por IPC roda no `seat0` (`execute_command` sem assento), então quando o
+  cursor seguido foca uma janela o rodapé pede ao `seat0` que foque a mesma. Só na MUDANÇA do
+  cursor seguido, senão uma janela escolhida pelo teclado (`LEADER w n`) voltaria sozinha.
+  Medido na VM: o cursor 4 clicou o terminal da direita e o `xyz` caiu nele.
+  **Detecção e foco-segue-o-ponteiro nascem DESLIGADOS** (escolha do dono): um cursor para
+  todas as mãos, e um clique foca.
+  **O ponteiro virtual do keyd não é uma mão** (`plan::follows_the_keyboards`, vendor `0x0FAC`):
+  tomado por "o primeiro ponteiro" ele segurava o `seat0` com um cursor parado num canto, e o
+  mouse de verdade ia para o cursor 3 — medido na VM. **E um aparelho físico é UM cursor, por
+  quantas interfaces tiver** (`plan::one_physical`, o mesmo `vendor:produto`): o touchpad chega
+  como `…_Touchpad` e `…_Mouse`, e a segunda fica parada — um cursor para cada deixava um
+  cursor morto ao lado do touchpad. **E a `.#vm` só mostra vários cursores com `-- --pointers`**:
+  o QEMU junta todo ponteiro do host num aparelho emulado, e cada um passado como
+  `virtio-input-host-pci` chega ao convidado como ele mesmo (e fica PRESO a ele até ela fechar).
+  **`LEADER s i` são os ajustes** (`pointers.rs`, duas portas: `s i i` e `s i w`): detecção
+  automática, cada cursor (ligado, cor, que dispositivos move — `RET` num dispositivo o passa ao
+  próximo cursor ou a um novo), todo ajuste que o libinput diz que AQUELE dispositivo tem (os que
+  ele não tem não são desenhados), e o que vale para todos: tamanho, esconder parado ou digitando,
+  foco segue o ponteiro. **Cada ordem lê o `pointers.json`, muda uma coisa e escreve** — nenhuma
+  porta guarda cópia entre ordens —, e só a thread do RODAPÉ detecta dispositivo novo. Tirar um
+  dispositivo de um assento é RELOAD (o compositor não tem *detach*); pôr num novo é IPC na hora.
+- **As cores dos cursores são as MESMAS em todo tema** (`cursor.fill.*`, oito, de uma matiz fixa;
+  o nono repete o primeiro): a cor é como a pessoa sabe qual mão é qual, e trocar de tema não
+  pode repintá-la. Só o hover é por tema, porque deita na superfície do tema. As formas são o
+  Bibata Modern recolorido na build (`nix/cursors.nix`, a mesma fonte que o nixpkgs pina) — oito
+  temas `ronoctua-pointer-N`, 43 MB com quatro tamanhos (24, 32, 48, 64; com 16 e 96 eram 92).
 - **Toda porta segue a ESCALA da tela em que está** (`hidpi.rs`, uma regra e dez chamadas):
   `scale_factor_changed` estava VAZIA nas nove daquele dia, ninguém chamava `set_buffer_scale`, e num monitor que
   o compositor dirige em escala 2 cada porta entregava um buffer do tamanho LÓGICO que o compositor

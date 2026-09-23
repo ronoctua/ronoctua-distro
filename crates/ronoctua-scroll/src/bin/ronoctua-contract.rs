@@ -190,6 +190,44 @@ fn main() -> Result<()> {
         bail!("the spare output is still there; it would outlive this run");
     }
 
+    // ---- 4. devices and seats ----------------------------------------
+    // Every setting a device reports is asked back AT ITS OWN VALUE, so the
+    // pass proves every spelling is one the compositor takes without
+    // changing anything a person set. A seat of the pass's own is made, so
+    // the seat verbs are exercised without touching `seat0` — and the
+    // re-read below must take it away again, which is the only way this
+    // compositor removes a seat.
+    let devices = wm.devices().context("listing the input devices")?;
+    let mut asked = 0_usize;
+    for d in devices.iter().filter(|d| d.kind.points()) {
+        for s in d.settings.present() {
+            wm.ask_input(&d.id, s)
+                .with_context(|| format!("{} refused its own {s:?}", d.id))?;
+            asked += 1;
+        }
+    }
+    println!(
+        "devices: {} — {asked} settings asked back unchanged",
+        devices.len()
+    );
+    let probe = "ronoctua-contract-probe";
+    wm.ask_seat(
+        probe,
+        ronoctua_compositor::SeatAsk::Cursor {
+            theme: "default".to_owned(),
+            size: 24,
+        },
+    )
+    .context("making a seat")?;
+    wm.ask_seat(probe, ronoctua_compositor::SeatAsk::HideAfter(0))?;
+    wm.ask_seat(probe, ronoctua_compositor::SeatAsk::HideWhileTyping(false))?;
+    wm.ask_focus(ronoctua_compositor::FocusFollows::Yes)?;
+    let seats = wm.seats().context("listing the seats")?;
+    if !seats.iter().any(|s| s.name == probe) {
+        bail!("a seat was asked for and is not in the list");
+    }
+    println!("seats: {} — the pass's own among them", seats.len());
+
     // ---- and the re-read, which is also the whole of undo -------------
     // AND AN `Ok` HERE SAYS THE REQUEST WAS CARRIED, nothing more: this
     // compositor answers `success` whatever parsed (measured — see
@@ -197,6 +235,9 @@ fn main() -> Result<()> {
     // everything section 3 applied is gone afterwards, which is the whole of
     // undo.
     wm.reread().context("asking it to re-read its config")?;
+    if wm.seats()?.iter().any(|s| s.name == probe) {
+        bail!("the pass's seat outlived the re-read; the plan of seats relies on it going");
+    }
     println!("reread: it took the request, and every transient ask is gone");
 
     println!("the contract holds");

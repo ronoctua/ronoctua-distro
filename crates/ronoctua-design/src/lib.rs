@@ -123,6 +123,7 @@ pub mod bindings {
 
 pub mod budget;
 pub mod grid;
+pub mod hovers;
 pub mod phrases;
 // THE PIXEL RAIL IS THE HOST'S. A component counts in cells and lines and has
 // no surface; see the module's own head for why that is not an omission.
@@ -138,6 +139,7 @@ pub mod table;
 
 pub use budget::{budget, claimed, room, stands, tall, wide};
 pub use grid::Grid;
+pub use hovers::Hovers;
 pub use phrases::Phrases;
 #[cfg(feature = "host")]
 pub use rails::Frame;
@@ -343,6 +345,14 @@ pub enum Role {
     /// — a buffer could answer neither, because no role reached
     /// `surface.hover` and the wall carried no pointer event at all.
     Hover,
+    /// The ground under the row ONE CURSOR is on, in that cursor's colour —
+    /// its number is `pointed.seat` from the WIT. Built with
+    /// [`Role::hover_of`], which reduces the number to the eight there are.
+    ///
+    /// The host paints it as the neutral [`Role::Hover`] while only one
+    /// cursor is on the window: colour is spent only where it tells two hands
+    /// apart, the rule the shell's own windows keep (`crate::seats`).
+    HoverOf(u16),
     /// The notation of a shortcut — `RET`, `m r`, `Tab`.
     ///
     /// # Why the hint family had to be reachable
@@ -363,6 +373,15 @@ pub enum Role {
     /// A third tone, so a separator is not read as a word — the same argument
     /// `Register::Separator` makes on the host's side of the wall.
     Faint,
+}
+
+impl Role {
+    /// One cursor's hover, by its colour number — reduced to the eight
+    /// colours there are, so a ninth cursor wears the first's.
+    #[must_use]
+    pub const fn hover_of(seat: u16) -> Self {
+        Self::HoverOf(seat % 8)
+    }
 }
 
 /// The one thing that differs between the host and the component.
@@ -465,6 +484,16 @@ impl Palette for Tokens {
             Role::Danger => "state-error",
             Role::Once => "text-once",
             Role::Hover => "surface-hover",
+            // ONE CURSOR'S HOVER, by its colour number — eight colours, and a
+            // ninth cursor wears the first's (`HoverOf` reduces it first).
+            Role::HoverOf(0) => "cursor-hover-one",
+            Role::HoverOf(1) => "cursor-hover-two",
+            Role::HoverOf(2) => "cursor-hover-three",
+            Role::HoverOf(3) => "cursor-hover-four",
+            Role::HoverOf(4) => "cursor-hover-five",
+            Role::HoverOf(5) => "cursor-hover-six",
+            Role::HoverOf(6) => "cursor-hover-seven",
+            Role::HoverOf(_) => "cursor-hover-eight",
             // THE HINT FAMILY, the same three the minibuffer's own line uses:
             // `Register::Key`, `Register::Prose` and `Register::Separator` in
             // `chrome.rs` resolve to exactly these.

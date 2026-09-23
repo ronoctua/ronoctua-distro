@@ -401,20 +401,6 @@ voltar, e tentar a leader. Se ela abrir, somem três coisas — este arquivo, o 
 
 - acabou quando: o gesto foi feito e a leader abriu, ou não abriu e o arquivo ganhou a nova medição
 
-### 0.000017d. DOIS PONTEIROS ao mesmo tempo, que é a razão da troca · a medir
-
-A migração foi feita por causa disto e ainda não foi exercida: o dono precisa de vários cursores ao
-mesmo tempo para os apps que pretende escrever, e o compositor anterior dirigia um assento com um
-ponteiro só. Este é um fork do sway, logo herda `seat <nome> { … }` e o `attach` por dispositivo,
-e é isso que ainda não foi posto à prova.
-
-**O teste é do dono e é um gesto**: dois mouses no TTY, com uma configuração de dois assentos, e os
-dois cursores se movendo ao mesmo tempo. Nada na distro declara um segundo assento hoje — o
-`nix/modules/scroll.nix` não escreve nenhum —, então o que está pendente é a medição E, se ela
-passar, de onde esse assento vai ser declarado.
-
-- acabou quando: os dois cursores andaram, e o segundo assento é declarado em um lugar só
-
 ### 0.000017c. Espaço de trabalho VAZIO não existe mais · minúsculo, e é uma perda declarada
 
 `LEADER TAB 1..9` continua significando sempre a mesma coisa: o comando é `workspace number N`, que

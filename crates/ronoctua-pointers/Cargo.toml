@@ -1,0 +1,30 @@
+[package]
+name = "ronoctua-pointers"
+description = "Mice, touchpads and cursors: which seat each pointing device is on, its settings, and the colour of every cursor."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# WHAT THIS CRATE IS THE FRONTIER OF: the pointing devices and the seats
+# they are put on. It is NOT a frontier with the compositor — it asks with
+# `ronoctua_compositor`'s vocabulary and reads its `Device` and `Seat`, and
+# `ronoctua-scroll` is named in exactly one function, `open_the_compositor`.
+#
+# NO `[[bin]]`: the footer raises the thread, the same arrangement as
+# `ronoctua-display`.
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ronoctua-compositor = { path = "../ronoctua-compositor" }
+ronoctua-scroll = { path = "../ronoctua-scroll" }
+# The preference file, written atomically, degrading to the default with a
+# reason in the log.
+ronoctua-store = { path = "../ronoctua-store" }
+
+[lints]
+workspace = true
