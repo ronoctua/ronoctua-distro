@@ -112,19 +112,19 @@ mod key {
 /// global prefix. Each id needs `cmd-<id>` in both languages — which a check
 /// already demands of every buffer.
 const KEYMAP: &[(&str, &str)] = &[
-    ("m f", "memory-full"),
-    ("m o", "memory-guard"),
-    ("m v", "memory-tab"),
-    ("m r", "memory-refresh"),
-    ("m s", "memory-scan"),
-    ("m x", "memory-scan-cancel"),
-    ("m k", "memory-stop"),
-    ("m g", "memory-sweep-store"),
-    ("m n", "memory-sweep-generations"),
-    ("m j", "memory-sweep-journal"),
-    ("m t", "memory-tolerant"),
-    ("m d", "memory-default"),
-    ("m p", "memory-persist"),
+    (", f", "memory-full"),
+    (", o", "memory-guard"),
+    (", v", "memory-tab"),
+    (", r", "memory-refresh"),
+    (", s", "memory-scan"),
+    (", x", "memory-scan-cancel"),
+    (", k", "memory-stop"),
+    (", g", "memory-sweep-store"),
+    (", n", "memory-sweep-generations"),
+    (", j", "memory-sweep-journal"),
+    (", t", "memory-tolerant"),
+    (", d", "memory-default"),
+    (", p", "memory-persist"),
 ];
 
 /// How many of the biggest the small screen shows.

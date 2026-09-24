@@ -293,6 +293,19 @@
   # own box came back as 172x644, most of the panel, while the orange, which
   # is near nothing, came back as 130x97 for exactly 12610 pixels. A
   # measurement that catches its neighbours is not a measurement.
+  #
+  # AND THE PICTURE IS NOT DISTORTED. The film is 240x180 — four to
+  # three — and a frame stretched to a region three times as wide as it
+  # is tall is what the owner photographed twice: once on the GIF and
+  # once after pausing and going wide. Asked of the picture's own colour,
+  # which is the picture and nothing else.
+  # WHICHEVER FRAME IS UP, and not the one that was up before.
+  #
+  # Naming a colour was the first shape of this and it measured 17 by 27 —
+  # a glyph, not a film. Giving the region away is a respawn, and the film
+  # comes back at another frame; asking for the OLD colour then measures
+  # whatever stray pixels match it. What is being asserted here is the
+  # SHAPE of the picture, so which frame is showing is not the question.
   {
     id = "miniplayer";
     needs = [ "manager-window" ];
@@ -315,6 +328,21 @@
   # wheel is several lines and carries the whole band off in one go,
   # and a two-line drag of the thumb moved nothing at all. Measured,
   # both, on this scene.
+  #
+  # THE SEA AND THE LAND ARE DRAWN, and it is the assertion this
+  # scene exists for.
+  #
+  # THE INFO COLUMN ONLY, and the reason is the trap this file has
+  # fallen into twice: an assertion answered by something else on
+  # screen. `surface.atlas.ocean` is a dark violet and so is
+  # `surface.selection`, the band under the cursor in the LISTING —
+  # crop the listing out and the question can only be answered by the
+  # panel the globe is in. The quarter is the panel: the manager puts
+  # the facts in the rightmost column.
+  #
+  # AND THE FUZZ IS TIGHT, because a disc is a filled region rather
+  # than a glyph: at the default twelve per cent every light letter on
+  # the panel answers for `surface.atlas.land`.
   {
     id = "globe";
     needs = [ "manager-window" ];
@@ -460,6 +488,22 @@
     id = "drop";
     needs = [ "manager-window" ];
   }
+  #
+  # AND THE SENTENCE UNDER A KEY BELONGS TO THE OPENED LINE (the owner's
+  # rule): resting on the first key of the SHUT line draws no sentence at all,
+  # and on the same key of the OPENED line it is spelt out in its own cool grey
+  # (`text.subtle.explain`). Measured in the EXACT colour, which nothing else
+  # in the window wears — the interior of its letters is the token itself.
+  #
+  # THE WINDOW'S OWN EDGES, MEASURED. The compositor gives a single
+  # window a COLUMN and not the output, so the screen's right border is the
+  # desktop — and an assertion aimed there is answered by it. A
+  # window clears with `surface.chrome` (`gpu::Gpu::frame`), so its
+  # first row says where it starts and stops.
+  #
+  # THE CHEVRON IS DRAWN, against that edge. INK is "not the ground",
+  # because a glyph is antialiased and may carry no pixel of the
+  # token's exact colour.
   { id = "header"; }
   # THE ASSERTION THAT WOULD HAVE CAUGHT IT, and it is the second time.
   #
@@ -540,6 +584,10 @@
   # wrong screen: first the nine `TAB`s that landed on Wi-Fi, then
   # `fresh_at` looking for a row that a machine without Tor does not
   # draw. Two pictures that are equal prove the door opened nothing.
+  #
+  # THE LINE IS OPENED FIRST (right `Ctrl` + `Down`): the sentence under a key
+  # is shown only with the line open (`Footer::explain_rows`), so a sweep over
+  # a shut one would never draw the row whose count once closed the ring.
   { id = "hints"; }
   # THE LINE THAT OUTLIVES THE FOOTER, and the keyboard reaching its options.
   #
@@ -554,5 +602,26 @@
   # does not. The TOP row and not an option, because `Lifeline::at` answers
   # `None` for any row but the last — so the click does nothing except what a
   # person's would, put the keyboard back on the line they are reading.
+  #
+  # THE SECOND DEFECT THE OWNER NAMED, which was not the crash: *"a
+  # ronoctua-distro não sabe lidar com isso, ou seja, acaba deixando o
+  # usuário sem interface"*. With the footer down, all four emergency
+  # binds are dead by construction — they all write to its own control
+  # socket — so nothing on screen could say what had happened.
+  #
+  # KILLED ON PURPOSE, and with the signal the defect produced: a stack
+  # overflow ends in `process::abort`, which is `SIGABRT`.
+  #
+  # AND THE MOUSE REACHES THE OPTIONS, which is the half nobody had
+  # tested — the owner said so in as many words: *"tenha certeza de que
+  # eles são clicáveis pelo mouse (pois como eu não testei, não sei se o
+  # suporte do mouse está implementado)"*.
+  #
+  # THE FIRST OPTION, whose column is known by construction: the row
+  # begins at `MARGIN + 2` cells — `lifeline::MARGIN` is the footer's own
+  # `modeline.edgeLeft`, plus the two the warning glyph takes — so a click
+  # three and a half cells in lands inside `[l]`. What it does is open the
+  # journal in the rescue console, which is a SECOND PROCESS, and that is
+  # what makes the click visible from out here.
   { id = "lifeline"; }
 ]

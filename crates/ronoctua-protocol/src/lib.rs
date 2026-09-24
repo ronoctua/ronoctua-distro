@@ -1502,11 +1502,18 @@ pub struct Binding {
 
 /// The prefix under which a buffer MAY bind (section 7.9).
 ///
-/// "Buffers only bind under `SPC m` (Doom's local leader). An attempt to
-/// bind under a global prefix is **rejected at load with an error**." Without that, a
+/// "Buffers only bind under the local leader. An attempt to bind under a
+/// global prefix is **rejected at load with an error**." Without that, a
 /// third-party component hijacks `SPC f` and the whole system changes
 /// behaviour because of one buffer.
-pub const LOCAL_PREFIX: &str = "m";
+///
+/// `,` — Spacemacs's major-mode leader, the counterpart of Doom's `SPC m`.
+/// It WAS `m`, Doom's own, and the system's MISCELLANEOUS group is `m` too:
+/// with a buffer focused its keymap took the letter, and the owner opened
+/// Lucide's window, pressed `SPC m` for the screenshot and got Lucide's
+/// menu. A local leader is a prefix no group of the system may ever want,
+/// and punctuation is where letters run out last.
+pub const LOCAL_PREFIX: &str = ",";
 
 /// The id every buffer's BASE state carries.
 ///
@@ -1778,6 +1785,9 @@ pub enum Command {
         /// The buffer declares the **budget**; what cuts is the host, which is what
         /// has the translated string.
         max_width: u16,
+        /// Counted from the RIGHT edge — see `edge` in the WIT's
+        /// `text-command`. The column still names the cell from the left.
+        edge: bool,
     },
     /// A sentence, WRAPPED, in a rectangle of cells.
     ///
@@ -2890,15 +2900,17 @@ mod tests {
 
     #[test]
     fn a_buffer_only_binds_under_the_local_prefix() {
-        // Section 7.9: "buffers only bind under `SPC m`. An attempt to bind
-        // under a global prefix is REJECTED at load with an error."
+        // Section 7.9: "buffers only bind under the local leader. An attempt
+        // to bind under a global prefix is REJECTED at load with an error."
         //
         // Without this, a third-party component hijacks `SPC f` and the whole
         // system changes behaviour because of one buffer.
-        assert!(with_keys("m f s").validate().is_ok());
-        assert!(with_keys("m").validate().is_ok());
+        assert!(with_keys(", f s").validate().is_ok());
+        assert!(with_keys(",").validate().is_ok());
 
-        for global in ["f s", "b b", "g", "q q"] {
+        // `m` INCLUDED: it is the system's miscellaneous group, and a buffer
+        // binding there took the letter from it.
+        for global in ["f s", "b b", "g", "q q", "m f s"] {
             let e = with_keys(global).validate().unwrap_err();
             assert!(e.contains(global), "the message does not say which: {e}");
         }
@@ -2979,6 +2991,7 @@ mod tests {
             color: Color::name("text-primary"),
             scale: Scale::Normal,
             max_width: 0,
+            edge: false,
         });
         d.push(Command::Rule {
             line: 1,
@@ -3020,6 +3033,7 @@ mod tests {
             color: Color::name("text-primary"),
             scale,
             max_width: 40,
+            edge: false,
         });
         d.push(Command::Rule {
             line: 1,
@@ -3065,6 +3079,7 @@ mod tests {
                 color: Color::name("text-primary"),
                 scale: Scale::Normal,
                 max_width: 20,
+                edge: false,
             });
         }
         assert!(d.nothing_is_covered(heights(), 80).is_ok());
@@ -3087,6 +3102,7 @@ mod tests {
             color: Color::name("text-primary"),
             scale: Scale::Normal,
             max_width,
+            edge: false,
         };
 
         let mut sentence = DisplayList::fresh_one();
@@ -3114,6 +3130,7 @@ mod tests {
             color: Color::name("text-primary"),
             scale: Scale::Large,
             max_width: 2,
+            edge: false,
         });
         d.push(Command::Text {
             line: 0,
@@ -3122,6 +3139,7 @@ mod tests {
             color: Color::name("text-primary"),
             scale: Scale::Normal,
             max_width: 1,
+            edge: false,
         });
         assert!(d.nothing_overlaps(heights(), 80).is_err());
     }

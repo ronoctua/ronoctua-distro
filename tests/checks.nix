@@ -22576,10 +22576,11 @@ let
         for f in sorted(src.rglob("*.rs")):
             body = code_of(f.read_text())
             # WHERE THE SENTENCE IS TAKEN OUT, in its three spellings: the shared
-            # painter reads its own field, the file manager's window asks
-            # `Hinted::said`, and the footer keeps a field of its own.
+            # painter asks its own `said()` (which is what hides it with the line
+            # shut), the file manager's window asks `Hinted::said`, and the
+            # footer keeps a field of its own.
             for m in re.finditer(
-                r"(hinted\.said\(\)|self\.hint_said\.as_ref\(\)|Some\(said\) = &self\.said)",
+                r"(hinted\.said\(\)|self\.hint_said\.as_ref\(\)|Some\(said\) = self\.said\(\))",
                 body,
             ):
                 after = body[m.end() : m.end() + 900]

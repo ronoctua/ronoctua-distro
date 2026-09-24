@@ -51,7 +51,7 @@ mod key {
 }
 
 /// The keys this buffer binds, under `m`.
-const KEYMAP: &[(&str, &str)] = &[("m c", "example-clear")];
+const KEYMAP: &[(&str, &str)] = &[(", c", "example-clear")];
 
 /// How many rows the caret walks: the items, then the fields.
 const ROWS: usize = key::ITEMS.len() + key::FIELDS.len();

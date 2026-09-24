@@ -1290,7 +1290,7 @@ pub struct Hinted {
     /// It is HERE and not in each door for the reason the marks are: ten
     /// copies of a drawer is ten places for the answer to drift.
     fold: crate::fold::Fold,
-    /// The cell the chevron was DRAWN at, or none while the line fits.
+    /// The cell the chevron was DRAWN at — always one, once a frame is drawn.
     ///
     /// Written down by the painter and read by the pointer — a control is
     /// taken where it was drawn, never where a second sum says it should be.
@@ -1305,6 +1305,10 @@ pub struct Hinted {
     wrapped: usize,
     /// Is the drawer's bar being dragged?
     dragging: bool,
+    /// A door with a drawer of its OWN — the file manager's window — says
+    /// here whether it is open, because the sentence below follows whichever
+    /// drawer the line has (see [`Hinted::rows`]).
+    open_elsewhere: bool,
     /// Is the RIGHT `Ctrl` down?
     ///
     /// Tracked by its keysym, as the footer tracks it: xkb merges both Ctrls
@@ -1330,6 +1334,7 @@ impl Default for Hinted {
             },
             wrapped: 0,
             dragging: false,
+            open_elsewhere: false,
             right_ctrl: false,
         }
     }
@@ -1389,10 +1394,25 @@ impl Hinted {
     ///
     /// The sentence is one row while a shortcut is under the pointer and none
     /// otherwise — the owner chose that over a row that stands empty at rest,
-    /// *"só existe enquanto há hover"*.
+    /// *"só existe enquanto há hover"*. And ONLY WITH THE LINE OPEN: a
+    /// sentence that appeared under a folded line whenever the hand crossed
+    /// it moved the list under it by a row, and the owner asked for it to
+    /// belong to the opened line — what one opens to read the keys in full.
     #[must_use]
     pub fn rows(&self) -> u16 {
-        self.folded_rows() + u16::from(self.said.is_some())
+        self.folded_rows() + u16::from(self.said().is_some())
+    }
+
+    /// Whether the line is open — its own drawer, or the door's.
+    #[must_use]
+    pub const fn is_open(&self) -> bool {
+        self.fold.open || self.open_elsewhere
+    }
+
+    /// For a door whose line opens into a drawer of its own: whether it is
+    /// open, which is what shows the sentence under it.
+    pub const fn open_elsewhere(&mut self, open: bool) {
+        self.open_elsewhere = open;
     }
 
     /// How many rows the OPENED line takes under itself. `0` while it is shut.
@@ -1401,10 +1421,10 @@ impl Hinted {
         crate::fold::rows(self.fold)
     }
 
-    /// The sentence, when there is one.
+    /// The sentence, when there is one and the line is open to show it.
     #[must_use]
     pub fn said(&self) -> Option<&str> {
-        self.said.as_deref()
+        self.said.as_deref().filter(|_| self.is_open())
     }
 
     /// LINE 0 OF A WINDOW, and the drawer it opens into.
@@ -1438,27 +1458,21 @@ impl Hinted {
     ) -> Vec<ronoctua_render::Span> {
         let size = tokens::text::size();
         let mut line: Vec<Piece> = pieces.to_vec();
-        // AND THE KEYS THAT WALK IT, once it is open. Only then: on a folded
-        // line they would name a gesture that does nothing.
-        if hinting && self.fold.open {
+        // AND THE KEYS THAT OPEN AND WALK IT, open or shut — see
+        // `fold::teaching`.
+        if hinting {
             line.extend(crate::fold::teaching(texts));
         }
-        let text: String = line.iter().map(|p| p.text.as_str()).collect();
         // THE CONTROL TAKES ITS CELLS BEFORE THE TEXT IS MEASURED, exactly as
         // the sidebar's eject glyph does: a control drawn over text that was
         // measured without it is a control that covers a word.
         //
-        // It is offered when the line would be CUT, and also whenever it is
-        // already open — otherwise the one gesture that closes it disappears
-        // the moment the content happens to fit.
-        let opens = self.fold.open
-            || crate::fold::wanted(&text, columns.saturating_sub(crate::fold::WIDTH));
-        let room = columns.saturating_sub(if opens { crate::fold::WIDTH } else { 0 });
-        self.wrapped = if opens {
-            crate::fold::wrap_pieces(&line, room).len()
-        } else {
-            0
-        };
+        // It is ALWAYS there, the owner's rule: it used to be offered only when
+        // the line would be cut, but opening the line is also what shows the
+        // sentence about the key under the pointer, and a line that fits still
+        // has that to show.
+        let room = columns.saturating_sub(crate::fold::WIDTH);
+        self.wrapped = crate::fold::wrap_pieces(&line, room).len();
         let mut spans: Vec<ronoctua_render::Span> = Vec::new();
         let mut marks: Vec<Mark> = Vec::new();
         if self.fold.open {
@@ -1498,7 +1512,7 @@ impl Hinted {
         // THE CONTROL THAT OPENS THE LINE, flush against the right edge. No
         // box and no border (invariant 15): a glyph on the line that is
         // already there.
-        self.control = opens.then(|| columns.saturating_sub(1) + margin);
+        self.control = Some(columns.saturating_sub(1) + margin);
         if let Some(at) = self.control {
             let chevron = if self.fold.open {
                 tokens::icon::COLLAPSE
@@ -1515,14 +1529,17 @@ impl Hinted {
                 } else {
                     tokens::color::TEXT_SUBTLE_DEFAULT
                 },
-                edge: false,
+                // COUNTED FROM THE BORDER, so the air after it is the door's
+                // margin at every width — counted from the left, the grid's
+                // remainder became air that changed as the window was resized.
+                edge: true,
                 foot: false,
             });
         }
         // AND THE SHORTCUT UNDER THE POINTER, SPELT OUT, on the line below the
         // header: the line the owner asked for. It costs the list one row for
         // as long as the pointer is on a key, and nothing above it moves.
-        if let Some(said) = &self.said {
+        if let Some(said) = self.said() {
             spans.push(ronoctua_render::Span {
                 size: ronoctua_render::Size::Px(size),
                 text: ronoctua_render::layout::elide_end(said, columns),

@@ -48,6 +48,8 @@ pub struct Run<I> {
     pub column: u16,
     /// How many cells it may occupy. `0` = to the edge.
     pub budget: u16,
+    /// Counted from the window's RIGHT edge — see [`Run::at_the_edge`].
+    pub edge: bool,
 }
 
 impl<I> Run<I> {
@@ -84,6 +86,7 @@ impl<I> Run<I> {
             scale: Scale::Normal,
             column: 0,
             budget: 0,
+            edge: false,
         }
     }
 
@@ -91,6 +94,16 @@ impl<I> Run<I> {
     #[must_use]
     pub const fn at(mut self, column: u16) -> Self {
         self.column = column;
+        self
+    }
+
+    /// Count its cell from the window's RIGHT edge, so the air after it is the
+    /// same at every width — for a control that sits against the border, as
+    /// the header's chevron does. The column still names the cell from the
+    /// left; the host places it in pixels from the border.
+    #[must_use]
+    pub const fn at_the_edge(mut self) -> Self {
+        self.edge = true;
         self
     }
 
@@ -875,6 +888,7 @@ impl<P: Palette> Screen<P> {
                     color: Tokens::color(run.role),
                     scale: run.scale,
                     max_width: run.budget,
+                    edge: run.edge,
                 },
                 #[cfg(feature = "syntax")]
                 Part::Coded {
@@ -892,6 +906,7 @@ impl<P: Palette> Screen<P> {
                     color: role.map_or_else(|| Tokens::color(Role::Body), Tokens::syntax),
                     scale: ronoctua_protocol::Scale::Normal,
                     max_width: 0,
+                    edge: false,
                 },
                 Part::Ruled {
                     line,

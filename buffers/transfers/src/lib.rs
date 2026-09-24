@@ -129,11 +129,11 @@ mod key {
 /// Data, and under `m ` only: the host refuses at load whoever binds under a
 /// global prefix. Each id needs `cmd-<id>` in both languages.
 const KEYMAP: &[(&str, &str)] = &[
-    ("m p", "transfers-hold"),
-    ("m c", "transfers-give-up"),
-    ("m k", "transfers-drop"),
-    ("m l", "transfers-clear"),
-    ("m d", "transfers-detail"),
+    (", p", "transfers-hold"),
+    (", c", "transfers-give-up"),
+    (", k", "transfers-drop"),
+    (", l", "transfers-clear"),
+    (", d", "transfers-detail"),
 ];
 
 /// Which screen is on.

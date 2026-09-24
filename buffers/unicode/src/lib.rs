@@ -2249,11 +2249,11 @@ impl Guest for Component {
         let mut keymap = Vec::new();
         keymap.extend(FORMATS.iter().map(|(id, key)| Binding {
             // EVERYTHING under `SPC m`: the host refuses at load whoever leaves that.
-            keys: format!("m c {key}"),
+            keys: format!(", c {key}"),
             command: (*id).to_owned(),
         }));
         keymap.extend(FILTERS.iter().map(|(id, key)| Binding {
-            keys: format!("m f {key}"),
+            keys: format!(", f {key}"),
             command: (*id).to_owned(),
         }));
 

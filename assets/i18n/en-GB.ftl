@@ -639,6 +639,7 @@ expansion-page = RCtrl ←→
 # translated.
 minibuffer-fold-keys = RCtrl ↑↓
 minibuffer-fold-hint = · { $keys } move through the rest of this line
+about-fold-walk = Move through the rest of this opened line, a row at a time; going back past its first row closes it.
 
 # --- The glyph card (Nerd Fonts browser) -----------------------------------
 glyphs-sheet-codepoint = Codepoint
@@ -2502,6 +2503,20 @@ brain-do-pane = Other half
 brain-do-change = Change this
 brain-do-keys = Every key
 brain-do-notice = Do it
+about-brain-do-open = Open the task under the cursor: its schedule, its steps and what it did the last times.
+about-brain-do-pane = Take the keyboard to the other half of the page.
+about-brain-do-change = Change the setting or the step under the cursor.
+about-brain-do-back = Go back to the list of every task.
+about-brain-keys = Open this line to see every key the page answers to, or close it again.
+about-brain-do-notice = Do what the notice above offers.
+about-brain-run = Run this task now, whatever its schedule says.
+about-brain-rehearse = Rehearse this task: every step is walked and nothing on the machine changes.
+about-brain-switch = Switch this task off, or on again; switched off, it never runs by itself.
+about-brain-interval = Step to the next cadence this task runs at.
+about-brain-window = Step to the next part of the day this task may run in.
+about-brain-reset-steps = Put every step of this task back as the distro ships it.
+about-brain-proceed = Start the task that is counting down now, without waiting for the count.
+about-brain-abort = Stop the task that is running or counting down.
 brain-task-emacs-daemon = Watch the Emacs daemon
 brain-task-emacs-daemon-does = Looks, every few minutes, for the Emacs server that holds your session and your configuration — and for an Emacs that is running WITHOUT it, which looks the same on screen and is not: it loaded its own copy, its buffers are not the session's, and closing it loses them. It reads the process table and nothing else, and the only thing it ever starts is the distro's own service.
 emacs-no-daemon = The Emacs daemon is not running. Every editor window will load the whole configuration again, and none of them will share your buffers.

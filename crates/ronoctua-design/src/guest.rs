@@ -68,6 +68,7 @@ impl Palette for Wit {
             Role::Key => wit::Color::TextSubtleStrong,
             Role::Prose => wit::Color::TextSubtleDefault,
             Role::Faint => wit::Color::TextSubtleFaint,
+            Role::Explain => wit::Color::TextSubtleExplain,
         }
     }
 
@@ -178,6 +179,7 @@ impl<P: Palette<Color = wit::Color, Icon = wit::Icon>> Screen<P> {
                     color: P::color(run.role),
                     scale: scale(run.scale),
                     max_width: run.budget,
+                    edge: run.edge,
                 }),
                 #[cfg(feature = "syntax")]
                 Frame::Coded(line, column, text, role) => wit::Command::Text(wit::TextCommand {
@@ -187,6 +189,7 @@ impl<P: Palette<Color = wit::Color, Icon = wit::Icon>> Screen<P> {
                     color: role.map_or_else(|| P::color(Role::Body), P::syntax),
                     scale: wit::Scale::Normal,
                     max_width: 0,
+                    edge: false,
                 }),
                 // THE ROLE TRAVELS HERE TOO, and for the same reason it does
                 // on the ground: a rule is a signal drawn ON something, and

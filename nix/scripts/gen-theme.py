@@ -906,6 +906,13 @@ CONTRAST_GATES = (
     # A buffer cannot draw invisible text by choosing the wrong role, and the
     # line above is what measures what it gets instead.
     ("text.subtle.alternate", RAISED_GROUNDS, 38, 38),
+    # THE SENTENCE UNDER AN OPENED LINE, on every ground a line of shortcuts is
+    # drawn on — the footer's chrome, a window's buffer ground and the brain's
+    # raised header. It had only distance gates, which say it is not another
+    # tone and nothing about whether it reads; a cool grey the owner asked to
+    # be DISCREET is exactly the tone that could slide into not reading.
+    ("text.subtle.explain", ("surface.chrome", "surface.buffer"), 30, 32),
+    ("text.subtle.explain", RAISED_GROUNDS, 26, 26),
     # THE ACCENT AND THE ALARM ON THEM TOO. A container is where the brain
     # draws a run that FAILED and a header is where the accent marks the page,
     # so both are drawn on a raised ground on the first screen built out of
@@ -921,7 +928,7 @@ CONTRAST_GATES = (
     ("text.dim", ("surface.shelf",), 15, 20),
     # AND THE FILM'S CONTROLS, which are text on the one surface in the system
     # with an alpha. The gate measures it OPAQUE — its own hex over nothing —
-    # which is the worst case it can be composited onto: the token is 80%
+    # which is the worst case it can be composited onto: the token is 90%
     # opaque over a frame of film, and a frame of film can be any colour.
     ("text.primary", ("surface.transport",), 60, 70),
     # AND THE RUBBER BAND, which is the system's SECOND alpha and the same

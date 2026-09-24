@@ -11696,7 +11696,10 @@ impl Footer {
     /// its only row would leave the region empty and the height would have to
     /// grow after all.
     fn explain_rows(&self) -> u16 {
-        if self.hint_said.is_none() {
+        // AND ONLY WITH THE LINE OPEN, the owner's rule: the sentence belongs
+        // to the opened line, where one goes to read the keys in full, and not
+        // to every crossing of the hand over a folded one.
+        if self.hint_said.is_none() || !self.fold.open {
             return 0;
         }
         // AND NOT WHILE AN ECHO HAS THE LINE. The explanation sits UNDER the
@@ -16354,9 +16357,9 @@ impl Footer {
             // control drawn over text that was measured without it is a
             // control that covers a word.
             //
-            // It is offered when the line would be CUT, and also whenever it
-            // is already open — otherwise the one gesture that closes it
-            // disappears the moment the content happens to fit.
+            // It is offered whenever the line carries something (see `opens`
+            // below), and also whenever it is already open — otherwise the one
+            // gesture that closes it would disappear with what it carried.
             let held = self.fold;
             let held_pieces = hint();
             // THE LINE AS PIECES, whatever is on it.
@@ -16382,27 +16385,53 @@ impl Footer {
                 vec![crate::chrome::Piece::said(p.clone())]
             } else if let Some(h) = &held_pieces {
                 let mut out = h.clone();
-                // AND THE KEYS THAT WALK IT, once it is open. Only then: on a
-                // folded line they would name a gesture that does nothing.
-                // Appended to the hint and not on a line of its own, because
-                // this line is where this system teaches a key that is in no
-                // registry — see `fold::teaching`.
-                if held.open {
-                    out.extend(crate::fold::teaching(&self.texts));
-                }
+                // AND THE KEYS THAT OPEN AND WALK IT, open or shut. Appended
+                // to the hint and not on a line of its own, because this line
+                // is where this system teaches a key that is in no registry —
+                // see `fold::teaching`.
+                out.extend(crate::fold::teaching(&self.texts));
                 out
             } else if let Some(p) = &pending {
                 vec![crate::chrome::Piece::pending(p.clone())]
             } else {
                 vec![crate::chrome::Piece::said(mini_at_rest.clone())]
             };
-            let line_text: String = line_pieces.iter().map(|p| p.text.as_str()).collect();
             let plain_room = columns
                 .saturating_sub(tokens::space::MODELINE_EDGELEFT)
                 .saturating_sub(taken);
-            let opens = held.open
-                || crate::fold::wanted(&line_text, plain_room.saturating_sub(crate::fold::WIDTH));
-            let mini_room = plain_room.saturating_sub(if opens { crate::fold::WIDTH } else { 0 });
+            // THE CONTROL IS THERE WHENEVER THE LINE CARRIES SOMETHING, the
+            // owner's rule: opening the line is also what shows the sentence
+            // about the key under the pointer (`explain_rows`), and a line that
+            // fits still has that to show. The minibuffer AT REST carries
+            // nothing, and there a control would open onto nothing — the
+            // owner's second word on it.
+            let at_rest = echo.is_none()
+                && explanation.is_none()
+                && prompt_mx.is_none()
+                && held_pieces.is_none()
+                && pending.is_none();
+            let opens = held.open || !at_rest;
+            // THE RIGHT END OF THE LINE, COUNTED FROM THE BORDER — the control,
+            // and the page counter one cell of air to its left — so the air
+            // after the control is the modeline's one cell at every width.
+            // Counted from the left, the grid's remainder (nought to one cell)
+            // became air that grew and shrank with the window, which the owner
+            // measured against the bell on the modeline above it. And the two
+            // used to share the last cell: the counter flush right, the control
+            // on top of its last digit.
+            let chevron_at = opens.then(|| crate::chrome::from_the_edge(columns, 1));
+            let indicator_at = indicator.as_ref().map(|i| {
+                let w = layout::width(i);
+                match chevron_at {
+                    Some(c) => c.saturating_sub(1 + w),
+                    None => crate::chrome::from_the_edge(columns, w),
+                }
+            });
+            // THE TEXT STOPS ONE CELL BEFORE WHATEVER STANDS AT THE RIGHT.
+            let mini_room = match indicator_at.or(chevron_at) {
+                Some(at) => at.saturating_sub(tokens::space::MODELINE_EDGELEFT + 1),
+                None => plain_room,
+            };
             // WHERE EVERY SHORTCUT OF THIS LINE LANDED, for the pointer.
             //
             // Collected while drawing and never rebuilt afterwards — see
@@ -16453,7 +16482,7 @@ impl Footer {
                 v.fold_is_shown(opens);
                 v.fold_focused()
             });
-            self.fold_control = opens.then_some(columns.saturating_sub(1));
+            self.fold_control = chevron_at;
             if let Some(at) = self.fold_control {
                 let chevron = if held.open {
                     tokens::icon::COLLAPSE
@@ -16476,7 +16505,7 @@ impl Footer {
                     } else {
                         tokens::color::TEXT_SUBTLE_DEFAULT
                     },
-                    edge: false,
+                    edge: true,
                     foot: false,
                 });
             }
@@ -16570,21 +16599,22 @@ impl Footer {
                 });
             }
 
-            // THE PAGE INDICATOR, flush against the right edge of the minibuffer's
-            // line. There is no bar and no box: it is text on the line that already
+            // THE PAGE INDICATOR, at the right end of the minibuffer's line —
+            // against the border, or one cell left of the control when there is
+            // one (`indicator_at`). There is no bar and no box: it is text on the line that already
             // exists (invariants 14 and 15).
-            if let Some(ind) = &indicator {
+            if let (Some(ind), Some(at)) = (&indicator, indicator_at) {
                 let indicator_width = layout::width(ind);
                 if indicator_width < columns {
                     spans.push(ronoctua_render::Span {
                         size: ronoctua_render::Size::Grid,
                         text: ind.clone(),
-                        column: columns - indicator_width,
+                        column: at,
                         line: mini_line,
                         // THE QUIETER OF THE TWO, because a counter is
                         // ambient: it is there to be found, not read.
                         color: tokens::color::TEXT_SUBTLE_DEFAULT,
-                        edge: false,
+                        edge: true,
                         foot: false,
                     });
                 }

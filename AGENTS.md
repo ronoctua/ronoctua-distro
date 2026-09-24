@@ -152,7 +152,10 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   paralelo saiu a pedido do dono; duas teclas para uma coisa gastam duas linhas da lista, que é o
   recurso escasso ali). **`m` é MISCELÂNEA**, o gaveteiro do que não pertence a nenhum outro grupo
   (a captura de tela e o `m i` dos três navegadores), e é o que libera `c` para ser o clipboard
-  SOZINHO — comando, não prefixo. **`s q` são as saídas**, porque o que elas fazem é o que a máquina
+  SOZINHO — comando, não prefixo. **E o grupo do BUFFER em foco é a VÍRGULA** (`LOCAL_PREFIX`,
+  o leader de modo do Spacemacs): era `m`, o `SPC m` do Doom, e com um buffer em foco ele TOMAVA a
+  letra da miscelânea — o dono abriu a janela da Lucide, apertou `SPC m` para a captura e caiu no
+  menu da Lucide. Todo buffer declara as sequências dele sob `,`, e o hospedeiro recusa as outras. **`s q` são as saídas**, porque o que elas fazem é o que a máquina
   faz a SI MESMA, que é a frase que define o grupo `s`. E `w` se chama `window/buffer`: janela e
   buffer são a mesma coisa (inv. 4), e o rótulo dizia só metade. **O teclado tem UM
   lugar** (`nix/keyboard-xkb.nix`); o xkb **não recusa** layout inexistente — cai no `us` mudo, e
@@ -183,20 +186,32 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   cujo NOME diz que desenha título (`heading`, `headed`, `title`, `drawer`, e os que são closure)
   leva `TEXT_HEADING` e nenhum segundo tom de texto. As DUAS isenções — a linha de dicas de uma
   janela e o renque de nomes de coluna da listagem — são nomeadas e o motivo é REMEDIDO.
-- **TODA dica se explica sob o ponteiro** (`chrome::hint_marks` → `hint_sentence`): uma linha
-  ABAIXO dos atalhos, nas onze portas, viva só enquanto há hover (escolha do dono). A frase é
+- **TODA dica se explica sob o ponteiro, COM A LINHA ABERTA** (`chrome::hint_marks` →
+  `hint_sentence`): uma linha ABAIXO dos atalhos, nas onze portas, viva só enquanto há hover e só
+  com a gaveta aberta (`Hinted::said`, `Footer::explain_rows`) — o dono pediu que a frase fosse da
+  linha aberta, onde se vai ler as teclas por inteiro, e não de toda passagem da mão por uma
+  fechada. **E por isso o CHEVRON EXISTE SEMPRE**, até quando tudo cabe: abrir a linha é também
+  o que mostra a frase, e uma linha que cabe ainda tem isso a mostrar (o `fold::wanted` morreu; o
+  brain segue a mesma regra) — **menos no minibuffer EM REPOUSO**, que não carrega nada para abrir.
+  **O chevron é contado da BORDA** (`Span::edge`, e nos buffers o `edge` do `text-command`,
+  `Run::at_the_edge`): contado da esquerda, a sobra da grade virava ar que mudava com a largura, e
+  o dono o mediu contra o sino da modeline. No rodapé o contador de página fica UMA célula à esquerda
+  dele — os dois dividiam a última célula. **Linha aberta que cabe abre em ZERO linhas**
+  (`Fold::measured`, que deixou o `held > 0` de ser o "já medi"): o piso de uma linha deixava uma
+  linha em branco inteira sob o clipboard e o lançador. **A notação `RCtrl ↑↓` também se explica**
+  (`fold::WALK`, `about-fold-walk`), e o **cérebro** tem a sua frase sob o par (`about_of`,
+  `Role::Explain`). A frase é
   `cmd-<id>` para comando do registro e `about-<id>` para tecla de vista, nunca as duas
   (`every-hint-key-explains-itself`, que achou 10 ids desenhando `[syncthing-down]` na TELA). **A
   linha sai da REGIÃO e nunca da altura do rodapé**: o rodapé é ancorado embaixo, então uma linha
   acrescentada sob o minibuffer o levanta de baixo do ponteiro — o hover acaba, a linha some, e
   roda. É o laço que o `Fold::held` descreve, com o ponteiro no mesmo lugar da corrente.
-  **E a frase tem REGISTRO PRÓPRIO** (`Register::Explain` → `text.subtle.explain`): era a prosa
-  da dica, e o dono leu na tela que ela parecia mais um atalho da linha de cima. É a ÚNICA cor
-  ACROMÁTICA do sistema (`chroma = 0.0`), porque é o terceiro assento: a dica é uma matiz, o
-  conteúdo é a rampa quente, e matiz nenhuma é o que sobra. Croma zero sozinho não bastava —
-  em cyber, industrial e darkside os cinzas já não têm cor e o degrau do meio virava
-  `text.secondary` exato (ΔE 0,0000, medido) —, então ela leva LUMINÂNCIA própria também
-  (`neutral.text-loud`), com portão contra os dois registros da dica e os três da rampa.
+  **E a frase tem REGISTRO PRÓPRIO** (`Register::Explain` → `text.subtle.explain`), e FAMÍLIA
+  própria (`explain`, em toda semente): um CINZA FRIO, matiz 250 quase sem croma, ABAIXO do degrau
+  do meio da rampa. Foi a prosa da dica (lida como mais um atalho), depois ACROMÁTICA no
+  `text-loud` — croma zero no degrau do meio virava `text.secondary` exato nos temas cinza (ΔE
+  0,0000) —, e o dono leu essa clara demais, mais alta que o texto amarelado do conteúdo: *"um
+  cinza frio discreto"*. Os portões contra os dois registros da dica e os três da rampa ficam.
 - **Três navegadores, um léxico** (`m i n`, `m i u`, `m i l`). Só o da Lucide personaliza; a prévia é o SVG COPIADO, e a marca sai da MESMA `affordance` que a tecla lê.
 - **São TREZE vistas, e a precedência vive só em `Footer::view()`** — nenhuma é menu (inv. 14), e
   **TODA porta pergunta a ele**: o ramo de teclas, o `expansion()` e o `region_is_free` das onze
@@ -553,7 +568,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   o glifo não aparece. **Fim é MENSAGEM** (`Beat::Ended`): ausência de acordada não se desenha.
   Nenhuma leitura sem prazo (`poll`, 50 ms) e nenhum `kill` à mão (guarda de `Drop`): o
   `read_exact` de antes matava a thread do player pelo resto da sessão, mudo. **Os controles ficam
-  POR CIMA do filme** — a imagem leva o painel inteiro — numa faixa `surface.transport` (alfa `CC`,
+  POR CIMA do filme** — a imagem leva o painel inteiro — numa faixa `surface.transport` (alfa `E6`,
   a única do sistema): sem teste de profundidade, a ordem é retângulo→imagem→texto, então a cauda da
   lista desenha depois das imagens (`Quads::draw_range`). **TUDO some sem o ponteiro**, linha do
   tempo inclusive; as CÉLULAS ficam, senão a trilha mudaria de tamanho no hover e o cursor escaparia
@@ -1401,7 +1416,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   janela (inv. 4), então os dois grupos viraram `w`: `w w` troca, `w n` próximo, `w d` fecha, `w s`
   estado; e o terminal saiu do `w` para o `RET`: `RET RET` o externo, `RET /` o da distro). O dono pediu a tecla direta, e uma sequência não pode ser comando e
   prefixo ao mesmo tempo — o `keymap-no-collision` derruba o BUILD —, então `b a` e `b p` saíram. O
-  que elas faziam já existia dentro do buffer (`m a`, `m p`), e **a faixa passou a imprimir as
+  que elas faziam já existia dentro do buffer (`, a`, `, p`), e **a faixa passou a imprimir as
   teclas do BUFFER**. Os dois continuam comandos do registro, então `LEADER :` os alcança pelo nome
   de qualquer lugar, e a faixa continua clicável; o que mudou é que o caminho mais curto de teclado
   virou dois passos. Estão em `leader::BY_NAME_ONLY`, uma lista de NOMES e não um prefixo — `brain-`

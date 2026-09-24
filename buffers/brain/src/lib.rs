@@ -124,11 +124,27 @@ mod key {
     pub const DO_CHANGE: &str = "brain-do-change";
     pub const DO_KEYS: &str = "brain-do-keys";
     pub const DO_NOTICE: &str = "brain-do-notice";
+
+    // ---- and what each of them does, under the pointer ----------------
+    pub const ABOUT_OPEN: &str = "about-brain-do-open";
+    pub const ABOUT_PANE: &str = "about-brain-do-pane";
+    pub const ABOUT_CHANGE: &str = "about-brain-do-change";
+    pub const ABOUT_BACK: &str = "about-brain-do-back";
+    pub const ABOUT_KEYS: &str = "about-brain-keys";
+    pub const ABOUT_NOTICE: &str = "about-brain-do-notice";
+    pub const ABOUT_RUN: &str = "about-brain-run";
+    pub const ABOUT_REHEARSE: &str = "about-brain-rehearse";
+    pub const ABOUT_SWITCH: &str = "about-brain-switch";
+    pub const ABOUT_INTERVAL: &str = "about-brain-interval";
+    pub const ABOUT_WINDOW: &str = "about-brain-window";
+    pub const ABOUT_RESET_STEPS: &str = "about-brain-reset-steps";
+    pub const ABOUT_PROCEED: &str = "about-brain-proceed";
+    pub const ABOUT_ABORT: &str = "about-brain-abort";
 }
 
 /// The commands this buffer registers, and the keys that reach them.
 ///
-/// Data, and under `m ` only: the host refuses at load whoever binds under a
+/// Data, and under `, ` only: the host refuses at load whoever binds under a
 /// global prefix. Each id needs `cmd-<id>` in both languages.
 ///
 /// There is deliberately no key for the two numbers of the gate — how busy is
@@ -136,16 +152,16 @@ mod key {
 /// moved it by a step would be a key that quietly made the machine less
 /// careful.
 const KEYMAP: &[(&str, &str)] = &[
-    ("m r", "brain-run"),
-    ("m e", "brain-rehearse"),
-    ("m a", "brain-abort"),
-    ("m p", "brain-proceed"),
-    ("m d", "brain-reset-steps"),
-    ("m i", "brain-interval"),
-    ("m w", "brain-window"),
-    ("m o", "brain-switch"),
-    ("m k", "brain-keys"),
-    ("m n", "brain-notice"),
+    (", r", "brain-run"),
+    (", e", "brain-rehearse"),
+    (", a", "brain-abort"),
+    (", p", "brain-proceed"),
+    (", d", "brain-reset-steps"),
+    (", i", "brain-interval"),
+    (", w", "brain-window"),
+    (", o", "brain-switch"),
+    (", k", "brain-keys"),
+    (", n", "brain-notice"),
 ];
 
 /// One thing the header teaches: a notation, and the key of what it does.
@@ -179,23 +195,23 @@ struct Rung {
 const HOME_TEACHES: &[Teach] = &[
     ("RET", key::DO_OPEN),
     ("Tab", key::DO_PANE),
-    ("m r", "cmd-brain-run"),
-    ("m e", "cmd-brain-rehearse"),
-    ("m o", "cmd-brain-switch"),
-    ("m k", key::DO_KEYS),
+    (", r", "cmd-brain-run"),
+    (", e", "cmd-brain-rehearse"),
+    (", o", "cmd-brain-switch"),
+    (", k", key::DO_KEYS),
 ];
 
 /// And what a TASK's page answers to.
 const TASK_TEACHES: &[Teach] = &[
     ("RET", key::DO_CHANGE),
     ("Esc", key::DO_BACK),
-    ("m r", "cmd-brain-run"),
-    ("m e", "cmd-brain-rehearse"),
-    ("m o", "cmd-brain-switch"),
-    ("m i", "cmd-brain-interval"),
-    ("m w", "cmd-brain-window"),
-    ("m d", "cmd-brain-reset-steps"),
-    ("m k", key::DO_KEYS),
+    (", r", "cmd-brain-run"),
+    (", e", "cmd-brain-rehearse"),
+    (", o", "cmd-brain-switch"),
+    (", i", "cmd-brain-interval"),
+    (", w", "cmd-brain-window"),
+    (", d", "cmd-brain-reset-steps"),
+    (", k", key::DO_KEYS),
 ];
 
 /// AND THE TWO THAT ANSWER A COUNTDOWN, taught only while one is running.
@@ -204,14 +220,47 @@ const TASK_TEACHES: &[Teach] = &[
 /// person reading the line under the minibuffer is told where the keyboard's
 /// answer is — which is inside this buffer, since `LEADER b` became the brain
 /// itself and a sequence cannot be a command and a prefix at once.
-const ANSWER_TEACHES: &[Teach] = &[("m p", "cmd-brain-proceed"), ("m a", "cmd-brain-abort")];
+const ANSWER_TEACHES: &[Teach] = &[(", p", "cmd-brain-proceed"), (", a", "cmd-brain-abort")];
 
 /// AND THE ONE A STANDING NOTICE OFFERS, taught only while it is offering.
 ///
 /// The phrase is the notice's own — a task names the command, and the command
 /// names its own label — so this table cannot say what it does. It says what
 /// the KEY is, and the line above it says the rest.
-const NOTICE_TEACHES: &[Teach] = &[("m n", key::DO_NOTICE)];
+const NOTICE_TEACHES: &[Teach] = &[(", n", key::DO_NOTICE)];
+
+/// The sentence about a taught pair, for the row under the OPENED header —
+/// the phrase beside the keys is a few words, and what the pointer asks for is
+/// what the key DOES, as every other line of shortcuts in the system says it.
+///
+/// A `match` and not a third column of the tables, because the tables are
+/// read by `the-brain-header-is-generated` pair by pair; a phrase with no
+/// sentence falls to its own words rather than to nothing.
+fn about_of(says: &str) -> &'static str {
+    match says {
+        key::DO_OPEN => key::ABOUT_OPEN,
+        key::DO_PANE => key::ABOUT_PANE,
+        key::DO_CHANGE => key::ABOUT_CHANGE,
+        key::DO_BACK => key::ABOUT_BACK,
+        key::DO_KEYS => key::ABOUT_KEYS,
+        key::DO_NOTICE => key::ABOUT_NOTICE,
+        "cmd-brain-run" => key::ABOUT_RUN,
+        "cmd-brain-rehearse" => key::ABOUT_REHEARSE,
+        "cmd-brain-switch" => key::ABOUT_SWITCH,
+        "cmd-brain-interval" => key::ABOUT_INTERVAL,
+        "cmd-brain-window" => key::ABOUT_WINDOW,
+        "cmd-brain-reset-steps" => key::ABOUT_RESET_STEPS,
+        "cmd-brain-proceed" => key::ABOUT_PROCEED,
+        "cmd-brain-abort" => key::ABOUT_ABORT,
+        _ => key::ABOUT_KEYS,
+    }
+}
+
+/// How many rows a ladder takes, without the sentence under it: one when the
+/// header is closed, and open as many as the pairs need.
+fn rows_of(ladder: &[Rung]) -> u16 {
+    ladder.last().map_or(1, |r| r.row.saturating_add(1)).max(1)
+}
 
 /// How wide a taught phrase is assumed to be when nobody has said.
 ///
@@ -737,9 +786,8 @@ impl State {
     /// it was — the three disagree the day any of the numbers moves, and the
     /// symptom is a control that answers for its neighbour.
     fn ladder(&self) -> Vec<Rung> {
-        // A CELL IS KEPT FOR THE CHEVRON, always: it appears exactly when
-        // something did not fit, and a pair that took its cell would be a
-        // control drawn over.
+        // A CELL IS KEPT FOR THE CHEVRON, which is always drawn: a pair that
+        // took its cell would be a control drawn over.
         let edge = self.columns.saturating_sub(1);
         let rows = if self.keys_open { KEYS_MOST } else { 1 };
         let mut out: Vec<Rung> = Vec::new();
@@ -794,10 +842,22 @@ impl State {
     /// actually need — and not the ceiling, which is what it was: four rows of
     /// ground with two of them empty is a band that looks like a mistake.
     fn header_rows(&self) -> u16 {
-        self.ladder()
-            .last()
-            .map_or(1, |r| r.row.saturating_add(1))
-            .max(1)
+        let ladder = self.ladder();
+        rows_of(&ladder) + u16::from(self.explained(&ladder).is_some())
+    }
+
+    /// The sentence about the pair under the pointer — only while the header
+    /// is OPEN, the rule of every line of shortcuts in the system: the owner
+    /// asked for the sentence to belong to the opened line, where one goes to
+    /// read the keys in full. Asked of the ladder the caller already walked.
+    fn explained(&self, ladder: &[Rung]) -> Option<&'static str> {
+        if !self.keys_open {
+            return None;
+        }
+        ladder
+            .iter()
+            .find(|r| self.on_rung(r))
+            .map(|r| about_of(r.says))
     }
 
     /// THE HEADER: a glyph, the name, and every key this page answers to.
@@ -883,21 +943,23 @@ impl State {
                     .within(rung.cells.saturating_sub(wide + ronoctua_design::GAP)),
             );
         }
-        // THE CHEVRON, in the last cell, exactly where the minibuffer's is.
-        //
-        // IT EXISTS WHENEVER IT DOES SOMETHING, and that is two cases and not
-        // one: there are more keys than the line holds, so opening it would
-        // show them — or it is already OPEN, so the control is what closes it.
-        // It used to be the first case alone, which meant that the moment
-        // everything fitted on the open rows the chevron vanished and there
-        // was no way back: the owner photographed a header expanded with no
-        // control to collapse it.
-        //
-        // A header open on ONE row is the one case where neither is true —
-        // opening it changed nothing — and there it stays away.
-        let hidden = ladder.len() < self.teaches().len();
-        let opened = ladder.last().is_some_and(|r| r.row > 0);
-        if hidden || opened {
+        // AND THE SENTENCE, on the row under the pairs, while the header is
+        // open and the pointer rests on one of them.
+        if let Some(about) = self.explained(&ladder) {
+            pen.put(
+                rows_of(&ladder),
+                Run::label(about)
+                    .playing(Role::Explain)
+                    .at(0)
+                    .within(pen.columns().saturating_sub(1)),
+            );
+        }
+        // THE CHEVRON, in the last cell, exactly where the minibuffer's is —
+        // and ALWAYS, the owner's rule for every line of shortcuts in the
+        // system. It used to exist only when it did something (keys that did
+        // not fit, or a header open to close), and first only in the first
+        // case, which left an expanded header with no way back.
+        {
             // It lights under the pointer, which is what every other control
             // in the system does and what this one could not: the wall carried
             // no pointer event until now.
@@ -912,7 +974,9 @@ impl State {
             } else {
                 Role::Accent
             };
-            pen.put(0, Run::glyph(mark).playing(role).at(cell));
+            // COUNTED FROM THE BORDER, so the air after it is the host's margin
+            // at every width, as the modeline's marks are.
+            pen.put(0, Run::glyph(mark).playing(role).at(cell).at_the_edge());
         }
     }
 
@@ -2165,13 +2229,13 @@ impl State {
                         Run::label(key::OFF).accent()
                     },
                 );
-                row.put("keys", Run::datum("m o").accent());
+                row.put("keys", Run::datum(", o").accent());
             }
             Spot::Interval => {
                 row.put("label", Run::label(key::EVERY).dim());
                 let days = task.interval_days.to_string();
                 row.put("value", Run::datum(&days));
-                row.put("keys", Run::datum("m i").accent());
+                row.put("keys", Run::datum(", i").accent());
                 // THE UNIT SITS AGAINST THE NUMBER, which is why its column
                 // is worked out here and drawn below rather than being put in
                 // a column of its own. In its own column it started where the
@@ -2204,7 +2268,7 @@ impl State {
                     "value",
                     Run::label(&format!("brain-part-{}", part_word(task.part_of_day))),
                 );
-                row.put("keys", Run::datum("m w").accent());
+                row.put("keys", Run::datum(", w").accent());
             }
             Spot::Next => {
                 // THE LABEL NAMES WHAT THE VALUE IS, and the value is one of
@@ -2228,11 +2292,11 @@ impl State {
                 if let Some(doing) = self.doing_of(task) {
                     row.put("value", doing);
                 }
-                row.put("keys", Run::datum("m r").accent());
+                row.put("keys", Run::datum(", r").accent());
             }
             Spot::Rehearse => {
                 row.put("label", Run::label(key::REHEARSE).dim());
-                row.put("keys", Run::datum("m e").accent());
+                row.put("keys", Run::datum(", e").accent());
             }
             Spot::Step(_) | Spot::Ran(_) => {}
         }
@@ -4140,6 +4204,43 @@ mod tests {
         s.body_from = 1;
         s.clicked(2, s.blocks.body.top + 1);
         assert_eq!(s.task, 1, "the click ignored where the window starts");
+    }
+
+    /// FAILS IF: the sentence about a pair shows under a SHUT header, or does
+    /// not show under an open one with the pointer on the pair — the rule of
+    /// every line of shortcuts in the system.
+    #[test]
+    fn the_sentence_belongs_to_the_opened_header() {
+        let explains = |screen: &Screen<Wit>| {
+            screen.as_protocol().commands.iter().any(|c| {
+                matches!(
+                    c,
+                    ronoctua_design::frame::Command::Text {
+                        text: ronoctua_design::frame::Text::Key(k),
+                        ..
+                    } if k.starts_with("about-brain-")
+                )
+            })
+        };
+        let mut s = a_state();
+        let _ = drawn(&mut s, 30, 140);
+        let rung = s.ladder()[0];
+        let line = s.blocks.head.top + rung.row;
+        s.hover.set(0, (rung.at, line));
+        let shut = drawn(&mut s, 30, 140);
+        assert!(
+            !explains(&shut),
+            "a shut header spelt out the pair under the pointer"
+        );
+        s.keys_open = true;
+        let _ = drawn(&mut s, 30, 140);
+        let rung = s.ladder()[0];
+        s.hover.set(0, (rung.at, s.blocks.head.top + rung.row));
+        let open = drawn(&mut s, 30, 140);
+        assert!(
+            explains(&open),
+            "the header is open and the pair under the pointer says nothing"
+        );
     }
 
     /// FAILS IF: a shortcut drawn in the header does not answer the pointer,

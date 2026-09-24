@@ -92,6 +92,14 @@ pub struct Fold {
     /// The owner asked for exactly this — *"o espaço de múltiplas linhas deve
     /// continuar como está, e dentro desse espaço será mostrada a mensagem"*.
     pub held: u16,
+    /// Whether [`settle`] has measured the opened band.
+    ///
+    /// Its own flag, because `held` may be ZERO: a line that fits opens into
+    /// no rows under it. It was `held > 0` that said "measured", which forced
+    /// one row on every opening — a whole blank line under a line that fitted,
+    /// photographed by the owner on the clipboard and the launcher once the
+    /// control became always there.
+    pub measured: bool,
 }
 
 impl Fold {
@@ -108,6 +116,7 @@ impl Fold {
         // now; closing forgets, so the next opening is not the last one's
         // size.
         self.held = 0;
+        self.measured = false;
     }
 
     /// Closes it, and says whether that changed anything.
@@ -120,6 +129,7 @@ impl Fold {
         self.open = false;
         self.offset = 0;
         self.held = 0;
+        self.measured = false;
         was
     }
 }
@@ -167,18 +177,20 @@ pub const fn rows(fold: Fold) -> u16 {
 /// ceiling is [`tokens::space::MODELINE_FOLDLINES`], and past it the text
 /// scrolls — which is where the bar comes from.
 pub fn settle(fold: &mut Fold, wrapped: usize) -> bool {
-    if !fold.open || fold.held > 0 || wrapped == 0 {
+    if !fold.open || fold.measured || wrapped == 0 {
         return false;
     }
     let under = wrapped.saturating_sub(1);
     let want = u16::try_from(under)
         .unwrap_or(u16::MAX)
         .min(tokens::space::MODELINE_FOLDLINES);
-    // A BAND OF NO ROWS IS NOT OPEN. A line that fits has no control to press,
-    // so this can only be reached by a line that shrank after opening — and
-    // one row is what keeps the drawer, and its bar, addressable.
-    fold.held = want.max(1);
-    true
+    // A LINE THAT FITS OPENS INTO NO ROWS: the control is always drawn now,
+    // and opening a line that fits is how the sentence about the key under
+    // the pointer is asked for — it goes straight under the line, with no
+    // blank row between. Only a height that CHANGED owes another frame.
+    fold.measured = true;
+    fold.held = want;
+    want > 0
 }
 
 /// How much of the line the control takes, in cells. `0` when there is none.
@@ -492,14 +504,17 @@ pub fn opened(
     (showing, scroll)
 }
 
-/// The sentence that teaches the keys, for the END of an opened hint.
+/// The sentence that teaches the keys, for the END of every line of shortcuts.
 ///
-/// # Why it is only shown while the line is OPEN
+/// # Why it is shown OPEN OR SHUT
 ///
-/// The owner asked for it in those words, and it is the honest place: the
-/// keys walk a line that has been opened, so on a folded line they name a
-/// gesture that does nothing. The control's own glyph is what teaches the
-/// FIRST step; these teach the ones after it.
+/// It was shown only on an opened line, on the argument that on a folded one
+/// the keys walk nothing. The argument was wrong: `RCtrl ↓` on a shut line is
+/// what OPENS it, so the pair has something to do in both states. The owner
+/// read the two lines side by side — room to spare on the shut one, and the
+/// pair appearing only after opening — and said it made no sense. Where the
+/// line is too narrow it falls off the end like any other pair, which is what
+/// the chevron beside it is for.
 ///
 /// # Why it is appended rather than standing on its own
 ///
@@ -517,19 +532,22 @@ pub fn teaching(texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
     // THROUGH THE SAME DOOR the hint's own sentences come through, so the
     // notation is drawn in the key's colour and the prose in the prose's.
     crate::chrome::Piece::extend(&mut out, &marked, &[keys.as_str()]);
+    // AND A NAME, so the pointer resting on it is told what it does, like on
+    // every other key of the line (`chrome::hint_sentence` → `about-fold-walk`).
+    // It had none, and it was the one pair of the opened line that said nothing
+    // under the pointer. The separator before it stays unnamed, as the dot
+    // between two shortcuts always is.
+    for piece in &mut out {
+        if !piece.text.trim().is_empty() && piece.text.trim() != "·" {
+            piece.id = Some(WALK);
+        }
+    }
     out
 }
 
-/// Does this text need the control at all?
-///
-/// It does when it would be cut — which is the same question `elide_end` asks,
-/// asked before the cut rather than after it. A line that fits has no rest to
-/// show, and a control offered where it does nothing is the shape
-/// `files::eject_room` already refuses.
-#[must_use]
-pub fn wanted(text: &str, columns: u16) -> bool {
-    ronoctua_render::layout::width(text) > columns
-}
+/// The name the opened line's own keys go by, for the sentence under the
+/// pointer. Not a command of the registry: nothing runs it, it is walked.
+pub const WALK: &str = "fold-walk";
 
 #[cfg(test)]
 mod tests {
@@ -662,10 +680,18 @@ mod tests {
         assert_eq!(rows(Fold::default()), 0);
     }
 
+    /// FAILS IF: a line that fits opens into a blank row under it — what the
+    /// owner photographed on the clipboard once the control was always drawn.
     #[test]
-    fn the_control_is_offered_only_where_it_does_something() {
-        assert!(!wanted("short", 40));
-        assert!(wanted("a sentence longer than the room it was given", 10));
+    fn a_line_that_fits_opens_into_no_rows() {
+        let text = prose("fits");
+        let mut fold = Fold::default();
+        fold.toggle();
+        assert!(!settle(&mut fold, wrap_pieces(&text, 40).len()));
+        assert_eq!(rows(fold), 0);
+        // AND IT IS MEASURED ONCE: a second settle asks nothing again.
+        assert!(!settle(&mut fold, 5));
+        assert_eq!(rows(fold), 0);
     }
 
     #[test]
@@ -674,6 +700,7 @@ mod tests {
             open: true,
             offset: 3,
             held: 2,
+            measured: true,
         };
         assert!(fold.close());
         assert_eq!(fold, Fold::default());

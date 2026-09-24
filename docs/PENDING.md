@@ -676,20 +676,20 @@ que isso cria (`t t` sem estado, `t w` com) é menor que a de inventar um segund
 
 ### 0.001. O minibuffer não mostra os submenus montados em runtime · pequeno
 
-`SPC m` e `SPC w s` são listados a partir do que a janela em foco publicou, e por isso não estão na
+`SPC ,` e `SPC w s` são listados a partir do que a janela em foco publicou, e por isso não estão na
 `ronoctua_keymap::Tree` — as ligações dela são `&'static str`. A consequência é que a sequência
 pendente que o minibuffer desenha vem só do `Leader`, e ela **para no nível anterior**: com a lista
 de estados na tela, a linha diz `LEADER w-` e não `LEADER w s-`.
 
-Isto **não é novo**: o `SPC m` faz o mesmo desde que existe, e o `buffer_pending` dele nunca foi
+Isto **não é novo**: o `SPC ,` (antes `SPC m`) faz o mesmo desde que existe, e o `buffer_pending` dele nunca foi
 alimentado no prefixo. O estado só acrescentou um segundo caso, e por isso vira item — dois é
 padrão, um era acidente.
 
 O conserto é um só e serve para ambos: o prefixo do minibuffer passa a somar o que os submenus de
 runtime têm pendente, em vez de ler só a sequência do `Leader`.
 
-- acabou quando: com a lista de estados aberta, o minibuffer diz `LEADER w s-`, e o `SPC m` diz
-  `LEADER m-`
+- acabou quando: com a lista de estados aberta, o minibuffer diz `LEADER w s-`, e o `SPC ,` diz
+  `LEADER ,-`
 
 ### 0.01. Nenhum buffer usa o `tone` explícito · pequeno
 

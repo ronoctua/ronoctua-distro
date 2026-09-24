@@ -211,6 +211,7 @@ fn spans_from(
             color,
             scale,
             max_width,
+            edge,
         } => {
             let Some(color) = token_color(color.as_str()) else {
                 tracing::error!(token = color.as_str(), "an invalid colour in a buffer");
@@ -242,7 +243,7 @@ fn spans_from(
                 column: *column,
                 line: *line,
                 color,
-                edge: false,
+                edge: *edge,
                 foot: false,
             }]
         }
@@ -1187,6 +1188,7 @@ mod tests {
             color: Color::name("text-primary"),
             scale: ronoctua_protocol::Scale::Normal,
             max_width: 0,
+            edge: false,
         });
         d
     }
@@ -1435,6 +1437,7 @@ mod tests {
             color: Color::name("text-primary"),
             scale: ronoctua_protocol::Scale::Normal,
             max_width: 0,
+            edge: false,
         });
         d.push(Command::Text {
             line: 1,
@@ -1443,6 +1446,7 @@ mod tests {
             color: Color::name("text-primary"),
             scale: ronoctua_protocol::Scale::Normal,
             max_width: 0,
+            edge: false,
         });
         let v = spans_of(&d, &t, 80, 24);
         // pt-BR: the VALUE of `cmd-mx-open` in pt-BR.ftl, which is what the

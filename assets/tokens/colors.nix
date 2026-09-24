@@ -157,12 +157,16 @@
     # one line tall, that darkens what it covers — the same kind of thing as
     # the modeline's background, with the picture showing through.
     #
-    # Four fifths. Below about two thirds the glyphs start to fight a white
-    # frame; at full opacity the band stops reading as part of the picture and
-    # becomes a strip of chrome across it, which is what invariant 14 is about.
+    # Nine tenths. It was four fifths, and the owner found the player's
+    # shortcut line hard to read over some films — a bright, busy frame came
+    # through the band and through the letters with it. Below about two
+    # thirds the glyphs fight a white frame; at full opacity the band stops
+    # reading as part of the picture and becomes a strip of chrome across it,
+    # which is what invariant 14 is about. Nine tenths still lets the film
+    # show, and the text wins.
     transport = {
       of = "neutral.chrome";
-      alpha = 0.8;
+      alpha = 0.9;
     };
 
     # THE SECOND SURFACE WITH AN ALPHA, and it is what the POINTER has claimed.
@@ -504,40 +508,25 @@
       contextual = {
         of = "alternate.text-muted";
       };
-      # THE SENTENCE UNDER THE HINT LINE, and it is the only role in this
-      # family with NO COLOUR AT ALL.
+      # THE SENTENCE UNDER AN OPENED LINE OF SHORTCUTS — a COOL GREY, and a
+      # family of its own (`explain`, in every seed).
       #
-      # The owner read it off the screen: *"a cor do texto está igual à dos
-      # textos dos outros atalhos, assim não criando uma boa distinção
-      # visual"*. It was drawn in `default` — the hint's own prose — so the
-      # line that answers a question looked like one more shortcut on the row
-      # above it. And he said what it should be instead: a tone told apart
-      # from the shortcuts AND from the content just below, *"uma cor bem
-      # neutra"*.
+      # It was the hint's own prose first, and the owner read it as one more
+      # shortcut: *"não criando uma boa distinção visual"*. Then it was
+      # ACHROMATIC at `text-loud` — no hue being the one seat left that was
+      # not another family, and the loud rung because nought chroma alone
+      # landed on `text.secondary` in the grey themes (ΔE 0.0000). The owner
+      # read that one too: too BRIGHT, louder than the content under the bar,
+      # and in the warm themes brighter than their yellowish text — *"um cinza
+      # frio discreto"*, he said.
       #
-      # ACHROMATIC IS THE ANSWER TO BOTH AT ONCE, and it is the palette's own
-      # rule read backwards. Hue says "another kind of thing": the hint line
-      # is a hue (this family), the content is the warm ramp, and NO hue is
-      # the third seat — the only one left that is not another family.
-      #
-      # `chroma = 0.0` AND NOT A FAMILY OF ITS OWN, for the reason
-      # `contextual` above gives: a family is a seed in all eleven themes plus
-      # the frozen reference, and what this has to say is the ABSENCE of a
-      # degree rather than another kind of thing.
-      #
-      # AND THE STEP IS `text-loud` BECAUSE ZERO CHROMA IS NOT ENOUGH ON ITS
-      # OWN. It was written at the middle step first, and the gates answered
-      # in four themes at once: cyber, industrial and darkside have greys with
-      # no colour in them to begin with, so there `neutral.text × 0` IS
-      # `text.secondary` — ΔE 0.0000, the same pixel — and frost came within
-      # 0.023 of it. A role that is the same colour as another role in a third
-      # of the themes is a role that exists only in the ones nobody looked at.
-      # So it takes a LUMINANCE of its own as well, the rung between the
-      # content's brightest and the ramp's middle: the sentence is what one is
-      # reading at that moment, and it stands just under the names it explains.
+      # So it takes a HUE after all, a cold one and barely drawn, and sits
+      # BELOW the content's middle step: the sentence is read when asked for
+      # (the line is opened for it) and does not compete with what is under
+      # it. The gates against the hint's registers and the ramp keep it apart
+      # from every other text.
       explain = {
-        of = "neutral.text-loud";
-        chroma = 0.0;
+        of = "explain.text";
       };
     };
     # THE LABEL COLUMN of the three views that are a list of a label and a

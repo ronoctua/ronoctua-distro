@@ -1669,6 +1669,7 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
                     color: color_of(field("color")),
                     scale: scale_of(field("scale")),
                     max_width: u16_de(field("max-width")),
+                    edge: matches!(field("edge"), Some(Val::Bool(true))),
                 });
             }
             "rule" => list.push(prot::Command::Rule {

@@ -2028,6 +2028,7 @@ impl State {
                 color,
                 scale: Scale::Small,
                 max_width: ctx.columns,
+                edge: false,
             }));
         }
         (screen, apart)
@@ -2593,15 +2594,15 @@ impl Guest for Component {
         let mut keymap = Vec::new();
         keymap.extend(FORMATS.iter().map(|(id, key)| Binding {
             // EVERYTHING under `SPC m`: the host rejects at load whoever leaves it.
-            keys: format!("m c {key}"),
+            keys: format!(", c {key}"),
             command: (*id).to_owned(),
         }));
         keymap.extend(FILTERS.iter().map(|(id, key)| Binding {
-            keys: format!("m f {key}"),
+            keys: format!(", f {key}"),
             command: (*id).to_owned(),
         }));
         keymap.push(Binding {
-            keys: "m f f".to_owned(),
+            keys: ", f f".to_owned(),
             command: PANEL.to_owned(),
         });
 

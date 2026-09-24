@@ -4354,7 +4354,7 @@ mod tests {
     /// The keymap the editor declares.
     fn buffer_keymap() -> Vec<ronoctua_protocol::Binding> {
         vec![ronoctua_protocol::Binding {
-            keys: "m s".into(),
+            keys: ", s".into(),
             command: "memory-refresh".into(),
         }]
     }
@@ -4367,11 +4367,11 @@ mod tests {
         let km = buffer_keymap();
         let mut pending = Vec::new();
         assert_eq!(
-            advance_sequence(&km, &mut pending, 'm'),
+            advance_sequence(&km, &mut pending, ','),
             None,
-            "`m` on its own does not fire"
+            "`,` on its own does not fire"
         );
-        assert_eq!(pending, vec!['m'], "the prefix has to stay pending");
+        assert_eq!(pending, vec![','], "the prefix has to stay pending");
         assert_eq!(
             advance_sequence(&km, &mut pending, 's').as_deref(),
             Some("memory-refresh")
@@ -4381,12 +4381,12 @@ mod tests {
 
     #[test]
     fn a_dead_sequence_does_not_leak_into_the_text() {
-        // `m` then `x`: no binding. Re-injecting the `m` would type it into the
+        // `,` then `x`: no binding. Re-injecting the `,` would type it into the
         // file one keystroke after the person had moved on — the class of bug
         // that makes an editor untrustworthy.
         let km = buffer_keymap();
         let mut pending = Vec::new();
-        advance_sequence(&km, &mut pending, 'm');
+        advance_sequence(&km, &mut pending, ',');
         assert_eq!(advance_sequence(&km, &mut pending, 'x'), None);
         assert!(pending.is_empty(), "a dead sequence has to clear");
     }
@@ -4396,7 +4396,7 @@ mod tests {
         // Every other buffer types text. If an empty keymap held a character
         // back, the search in the glyph browser would lose its first letter.
         let mut pending = Vec::new();
-        assert_eq!(advance_sequence(&[], &mut pending, 'm'), None);
+        assert_eq!(advance_sequence(&[], &mut pending, ','), None);
         assert!(pending.is_empty());
     }
 

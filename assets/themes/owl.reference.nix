@@ -58,7 +58,12 @@
       hover = "0x222222FF";
       mesh = "0xD8D4CEFF";
       selection = "0x282448FF";
-      transport = "0x121212CC";
+      # THE ONE FROZEN VALUE THE OWNER MOVED: the band over a film went from
+      # four fifths opaque to nine tenths, because the player's shortcut line
+      # was hard to read over some films. An ALPHA has no distance for
+      # `deviations` to allow — the regression gate compares it exactly — so
+      # the literal moves with the decision, and only its last byte.
+      transport = "0x121212E6";
       wave = "0xBFD3E6E6";
     };
     syntax = {

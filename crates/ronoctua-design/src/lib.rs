@@ -379,6 +379,10 @@ pub enum Role {
     /// A third tone, so a separator is not read as a word — the same argument
     /// `Register::Separator` makes on the host's side of the wall.
     Faint,
+    /// The sentence under an OPENED line of shortcuts, about the one the
+    /// pointer rests on — `Register::Explain` on the host's side, the same
+    /// cool grey.
+    Explain,
 }
 
 impl Role {
@@ -520,6 +524,7 @@ impl Palette for Tokens {
             Role::Key => "text-subtle-strong",
             Role::Prose => "text-subtle-default",
             Role::Faint => "text-subtle-faint",
+            Role::Explain => "text-subtle-explain",
         })
     }
 

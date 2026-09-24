@@ -109,9 +109,9 @@ const UNIT_SETTINGS: usize = 6;
 /// The keys this buffer binds, all under `m` — the host refuses any other
 /// prefix at load.
 const KEYMAP: &[(&str, &str)] = &[
-    ("m n", "keyboard-next"),
-    ("m p", "keyboard-previous"),
-    ("m l", "keyboard-list"),
+    (", n", "keyboard-next"),
+    (", p", "keyboard-previous"),
+    (", l", "keyboard-list"),
 ];
 
 /// Which screen is open.

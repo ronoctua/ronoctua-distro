@@ -1750,18 +1750,6 @@ pkgs.testers.runNixOSTest {
                 "the wide preview"
             )
 
-            # AND THE PICTURE IS NOT DISTORTED. The film is 240x180 — four to
-            # three — and a frame stretched to a region three times as wide as it
-            # is tall is what the owner photographed twice: once on the GIF and
-            # once after pausing and going wide. Asked of the picture's own colour,
-            # which is the picture and nothing else.
-            # WHICHEVER FRAME IS UP, and not the one that was up before.
-            #
-            # Naming a colour was the first shape of this and it measured 17 by 27 —
-            # a glyph, not a film. Giving the region away is a respawn, and the film
-            # comes back at another frame; asking for the OLD colour then measures
-            # whatever stray pixels match it. What is being asserted here is the
-            # SHAPE of the picture, so which frame is showing is not the question.
             machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             machine.succeed(
                 "magick /tmp/screen.xwd -crop "
@@ -1920,20 +1908,6 @@ pkgs.testers.runNixOSTest {
             machine.sleep(2)
             shot("39-the-globe-and-its-address")
 
-            # THE SEA AND THE LAND ARE DRAWN, and it is the assertion this
-            # scene exists for.
-            #
-            # THE INFO COLUMN ONLY, and the reason is the trap this file has
-            # fallen into twice: an assertion answered by something else on
-            # screen. `surface.atlas.ocean` is a dark violet and so is
-            # `surface.selection`, the band under the cursor in the LISTING —
-            # crop the listing out and the question can only be answered by the
-            # panel the globe is in. The quarter is the panel: the manager puts
-            # the facts in the rightmost column.
-            #
-            # AND THE FUZZ IS TIGHT, because a disc is a filled region rather
-            # than a glyph: at the default twelve per cent every light letter on
-            # the panel answers for `surface.atlas.land`.
             crop(f"{w_g // 4}x{h_g}+{x_g + 3 * (w_g // 4)}+{y_g}", into="/tmp/globe.png")
             has_colour(
                 "#" + token_hex("surface.atlas.ocean"),
@@ -2763,20 +2737,12 @@ pkgs.testers.runNixOSTest {
             _, _, x_h, y_h = compositor_geometry()
             shot("37-the-header-shut", lines=None)
 
-            # THE WINDOW'S OWN EDGES, MEASURED. The compositor gives a single
-            # window a COLUMN and not the output, so the screen's right border is the
-            # desktop — and an assertion aimed there is answered by it. A
-            # window clears with `surface.chrome` (`gpu::Gpu::frame`), so its
-            # first row says where it starts and stops.
             chrome = "#" + token_hex("surface.chrome")
             row_0 = [x for x, y in pixels_of("/tmp/37-the-header-shut.png", chrome) if y < LINE]
             assert row_0, "no window on the screen's first row"
             left, right = min(row_0), max(row_0)
             print(f"the window's first row runs {left}..{right}")
 
-            # THE CHEVRON IS DRAWN, against that edge. INK is "not the ground",
-            # because a glyph is antialiased and may carry no pixel of the
-            # token's exact colour.
             ink = [
                 x
                 for x, y in pixels_of("/tmp/37-the-header-shut.png", chrome, match=False)
@@ -2804,6 +2770,23 @@ pkgs.testers.runNixOSTest {
             before = teaching("/tmp/37-the-header-shut.png")
             print(f"the shut header teaches on {len(before)} row(s)")
             assert len(before) == 1, "the shut header is already more than a line"
+
+            explain = "#" + token_hex("text.subtle.explain")
+
+            def explained(path):
+                return [
+                    (x, y)
+                    for x, y in pixels_of(path, explain)
+                    if left <= x <= right
+                ]
+
+            on_a_key = f"{x_h + left + 3 * CELL} {y_h + LINE // 2}"
+            machine.succeed(f"DISPLAY=:99 xdotool mousemove {on_a_key}")
+            machine.sleep(1)
+            shot("37b-the-header-shut-a-key-under-the-pointer", lines=None)
+            shut_said = explained("/tmp/37b-the-header-shut-a-key-under-the-pointer.png")
+            print(f"shut, the sentence draws {len(shut_said)} pixel(s)")
+            assert not shut_said, "a shut line spelt out the key under the pointer"
             machine.succeed(
                 "DISPLAY=:99 xdotool mousemove "
                 f"{x_h + right - CELL // 2} {y_h + LINE // 2}"
@@ -2818,6 +2801,15 @@ pkgs.testers.runNixOSTest {
                 "the chevron was pressed and the line did not open"
             )
 
+            machine.succeed(f"DISPLAY=:99 xdotool mousemove {on_a_key}")
+            machine.sleep(1)
+            shot("39-the-header-open-a-key-under-the-pointer", lines=None)
+            open_said = explained("/tmp/39-the-header-open-a-key-under-the-pointer.png")
+            print(f"open, the sentence draws {len(open_said)} pixel(s)")
+            assert len(open_said) >= 8, (
+                "the line is open and the key under the pointer is not spelt out"
+            )
+
     if wanted("hints"):
         with subtest("the pointer on the hint line does not take the interface with it"):
             # THE ASSERTION THAT WOULD HAVE CAUGHT IT — see `nix/shots-scenes.nix`.
@@ -2826,6 +2818,10 @@ pkgs.testers.runNixOSTest {
             machine.sleep(1)
             control("files-open")
             machine.sleep(2)
+            machine.succeed(
+                "DISPLAY=:99 xdotool keydown Control_R key Down keyup Control_R"
+            )
+            machine.sleep(1)
             w_p, h_p, x_p, y_p = compositor_geometry()
             for n in range(1, 16):
                 machine.succeed(
@@ -2844,14 +2840,6 @@ pkgs.testers.runNixOSTest {
 
     if wanted("lifeline"):
         with subtest("the line that outlives the footer"):
-            # THE SECOND DEFECT THE OWNER NAMED, which was not the crash: *"a
-            # ronoctua-distro não sabe lidar com isso, ou seja, acaba deixando o
-            # usuário sem interface"*. With the footer down, all four emergency
-            # binds are dead by construction — they all write to its own control
-            # socket — so nothing on screen could say what had happened.
-            #
-            # KILLED ON PURPOSE, and with the signal the defect produced: a stack
-            # overflow ends in `process::abort`, which is `SIGABRT`.
             machine.succeed("systemctl kill -s SIGABRT footer")
             machine.wait_until_fails("systemctl is-active footer", timeout=30)
             # RAISED BY HAND HERE, because this transient unit is not the one the
@@ -2887,17 +2875,6 @@ pkgs.testers.runNixOSTest {
             crop(band, "/tmp/lifeline.png")
             has_colour("#" + token_hex("state.error"), at_least=8, of="/tmp/lifeline.png")
 
-            # AND THE MOUSE REACHES THE OPTIONS, which is the half nobody had
-            # tested — the owner said so in as many words: *"tenha certeza de que
-            # eles são clicáveis pelo mouse (pois como eu não testei, não sei se o
-            # suporte do mouse está implementado)"*.
-            #
-            # THE FIRST OPTION, whose column is known by construction: the row
-            # begins at `MARGIN + 2` cells — `lifeline::MARGIN` is the footer's own
-            # `modeline.edgeLeft`, plus the two the warning glyph takes — so a click
-            # three and a half cells in lands inside `[l]`. What it does is open the
-            # journal in the rescue console, which is a SECOND PROCESS, and that is
-            # what makes the click visible from out here.
             options_row = y_l + h_l - LINE + LINE // 2
             machine.succeed(
                 "DISPLAY=:99 xdotool mousemove "

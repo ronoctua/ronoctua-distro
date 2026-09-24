@@ -625,6 +625,7 @@ expansion-page = CtrlDir ←→
 # translated.
 minibuffer-fold-keys = CtrlDir ↑↓
 minibuffer-fold-hint = · { $keys } andam pelo resto desta linha
+about-fold-walk = Anda pelo resto desta linha aberta, uma linha por vez; voltar além da primeira a fecha.
 
 # --- The glyph card (Nerd Fonts browser) -----------------------------------
 glyphs-sheet-codepoint = Codepoint
@@ -2494,6 +2495,20 @@ brain-do-pane = Outra metade
 brain-do-change = Alterar isto
 brain-do-keys = Todas as teclas
 brain-do-notice = Fazer
+about-brain-do-open = Abre a tarefa sob o cursor: a agenda, os passos e o que ela fez nas últimas vezes.
+about-brain-do-pane = Leva o teclado para a outra metade da página.
+about-brain-do-change = Muda o ajuste ou o passo sob o cursor.
+about-brain-do-back = Volta à lista de todas as tarefas.
+about-brain-keys = Abre esta linha para ver toda tecla que a página atende, ou a fecha de novo.
+about-brain-do-notice = Faz o que o aviso acima oferece.
+about-brain-run = Roda esta tarefa agora, diga o que disser a agenda dela.
+about-brain-rehearse = Ensaia esta tarefa: cada passo é percorrido e nada na máquina muda.
+about-brain-switch = Desliga esta tarefa, ou a religa; desligada, ela nunca roda sozinha.
+about-brain-interval = Passa para a próxima cadência em que esta tarefa roda.
+about-brain-window = Passa para a próxima parte do dia em que esta tarefa pode rodar.
+about-brain-reset-steps = Devolve todo passo desta tarefa ao que a distro traz.
+about-brain-proceed = Começa agora a tarefa em contagem regressiva, sem esperar a contagem.
+about-brain-abort = Para a tarefa que está rodando ou em contagem regressiva.
 brain-task-emacs-daemon = Vigiar o daemon do Emacs
 brain-task-emacs-daemon-does = Procura, de poucos em poucos minutos, o servidor do Emacs que segura a sua sessão e a sua configuração — e um Emacs que está rodando SEM ele, que parece a mesma coisa na tela e não é: ele carregou uma cópia própria, os buffers não são os da sessão, e fechar perde eles. Lê a tabela de processos e nada mais, e a única coisa que ele chega a iniciar é o serviço da própria distro.
 emacs-no-daemon = O daemon do Emacs não está rodando. Cada janela do editor vai carregar a configuração inteira de novo, e nenhuma delas compartilha os seus buffers.

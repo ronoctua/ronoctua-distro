@@ -381,6 +381,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         message: None,
         said: 0,
         fold: crate::fold::Fold::default(),
+        right_ctrl: false,
         fold_control: None,
         fold_scroll: ronoctua_design::Scroll {
             total: 0,
@@ -545,6 +546,11 @@ struct FilesWindow {
     /// The same state the footer keeps for the same line — this door's line 0
     /// and that one's minibuffer are the one line, seen through two doors.
     fold: crate::fold::Fold,
+    /// Is the RIGHT `Ctrl` down? Tracked by its keysym, as every door does:
+    /// xkb merges both Ctrls into one bit. With it, `↑`/`↓` open and walk the
+    /// line — the pair the line teaches (`fold::teaching`), and it was taught
+    /// here while nothing answered it.
+    right_ctrl: bool,
     /// Where the control that opens it was drawn, in cells of line 0.
     fold_control: Option<u16>,
     /// The opened band's scroll, as it was last DRAWN.
@@ -1133,6 +1139,29 @@ impl FilesWindow {
     /// does something slightly different the second time, which is the kind of
     /// difference nobody looks for.
     fn typed(&mut self, event: KeyEvent) {
+        // THE RIGHT `Ctrl` AND THE ARROWS OPEN AND WALK THE LINE, before the
+        // view sees anything — the pair the line teaches, answered here as in
+        // every other door (`chrome::Hinted::took_a_key`).
+        if event.keysym == Keysym::Control_R {
+            self.right_ctrl = true;
+            return;
+        }
+        if self.right_ctrl {
+            let ask = match event.keysym {
+                Keysym::Down if self.fold.open => Some(crate::fold::Ask::By(1)),
+                Keysym::Down => Some(crate::fold::Ask::Toggle),
+                Keysym::Up if self.fold.open && self.fold.offset == 0 => {
+                    Some(crate::fold::Ask::Toggle)
+                }
+                Keysym::Up if self.fold.open => Some(crate::fold::Ask::By(-1)),
+                _ => None,
+            };
+            if let Some(ask) = ask {
+                self.apply(crate::files::Step::Fold(ask));
+                self.ask_paint();
+                return;
+            }
+        }
         let Some(t) = key_of(&event, self.mods) else {
             return;
         };
@@ -2088,15 +2117,12 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     let hinting = second.is_none() && !s.view.filtering();
     let line_pieces: Vec<crate::chrome::Piece> = if hinting {
         let mut out = s.view.hint(s.texts);
-        // AND THE KEYS THAT WALK IT, once it is open — see `fold::teaching`.
-        if s.fold.open {
-            out.extend(crate::fold::teaching(s.texts));
-        }
+        // AND THE KEYS THAT OPEN AND WALK IT — see `fold::teaching`.
+        out.extend(crate::fold::teaching(s.texts));
         out
     } else {
         second.clone().unwrap_or_default()
     };
-    let line_text: String = line_pieces.iter().map(|p| p.text.as_str()).collect();
     // WHERE THE SHORTCUTS OF THIS LINE LAND, collected while they are drawn.
     let mut marks: Vec<crate::chrome::Mark> = Vec::new();
     // THE ROOM IS THE WHOLE OF `columns`: `recount` took BOTH margins off the
@@ -2106,9 +2132,12 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // early — found by the review of the notification window, whose paint
     // was written against this one.
     let plain_room = s.geo.columns;
-    let opens = s.fold.open
-        || crate::fold::wanted(&line_text, plain_room.saturating_sub(crate::fold::WIDTH));
-    let room = plain_room.saturating_sub(if opens { crate::fold::WIDTH } else { 0 });
+    // THE CONTROL IS ALWAYS THERE (`chrome::Hinted::head` says why), and the
+    // header is told whether this door's drawer is open, which is what shows
+    // the sentence about the key under the pointer.
+    let opens = true;
+    s.hinted.open_elsewhere(s.fold.open);
+    let room = plain_room.saturating_sub(crate::fold::WIDTH);
     // HOW TALL THE LINE WOULD BE, written down for the geometry — see
     // `fold_wrapped`. Measured whenever there is a control, open or not,
     // because opening has to know the answer before it draws.
@@ -2242,7 +2271,9 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             } else {
                 tokens::color::TEXT_SUBTLE_DEFAULT
             },
-            edge: false,
+            // COUNTED FROM THE BORDER, as `chrome::Hinted::head` does: the air
+            // after it is the margin at every width.
+            edge: true,
             foot: false,
         });
     }
@@ -3360,9 +3391,12 @@ impl KeyboardHandler for FilesWindow {
         _: &QueueHandle<Self>,
         kb: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
         self.keyboards.switch_to(kb, &mut self.mods);
+        if event.keysym == Keysym::Control_R {
+            self.right_ctrl = false;
+        }
     }
 
     fn update_modifiers(
@@ -3376,6 +3410,11 @@ impl KeyboardHandler for FilesWindow {
         _: u32,
     ) {
         self.keyboards.switch_to(kb, &mut self.mods);
+        // A RELEASE THAT NEVER ARRIVED (focus lost with it down) is caught
+        // here: no Ctrl held means the right one is not held either.
+        if !mods.ctrl {
+            self.right_ctrl = false;
+        }
         self.mods = mods;
     }
 }

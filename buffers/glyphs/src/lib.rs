@@ -2057,17 +2057,17 @@ impl Guest for Component {
             // Assign the focused glyph to an app id — section 4.2 calls this
             // "the real answer to *easily*".
             Binding {
-                keys: "m a".into(),
+                keys: ", a".into(),
                 command: "glyphs-assign".into(),
             },
         ];
         keymap.extend(FORMATS.iter().map(|(id, key)| Binding {
             // EVERYTHING under `SPC m`: the host rejects at load whoever leaves it.
-            keys: format!("m c {key}"),
+            keys: format!(", c {key}"),
             command: (*id).to_owned(),
         }));
         keymap.extend(FILTERS.iter().map(|(id, key)| Binding {
-            keys: format!("m f {key}"),
+            keys: format!(", f {key}"),
             command: (*id).to_owned(),
         }));
 

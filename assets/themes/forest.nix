@@ -119,6 +119,13 @@
       text-chroma = 0.12;
       text-shift = -3;
     };
+    # The sentence under an opened line of shortcuts: a COOL grey, quieter
+    # than the content and never another shortcut (`text.subtle.explain`).
+    explain = {
+      hue = 250;
+      text-chroma = 0.14;
+      text-shift = -10;
+    };
     alternate = {
       hue = 200;
       text-chroma = 0.34;

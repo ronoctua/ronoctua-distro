@@ -87,6 +87,15 @@ interface types {
         // window: text over text, the worst possible result because
         // neither of the two stays legible.
         max-width: u16,
+        // Counted from the window's RIGHT edge instead of from the left.
+        //
+        // The grid does not reach the border — `columns` is the floor of the
+        // width over a cell — so a run in the last cell has a remainder of
+        // nought to one cell after it that changes with the window. A control
+        // that sits against the edge (the header's chevron) asks for this, and
+        // the host places it in pixels from the border, as it does the
+        // modeline's marks: the air after it is then fixed.
+        edge: bool,
     }
 
     // A BAND ACROSS A ROW, OR ACROSS PART OF ONE.
