@@ -140,6 +140,12 @@ pkgs.mkShell {
       echo "  pre-commit hook installed (fmt + clippy)"
       echo
     fi
+    if [ -d .git ] && [ ! -e .git/hooks/commit-msg ]; then
+      mkdir -p .git/hooks
+      ln -sf ${gitHooks}/hooks/commit-msg .git/hooks/commit-msg
+      echo "  commit-msg hook installed (no agent signs a commit)"
+      echo
+    fi
 
     # `tokens.wit` is GENERATED, and `wit_bindgen::generate!` takes the path
     # as a literal — there is no pointing it at the store. So it is

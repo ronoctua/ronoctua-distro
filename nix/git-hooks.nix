@@ -53,8 +53,25 @@ let
       echo "pre-commit: ok"
     '';
   };
+  # NO AGENT SIGNS A COMMIT — the owner's rule (AGENTS.md, "Como trabalhar").
+  # Tools that write commits add a trailer or a footer naming themselves, and
+  # the rule has to hold whatever a tool's own instructions say, so it is
+  # checked here, on the message itself. Lines git strips (`#`) are skipped:
+  # a template may mention the words without the message carrying them.
+  commit-msg = writeShellApplication {
+    name = "ronoctua-commit-msg";
+    text = ''
+      message=$1
+      if grep -v '^#' "$message" | grep -qiE '^(co-authored-by|generated-by):|generated with'; then
+        echo "ERROR: the message carries an agent's signature (Co-Authored-By, Generated with)." >&2
+        echo "       Commits here carry none — AGENTS.md, \"Como trabalhar\". Take the line out." >&2
+        exit 1
+      fi
+    '';
+  };
 in
 runCommand "ronoctua-git-hooks" { } ''
   mkdir -p $out/hooks
   ln -s ${pre-commit}/bin/ronoctua-pre-commit $out/hooks/pre-commit
+  ln -s ${commit-msg}/bin/ronoctua-commit-msg $out/hooks/commit-msg
 ''

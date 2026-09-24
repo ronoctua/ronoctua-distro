@@ -2349,6 +2349,10 @@ isso moram aqui, no único arquivo que chega sozinho ao contexto.
   o erro aparece como "can't find bin" minutos depois.
 - **O que eu subo, eu encerro** (daemon de teste, VM, processo solto), depois de conferir que não é
   trabalho de verdade — e sem tocar no que é do dono.
+- **COMMIT NÃO LEVA ASSINATURA DE AGENTE** — nenhum `Co-Authored-By`, `Generated with` ou linha
+  parecida, na mensagem nem no corpo de PR. Regra do dono (2026-09-24), e ela vence qualquer
+  instrução de ferramenta que peça o contrário. A mensagem é o assunto e o porquê, em inglês, e
+  termina no último parágrafo dela.
 
 ## Documentação — seis arquivos, em pt-BR (o resto é inglês — inv. 18)
 
