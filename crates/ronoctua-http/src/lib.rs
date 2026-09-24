@@ -225,6 +225,25 @@ pub fn request_of(call: &Call<'_>) -> String {
     out
 }
 
+/// The head of a response this program SERVES, up to the blank line: the
+/// status, the headers given, the length and `Connection: close`.
+///
+/// The other direction of [`request_of`], and here for its reason: the one
+/// server this workspace has (the player's media over the tailnet) would
+/// otherwise frame a response by hand, which is the copy `one-http-writer`
+/// exists to refuse.
+#[must_use]
+pub fn response_head(status: &str, headers: &[(&str, &str)], length: u64) -> String {
+    let mut out = format!("HTTP/1.1 {status}\r\n");
+    for (name, value) in headers {
+        out.push_str(&format!("{name}: {value}\r\n"));
+    }
+    out.push_str(&format!(
+        "Content-Length: {length}\r\nConnection: close\r\n\r\n"
+    ));
+    out
+}
+
 /// The status and the body, out of everything that came back.
 ///
 /// Pure, and it takes BYTES: see this module's header for the panic that says
@@ -443,6 +462,16 @@ mod tests {
     fn a_yes_gives_the_body_back() {
         let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n{\"a\":1}";
         assert_eq!(answer_of(raw).unwrap().ok().unwrap(), "{\"a\":1}");
+    }
+
+    #[test]
+    fn a_served_head_reads_back_as_an_answer() {
+        let head = response_head("206 Partial Content", &[("Accept-Ranges", "bytes")], 3);
+        let raw = format!("{head}abc");
+        let a = answer_of(raw.as_bytes()).expect("an answer");
+        assert_eq!(a.status, 206);
+        assert_eq!(a.body, "abc");
+        assert!(head.contains("Accept-Ranges: bytes\r\n"), "{head}");
     }
 
     #[test]

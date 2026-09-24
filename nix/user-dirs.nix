@@ -32,8 +32,9 @@
 # footer builds, and it builds it from here. A directory the system writes into
 # and never declares is a directory nobody can point at.
 #
-# SINGULAR, like its three siblings under `media/`: `image`, `video`,
-# `audio-music`. A plural among them would read as a different kind of thing.
+# SINGULAR, like its four siblings under `media/`: `image`, `video`,
+# `audio-music`, `video-music`. A plural among them would read as a different
+# kind of thing.
 {
   desktop = "main/temp";
   documents = "main/archive";
@@ -43,6 +44,9 @@
   publicShare = "main/share/public";
   templates = "templates";
   videos = "main/media/video";
+  # MUSIC VIDEOS, the eleventh: the player's third place, beside `music` and
+  # `videos`. Named like its sibling `audio-music` from the other side.
+  musicVideo = "main/media/video-music";
   projects = "main/prj";
   screenshot = "main/media/screenshot";
 }

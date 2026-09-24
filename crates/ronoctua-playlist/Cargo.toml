@@ -1,0 +1,17 @@
+[package]
+name = "ronoctua-playlist"
+description = "The playlist parsers: M3U, PLS, XSPF and ASX, read into entries."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The playlist parsers, shared by the file manager's preview
+# (`ronoctua-inspect`) and the player daemon. An XML reader and nothing else:
+# the daemon links this, and must not link the preview's decoders.
+[dependencies]
+roxmltree = "0.21"
+
+[lints]
+workspace = true

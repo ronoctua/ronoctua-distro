@@ -120,5 +120,5 @@ pub fn watch(on_state: impl Fn(Option<State>) + Send + 'static) -> Arc<AtomicBoo
 
 /// Opens the program's preview (see `preview.rs`), starting the daemon.
 pub fn preview() -> Result<crate::preview::Feed> {
-    crate::preview::Feed::open(&ensure()?)
+    crate::preview::open(&ensure()?)
 }

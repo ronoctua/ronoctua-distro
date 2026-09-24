@@ -31,6 +31,7 @@ ronoctua-effects = { path = "../ronoctua-effects" }
 ronoctua-segment = { path = "../ronoctua-segment" }
 ronoctua-audio = { path = "../ronoctua-audio" }
 ronoctua-store = { path = "../ronoctua-store" }
+ronoctua-frames = { path = "../ronoctua-frames" }
 ronoctua-xdg = { path = "../ronoctua-xdg" }
 # `/proc`: who holds a camera, for the busy sentence.
 ronoctua-memory = { path = "../ronoctua-memory" }

@@ -1,0 +1,21 @@
+[package]
+name = "ronoctua-player"
+description = "The player: one daemon that plays every format, shows a picture in many places at once and keeps several in step."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ronoctua-frames = { path = "../ronoctua-frames" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+# The preferences file: atomic write, "read or fall back and say why".
+ronoctua-store = { path = "../ronoctua-store" }
+
+[lints]
+workspace = true

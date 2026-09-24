@@ -592,6 +592,9 @@
           singleFooter
           rustToolchain
           ;
+        # What the player runs; the loop's player is started from beside the
+        # footer and has no unit to take them from.
+        playerTools = import ./nix/player-tools.nix { inherit pkgs; };
         # `rust.loopShell` AND NOT `rust.shell`: the nested loop is where one
         # LOOKS at the interface, never where one measures it, and it is the
         # most-run command in the project. Measured on this machine, the same
@@ -763,6 +766,8 @@
         # The camera studio: the unit that owns every camera, and the kernel's
         # virtual camera it writes to.
         ./nix/modules/studio.nix
+        # The player: the unit that plays, and the decoders it runs.
+        ./nix/modules/player.nix
         ./nix/modules/browser-extension.nix
         ./nix/modules/fonts.nix
         ./nix/modules/scroll.nix
@@ -844,6 +849,8 @@
               # The studio's daemon, EXTRACTED for the same reason: it owns the
               # camera and draws nothing.
               studio = rust.studio;
+              # And the player's, for the same reason: libmpv, never the renderer.
+              player = rust.player;
               # The segmentation model its background effects run.
               inherit segmentModel;
               # The cache sweep, extracted for the brain's reason and one of

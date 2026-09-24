@@ -1,0 +1,13 @@
+[package]
+name = "ronoctua-ytdlp"
+description = "yt-dlp's device-level flags, shared by the transfer queue and the player."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

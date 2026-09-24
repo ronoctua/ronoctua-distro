@@ -26,8 +26,12 @@ linhas. Scroll como compositor, camada de shell própria em Rust. O porquê de c
 11. **Buffers WASM não tocam Wayland, não recebem valores de token, não traduzem.**
 12. **`ronoctua-design`, `ronoctua-protocol` e `ronoctua-syntax` compilam para `wasm32-wasip2`.**
 13. **Nenhum dado pessoal** — nem `host.nix`, `facter.json`, `~/.shellrc.local`: nascem NA máquina.
-14. **Nenhuma chrome além do rodapé.** Sem barra, relógio, taskbar, menu iniciar, dock, ícone de
-    desktop ou popup flutuante. Tray, notificação e expansão são A MESMA superfície crescendo.
+14. **Chrome é o rodapé e, no máximo, UMA coluna à direita por vez** — do topo até a área do
+    rodapé, sem estreitá-lo; sem barra de cima, relógio, taskbar, menu iniciar, dock, ícone de
+    desktop ou popup flutuante. Tray, notificação e expansão são A MESMA superfície crescendo. A
+    regra anterior dizia "nenhuma chrome além do rodapé", e o dono a corrigiu ao pedir o player: a
+    coluna é permitida, e o que não se permite é ela tomar a largura da modeline, do minibuffer ou
+    da faixa de notificação.
 15. **Sem sombra e sem elevação.** CARD e LINHA SEPARATÓRIA são PERMITIDOS — a preferência por
     um layout mais limpo é preferência, não proibição, e quem decide é o dono. Também é permitido
     pôr COLUNAS LADO A LADO, cada uma com as suas próprias seleções, e **uma seleção não precisa
@@ -70,7 +74,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 
 ## Como funciona
 
-- **O rodapé é o desktop.** `wlr-layer-shell` embaixo: modeline e minibuffer COLADAS, expansão com teto e página abaixo, **faixa de notificação acima**, e nenhuma chrome (inv. 14). Ancorado embaixo, crescer para cima não move a modeline. Clique só faz o que tecla faz.
+- **O rodapé é o desktop.** `wlr-layer-shell` embaixo: modeline e minibuffer COLADAS, expansão com teto e página abaixo, **faixa de notificação acima**, e além dele no máximo uma coluna à direita (inv. 14). Ancorado embaixo, crescer para cima não move a modeline. Clique só faz o que tecla faz.
 - **Todo buffer tem ESTADO, e o primeiro é `normal`** — recusado no load se não for. `Esc` sozinho volta UM nível (o buffer é que anda, e relata); **segurar `Esc` + setas gira**; `LEADER w s` escolhe; clique na modeline gira. O toque-contra-retenção é resolvido NO HOST do buffer (keyd pegaria o `Esc` do vim), que avisa o rodapé pelo socket de controle — e o rodapé PERGUNTA na troca de foco. Estrangeira não tem estado. Id inglês, tela por `state-<id>`; `normal` discreto, todo o resto num token SÓ.
 - **A fronteira com o compositor é um CONTRATO, e só o adaptador fala IPC** — `ronoctua-compositor`
   são os tipos neutros e o `trait Compositor`, com zero socket e zero JSON; `ronoctua-scroll` é o
@@ -831,7 +835,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   `j` nunca andou na lista. A repetição chega pelo CALLBACK, não pelo método, então cada porta tem um
   `typed` por onde passam as duas entradas. O rodapé cria o `calloop` ANTES do roundtrip: é nele que o
   assento anuncia o teclado e o `LoopHandle` já tem de existir. Ritmo e atraso são do COMPOSITOR.
-- **A barra lateral é uma SEÇÃO** (`files::Section`), com extensão, deslocamento e conteúdo próprios — como a listagem, a prévia e os fatos. `sidebar_columns` a RETIRA quando não cabe (`space.files.sidebarFrom`); a marca vai em `layout.from`, nunca em 0; e `header` usa o MESMO `split` das linhas. Padrões por CHAVE (`nix/files-sidebar.nix` sobre `nix/user-dirs.nix` — **uma fonte para as dez pastas**, e de lá sai também o `RONOCTUA_SCREENSHOTS` que o rodapé lê, que sem isso escrevia onde calhasse). O ajuste do dono vence, em `$XDG_CONFIG_HOME`: padrão da distro OCULTA (volta), o dele REMOVE — e as frases diferem. `C-l` esconde, `C-e` desmonta, `C-u` tira, `s` do menu e `C-s` do localizador fixam: **LETRAS, porque Ctrl DIREITO com seta é paginar e a janela não o rastreia**. **Atravessar é o anel do `Tab`, e só ele** — `C-o` era um segundo caminho e saiu a pedido do dono.
+- **A barra lateral é uma SEÇÃO** (`files::Section`), com extensão, deslocamento e conteúdo próprios — como a listagem, a prévia e os fatos. `sidebar_columns` a RETIRA quando não cabe (`space.files.sidebarFrom`); a marca vai em `layout.from`, nunca em 0; e `header` usa o MESMO `split` das linhas. Padrões por CHAVE (`nix/files-sidebar.nix` sobre `nix/user-dirs.nix` — **uma fonte para as onze pastas**, e de lá sai também o `RONOCTUA_SCREENSHOTS` que o rodapé lê, que sem isso escrevia onde calhasse). O ajuste do dono vence, em `$XDG_CONFIG_HOME`: padrão da distro OCULTA (volta), o dele REMOVE — e as frases diferem. `C-l` esconde, `C-e` desmonta, `C-u` tira, `s` do menu e `C-s` do localizador fixam: **LETRAS, porque Ctrl DIREITO com seta é paginar e a janela não o rastreia**. **Atravessar é o anel do `Tab`, e só ele** — `C-o` era um segundo caminho e saiu a pedido do dono.
 - **Só o `ronoctua-disks` fala udisks2, e ele NÃO escreve regra polkit** — a do upstream já separa removível (`allow_active: yes`) de sistema (`auth_admin_keep`) pelo `HintSystem`, e uma nossa só poderia ALARGAR. **Não há agente polkit na sessão** (só `pkttyagent`, no resgate): toda chamada leva `auth.no_user_interaction`. E a razão é do DONO, não do desenho: ele nem sempre vê o pedido de digital, ou está longe do laptop — pedido não visto vira recusa no relatório, sobre algo que ninguém viu. **Nada que o sistema faça sozinho pode PERGUNTAR**, e volume de SISTEMA não oferece montar — manda ao terminal root. `HintIgnore` vira `quiet` e anda no `C-h` dos dotfiles. O `override` tira só o `xfsprogs` (538,3 → 343,2 MiB; 258 eram Python do `xfs_scrub`, e montar XFS é do KERNEL). Sinal do `ObjectManager` numa thread, mandando o `Rack` INTEIRO — o relógio do rodapé só bate com a vista aberta, e a janela não tem relógio nenhum.
 - **`LEADER s f` é formatar, e são TRÊS perguntas** (`buffers/format`, `capability::disks`): qual disco, para que serve, tem certeza. Linguagem de gente — o vfat diz *"abre em qualquer computador"*, não FAT32, e **o XFS aparece DESABILITADO dizendo que falta o programa**, alcançável e recusando. **Toda linha tem DOIS registros**: o rótulo, e uma linha discreta SOB O CURSOR com o nome real e os limites (na lista, o tamanho em bytes; no confirmar, o gesto inteiro). Nome técnico é CHAVE, nunca literal no componente. Duas recusas que o hospedeiro não enxerga (de fora, recusa e componente morto são o mesmo "nenhum plano"), e por isso são do `format-driven`: disco que o sistema precisa é DESENHADO e o `Enter` nele não anda; e o primeiro `Enter` do confirmar VOLTA, porque `não` é a primeira linha. **Sem estado `working`** — o `SPC w s` o ofereceria e mentiria; a espera é na lista. O alvo é id que o buffer RECEBEU, reconferido contra o `Rack` mandado **e contra `needed()` de novo**. Disco inteiro é `dos` até 2 TiB (`gpt` acima) mais UMA partição, com `update-partition-type` — sem ele o vfat sai tipado `0x83` e o Windows não abre o pendrive, sem nada dizendo por quê.
 - **`LEADER t` é a fila, e ela é de uma UNIDADE** (`ronoctua-transfers`): três processos olham a mesma
@@ -1767,6 +1771,102 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   a cada passo — a BARRA (`chrome::meter`, dois `mark`s de uma célula) é que diz quanto.
   **O aparelho escolhido é do PipeWire** (`default.configured.*`) e não guardamos cópia; o
   `audio.json` fica com o passo, o teto acima de 100% e se a linha aparece.
+- **`LEADER p` é o PLAYER, e ele é UM processo** (`ronoctua-player`, unidade de usuário): um
+  decodificador alimenta todas as vistas pelo anel de memória comum (`ronoctua-frames`, que subiu do
+  estúdio), e um áudio toca — o mesmo vídeo no rodapé, na janela e na coluna está junto por
+  construção. **O motor é libmpv por FFI escrita à mão** (`ronoctua-player-engine/src/mpv.rs`, o
+  único `unsafe`, `mpv-layout-matches-c`), e é um CRATE À PARTE porque o workspace unifica features:
+  com uma feature, o shell linkaria o libmpv no dia em que o daemon fosse compilado ao lado. O
+  `mpv-unwrapped` é sobrescrito com o `ffmpeg-full`. **Três medições viraram desenho**: a render API
+  de software espera a hora do quadro se `BLOCK_FOR_TARGET_TIME` não for 0 (31 ms "por quadro"); o
+  `rgb0` deixa o quarto byte em ZERO, que o renderizador lê como transparente — todo quadro chegava e
+  nenhum pixel aparecia —, então o motor o põe em 255; e o contexto de render tem de existir ANTES do
+  `loadfile`, senão o `vo=libmpv` larga o vídeo para sempre (o vídeo "em sincronia" tocava e não
+  mostrava nada). **O que só o DeaDBeeF abria vem de decodificadores de linha de comando**
+  (`decoders.rs` + `nix/player-tools.nix`, `player-decoders-exist`): SID, MIDI com GeneralUser GS,
+  vgmstream, sc68, AdLib (`nix/adplug.nix` — o nixpkgs não tem), zxtune (PSF, PSF2, USF, GSF, 2SF,
+  NCSF, SSF e o ZX Spectrum) e o SACD — que só reivindica um `.iso` cujo setor 510 diz
+  `SACDMTOC`, porque `.iso` também é DVD (`Decoder::mark`). E o AMIGA é o `uade`, que é UNFREE e entra SOZINHO: o
+  `nix/player-tools.nix` importa um nixpkgs cujo predicado admite `uade` e nada mais, e o nome do
+  arquivo do Amiga põe o formato NA FRENTE (`mdat.Turrican`, `Decoder::prefixed`). Todo WAV escrito em cano diz
+  tamanho ZERO e o leitor chama o primeiro pacote de corrompido, então o cabeçalho é consertado na
+  fronteira (`decoders::endless`); o `fluidsynth` não abre FIFO para WAV e sai em RAW no stdout, e o
+  zxtune recusa FIFO também — escreve arquivo no CACHE, que o motor lê enquanto cresce
+  (`Growing`). **O fluxo de um decodificador BUSCA** (`Decoded::seek_to`): para frente decodifica e
+  descarta, para trás reinicia — sem isso a linha de posição não andava num SID e a máquina que
+  segue tocava seis segundos atrás para sempre. **E a busca de SONDA não é lugar**: o demuxer pula
+  para depois do tamanho que o cabeçalho sem fim declara (4 294 967 304, medido); decodificar até lá
+  custava a música inteira e RECUSAR fazia o mpv dar o fluxo por acabado, então o fluxo vai lá sem
+  decodificar nada e a volta reinicia o decodificador. A máquina que SEGUE baixa inteiro o arquivo
+  que só um decodificador nosso lê, antes de tomar a trava do motor. E seguir NÃO custa a fila: a
+  daemon guarda a fila e o lugar desta máquina, não os grava enquanto segue, e os devolve PAUSADOS
+  ao sair. **A coluna segue a tela com FOCO**: ela ouve o compositor pelo contrato e, quando o foco
+  vai para outra tela, refaz a superfície lá (GPU inclusive — superfície nova é textura nova).
+  **A COLUNA** (`player_window.rs`, `Door::Column`) é layer-shell TOP|RIGHT|BOTTOM com zona exclusiva
+  da própria largura (`space.column.width`): a zona é recortada do que as superfícies criadas ANTES
+  deixaram, então ela termina onde o rodapé começa — e um rodapé que sobe depois dela seria
+  estreitado, por isso ele a levanta de novo na partida. Uma só (`column.pid`). A janela (`p w`) é o
+  mesmo anfitrião com `xdg_toplevel`. **Vídeos juntos** dividem UMA faixa sob o principal, lado a
+  lado, dentro do mesmo teto. **Letra**: `.lrc` ao lado, a tag, e o LRCLIB; **SponsorBlock** pede
+  pelo PREFIXO do SHA-256 do id (o serviço não sabe o vídeo). Os dois nascem DESLIGADOS e a linha
+  nomeia o host. **Outra máquina** (`p m` pareia, a vista junta): só a tailnet — o daemon escuta nos
+  endereços dela e recusa quem está fora das faixas dela —, código de seis dígitos por dois minutos,
+  chave em `player-peers.json` (0600), relógio medido uma vez (oito idas, a mediana), mídia por HTTP
+  com `Range` na mesma porta (`ronoctua.player.port`, aberta só na interface da tailnet). Carregar
+  pela tailnet atrasa ~0,7 s, e o empurrão de 5% pagava isso em catorze segundos: por 4 s depois de
+  um load quem segue SALTA, e fica a ±70 ms desde o primeiro segundo (medido). **MPRIS**
+  (`org.mpris.MediaPlayer2.<instância>`) é o que faz as teclas de mídia e o `playerctl` chegarem nele,
+  e é a especificação INTEIRA menos `Playlists` (que é de biblioteca de listas SALVAS, e aqui há
+  fila e disco): a FILA é a `TrackList` (ler, acrescentar, tirar, ir), o id de uma faixa é o LUGAR
+  dela e toda mudança da fila sai como `TrackListReplaced`, os `Can*` dizem o que a fila deixa,
+  `Raise` levanta a coluna, `Quit` para e sai — e o `client::ensure` pede a unidade de volta, porque
+  na máquina instalada o daemon não mora ao lado do shell —, e `SupportedMimeTypes` NOMEIA os tipos
+  da entrada (curinga não é tipo).
+  **A marca da modeline ALTERNA a coluna, como o `p c`**, e "há coluna de pé?" confere a LINHA DE
+  COMANDO do PID (`player_window::is_a_column`, que aceita o `.ronoctua-shell-wrapped` do
+  embrulho), não só se ele vive: PID é reciclado, e um `column.pid` velho fazia o clique mandar
+  `TERM` a um processo alheio e não abrir nada. **E as marcas da DIREITA são acertadas pela BORDA**
+  (`segment_at` lê o `edge` que o desenho usou, com o `column_at_the_edge` da faixa): desenhadas
+  da borda e acertadas da esquerda, só a metade esquerda do glifo do pause respondia.
+  **A imagem pede a PROPORÇÃO do vídeo** (`player_window::fitted`, do `State::video`) e não a da
+  faixa: pedida na forma da faixa, o player a devolvia com tarjas PRETAS dentro do quadro e o tom de
+  superfície atrás nunca aparecia. **Uma vista nova recebe o quadro que está na tela**
+  (`Viewer::owed`, e o `Poke` acorda a thread de render): vídeo pausado e capa de mp3 não mandam
+  quadro novo, e a coluna aberta sobre um ficava preta até algo mudar. **A imagem SOZINHA** (`o`, ou
+  `ronoctua-shell player only`) e **na tela inteira** (`m`, ou `player maximized`; da coluna, abre a
+  janela assim): `Stage`, com a imagem tomando a superfície, tarja preta, e o cabeçalho e o
+  transporte POR CIMA em `surface.transport` a cada atividade, sumindo 3 s depois da última — nunca
+  com a mão sobre eles, e controle escondido não é alvo. `Esc` sai do palco antes de fechar.
+  **A coluna abria POR CIMA da janela** porque o commit que a MAPEIA re-arranja as janelas e não as
+  AVISA (`handle_surface_commit` só chama `transaction_commit_dirty` quando o commit leva estado de
+  layer): a coluna diz de novo a zona exclusiva no primeiro quadro
+  (`zone_in_the_mapping_commit`), e o `player-vm` espera a JANELA receber a largura nova — a árvore
+  do IPC mostra o que o compositor CALCULOU e passava com o defeito.
+  **O `.desktop` roda `ronoctua-shell play`** (toca e levanta a coluna), e o `apps::opens` prefere as
+  entradas `br.ronoctua.*` — senão quem abre um filme é quem o diretório listou primeiro. **A lista
+  de tipos é LIDA do `shared-mime-info` na build** (todo `audio/` e `video/`, mais os de
+  `application/` e os nossos), e os padrões vão no `mimeapps.list` de `$XDG_DATA_DIRS`, abaixo de
+  toda escolha de alguém. **O que só um decodificador abre ganha UM tipo por família**
+  (`assets/player-types.nix`, lido pelo gerenciador, pela base do sistema e pela entrada), e a
+  maior parte daquele arquivo é o que ficou DE FORA: extensão que a base já dá a outra coisa
+  (`.iso`, `.gsf`) ou que é de outro programa lá fora (`.cff`, `.bam`) só toca quando entregue.
+  **XSPF e ASX o daemon abre** (`ronoctua-playlist`, o leitor da prévia descido a crate): o libmpv
+  não os conhece e termina na hora.
+  **Os arquivos são um NÍVEL da vista** (`f`, a linha `Navegar nos arquivos…`, `LEADER p l`;
+  `player_browse.rs`): um anel com música, vídeos e clipes musicais (a ONZE pasta,
+  `XDG_MUSIC_VIDEO_DIR`; sem ela declarada, a de MÚSICA que a máquina declara, nunca um nome
+  inventado), as pastas e só os arquivos que o player toca. **O glifo sai NA LEITURA da pasta**
+  (`Listing::glyphs`): o `mime::by_name` custa 1,2 ms por nome em debug, as linhas são montadas várias
+  vezes por quadro e de novo a cada posição que o player relata, e perguntar a cada quadro congelou
+  a `~/main/temp` do dono com uma música tocando — medido, 53 ms por tecla contra 0,5. `RET` entra na pasta ou toca
+  o arquivo SOZINHO, `a` põe na fila (a pasta inteira), `DEL` sobe e cai na pasta de onde veio, `Esc`
+  volta à vista. **Quem abre uma PASTA é o SHELL, não o daemon** — o libmpv tomaria figura e texto
+  juntos, e o arquivo de um decodificador nosso chegaria pelo caminho e não pelo protocolo dele —, e
+  o mesmo `player_browse::glyph_if_played` responde à listagem, à pergunta de caminho e ao `ronoctua-shell
+  play`, senão uma pasta tocaria o que a listagem não mostrou.
+  **O minibuffer COLA** (`C-v`, e o `C-y` do Emacs): o topo do histórico que o `zwlr_data_control`
+  já alimenta, numa linha só. Não está no `gesture_of`, porque nas listas que o dividem `C-v` é a
+  prévia do gerenciador.
 - **`LEADER m c` é a CÂMERA, e `LEADER s c` os ajustes dela** (`camera.rs`/`camera_window.rs` e
   `camera_settings.rs`, duas portas: `s c c`/`s c w`). **Um PROCESSO é dono do vídeo**
   (`ronoctua-studio`, unidade de usuário): uma captura V4L2 serve UM leitor, e gravação, transmissão

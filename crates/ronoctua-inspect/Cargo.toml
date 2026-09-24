@@ -30,6 +30,7 @@ publish.workspace = true
 # `ronoctua-files-root` gains nothing from this line, which is the whole reason
 # the two crates are separate.
 ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-playlist = { path = "../ronoctua-playlist" }
 # THE ONE RULER, for the spreadsheet's columns.
 #
 # `document::align` pads cells into columns, and a table padded by BYTES leans

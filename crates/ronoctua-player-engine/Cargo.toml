@@ -1,0 +1,43 @@
+[package]
+name = "ronoctua-player-engine"
+description = "The player's daemon: libmpv, the render threads, the decoders and the participants kept in step."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE ONLY CRATE THAT LINKS libmpv. The protocol and the client are
+# `ronoctua-player`, which is what the shell links — see its header for why
+# this is a crate and not a feature.
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rustix = { workspace = true, features = [ "fs" ] }
+ronoctua-player = { path = "../ronoctua-player" }
+ronoctua-playlist = { path = "../ronoctua-playlist" }
+ronoctua-frames = { path = "../ronoctua-frames" }
+ronoctua-store = { path = "../ronoctua-store" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+# HTTPS for the two hosts a person can switch on — lyrics and sponsored
+# segments — through the one TLS setup the workspace has.
+ronoctua-http = { path = "../ronoctua-http", features = [ "tls" ] }
+# The tailnet's own addresses and machines — the listener binds those and
+# nothing else.
+ronoctua-tunnel = { path = "../ronoctua-tunnel" }
+# MPRIS, on the session bus: the blocking API, the workspace's one D-Bus.
+zbus.workspace = true
+# The PO token's flags, the transfer queue's own.
+ronoctua-ytdlp = { path = "../ronoctua-ytdlp" }
+
+[dependencies.tracing-subscriber]
+workspace = true
+
+[[bin]]
+name = "ronoctua-player"
+path = "src/main.rs"
+
+[lints]
+workspace = true

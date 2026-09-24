@@ -99,6 +99,9 @@ mod network_words;
 mod notifications;
 mod notifications_window;
 mod paint;
+mod player;
+mod player_browse;
+mod player_window;
 mod pointers;
 mod pointers_window;
 mod power;
@@ -344,6 +347,58 @@ fn main() -> Result<()> {
         }
         Some("camera-settings") => {
             return camera_settings_window::host_it().context("the camera settings window");
+        }
+        // THE PLAYER, in a window and in the column on the right: one host,
+        // two kinds of surface (`player_window::Door`).
+        // `player only` and `player maximized` open it with the picture alone,
+        // in the window or on the whole screen.
+        Some("player") => {
+            let stage = match std::env::args().nth(2).as_deref() {
+                Some("only") => player_window::Stage::Only,
+                Some("maximized") => player_window::Stage::Maximized,
+                _ => player_window::Stage::Off,
+            };
+            return player_window::host_it(player_window::Door::Window, stage)
+                .context("the player's window");
+        }
+        // WHAT THE `.desktop` ENTRY RUNS: play these, and show the column —
+        // a file opened from anywhere is a file somebody wants to see play.
+        Some("play") => {
+            let items: Vec<String> = std::env::args().skip(2).collect();
+            ronoctua_player::client::ensure().context("the player did not start")?;
+            // A FOLDER, handed by a file manager or typed after `play`, is
+            // every file under it the player plays.
+            ronoctua_player::client::tell(&ronoctua_player::wire::Ask::Open {
+                items: player_browse::items_of(
+                    &items
+                        .iter()
+                        .map(|i| {
+                            let path = std::path::Path::new(i);
+                            if i.contains("://") || path.is_absolute() {
+                                i.clone()
+                            } else {
+                                std::env::current_dir()
+                                    .map(|d| d.join(path).to_string_lossy().into_owned())
+                                    .unwrap_or_else(|_| i.clone())
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                replace: true,
+            })?;
+            if player_window::column_pid().is_none() {
+                let me = std::env::current_exe().context("where this program is")?;
+                std::process::Command::new(me)
+                    .arg("column")
+                    .stdin(std::process::Stdio::null())
+                    .spawn()
+                    .context("raising the column")?;
+            }
+            return Ok(());
+        }
+        Some("column") => {
+            return player_window::host_it(player_window::Door::Column, player_window::Stage::Off)
+                .context("the player's column");
         }
         Some("pointers") => {
             return pointers_window::host_it().context("host the pointers view");
@@ -668,6 +723,10 @@ pub struct Marks<'a> {
     pub camera: bool,
     /// The studio is recording or streaming.
     pub recording: bool,
+    /// The player has something loaded: its glyph says playing or paused
+    /// (`player::mark`). Absent with nothing loaded — a modeline at rest says
+    /// nothing.
+    pub player: Option<char>,
     /// The compositor's key mode, by its name, while one is on.
     pub compositor_mode: Option<&'a str>,
     /// SYNCTHING, and it is the only mark whose very existence is a choice.
@@ -918,6 +977,20 @@ pub fn segments(
             id: "microphone",
             text: tokens::icon::MICROPHONE.to_string(),
             priority: 2,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // THE PLAYER, one rung below the privacy marks: what is playing is worth
+    // a cell, and it is the first of the right-hand marks to go on a line too
+    // narrow for everything — the sound itself says it is there.
+    if let Some(glyph) = marks.player {
+        out.push(Segment {
+            id: "player",
+            text: glyph.to_string(),
+            priority: 3,
             min_cols: 1,
             side: Side::Right,
             shrink: Shrink::Cut,
@@ -1193,6 +1266,7 @@ mod tests {
                         // AND A KEY MODE, the longest of their names: the
                         // fullest line has to survive it beside the rest.
                         compositor_mode: Some("alternar largura"),
+                        player: Some(tokens::icon::PLAYER),
                         // AND SYNCTHING'S, which the fullest line has to
                         // carry too: it is a mark somebody chose to have, so
                         // the worst case is a line that has it AND everything

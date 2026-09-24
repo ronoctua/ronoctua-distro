@@ -696,4 +696,33 @@
   # And the one that says the studio is RECORDING or STREAMING, drawn in the
   # danger tone: a mark that is also a warning.
   recording = "md-record_rec";
+
+  # THE PLAYER (`LEADER p`, the column on the right, the modeline's mark).
+  #
+  # The transport is drawn as glyphs under the picture, one cell each and every
+  # one a key too (invariant 19). Material, because the family has every half
+  # of every pair designed together: `repeat`, `repeat_once` and `repeat_off`
+  # are one drawing in three states, and a ring drawn from three families would
+  # twitch at every press.
+  player = "md-play_circle_outline";
+  player-previous = "md-skip_previous";
+  player-next = "md-skip_next";
+  player-stop = "md-stop";
+  player-shuffle = "md-shuffle_variant";
+  player-shuffle-off = "md-shuffle_disabled";
+  player-repeat = "md-repeat";
+  player-repeat-one = "md-repeat_once";
+  player-repeat-off = "md-repeat_off";
+  # THE PICTURE ALONE in the door, and the door filling the screen. Only-
+  # the-picture is a switch, lit while it is on, like shuffle and repeat;
+  # filling the screen is the file manager's `theatre` pair, because it is
+  # the same gesture — the glyph says where the button GOES.
+  player-only = "md-fit_to_screen";
+  player-volume = "md-volume_high";
+  player-subtitles = "md-subtitles_outline";
+  player-lyrics = "md-music_note";
+  player-queue = "md-playlist_music";
+  player-follow = "md-television_play";
+  player-column = "md-dock_right";
+  player-window = "md-dock_window";
 }

@@ -74,7 +74,7 @@ ronoctua-inspect = { path = "../ronoctua-inspect" }
 # It is not a nicety. A blocking `read_exact` on a child that has stopped
 # writing hangs the player's thread for the rest of the session, with nothing on
 # screen saying so, and that is the hole the owner asked not to exist.
-rustix = { workspace = true, features = [ "event" ] }
+rustix = { workspace = true, features = [ "event", "process" ] }
 # THE DISK BORDER. It enters HERE and not in `ronoctua-files`, which builds the
 # root-privileged helper: pulling zbus in there would put a D-Bus client inside
 # a binary that runs as root, and would give that crate a second border. The
@@ -103,6 +103,9 @@ ronoctua-audio = { path = "../ronoctua-audio" }
 # controls), the studio's wire and preview, and the effect table the rings walk.
 ronoctua-camera = { path = "../ronoctua-camera" }
 ronoctua-studio = { path = "../ronoctua-studio" }
+# The player's CLIENT only: its socket, its words and its frames. The engine is
+# `ronoctua-player-engine`, a crate of its own, so libmpv never reaches here.
+ronoctua-player = { path = "../ronoctua-player" }
 ronoctua-effects = { path = "../ronoctua-effects" }
 ronoctua-syncthing = { path = "../ronoctua-syncthing" }
 ronoctua-bluetooth = { path = "../ronoctua-bluetooth" }

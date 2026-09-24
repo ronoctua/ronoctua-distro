@@ -197,17 +197,29 @@ pub fn cache_root() -> Option<PathBuf> {
 /// reason `nix/modules/home.nix` writes it.
 #[must_use]
 pub fn user_dir(key: &str, fallback: &str) -> PathBuf {
+    user_dir_declared(key).unwrap_or_else(|| {
+        std::env::var_os("HOME")
+            .map_or_else(|| PathBuf::from("."), |h| PathBuf::from(h).join(fallback))
+    })
+}
+
+/// One of the USER directories, only when something DECLARES it — the
+/// user-dirs file or the environment — and `None` otherwise.
+///
+/// For a directory that has a better answer than a made-up name under home
+/// when nobody declared it: the player's music videos fall back to wherever
+/// the MUSIC directory is, which a machine does declare, rather than to a
+/// folder called `Music videos` that exists on nobody's disk.
+#[must_use]
+pub fn user_dir_declared(key: &str) -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     if let Some(home) = home.as_ref()
         && let Ok(text) = std::fs::read_to_string(home.join(".config").join("user-dirs.dirs"))
         && let Some(value) = user_dir_value(&text, key)
     {
-        return user_dir_expand(home, &value);
+        return Some(user_dir_expand(home, &value));
     }
-    if let Some(dir) = std::env::var_os(key).map(PathBuf::from) {
-        return dir;
-    }
-    home.map_or_else(|| PathBuf::from("."), |h| h.join(fallback))
+    std::env::var_os(key).map(PathBuf::from)
 }
 
 /// The value of one key in a user-dirs file, unquoted.

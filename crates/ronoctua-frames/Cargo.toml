@@ -1,0 +1,17 @@
+[package]
+name = "ronoctua-frames"
+description = "Frames shared between a daemon and the windows that show them: a memfd ring handed over a socket."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ONE RING FOR EVERY DAEMON THAT SHOWS PICTURES. The studio wrote it first, and
+# the player needs the same thing — a copy would be two seqlocks to keep right.
+[dependencies]
+anyhow.workspace = true
+rustix = { workspace = true, features = [ "fs", "net" ] }
+
+[lints]
+workspace = true

@@ -542,7 +542,10 @@ struct Footer {
     /// already carries a comment about — and it is also the only version that
     /// cannot be wrong: what the pointer is over is what was DRAWN, not what a
     /// second calculation says would be drawn.
-    modeline_placed: Vec<(&'static str, u16, u16)>,
+    /// What the modeline DREW: id, column, width, and whether it was placed
+    /// from the right border (`Span::edge`) — read back by the same rule by
+    /// [`Footer::segment_at`].
+    modeline_placed: Vec<(&'static str, u16, u16, bool)>,
     /// What the band's control under the pointer says, already translated.
     ///
     /// On the MESSAGE LINE and never in a tooltip: a floating surface is what
@@ -829,6 +832,11 @@ struct Footer {
     /// The studio's last state: the modeline's recording mark, the photo and
     /// recording notifications, and the settings' scenes.
     studio: Option<ronoctua_studio::wire::State>,
+    /// The player's view (`LEADER p p`), when it is open.
+    player_view: Option<crate::player::View>,
+    /// The player's last state — the modeline's mark and the view's rows.
+    /// `None` while nothing answers its socket.
+    player: Option<ronoctua_player::wire::State>,
     /// Which programs have a camera open, from `/proc` every two seconds.
     camera_holders: Vec<String>,
     /// The compositor's key mode, while one is on (`actions::modes`).
@@ -1184,6 +1192,9 @@ enum ViewState {
     /// The camera settings — `LEADER s c c`. Ranked with the pointers for
     /// their reason: rows of settings hold nothing built by hand.
     Camera,
+    /// The player — `LEADER p p`. Ranked with the camera settings, for their
+    /// reason: a cursor over a queue holds nothing a person built by hand.
+    Player,
     /// Syncthing — `LEADER s s s`.
     Syncthing,
     /// The shell's history — `LEADER s h h`.
@@ -1472,6 +1483,8 @@ enum Click {
     Pointers(usize),
     /// A row of the camera settings.
     Camera(usize),
+    /// A row of the player.
+    Player(usize),
     /// A row of the Syncthing view.
     Syncthing(usize),
     /// A row of the language and region view.
@@ -2405,6 +2418,8 @@ pub fn run() -> Result<()> {
         camera_list: Vec::new(),
         _camera_watch: None,
         studio: None,
+        player_view: None,
+        player: None,
         camera_holders: Vec::new(),
         compositor_mode: None,
         camera_mark_allowed: ronoctua_studio::prefs::store().read().mark
@@ -3182,6 +3197,33 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the studio channel: {e}"))?;
+    // THE PLAYER'S STATE, for its mark and its view. `watch` does NOT start
+    // the daemon — a footer starting is not somebody asking for music — and
+    // keeps knocking until one answers.
+    let (player_sender, player_events) = channel::channel::<Option<ronoctua_player::wire::State>>();
+    let _player_watch = ronoctua_player::client::watch(move |s| {
+        let _ = player_sender.send(s);
+    });
+    std::mem::forget(_player_watch);
+    handle
+        .insert_source(player_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(s) = event {
+                state.player_arrived(s);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the player channel: {e}"))?;
+    // A COLUMN ALREADY UP IS RAISED AGAIN: a layer surface's exclusive zone
+    // is carved from what the surfaces made BEFORE it leave, and this footer
+    // was just made after it — left alone, the column would narrow the
+    // modeline. See `player_window`.
+    if crate::player_window::end_the_column()
+        && let Ok(me) = std::env::current_exe()
+    {
+        let _ = std::process::Command::new(me)
+            .arg("column")
+            .stdin(std::process::Stdio::null())
+            .spawn();
+    }
     // AND WHO HAS A CAMERA OPEN — any program, from `/proc`. A browser opens
     // the device directly and no graph hears of it, so the kernel's answer is
     // the only one that covers everybody; measured, a walk costs under 8 ms.
@@ -3759,6 +3801,7 @@ impl Footer {
                 // program with a camera open, ours included.
                 camera: self.camera_in_use(),
                 recording: self.studio_rolling(),
+                player: self.player.as_ref().and_then(crate::player::mark),
                 compositor_mode: mode.as_deref(),
                 // SYNCTHING, and it is the only mark that may draw while all
                 // is WELL. That is the owner's choice and it is theirs to
@@ -3880,13 +3923,14 @@ impl Footer {
             return None;
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let column = (x / cell) as u32;
-        self.modeline_placed
-            .iter()
-            .find(|(_, at, width)| {
-                column >= u32::from(*at) && column < u32::from(*at) + u32::from(*width)
-            })
-            .map(|(id, _, _)| *id)
+        let from_left = (x / cell) as u16;
+        // EACH SEGMENT BY THE READING THAT PLACED IT. The right-hand marks are
+        // drawn from the BORDER, the grid's remainder (0 to 1 cell) to the
+        // right of where their column says; compared by the column from the
+        // left, a mark answered on its left half and on the empty cell before
+        // it — the owner found it on the player's pause glyph. It is
+        // `band::at`'s rule, for the line under the band.
+        segment_placed_at(&self.modeline_placed, from_left, self.column_at_the_edge(x))
     }
 
     /// Which piece of the band is at `(x, y)`.
@@ -4094,6 +4138,12 @@ impl Footer {
         // AND THE CAMERA'S TWO, to the camera's settings.
         if id == "camera" || id == "recording" {
             self.run_command("camera-settings-open");
+            return;
+        }
+        // THE PLAYER'S, to the column on the right — where it lives. The same
+        // toggle as `p c`: open, or closed when it is open.
+        if id == "player" {
+            self.run_command("player-column");
             return;
         }
         // THE KEY MODE: a click is its `Esc`.
@@ -4317,6 +4367,15 @@ impl Footer {
                 &[("programs", &self.camera_holders.join(", "))],
             )),
             "recording" => Some(self.texts.t(ronoctua_i18n::key::HINT_RECORDING)),
+            // THE PLAYER SAYS WHAT IS PLAYING — the one thing its glyph
+            // cannot.
+            "player" => {
+                let what = self.player.as_ref().and_then(crate::player::now_playing)?;
+                Some(
+                    self.texts
+                        .t_with(ronoctua_i18n::key::HINT_PLAYER, &[("what", &what)]),
+                )
+            }
             "compositor-mode" => Some(self.texts.t(ronoctua_i18n::key::HINT_COMPOSITOR_MODE)),
             // AND SYNCTHING'S SAYS WHICH OF THE TWO IT IS. One glyph means
             // "everything is travelling" and the other means "nothing is",
@@ -6615,6 +6674,82 @@ impl Footer {
             "camera-open" => {
                 if let Ok(me) = std::env::current_exe() {
                     self.open_foreign(&me.to_string_lossy(), &["camera".to_owned()], None);
+                }
+            }
+            "player-open" => self.open_player(),
+            // THE FILES: the view opened on them, or turned to them when it
+            // is already open.
+            "player-browse" => {
+                if self.player_view.is_some() {
+                    self.player_press(crate::player::Press::Browse);
+                } else {
+                    self.open_player();
+                    if self.player_view.is_some() {
+                        self.player_press(crate::player::Press::Browse);
+                    }
+                }
+            }
+            "player-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["player".to_owned()], None);
+                }
+            }
+            // THE COLUMN TOGGLES: one that is up is closed, else one is raised.
+            "player-column" => {
+                if !crate::player_window::end_the_column() {
+                    self.raise_the_column();
+                }
+            }
+            "player-up" | "player-down" | "player-less" | "player-more" | "player-enter"
+            | "player-remove" | "player-add" | "player-parent" | "player-only"
+            | "player-maximize"
+                if self.player_view.is_some() =>
+            {
+                if let Some(press) = crate::player::press_of(id) {
+                    self.player_press(press);
+                }
+            }
+            // THE TRANSPORT, from anywhere: told to the player straight away.
+            "player-toggle" | "player-next" | "player-previous" | "player-stop"
+            | "player-shuffle" | "player-repeat" => {
+                use ronoctua_player::wire::Ask;
+                let ask = match id {
+                    "player-toggle" => Ask::Toggle,
+                    "player-next" => Ask::Next,
+                    "player-previous" => Ask::Previous,
+                    "player-stop" => Ask::Stop,
+                    "player-shuffle" => Ask::Shuffle,
+                    _ => Ask::Repeat,
+                };
+                if let Some(said) = crate::player::tell(&ask, &self.texts) {
+                    self.echo_message(said);
+                }
+            }
+            // THE PLAYER'S QUESTIONS: with nothing typed this opens the
+            // question; with an argument it IS the answer.
+            "player-play-file" | "player-enqueue" | "player-follow" | "player-pair" => {
+                match argument {
+                    Some(said) if !said.trim().is_empty() => {
+                        if let Some(ask) = crate::player::typed(id, said)
+                            && let Some(m) = crate::player::tell(&ask, &self.texts)
+                        {
+                            self.echo_message(m);
+                        }
+                    }
+                    _ => {
+                        let asked: &'static str = match id {
+                            "player-play-file" => "player-play-file",
+                            "player-enqueue" => "player-enqueue",
+                            "player-pair" => "player-pair",
+                            _ => "player-follow",
+                        };
+                        if self.player_view.take().is_some() {
+                            self.first_page();
+                        }
+                        self.mx.request(asked, false);
+                        self.apply_geometry(KeyboardInteractivity::Exclusive);
+                        self.draw_and_paint();
+                    }
                 }
             }
             "camera-settings-open" => self.open_camera_settings(),
@@ -10228,6 +10363,19 @@ impl Footer {
             return;
         }
 
+        if self.view() == ViewState::Player {
+            use ronoctua_keymap::Sym;
+            // EVERY DOOR THROUGH ONE TABLE — `player::OF_THE_VIEW`.
+            let press = match key.sym {
+                Sym::Esc => Some(crate::player::Press::Escape),
+                other => crate::player::pressed(&ronoctua_keymap::Key::simple(other).notation()),
+            };
+            if let Some(press) = press {
+                self.player_press(press);
+            }
+            return;
+        }
+
         if self.view() == ViewState::Pointers {
             use ronoctua_keymap::Sym;
             // BOTH DOORS THROUGH ONE TABLE — `pointers::OF_THE_VIEW`.
@@ -10361,8 +10509,23 @@ impl Footer {
     /// writing it twice would be two answers for one keystroke.
     fn minibuffer_key(&mut self, key: ronoctua_keymap::Key) {
         use crate::minibuffer::Action;
-        match self.mx.key(key, &self.command_registry) {
-            Action::Nothing => {}
+        let mut action = self.mx.key(key, &self.command_registry);
+        // THE NEWEST COPY IS WHAT IS PASTED: the history this footer keeps is
+        // fed by `zwlr_data_control`, which sees every copy on the machine —
+        // the file manager's `Copy the path` included — whether or not the
+        // footer had the focus when it happened.
+        if action == Action::WantsPaste {
+            let copied = self
+                .clipboard
+                .at(0)
+                .and_then(ronoctua_clipboard::Entry::text)
+                .map(str::to_owned);
+            action = copied.map_or(Action::Nothing, |text| {
+                self.mx.paste(&text, &self.command_registry)
+            });
+        }
+        match action {
+            Action::Nothing | Action::WantsPaste => {}
             Action::Changed => {
                 // REDRAW HERE, AND NOT ONLY RE-COMMIT THE SIZE.
                 //
@@ -11313,6 +11476,8 @@ impl Footer {
             ViewState::Pointers
         } else if self.camera_view.is_some() {
             ViewState::Camera
+        } else if self.player_view.is_some() {
+            ViewState::Player
         } else if self.display.is_some() {
             ViewState::Display
         } else if self.files.is_some() {
@@ -12804,6 +12969,22 @@ impl Footer {
                 .enumerate()
                 .map(|(n, r)| ExpansionRow {
                     click: (!r.heading).then_some(Click::Syncthing(n)),
+                    fields: r.fields,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+        if self.view() == ViewState::Player
+            && let Some(v) = self.player_view.as_ref()
+        {
+            let width = self.screen_columns();
+            return v
+                .rows(self.player.as_ref(), width, &self.texts)
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::Player(n)),
                     fields: r.fields,
                     foot: false,
                     ..ExpansionRow::empty_one()
@@ -14511,6 +14692,20 @@ impl Footer {
                     self.draw_and_paint();
                 }
             }
+            Some(Click::Player(n)) => {
+                // THE MOUSE AIMS, AND THE SECOND CLICK ACTS — invariant 19.
+                let width = self.screen_columns();
+                let mut already = false;
+                if let Some(v) = self.player_view.as_mut() {
+                    let rows = v.rows(self.player.as_ref(), width, &self.texts);
+                    already = v.clicked(n, &rows);
+                }
+                if already {
+                    self.player_press(crate::player::Press::Enter);
+                } else {
+                    self.draw_and_paint();
+                }
+            }
             Some(Click::Camera(n)) => {
                 // THE MOUSE AIMS, AND THE SECOND CLICK ACTS — invariant 19.
                 let width = self.screen_columns();
@@ -14838,6 +15033,7 @@ impl Footer {
                 .camera_view
                 .as_ref()
                 .map(crate::camera_settings::View::cursor),
+            ViewState::Player => self.player_view.as_ref().map(crate::player::View::cursor),
             ViewState::Syncthing => self.syncthing.as_ref().map(crate::syncthing::View::cursor),
             // THE ROW THE VIEW DREW, and not `clip_cursor`, which counts
             // ENTRIES: the drawn list has a heading above them, so the two are
@@ -15426,6 +15622,8 @@ impl Footer {
         let pointer_snapshot = self.pointer_snapshot.as_ref();
         let camera_view = &self.camera_view;
         let camera_snapshot = &self.camera_snapshot;
+        let player_view = &self.player_view;
+        let player_state = self.player.as_ref();
         // THE READING TOO: this view's hint depends on which row the cursor
         // is on, and which rows exist depends on what PipeWire reported.
         let sound = self.audio_snapshot.as_ref();
@@ -15497,6 +15695,9 @@ impl Footer {
                 ViewState::Camera => camera_view
                     .as_ref()
                     .map(|v| v.hint(camera_snapshot, hint_columns, texts)),
+                ViewState::Player => player_view
+                    .as_ref()
+                    .map(|v| v.hint(player_state, hint_columns, texts)),
                 ViewState::Syncthing => syncthing
                     .as_ref()
                     .map(|v| v.hint(syncthing_state, hint_columns, texts)),
@@ -15958,7 +16159,14 @@ impl Footer {
                 .collect();
             self.modeline_placed = placed
                 .iter()
-                .map(|c| (c.id, c.column, ronoctua_render::layout::width(&c.text)))
+                .map(|c| {
+                    (
+                        c.id,
+                        c.column,
+                        ronoctua_render::layout::width(&c.text),
+                        c.edge,
+                    )
+                })
                 .collect();
             let mut spans: Vec<ronoctua_render::Span> = placed
                 .iter()
@@ -17923,6 +18131,23 @@ pub fn chrome_size_of(glyph: char) -> f32 {
     tokens::text::scaled(tokens::icon::chrome_size(glyph))
 }
 
+/// Which modeline segment a cell is, each compared by the reading that
+/// PLACED it: `from_left` for the left-hand ones, `from_border` for those drawn
+/// from the right border (`edge`).
+fn segment_placed_at(
+    placed: &[(&'static str, u16, u16, bool)],
+    from_left: u16,
+    from_border: Option<u16>,
+) -> Option<&'static str> {
+    placed
+        .iter()
+        .find(|(_, at, width, edge)| {
+            let column = if *edge { from_border } else { Some(from_left) };
+            column.is_some_and(|c| c >= *at && u32::from(c) < u32::from(*at) + u32::from(*width))
+        })
+        .map(|(id, _, _, _)| *id)
+}
+
 /// One piece of chrome text becomes ONE OR TWO runs.
 ///
 /// # Why the glyph cannot be in the same run as the text
@@ -18786,6 +19011,125 @@ impl Footer {
             Ok(child) => drop(child),
             Err(e) => tracing::warn!(error = %e, %program, "could not run the media player"),
         }
+    }
+
+    /// The player's new state: the mark, and the view when it is open.
+    ///
+    /// It arrives four times a second while something plays, and a frame is
+    /// drawn only when something drawn changed: the mark (playing, paused,
+    /// gone) or an open view.
+    fn player_arrived(&mut self, s: Option<ronoctua_player::wire::State>) {
+        let before = self.player.as_ref().and_then(crate::player::mark);
+        let columns = self.screen_columns();
+        let spot = self.player_view.as_ref().and_then(|v| {
+            v.rows(self.player.as_ref(), columns, &self.texts)
+                .get(v.cursor())
+                .map(|r| r.spot.clone())
+        });
+        self.player = s;
+        if let Some(v) = self.player_view.as_mut() {
+            if let Some(spot) = spot {
+                v.follow(&spot, self.player.as_ref(), columns, &self.texts);
+            }
+            v.settle_in(self.player.as_ref(), columns, &self.texts);
+            self.region_resized();
+            self.draw_and_paint();
+        } else if before != self.player.as_ref().and_then(crate::player::mark) {
+            self.draw_and_paint();
+        }
+    }
+
+    /// Opens the player in the footer.
+    fn open_player(&mut self) {
+        if self.player_view.is_some() {
+            self.follow_cursor();
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+            return;
+        }
+        if !self.region_is_free("player-open") {
+            return;
+        }
+        let columns = self.screen_columns();
+        let mut v = crate::player::View::fresh();
+        v.settle_in(self.player.as_ref(), columns, &self.texts);
+        self.player_view = Some(v);
+        self.first_page();
+        self.follow_cursor();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// The player's column, started — the one already up ends as this one
+    /// starts (`player_window`), so it is also how a hidden one is shown.
+    /// Said in the log, with the reason when it fails: a click that raised
+    /// nothing left no trace the first time.
+    fn raise_the_column(&mut self) {
+        let _ = ronoctua_player::client::ensure();
+        let started = std::env::current_exe().and_then(|me| {
+            std::process::Command::new(me)
+                .arg("column")
+                .stdin(std::process::Stdio::null())
+                .spawn()
+        });
+        match started {
+            Ok(child) => tracing::info!(pid = child.id(), "raising the player's column"),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not raise the player's column");
+                let said = self.texts.t_with(
+                    ronoctua_i18n::key::PLAYER_COLUMN_REFUSED,
+                    &[("why", &e.to_string())],
+                );
+                self.echo_message(said);
+            }
+        }
+    }
+
+    /// A key in the player's view.
+    fn player_press(&mut self, press: crate::player::Press) {
+        let columns = self.screen_columns();
+        let Some(v) = self.player_view.as_mut() else {
+            return;
+        };
+        let errand = v.key(press, self.player.as_ref(), columns, &self.texts);
+        self.region_resized();
+        self.follow_cursor();
+        match crate::player::carry_out(errand, &self.texts) {
+            Ok(Some(said)) => self.echo_message(said),
+            Ok(None) => {}
+            Err(crate::player::Errand::Close) => {
+                self.player_view = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+            }
+            // THE VIEW CLOSES FIRST: a question opens the minibuffer and a
+            // door opens a surface — both would be refused by
+            // `region_is_free`.
+            Err(crate::player::Errand::Run(id)) => {
+                self.player_view = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+                self.run_with(id, None);
+                return;
+            }
+            // THE FOOTER HAS NO PICTURE: showing one alone, or on the whole
+            // screen, is the window's, opened already that way.
+            Err(crate::player::Errand::Show(show)) => {
+                let how = match show {
+                    crate::player::Show::Only => "only",
+                    crate::player::Show::Maximized => "maximized",
+                };
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(
+                        &me.to_string_lossy(),
+                        &["player".to_owned(), how.to_owned()],
+                        None,
+                    );
+                }
+            }
+            Err(_) => {}
+        }
+        self.draw_and_paint();
     }
 
     /// Opens the camera settings in the footer.
@@ -20990,6 +21334,28 @@ fn narrow_buffer_keymap(
 
 #[cfg(test)]
 mod tests {
+    /// FAILS IF: a mark drawn from the border is hit by the column from the
+    /// left again. With the grid's remainder half a cell, the pointer on the
+    /// RIGHT half of the player's glyph is one cell further from the left than
+    /// the glyph's column, and that half answered nothing — the owner's pause
+    /// glyph, clickable on its left half only.
+    #[test]
+    fn a_mark_at_the_border_is_hit_where_it_is_drawn() {
+        let placed = [("buffer", 1, 6, false), ("player", 169, 1, true)];
+        // THE RIGHT HALF: from the left it is cell 170, from the border 169.
+        assert_eq!(
+            super::segment_placed_at(&placed, 170, Some(169)),
+            Some("player")
+        );
+        // THE LEFT HALF: the cell before, from the border, is nothing.
+        assert_eq!(super::segment_placed_at(&placed, 169, Some(168)), None);
+        // A LEFT-HAND SEGMENT still reads from the left.
+        assert_eq!(
+            super::segment_placed_at(&placed, 3, Some(1)),
+            Some("buffer")
+        );
+    }
+
     use super::{KeyboardHold, Leave};
 
     /// THE LEADER DOES NOT CLOSE IN THE INSTANT IT OPENS.

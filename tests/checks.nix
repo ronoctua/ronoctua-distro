@@ -1368,6 +1368,7 @@ let
     XDG_DOCUMENTS_DIR=/home/noctua/main/archive
     XDG_DOWNLOAD_DIR=/home/noctua/main/temp
     XDG_MUSIC_DIR=/home/noctua/main/media/audio-music
+    XDG_MUSIC_VIDEO_DIR=/home/noctua/main/media/video-music
     XDG_PICTURES_DIR=/home/noctua/main/media/image
     XDG_PROJECTS_DIR=/home/noctua/main/prj
     XDG_PUBLICSHARE_DIR=/home/noctua/main/share/public
@@ -1393,7 +1394,7 @@ let
     done || missing=1
     [ "$missing" = 0 ] || exit 1
 
-    echo "OK: section 2's ten directories reach user-dirs.dirs"
+    echo "OK: section 2's eleven directories reach user-dirs.dirs"
   '';
 
   # THE LOCALE AND THE TIMEZONE EXIST, and the check is where that gets asked.
@@ -2146,6 +2147,16 @@ let
     inherit scroll;
     ronoctua-shell = rust.shell;
     studio = rust.studio;
+  };
+
+  # THE PLAYER in a VM: every family of format through the decoder its table
+  # names, the picture through the memfd, a second video in step, MPRIS over
+  # `busctl`, and the column narrowing a window in the compositor's own tree.
+  playerVm = import ./player-vm.nix {
+    inherit pkgs lib fonts;
+    inherit scroll;
+    ronoctua-shell = rust.shell;
+    player = rust.player;
   };
 
   displayVm = import ./display-vm.nix {
@@ -7926,6 +7937,113 @@ let
         print(f"OK: {len(measured)} sizes and opcodes agree with videodev2.h")
         END
       '';
+
+  # LIBMPV'S STRUCTS AND NUMBERS, against the C compiler. The player's FFI is
+  # written by hand (`crates/ronoctua-player-engine/src/mpv.rs`), and
+  # `#[repr(C)]` promises to ARRANGE, never to check: a wrong size or a wrong
+  # event number is libmpv writing past a struct, or an end of file read as a
+  # seek, with nothing said anywhere. Every size the Rust asserts and every
+  # constant it declares is measured here from the headers of the libmpv the
+  # flake pins.
+  mpv-layout-matches-c = mkCheck "mpv-layout-matches-c" [ pkgs.python3 pkgs.stdenv.cc ] ''
+    cat > probe.c <<'C'
+    #include <stdio.h>
+    #include <mpv/client.h>
+    #include <mpv/render.h>
+    #include <mpv/stream_cb.h>
+    int main(void) {
+      printf("RawEvent %zu\n", sizeof(mpv_event));
+      printf("RawProperty %zu\n", sizeof(mpv_event_property));
+      printf("RawEndFile %zu\n", sizeof(mpv_event_end_file));
+      printf("RawRenderParam %zu\n", sizeof(mpv_render_param));
+      printf("RawStreamInfo %zu\n", sizeof(mpv_stream_cb_info));
+      printf("FORMAT_NONE %d\n", MPV_FORMAT_NONE);
+      printf("FORMAT_STRING %d\n", MPV_FORMAT_STRING);
+      printf("FORMAT_FLAG %d\n", MPV_FORMAT_FLAG);
+      printf("FORMAT_INT64 %d\n", MPV_FORMAT_INT64);
+      printf("FORMAT_DOUBLE %d\n", MPV_FORMAT_DOUBLE);
+      printf("EVENT_NONE %d\n", MPV_EVENT_NONE);
+      printf("EVENT_SHUTDOWN %d\n", MPV_EVENT_SHUTDOWN);
+      printf("EVENT_START_FILE %d\n", MPV_EVENT_START_FILE);
+      printf("EVENT_END_FILE %d\n", MPV_EVENT_END_FILE);
+      printf("EVENT_FILE_LOADED %d\n", MPV_EVENT_FILE_LOADED);
+      printf("EVENT_SEEK %d\n", MPV_EVENT_SEEK);
+      printf("EVENT_PLAYBACK_RESTART %d\n", MPV_EVENT_PLAYBACK_RESTART);
+      printf("EVENT_PROPERTY_CHANGE %d\n", MPV_EVENT_PROPERTY_CHANGE);
+      printf("END_FILE_EOF %d\n", MPV_END_FILE_REASON_EOF);
+      printf("END_FILE_ERROR %d\n", MPV_END_FILE_REASON_ERROR);
+      printf("RENDER_PARAM_API_TYPE %d\n", MPV_RENDER_PARAM_API_TYPE);
+      printf("RENDER_PARAM_BLOCK_FOR_TARGET_TIME %d\n", MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME);
+      printf("RENDER_PARAM_SW_SIZE %d\n", MPV_RENDER_PARAM_SW_SIZE);
+      printf("RENDER_PARAM_SW_FORMAT %d\n", MPV_RENDER_PARAM_SW_FORMAT);
+      printf("RENDER_PARAM_SW_STRIDE %d\n", MPV_RENDER_PARAM_SW_STRIDE);
+      printf("RENDER_PARAM_SW_POINTER %d\n", MPV_RENDER_PARAM_SW_POINTER);
+      return 0;
+    }
+    C
+    cc -I${pkgs.mpv-unwrapped.dev}/include probe.c -o probe
+    ./probe > measured.txt
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: the C side is a table the compiler wrote.
+    measured = {}
+    for row in pathlib.Path("measured.txt").read_text().splitlines():
+        name, value = row.split()
+        measured[name] = int(value)
+    # FILE-WIDE: `code_of`, and the numbers are the compile-time assertions
+    # and the constants; a number in a comment is prose, not a promise.
+    rust = code_of(pathlib.Path("${../crates/ronoctua-player-engine/src/mpv.rs}").read_text())
+    floor(len(rust), 2000, "characters of mpv.rs")
+    declared = {n: int(v) for n, v in re.findall(r"size_of::<(\w+)>\(\) == (\d+)", rust)}
+    declared |= {n: int(v) for n, v in re.findall(r"const (\w+): c_int = (\d+);", rust)}
+    floor(len(declared), 25, "numbers mpv.rs declares")
+    wrong = [f"{n}: the C compiler says {v}, the Rust says {declared.get(n)}" for n, v in sorted(measured.items()) if declared.get(n) != v]
+    # AND NOTHING THE RUST DECLARES GOES UNMEASURED: a constant added to
+    # mpv.rs and not to the probe is a number nobody checked.
+    wrong += [f"{n} is declared in mpv.rs and the probe does not measure it" for n in sorted(set(declared) - set(measured))]
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        sys.exit(1)
+    print(f"OK: {len(measured)} sizes and numbers agree with libmpv's headers")
+    END
+  '';
+
+  # EVERY DECODER THE PLAYER RUNS IS A PROGRAM THAT EXISTS. The table in
+  # `decoders.rs` names a variable per decoder, and `nix/player-tools.nix` is
+  # what sets them; a variable set by nobody is a family of formats that
+  # plays nowhere, silently — the file is handed to mpv, which refuses it.
+  player-decoders-exist = mkCheck "player-decoders-exist" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import json, os, pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: the table is Nix turned to JSON by Nix itself.
+    tools = json.loads(${
+      lib.escapeShellArg (builtins.toJSON (import ../nix/player-tools.nix { inherit pkgs; }))
+    })
+    # FILE-WIDE: the table IS the file's point — every decoder is a row of
+    # one `const`, and a variable read anywhere in it is a program the player
+    # runs. `uncommented`: the variable names are string literals.
+    table = uncommented(pathlib.Path("${../crates/ronoctua-player/src/decoders.rs}").read_text())
+    wanted = set(re.findall(r'env: "(RONOCTUA_[A-Z0-9_]+)"', table))
+    floor(len(wanted), 5, "decoders the table declares")
+    # AND THE SOUNDFONT, the one path the table's arguments name besides the
+    # programs (`{soundfont}`).
+    wanted.add("RONOCTUA_SOUNDFONT")
+    wrong = [f"`{v}` is read and `nix/player-tools.nix` does not set it" for v in sorted(wanted - set(tools))]
+    for name, path in sorted(tools.items()):
+        if not os.path.exists(path):
+            wrong.append(f"`{name}` points at {path}, which does not exist")
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        sys.exit(1)
+    print(f"OK: {len(wanted)} variables, every one set to a program that exists")
+    END
+  '';
 
   # EVERY EFFECT AND EVERY PARAMETER HAS A NAME IN BOTH LANGUAGES. The keys
   # are built from the table (`camera-effect-<id>`, `camera-param-<name>`),
@@ -14257,11 +14375,14 @@ let
         # AND THE STUDIO'S: the camera app and the settings view start it from
         # beside themselves when nobody answers its socket.
         studio=${../crates/ronoctua-studio/src}
+        # AND THE PLAYER'S, for the same reason: its client starts the daemon
+        # from beside whoever asked.
+        player=${../crates/ronoctua-player/src}
         failed=0
 
         # The names come from the CODE that looks them up, never from a list
         # written here: a list would be a third place to keep in step.
-        beside=$(grep -rhoE 'parent\(\)\?\.join\("[a-z-]+"' "$shell" "$queue" "$brain" "$studio" \
+        beside=$(grep -rhoE 'parent\(\)\?\.join\("[a-z-]+"' "$shell" "$queue" "$brain" "$studio" "$player" \
           | grep -oE '"[a-z-]+"' | tr -d '"' | sort -u)
         [ -n "$beside" ] || {
           echo "ERROR: nobody looks for a binary beside it — what does the grep match?" >&2
@@ -22977,6 +23098,8 @@ let
       one-camera-boundary
       the-camera-has-one-door
       v4l2-layout-matches-c
+      mpv-layout-matches-c
+      player-decoders-exist
       camera-effects-have-text
       stream-key-is-never-an-argument
       volume-is-perceived
@@ -23023,6 +23146,7 @@ let
     power-vm = powerVm;
     display-vm = displayVm;
     camera-vm = cameraVm;
+    player-vm = playerVm;
     bluetooth-vm = bluetoothVm;
     network-vm = networkVm;
     impermanence-vm = impermanenceVm;

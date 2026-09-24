@@ -8491,6 +8491,124 @@ handler não faz um teclado: o botão de energia, a tampa, o barramento de víde
 controle do headset o carregam também — medido em 2026-09-08, nove dispositivos desta máquina o
 carregavam e DOIS eram teclados. O filtro é o alfabeto, como o próprio keyd faz.
 
+### O player — `LEADER p`, um processo, e a coluna à direita
+
+**Por que um daemon.** O dono pediu o mesmo vídeo no rodapé e numa janela com UM áudio, vários
+vídeos presos a um áudio, e duas máquinas tocando juntas. As três coisas são a mesma: um relógio
+mestre e vistas que o seguem. Um processo por vista seria N decodificações e N áudios que se
+desalinham; um processo que decodifica UMA vez e publica quadros num anel de memória por vista
+(`ronoctua-frames`, o mesmo do estúdio, que subiu para ser comum) está junto por construção.
+
+**Por que libmpv, e por que FFI à mão.** O pedido era "todos os formatos do VLC e do DeaDBeeF". O
+libmpv sobre o `ffmpeg-full` cobre o primeiro (libopenmpt, gme, modplug, bluray, dvdnav, dav1d,
+libass) e a render API de software entrega o quadro na CPU, que é onde o anel precisa dele. Medido
+na fase 0: 1,34 ms por quadro a 1080p, o processo inteiro a 40% de um núcleo, e o `hwdec` não
+mudou nada (o quadro volta para a CPU de qualquer jeito). A FFI são quinze funções; um gerador de
+bindings traria o cabeçalho inteiro e um `clang` na build para usar quinze. O preço é o layout sem
+conferência, e é por isso que o `mpv-layout-matches-c` compila uma sonda contra os cabeçalhos
+pinados — ele achou o `cancel_fn` que o `mpv_stream_cb_info` ganhou na API 1.106 e a struct não
+tinha (40 bytes contra 48; funcionava porque o libmpv zera a struct antes de a entregar).
+
+**Por que o motor é outro crate.** Uma feature `engine` no `ronoctua-player` não basta: o workspace
+unifica features, e o shell passaria a linkar o libmpv no dia em que o daemon fosse compilado ao
+lado. `ronoctua-player` é o cliente, o protocolo e as regras puras; `ronoctua-player-engine` é o
+binário, o único que cita o libmpv, e é extraído (`rust.player`) como o estúdio.
+
+**O que só o DeaDBeeF abria.** Um decodificador de linha de comando por família, escrevendo WAV (ou
+PCM cru) num cano que o mpv lê por um protocolo nosso (`ronoctua-decode://`, `mpv_stream_cb_add_ro`).
+Duas medições: todo WAV escrito em cano diz tamanho ZERO — o escritor não pode voltar para corrigir
+—, e o leitor do ffmpeg acredita e chama o primeiro pacote de corrompido; por isso o cabeçalho é
+reescrito na fronteira (`decoders::endless`), mantendo o formato do decodificador (o do sidplayfp é
+MONO). E o libsndfile não abre FIFO para escrever WAV, então o `fluidsynth` sai em RAW no stdout.
+O AdPlug não existe no nixpkgs e é empacotado aqui (`nix/adplug.nix`). Ficaram de fora: o `uade` é
+unfree, o `sacd` e os PSF não têm decodificador no nixpkgs (`docs/PENDING.md`).
+
+**A coluna.** Uma superfície layer-shell ancorada em cima, à direita e embaixo, com zona exclusiva
+da própria largura: as janelas encolhem, nada é coberto. A zona de uma superfície é recortada do
+que as superfícies criadas ANTES dela deixaram — é assim que o compositor arranja a camada —, então
+a coluna termina onde a área do rodapé começa e nunca estreita a modeline, o minibuffer nem a faixa.
+A ordem é a armadilha: um rodapé que sobe DEPOIS da coluna seria arranjado depois dela e
+estreitado; por isso ele, na partida, derruba e levanta de novo uma coluna que já esteja de pé. Uma
+só por vez (`column.pid`): abrir outra fecha a atual, que é como um segundo inquilino vai tomar a
+borda quando existir.
+
+**Remoto: por que a tailnet e por que um código.** A tailnet já é cifrada e já autentica máquina a
+máquina; o daemon escuta só nos endereços dela e recusa conexão fora das faixas dela mesmo assim.
+O que se acrescenta é que uma máquina da MESMA tailnet ainda precisa ser pareada — um código de seis
+dígitos lido em voz alta, trocado por uma chave de 32 bytes. A mídia viaja por HTTP com `Range` na
+mesma porta, porque é assim que o mpv busca um trecho; um endereço (YouTube) viaja como endereço.
+O relógio é medido uma vez (oito idas e voltas, a mediana) e a correção é a mesma regra dos vídeos
+locais — com uma janela de quatro segundos depois de cada carga em que quem segue SALTA em vez de
+empurrar, porque a carga pela tailnet atrasa ~0,7 s e um empurrão de 5% levaria catorze segundos
+para pagar isso. Medido entre duas instâncias pela tailnet real: ±70 ms desde o primeiro segundo.
+
+**Letra e patrocínio nascem desligados.** Os dois contam a um estranho o que está tocando. O
+SponsorBlock é perguntado pelo PREFIXO de quatro dígitos do SHA-256 do id — a forma que o próprio
+serviço recomenda —, e o SHA-256 foi escrito aqui (vetores da especificação no teste) em vez de uma
+dependência para um uso só.
+
+**Que arquivo o player abre, e por que a lista é LIDA e não escrita.** A entrada `.desktop` tem de
+nomear tipo por tipo — ela não pode dizer `audio/*` —, e a primeira forma era uma lista à mão com 51
+dos 95 tipos de áudio e vídeo que o `shared-mime-info` conhece: os que alguém lembrou. Agora a lista
+sai da base na BUILD (listar o store ao avaliar seria import-from-derivation, pago por toda avaliação
+do flake), mais os tipos de mídia que moram em `application/` e os NOSSOS. E os padrões vão no
+`mimeapps.list` de `$XDG_DATA_DIRS/applications`, que é onde a especificação guarda os da
+distribuição: abaixo do arquivo da pessoa e do `/etc/xdg`, então uma escolha de alguém vence.
+
+**Os nossos tipos** (`assets/player-types.nix`) são um por FAMÍLIA de decodificador — AdLib, Amiga,
+trilha de console, chip de 8 bits —, porque o que a base não nomeia resolve para
+`application/octet-stream`, e tipo que ninguém reivindica é arquivo que programa nenhum oferece
+abrir. Eles entram nos três lugares que perguntam: a tabela do gerenciador (`mime-glyphs.nix`
+importa as linhas), a base do sistema (`share/mime/packages/ronoctua-player.xml`, para quem pergunta
+ao `xdg-mime`) e a entrada. **A maior parte da decisão é o que fica DE FORA**: um glob é reivindicar
+todo arquivo com aquele nome, escrito por qualquer programa, então extensão que a base já dá a outra
+coisa (`.iso`, `.gsf`, `.stc`, `.asc`…) ou que é de outra coisa lá fora (`.cff` é fonte, `.bam` é
+genoma, `.mib` é SNMP) e toda extensão de duas letras ficam só no decodificador: o player toca quando
+recebe, e não toma dos outros. A lista do que saiu e por quê está no topo do arquivo.
+
+**XSPF e ASX são abertos pelo daemon.** O libmpv lê `.m3u` e `.pls` sozinho, e preguiçosamente — a
+entrada vira item quando a fila chega nela, que é também como um HLS toca —, mas não conhece os dois
+em XML: recebe um e termina na hora, como se nada tivesse sido pedido. O daemon os lê com o MESMO
+leitor da prévia do gerenciador, que por isso desceu para um crate próprio (`ronoctua-playlist`,
+só um leitor de XML ao lado): o daemon não pode linkar o `ronoctua-inspect`, que traz todo
+decodificador da prévia, e dois leitores seriam duas respostas sobre o que uma lista contém.
+
+**Os arquivos são do player, e a pasta é aberta pelo shell.** O player lista a própria biblioteca
+(`LEADER p l`, um nível da vista) em vez de mandar a pessoa ao gerenciador: começa na pasta de
+música, gira para vídeos e clipes musicais (a décima primeira pasta do `nix/user-dirs.nix`), e só
+mostra o que toca — o critério é UM (`player_browse::glyph_if_played`) e responde também à pergunta de caminho
+e ao `ronoctua-shell play`, porque uma pasta que tocasse o que a listagem não mostrou seria duas
+respostas à mesma pergunta. Uma pasta vira arquivos DESTE lado do soquete: o libmpv aceitaria um
+diretório e enfileiraria figuras e texto junto, e um arquivo que só um decodificador nosso lê
+chegaria a ele pelo caminho e não pelo protocolo do decodificador. A caminhada não segue link para
+pasta (um link para cima não acaba) e tem teto de profundidade e de arquivos.
+
+**O MPRIS é a especificação inteira, menos `Playlists`.** A fila é a `TrackList`, e o id de uma
+faixa é o LUGAR dela na fila: ids estáveis pediriam uma identidade por item que o motor não tem, e a
+especificação aceita ids que mudam desde que toda mudança da fila saia como `TrackListReplaced` —
+que é o que sai. `Playlists` é para quem guarda listas SALVAS, e este player tem uma fila e o disco.
+`Quit` para e sai de verdade; quem o traz de volta é o próximo pedido, porque o `client::ensure`
+pede a unidade ao systemd quando ninguém responde e o daemon não mora ao lado do shell.
+
+**A marca da modeline e a tecla alternam a coluna, e "está de pé?" é uma pergunta sobre a COLUNA,
+não sobre um número.** O `column.pid` sobrevive a uma coluna morta sem `Drop` (morta a sinal, ou
+levada com a sessão), e o número dele volta a outro processo; perguntar só "o PID vive?" fazia o
+interruptor mandar `TERM` a quem o herdou, responder "fechei" e não abrir nada. Por isso a linha de
+comando é lida: este programa, com a palavra `column`.
+
+**A coluna põe um estado no commit que a mapeia, porque o compositor não avisa as janelas sem
+isso.** Um commit de layer re-arranja as janelas sempre, mas só MANDA a nova disposição quando leva
+algum estado de layer além da interatividade do teclado; o commit que mapeia a superfície leva só o
+buffer. Sem patch (invariante 3), o lado do cliente é dizer de novo a zona exclusiva no primeiro
+quadro — o wlroots conta um valor repetido como mudança. E a prova é a JANELA receber a largura
+nova: a árvore do IPC mostra o que foi calculado, e mostrava certo com a janela ainda larga.
+
+**A imagem sozinha é um palco, e os controles são dela só enquanto há atividade.** Fora do palco a
+faixa da imagem é um tom de superfície, e o quadro é pedido na proporção do vídeo para que ela
+apareça; no palco a imagem toma a superfície e o preto é a tarja do próprio player. O transporte
+volta por cima a cada gesto e sai sozinho, mas nunca sob a mão — um controle que some sob o ponteiro
+que ia apertá-lo é um controle que ninguém aperta — e escondido ele não é alvo de nada.
+
 ## 8. Desempenho, grafo e riscos
 
 ### Grafo de crates
@@ -8508,6 +8626,9 @@ Duas adições ao grafo original, cada uma por um problema real:
 - **`ronoctua-cmd`.** Toda funcionalidade tem de ser um comando nomeado. `keymap` resolve a árvore de
   teclas; o **registro de comandos** é outra coisa, e sem crate próprio os ids nascem espalhados
   dentro do `shell`.
+- **`ronoctua-playlist`.** Os leitores de lista de reprodução, com dois chamadores: a prévia do
+  gerenciador (`ronoctua-inspect::playlist`, que guarda a parte que é sobre TIPO MIME) e o daemon do
+  player, que não pode linkar o `ronoctua-inspect`.
 - **`ronoctua-clock`.** Uma fronteira, um crate — a regra que o `ronoctua-disks` e o
   `ronoctua-power` já seguem. Dois chamadores querem o `timedate1`: a vista `LEADER s l` e a vigia
   do brain. Um segundo leitor de `timedatectl` seria uma segunda resposta sobre um relógio só.

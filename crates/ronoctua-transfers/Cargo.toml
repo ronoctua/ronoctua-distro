@@ -14,6 +14,8 @@ publish.workspace = true
 [dependencies]
 # THE HTTP FRAMER, and not a fourth copy of one. See `one-http-writer`.
 ronoctua-http = { path = "../ronoctua-http" }
+# THE PO TOKEN'S FLAGS, shared with the player: the device is the same for both.
+ronoctua-ytdlp = { path = "../ronoctua-ytdlp" }
 # The disk. Every local operation in the queue is one of this crate's, watched —
 # there is no second implementation of "copy a tree" here.
 ronoctua-files = { path = "../ronoctua-files" }

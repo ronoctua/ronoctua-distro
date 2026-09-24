@@ -32,6 +32,89 @@
 }:
 
 let
+  # The player's scenes, read by `exec` from the test script — which is at
+  # the kernel's 128 KiB ceiling for one argument (see `testScript`).
+  playerScenes = pkgs.writeText "shots-player-scenes.py" ''
+    if wanted("player"):
+        with subtest("the player, before anything was played"):
+            control("player-open")
+            shot("33c-player", lines=15)
+            has_colour(
+                "#" + token_hex("text.heading"),
+                at_least=40,
+                of="/tmp/33c-player.png",
+                fuzz=4,
+            )
+            focus_compositor()
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
+            machine.sleep(1)
+
+    if wanted("player-files"):
+        with subtest("the player's files: folders, and only what it plays"):
+            # A LIBRARY IN THE MUSIC FOLDER this footer reads: `HOME` is
+            # `/root` and no `user-dirs.dirs` names one, so it is `~/Music`.
+            # The picture and the text are there to be LEFT OUT.
+            machine.succeed(
+                "mkdir -p '/root/Music/Some Album/Disc 2' /root/Music/Singles && "
+                "touch '/root/Music/Some Album/01 First.flac' "
+                "'/root/Music/Some Album/02 Second.flac' "
+                "'/root/Music/Some Album/cover.jpg' "
+                "/root/Music/tune.d00 /root/Music/theme.brstm "
+                "/root/Music/clip.mkv /root/Music/notes.txt"
+            )
+            control("player-browse")
+            shot("33f-player-files", lines=15)
+            # THE CURSOR IS ON AN ENTRY: the first form opened with it on the
+            # heading, where no row wears the cursor's tone and the hint line
+            # teaches none of the level's keys. The footer follows the cursor,
+            # so the heading itself may have scrolled away — the tone is the
+            # assertion.
+            has_colour(
+                "#" + token_hex("text.here.acts"),
+                at_least=20,
+                of="/tmp/33f-player-files.png",
+                fuzz=4,
+            )
+            # ONE `Esc` IS ONE LEVEL: back to the view, and the second closes.
+            focus_compositor()
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
+            machine.sleep(1)
+
+    if wanted("player-column"):
+        with subtest("the player's column, down the right edge"):
+            control("player-column")
+            # BRACKETED, so the pattern never matches the shell asking.
+            machine.wait_until_succeeds("pgrep -f '[r]onoctua-shell column'", timeout=60)
+            machine.sleep(4)
+            shot("33d-player-column")
+            has_colour(
+                "#" + token_hex("text.heading"),
+                at_least=40,
+                of="/tmp/33d-player-column.png",
+                fuzz=4,
+            )
+            # THE SAME COMMAND CLOSES IT: the column toggles.
+            control("player-column")
+            machine.wait_until_fails("pgrep -f '[r]onoctua-shell column'", timeout=30)
+
+    if wanted("player-window"):
+        with subtest("the player in a window of its own"):
+            control("player-window")
+            machine.wait_until_succeeds(
+                "pgrep -f '[r]onoctua-shell player$'", timeout=60
+            )
+            machine.sleep(4)
+            shot("33e-player-window")
+            has_colour(
+                "#" + token_hex("text.heading"),
+                at_least=40,
+                of="/tmp/33e-player-window.png",
+                fuzz=4,
+            )
+            machine.succeed("pkill -f '[r]onoctua-shell player$'")
+  '';
   declared = import ./shots-scenes.nix;
   scenes = map (s: s.id) declared;
   needsOf = lib.listToAttrs (
@@ -545,6 +628,11 @@ pkgs.testers.runNixOSTest {
             focus_compositor()
             machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
+
+    # THE PLAYER'S THREE DOORS live in a file of their own, read at run time:
+    # this script is at the kernel's ceiling (see above), and three scenes
+    # were what crossed it.
+    exec(open("${playerScenes}").read())
 
     if wanted("tor"):
         with subtest("Tor: the section exists with the daemon STOPPED"):

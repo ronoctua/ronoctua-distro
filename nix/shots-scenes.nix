@@ -80,6 +80,21 @@
   # view — its sections, and a sentence saying there is no camera — and not a
   # blank region: the headings' tone is the assertion.
   { id = "camera-settings"; }
+  # THE PLAYER (`LEADER p p`) with no daemon answering — the state a machine
+  # is in before anything was ever played, and the one this VM has. The view
+  # must still be a view: its headings, a sentence saying the player is not
+  # answering, and the rows that open something. The headings' tone is the
+  # assertion, as the camera's.
+  { id = "player"; }
+  # THE PLAYER'S FILES (`LEADER p l`): the music folder's folders and the
+  # files the player plays — a picture and a text beside them are left out.
+  { id = "player-files"; }
+  # THE COLUMN ON THE RIGHT and THE WINDOW, the player's other two doors.
+  # The column is a layer surface the compositor places, and the one thing a
+  # photograph of it proves that the VM test's geometry does not is what it
+  # DRAWS: the headings, down the right edge, above the footer.
+  { id = "player-column"; }
+  { id = "player-window"; }
   # THE OTHER HALF OF WHAT THE OWNER REPORTED: he could not find a way to turn
   # Tor on. The section lived behind `if let Some(scene)`, and the control
   # socket only answers when Tor is already running — so a stopped Tor drew no

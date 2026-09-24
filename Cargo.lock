@@ -2869,6 +2869,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-frames"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rustix 1.1.4",
+]
+
+[[package]]
 name = "ronoctua-http"
 version = "0.1.0"
 dependencies = [
@@ -2898,6 +2906,7 @@ dependencies = [
  "image",
  "resvg",
  "ronoctua-files",
+ "ronoctua-playlist",
  "ronoctua-protocol",
  "ronoctua-syntax",
  "ronoctua-zip",
@@ -2992,6 +3001,47 @@ dependencies = [
 [[package]]
 name = "ronoctua-options"
 version = "0.1.0"
+
+[[package]]
+name = "ronoctua-player"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-frames",
+ "ronoctua-store",
+ "ronoctua-xdg",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "ronoctua-player-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-frames",
+ "ronoctua-http",
+ "ronoctua-player",
+ "ronoctua-playlist",
+ "ronoctua-store",
+ "ronoctua-tunnel",
+ "ronoctua-xdg",
+ "ronoctua-ytdlp",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+]
+
+[[package]]
+name = "ronoctua-playlist"
+version = "0.1.0"
+dependencies = [
+ "roxmltree 0.21.1",
+]
 
 [[package]]
 name = "ronoctua-pointers"
@@ -3123,6 +3173,7 @@ dependencies = [
  "ronoctua-network",
  "ronoctua-notify",
  "ronoctua-options",
+ "ronoctua-player",
  "ronoctua-pointers",
  "ronoctua-power",
  "ronoctua-protocol",
@@ -3171,6 +3222,7 @@ dependencies = [
  "ronoctua-camera",
  "ronoctua-effects",
  "ronoctua-files",
+ "ronoctua-frames",
  "ronoctua-memory",
  "ronoctua-segment",
  "ronoctua-store",
@@ -3232,6 +3284,7 @@ dependencies = [
  "ronoctua-http",
  "ronoctua-torrent",
  "ronoctua-xdg",
+ "ronoctua-ytdlp",
  "rustix 1.1.4",
  "serde",
  "serde_json",
@@ -3266,6 +3319,10 @@ dependencies = [
 
 [[package]]
 name = "ronoctua-xdg"
+version = "0.1.0"
+
+[[package]]
+name = "ronoctua-ytdlp"
 version = "0.1.0"
 
 [[package]]

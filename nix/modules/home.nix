@@ -28,7 +28,7 @@ let
   cfg = config.ronoctua;
   home = "/home/${cfg.user}";
 
-  # THE TEN DIRECTORIES, from the ONE file that holds them.
+  # THE ELEVEN DIRECTORIES, from the ONE file that holds them.
   #
   # Names relative to home; the `${home}/` goes on here. Written out again in
   # this file, the sidebar of the file manager and the compositor's
@@ -96,7 +96,7 @@ in
         ".bashrc".source = ../../assets/shell/bashrc.bash;
       };
 
-      # THE TEN DIRECTORIES, section 2. The names come from `nix/user-dirs.nix`.
+      # THE ELEVEN DIRECTORIES, section 2. The names come from `nix/user-dirs.nix`.
       #
       # `xdg.userDirs` writes `~/.config/user-dirs.dirs`, which is what a file
       # dialog, a browser download and `xdg-open` actually read. Setting the
@@ -134,6 +134,9 @@ in
         # name from, and a check compares the two.
         extraConfig = {
           SCREENSHOT = "${home}/${dirs.screenshot}";
+          # THE ELEVENTH, the player's music videos — read by the shell as
+          # `XDG_MUSIC_VIDEO_DIR` (`player_browse::places`).
+          MUSIC_VIDEO = "${home}/${dirs.musicVideo}";
         };
       };
 

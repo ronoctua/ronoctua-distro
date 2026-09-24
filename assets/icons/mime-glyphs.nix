@@ -422,5 +422,8 @@
       under = "text/plain";
       token = "mesh";
     }
-  ];
+  ]
+  # THE SOUNDS ONLY THE PLAYER'S DECODERS OPEN, declared where the player's
+  # desktop entry and the system database read them too.
+  ++ (import ../player-types.nix).rows;
 }

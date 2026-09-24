@@ -199,6 +199,12 @@ let
   #
   # The split is the fix, and `deps-layer-is-lean` is what keeps it: it reads
   # the generated `.drv` and refuses a `RONOCTUA_*` in there.
+  # THE PLAYER'S ENGINE: libmpv, over the SAME ffmpeg-full the rest of the
+  # system decodes with — libopenmpt, gme, modplug, bluray, dvdnav, dav1d and
+  # libass are what make it open what DeaDBeeF and VLC open. The stock mpv is
+  # built against the smaller ffmpeg.
+  mpvFull = pkgs.mpv-unwrapped.override { ffmpeg = pkgs.ffmpeg-full; };
+
   buildBase = {
     src = rustFont;
     strictDeps = true;
@@ -269,6 +275,9 @@ let
     # THE CAMERA'S EFFECTS, one declaration for the studio's arithmetic and
     # the text keys both languages owe. See `nix/camera-effects.nix`.
     RONOCTUA_CAMERA_EFFECTS_RS = "${cameraEffectsRs}/effects.rs";
+    # WHERE libmpv IS, for `ronoctua-player-engine`'s build script — the ONE
+    # crate that links it, which also puts it in that binary's RUNPATH.
+    RONOCTUA_LIBMPV_DIR = "${mpvFull}/lib";
     # THE SYNTAX TABLE, and it is one file for the same reason the update
     # sequence is: what crosses to Rust is the finished table, not the
     # declaration. `crates/ronoctua-syntax`'s `build.rs` copies it into
@@ -920,6 +929,15 @@ rec {
     cp ${workspace}/bin/ronoctua-studio $out/bin/
     chmod +w $out/bin/ronoctua-studio
     patchelf --shrink-rpath $out/bin/ronoctua-studio
+  '';
+
+  # THE PLAYER, extracted for the studio's reason: its closure is libmpv and
+  # ffmpeg-full, and never the renderer or the wasm runtime.
+  player = pkgs.runCommand "ronoctua-player" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-player $out/bin/
+    chmod +w $out/bin/ronoctua-player
+    patchelf --shrink-rpath $out/bin/ronoctua-player
   '';
 
   # THE KEYS DAEMON, extracted the same way: Independent mode runs it as root

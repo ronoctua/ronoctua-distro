@@ -319,6 +319,15 @@ impl Minibuffer {
     pub fn key(&mut self, t: ronoctua_keymap::Key, registry: &ronoctua_cmd::Registry) -> Action {
         use ronoctua_keymap::Sym;
 
+        // PASTING IS THE MINIBUFFER'S ALONE, and not a gesture of the lists
+        // that share `gesture_of`: there `C-v` is the file manager's preview.
+        // `C-y` is Emacs's yank, which is the notation this line is written in.
+        // This side does not hold the clipboard; the footer does, and answers
+        // with [`Minibuffer::paste`].
+        if t.mods.ctrl && matches!(t.sym, Sym::Char('v' | 'y')) {
+            return Action::WantsPaste;
+        }
+
         match gesture_of(t) {
             Gesture::Cancel => {
                 self.close_it();
@@ -401,6 +410,26 @@ impl Minibuffer {
             // `gesture_of` has already resolved everything else.
             _ => Action::Nothing,
         }
+    }
+
+    /// What was copied, typed in at the end of the line.
+    ///
+    /// ONE LINE: the minibuffer is a line, and a newline in it would be a
+    /// character nobody can see — a path copied with its trailing newline
+    /// would name a file that does not exist. Line breaks become spaces, and
+    /// the ends are trimmed.
+    pub fn paste(&mut self, text: &str, registry: &ronoctua_cmd::Registry) -> Action {
+        let line: String = text
+            .trim()
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        if line.is_empty() {
+            return Action::Nothing;
+        }
+        self.query.push_str(&line);
+        self.filter_by(registry);
+        Action::Changed
     }
 
     /// Moves the cursor, without leaving the list.
@@ -490,6 +519,9 @@ pub enum Action {
     /// It is NOT a command: the registry knows nothing about it, and the caller
     /// is the one that knows what the id means.
     Selected(String),
+    /// `C-v` or `C-y`: the caller holds the clipboard, and hands it to
+    /// [`Minibuffer::paste`].
+    WantsPaste,
 }
 
 /// Does the command require a positional argument?
@@ -959,6 +991,29 @@ mod tests {
         assert_eq!(m.prompt(), "M-x ");
         type_in(&mut m, &r, "sai");
         assert_eq!(m.prompt(), "M-x sai");
+    }
+
+    /// FAILS IF: `C-v` goes back to being a key with no role — the owner
+    /// copied a path in the file manager, asked the player for a file, and
+    /// nothing was pasted — or a pasted newline gets into the line.
+    #[test]
+    fn a_copy_is_pasted_as_one_line() {
+        let r = registry();
+        let mut m = Minibuffer::default();
+        m.open(&r);
+        for c in ['v', 'y'] {
+            let key = Key {
+                mods: Mods {
+                    ctrl: true,
+                    ..Mods::default()
+                },
+                sym: Sym::Char(c),
+            };
+            assert_eq!(m.key(key, &r), Action::WantsPaste, "C-{c}");
+        }
+        assert_eq!(m.paste("/music/a b.flac\n", &r), Action::Changed);
+        assert_eq!(m.prompt(), "M-x /music/a b.flac");
+        assert_eq!(m.paste("  \n", &r), Action::Nothing);
     }
 
     /// THE DEFECT THIS CATCHES: backspace taking one CODE POINT.

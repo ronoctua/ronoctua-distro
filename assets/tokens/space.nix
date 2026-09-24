@@ -867,6 +867,18 @@
     thickness = 1;
   };
 
+  # THE COLUMN ON THE RIGHT — the one chrome besides the footer (invariant
+  # 14), from the top of the screen to where the footer's area begins.
+  #
+  # `width` is in CELLS, like everything drawn on the grid, so the column
+  # grows with the size of the text instead of squeezing it. `pictures` is how
+  # many LINES a video in it takes before the rows start; a second video
+  # playing in step (a follower) takes as many again.
+  column = {
+    width = 48;
+    pictures = 12;
+  };
+
   # THE BROWSER EXTENSION'S POPUP, and this is the THIRD block in this file
   # measured in PIXELS rather than in cells.
   #

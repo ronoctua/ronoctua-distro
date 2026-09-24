@@ -1,0 +1,85 @@
+//! `ronoctua-player` — the daemon.
+//!
+//! A user unit (`nix/modules/player.nix`) that is always up and costs a
+//! socket at rest: no mpv exists until something is asked to play. The
+//! nested loop starts it from beside the shell (`client::ensure`).
+
+use std::{
+    os::unix::net::UnixListener,
+    sync::{Arc, Condvar, Mutex},
+};
+
+use anyhow::{Context as _, Result};
+use ronoctua_player::wire;
+
+mod engine;
+mod mpris;
+mod mpv;
+mod remote;
+
+fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "ronoctua_player_engine=info".into()),
+        )
+        .init();
+
+    // OPEN THESE, when the daemon is started with paths — which is what the
+    // `.desktop` entry does when there is no player yet.
+    let items: Vec<String> = std::env::args()
+        .skip(1)
+        .map(|a| engine::absolute(&a))
+        .collect();
+
+    let path = wire::socket_path()?;
+    // A socket that answers is another player: hand it the items and leave.
+    if std::os::unix::net::UnixStream::connect(&path).is_ok() {
+        if !items.is_empty() {
+            ronoctua_player::client::tell(&wire::Ask::Open {
+                items,
+                replace: true,
+            })?;
+            return Ok(());
+        }
+        anyhow::bail!("a player is already listening at {}", path.display());
+    }
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)
+        .with_context(|| format!("could not listen at {}", path.display()))?;
+
+    engine::forget_old_decodes();
+    let shared: engine::Shared = Arc::new((Mutex::new(engine::Engine::new()), Condvar::new()));
+    if !items.is_empty() {
+        let (lock, _) = &*shared;
+        if let Ok(mut e) = lock.lock() {
+            let _ = e.ask(
+                wire::Ask::Open {
+                    items,
+                    replace: true,
+                },
+                &shared,
+            );
+        }
+    }
+
+    // MPRIS, so the media keys and `playerctl` reach this player.
+    let poke = mpris::start(shared.clone());
+    if let Ok(mut e) = shared.0.lock() {
+        e.set_mpris(poke);
+    }
+
+    // AND THE TAILNET: other machines join this one there, and only there.
+    remote::listen(shared.clone());
+
+    tracing::info!(socket = %path.display(), "the player is listening");
+    for stream in listener.incoming() {
+        let Ok(stream) = stream else { continue };
+        let shared = shared.clone();
+        let _ = std::thread::Builder::new()
+            .name("player-client".into())
+            .spawn(move || engine::serve_one(stream, &shared));
+    }
+    Ok(())
+}

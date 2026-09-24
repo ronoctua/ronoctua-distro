@@ -694,6 +694,11 @@ pub const BY_NAME_ONLY: &[&str] = &[
     "camera-script-add",
     "camera-stream-url",
     "camera-stream-key",
+    // THE PLAYER'S TWO SWITCHES: the transport draws them as buttons, the
+    // view as rows, and a sequence of their own would be two keys for a
+    // setting touched once in a while.
+    "player-shuffle",
+    "player-repeat",
 ];
 
 /// And for the button a standing notice offers.
@@ -1125,6 +1130,105 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "camera-stream-key",
             label: key::CMD_CAMERA_STREAM_KEY,
+        },
+        // THE PLAYER — `p p` in the footer, `p w` in a window, `p c` the
+        // column on the right. The transport is under `p` too, so a song is
+        // paused from anywhere without opening anything.
+        Command {
+            id: "player-open",
+            label: key::CMD_PLAYER_OPEN,
+        },
+        Command {
+            id: "player-window",
+            label: key::CMD_PLAYER_WINDOW,
+        },
+        Command {
+            id: "player-column",
+            label: key::CMD_PLAYER_COLUMN,
+        },
+        Command {
+            id: "player-play-file",
+            label: key::CMD_PLAYER_PLAY_FILE,
+        },
+        Command {
+            id: "player-enqueue",
+            label: key::CMD_PLAYER_ENQUEUE,
+        },
+        Command {
+            id: "player-follow",
+            label: key::CMD_PLAYER_FOLLOW,
+        },
+        Command {
+            id: "player-pair",
+            label: key::CMD_PLAYER_PAIR,
+        },
+        Command {
+            id: "player-toggle",
+            label: key::CMD_PLAYER_TOGGLE,
+        },
+        Command {
+            id: "player-next",
+            label: key::CMD_PLAYER_NEXT,
+        },
+        Command {
+            id: "player-previous",
+            label: key::CMD_PLAYER_PREVIOUS,
+        },
+        Command {
+            id: "player-stop",
+            label: key::CMD_PLAYER_STOP,
+        },
+        Command {
+            id: "player-shuffle",
+            label: key::CMD_PLAYER_SHUFFLE,
+        },
+        Command {
+            id: "player-repeat",
+            label: key::CMD_PLAYER_REPEAT,
+        },
+        Command {
+            id: "player-up",
+            label: key::CMD_PLAYER_UP,
+        },
+        Command {
+            id: "player-down",
+            label: key::CMD_PLAYER_DOWN,
+        },
+        Command {
+            id: "player-less",
+            label: key::CMD_PLAYER_LESS,
+        },
+        Command {
+            id: "player-more",
+            label: key::CMD_PLAYER_MORE,
+        },
+        Command {
+            id: "player-enter",
+            label: key::CMD_PLAYER_ENTER,
+        },
+        Command {
+            id: "player-remove",
+            label: key::CMD_PLAYER_REMOVE,
+        },
+        Command {
+            id: "player-browse",
+            label: key::CMD_PLAYER_BROWSE,
+        },
+        Command {
+            id: "player-add",
+            label: key::CMD_PLAYER_ADD,
+        },
+        Command {
+            id: "player-parent",
+            label: key::CMD_PLAYER_PARENT,
+        },
+        Command {
+            id: "player-only",
+            label: key::CMD_PLAYER_ONLY,
+        },
+        Command {
+            id: "player-maximize",
+            label: key::CMD_PLAYER_MAXIMIZE,
         },
         // MICE, TOUCHPADS AND EVERY CURSOR — `s i i` in the footer and `s i w`
         // in a window, the doubled letter and the `w` every view of this
@@ -2303,6 +2407,23 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // trio reading one lexicon (see the `ARCHITECTURE`), and a drawer for
         // odds and ends is exactly where a named trio would stop looking like
         // one.
+        // `p` FOR THE PLAYER: its three doors, the three questions (play,
+        // queue, follow), and the transport.
+        ("p p", "player-open", None),
+        ("p w", "player-window", None),
+        ("p c", "player-column", None),
+        ("p o", "player-play-file", None),
+        ("p a", "player-enqueue", None),
+        ("p f", "player-follow", None),
+        // `l` FOR THE LIBRARY: the files, from the music folder.
+        ("p l", "player-browse", None),
+        // `m` FOR MACHINE: pairing with another one, by its name and the code
+        // it shows.
+        ("p m", "player-pair", None),
+        ("p t", "player-toggle", None),
+        ("p n", "player-next", None),
+        ("p b", "player-previous", None),
+        ("p s", "player-stop", None),
         ("m s", "screen-capture", None),
         ("m c", "camera-open", None),
         // `i` for ICONS, and not `g` for glyphs: the Nerd Fonts browser is the
@@ -2523,6 +2644,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `m` FOR MISCELLANEOUS, and `m i` for the browsers inside it. See the
         // bindings for why the trio keeps a prefix of its own.
         ("m", key::GROUP_MISCELLANEOUS),
+        ("p", key::GROUP_PLAYER),
         ("m i", key::GROUP_ICONS),
         // `t` FOR TRANSFERS. It held the screen capture alone and gave the
         // letter up: a queue that everything long goes through earns a
@@ -2749,6 +2871,7 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
             .filter(|id| !crate::camera::LOCAL.contains(id)),
     );
     out.extend(crate::syncthing::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
+    out.extend(crate::player::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     // THE KEYBOARD'S TOP ROW, which the compositor binds directly — the same
     // arrangement as the four emergency keys just above.
     out.extend(crate::actions::media().into_iter().map(|(_, _, id)| id));
@@ -3453,6 +3576,30 @@ mod tests {
             "camera-script-add",
             "camera-stream-url",
             "camera-stream-key",
+            "player-open",
+            "player-window",
+            "player-column",
+            "player-play-file",
+            "player-enqueue",
+            "player-follow",
+            "player-pair",
+            "player-toggle",
+            "player-next",
+            "player-previous",
+            "player-stop",
+            "player-shuffle",
+            "player-repeat",
+            "player-up",
+            "player-down",
+            "player-less",
+            "player-more",
+            "player-enter",
+            "player-remove",
+            "player-browse",
+            "player-add",
+            "player-parent",
+            "player-only",
+            "player-maximize",
             "pointers-up",
             "pointers-down",
             "pointers-enter",

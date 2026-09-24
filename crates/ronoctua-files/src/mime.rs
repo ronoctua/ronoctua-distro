@@ -515,6 +515,28 @@ mod tests {
         assert_eq!(by_name("nothing-named-like-this"), None);
     }
 
+    /// FAILS IF: a sound only the player's decoders open falls back to
+    /// "some bytes", which no program offers to open — or a family's glob
+    /// starts taking a name that belongs to somebody else.
+    ///
+    /// The types are `assets/player-types.nix`'s, joined through `ours`.
+    #[test]
+    fn the_players_own_sounds_have_a_type_and_nothing_else_does() {
+        assert_eq!(by_name("song.d00"), Some("audio/x-adlib"));
+        assert_eq!(by_name("mdat.title"), Some("audio/x-amiga-music"));
+        assert_eq!(by_name("track.minipsf2"), Some("audio/x-console-rip"));
+        assert_eq!(by_name("theme.brstm"), Some("audio/x-game-stream"));
+        assert_eq!(by_name("tune.rsid"), Some("audio/x-rsid"));
+        assert!(is_a("audio/x-rsid", "audio/prs.sid"));
+        // LEFT OUT ON PURPOSE: a font, a genome, a disc image.
+        assert_ne!(by_name("face.cff"), Some("audio/x-adlib"));
+        assert_ne!(by_name("reads.bam"), Some("audio/x-adlib"));
+        assert_ne!(
+            by_name("disc.iso").map(|m| m.starts_with("audio/")),
+            Some(true)
+        );
+    }
+
     #[test]
     fn case_matters_where_the_database_says_it_does() {
         // Five rows carry the `cs` flag, and these two are why: without it a

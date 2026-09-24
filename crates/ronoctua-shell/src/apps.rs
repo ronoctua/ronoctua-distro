@@ -519,21 +519,33 @@ pub fn opens<'a>(
     of_type: &str,
 ) -> Option<&'a ronoctua_apps::DesktopEntry> {
     let wanted = ronoctua_files::mime::canonical(of_type);
+    // OURS FIRST, then anybody's. The player claims every audio and video
+    // type, and so do the mpv and the VLC the full profile installs; the
+    // catalogue's order between entries of one directory is the order the
+    // directory lists them in, which is nobody's decision. A program of this
+    // system opening a file this system knows how to play is.
+    let ours = |e: &&ronoctua_apps::DesktopEntry| e.id.starts_with(OURS);
+    let exact = |e: &&ronoctua_apps::DesktopEntry| e.mime_types.iter().any(|m| m == wanted);
+    let parent = |e: &&ronoctua_apps::DesktopEntry| {
+        e.mime_types
+            .iter()
+            .any(|m| ronoctua_files::mime::is_a(wanted, m))
+    };
     catalogue
         .iter()
+        .filter(ours)
+        .find(exact)
         // EXACTLY the type first. A handler for `text/plain` will open a
         // `text/x-rust` — every editor does — but so will fifty other
         // applications, and picking one of those over the one that named the
         // type is how a `.rs` file ends up in a mail client.
-        .find(|e| e.mime_types.iter().any(|m| m == wanted))
-        .or_else(|| {
-            catalogue.iter().find(|e| {
-                e.mime_types
-                    .iter()
-                    .any(|m| ronoctua_files::mime::is_a(wanted, m))
-            })
-        })
+        .or_else(|| catalogue.iter().find(exact))
+        .or_else(|| catalogue.iter().filter(ours).find(parent))
+        .or_else(|| catalogue.iter().find(parent))
 }
+
+/// The prefix of this system's own desktop entries.
+pub const OURS: &str = "br.ronoctua.";
 
 /// The command line for opening `path` with this entry.
 ///
@@ -609,6 +621,26 @@ mod tests {
         let l = Finder::fresh(catalogue());
         assert_eq!(l.result().len(), 4);
         assert_eq!(l.chosen().map(|e| e.name.as_str()), Some("Arquivos"));
+    }
+
+    /// OURS WIN a type another program also claims, whatever order the
+    /// directory listed them in — and only then does the exact type beat a
+    /// parent type.
+    #[test]
+    fn our_player_opens_a_film_before_anybody_elses() {
+        let mut mpv = input_of("mpv", "mpv", &[]);
+        mpv.mime_types = vec!["video/mp4".into()];
+        let mut ours = input_of("br.ronoctua.player", "Player", &[]);
+        ours.mime_types = vec!["video/mp4".into()];
+        let c = Arc::new(vec![mpv, ours]);
+        assert_eq!(
+            crate::apps::opens(&c, "video/mp4").map(|e| e.id.as_str()),
+            Some("br.ronoctua.player")
+        );
+        assert_eq!(
+            crate::apps::opens(&c, "text/plain").map(|e| e.id.as_str()),
+            None
+        );
     }
 
     /// THE DEFECT: without folding the query, `calculo` does not find `Cálculo` — and

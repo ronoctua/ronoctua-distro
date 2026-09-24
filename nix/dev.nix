@@ -56,6 +56,7 @@
   exiftool,
   poppler-utils,
   catdoc,
+  playerTools,
   graphicsHost,
   reloadApp,
   singleFooter,
@@ -1173,6 +1174,12 @@ let
       export RONOCTUA_PDFTOPPM="${poppler-utils}/bin/pdftoppm"
       export RONOCTUA_PDFINFO="${poppler-utils}/bin/pdfinfo"
       export RONOCTUA_XLS2CSV="${catdoc}/bin/xls2csv"
+      # AND THE PLAYER'S, for the same reason: the loop's player is started
+      # from beside the footer, and has no unit to read them from.
+      ${lib.concatStringsSep "
+" (
+        lib.mapAttrsToList (name: path: "export ${name}=${lib.escapeShellArg path}") playerTools
+      )}
       export RONOCTUA_FILES_START="${import ./files-start.nix}"
       # AND WHAT THE SIDEBAR STARTS WITH — the same two files the installed
       # system resolves, for the same reason: there is no NixOS here to read an
@@ -1316,7 +1323,8 @@ let
                    -p ronoctua-rescue --bin ronoctua-rescue \
                    -p ronoctua-transfers --bin ronoctua-transfers \
                    -p ronoctua-brain --bin ronoctua-brain \
-                   -p ronoctua-studio --bin ronoctua-studio 2>&1 | tail -20; then
+                   -p ronoctua-studio --bin ronoctua-studio \
+                   -p ronoctua-player-engine --bin ronoctua-player 2>&1 | tail -20; then
                 export RONOCTUA_FOOTER_BIN="$CARGO_TARGET_DIR/loop/ronoctua-shell"
                 restart_footer
               else
