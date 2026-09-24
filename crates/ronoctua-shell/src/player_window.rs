@@ -81,9 +81,6 @@ pub const APP_ID: &str = "br.ronoctua.player";
 /// the footer.
 pub const NAMESPACE: &str = "ronoctua-column";
 
-/// The runtime file the column keeps its pid in.
-pub const COLUMN_PID: &str = "column.pid";
-
 /// `BTN_LEFT`.
 const LEFT_BUTTON: u32 = 0x110;
 
@@ -104,7 +101,7 @@ type Slot = Arc<Mutex<Option<(u32, u32, Vec<u8>)>>>;
 
 /// The transport's buttons, in the order they are drawn: the command each one
 /// runs, which is also what the header says under the pointer.
-const BUTTONS: [&str; 8] = [
+const BUTTONS: [&str; 9] = [
     "player-previous",
     "player-toggle",
     "player-next",
@@ -112,8 +109,13 @@ const BUTTONS: [&str; 8] = [
     "player-shuffle",
     "player-repeat",
     "player-only",
+    "player-pip",
     "player-maximize",
 ];
+
+/// How quick a second click on the picture has to be to be a DOUBLE click,
+/// which puts it on the whole screen and back.
+const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// How the picture is shown in this door.
 ///
@@ -135,7 +137,17 @@ pub enum Stage {
     Only,
     /// Only the picture, on the whole screen.
     Maximized,
+    /// Only the picture, in the window made small and floated in the
+    /// bottom-right corner — picture-in-picture.
+    Small,
 }
+
+/// How many frames the corner is asked for while the window is not yet in
+/// the compositor's tree.
+const CORNER_TRIES: u8 = 20;
+
+/// How long between two asks for the corner.
+const CORNER_WAIT: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// How long the controls stay over the picture after the last activity.
 const CONTROLS_LINGER: std::time::Duration = std::time::Duration::from_secs(3);
@@ -145,6 +157,9 @@ fn glyph_of(id: &str, s: Option<&State>, stage: Stage) -> char {
     let playing = s.is_some_and(|s| s.playing);
     match id {
         "player-only" => tokens::icon::PLAYER_ONLY,
+        "player-pip" => tokens::icon::PLAYER_PIP,
+        "player-mute" if s.is_some_and(|s| s.muted) => tokens::icon::VOLUME_OFF,
+        "player-mute" => tokens::icon::VOLUME,
         // WHERE IT GOES, as the file manager's pair: out when on the screen.
         "player-maximize" if stage == Stage::Maximized => tokens::icon::THEATRE_OFF,
         "player-maximize" => tokens::icon::THEATRE,
@@ -168,6 +183,7 @@ fn glyph_of(id: &str, s: Option<&State>, stage: Stage) -> char {
 fn lit(id: &str, s: Option<&State>, stage: Stage) -> bool {
     match id {
         "player-only" => stage == Stage::Only,
+        "player-pip" => stage == Stage::Small,
         "player-shuffle" => s.is_some_and(|s| s.shuffle),
         "player-repeat" => s.is_some_and(|s| s.repeat != Repeat::Nothing),
         _ => false,
@@ -183,6 +199,7 @@ fn ask_of(id: &str) -> Option<Ask> {
         "player-stop" => Ask::Stop,
         "player-shuffle" => Ask::Shuffle,
         "player-repeat" => Ask::Repeat,
+        "player-mute" => Ask::Mute,
         _ => return None,
     })
 }
@@ -364,8 +381,7 @@ pub fn host_it(door: Door, stage: Stage) -> Result<()> {
             let layer_shell = LayerShell::bind(&globals, &qh)
                 .context("the compositor does not expose wlr-layer-shell")?;
             // ONE COLUMN: the one already there goes.
-            end_the_column();
-            keep_the_pid();
+            crate::right_column::take(crate::right_column::Tenant::Player);
             let layer = column_on(&layer_shell, &compositor, &qh, None);
             column_shell = Some(layer_shell);
             Shell::Layer(layer)
@@ -497,11 +513,22 @@ pub fn host_it(door: Door, stage: Stage) -> Result<()> {
         fullscreen: false,
         controls_until: None,
         controls_timer: None,
-        zone_owed: door == Door::Column,
+        settle_owed: door == Door::Column,
+        corner_owed: 0,
+        corner_timer: false,
+
+        opened_for: None,
     };
-    // THE STAGE IT WAS OPENED ON (`ronoctua-shell player only|maximized`).
+    // THE STAGE IT WAS OPENED ON (`ronoctua-shell player only|maximized|pip`),
+    // and the slot that lets the door that asked close it again.
     if stage != Stage::Off {
         state.set_stage(stage);
+        state.opened_for = Some(stage);
+        crate::player_stage::hold(match stage {
+            Stage::Only | Stage::Off => crate::player::Show::Only,
+            Stage::Maximized => crate::player::Show::Maximized,
+            Stage::Small => crate::player::Show::Small,
+        });
     }
 
     WaylandSource::new(conn, queue)
@@ -529,7 +556,10 @@ pub fn host_it(door: Door, stage: Stage) -> Result<()> {
         p.alive.store(false, Ordering::SeqCst);
     }
     if door == Door::Column {
-        forget_the_pid();
+        crate::right_column::leave();
+    }
+    if state.opened_for.is_some() {
+        crate::player_stage::leave();
     }
     run.context("event loop")?;
     Ok(())
@@ -572,68 +602,15 @@ fn column_width() -> u32 {
     px
 }
 
-/// The pid in `column.pid`, when that process is alive, is not this one, and
-/// IS a column.
-///
-/// # A living pid is not enough
-///
-/// A pid is recycled. A column that died without its `Drop` — killed, or
-/// taken down with a session — leaves its number in the file, and the next
-/// process to get that number is somebody else's: asked only "is it alive",
-/// the toggle would send it `TERM`, answer "closed", and raise nothing — a
-/// click on the mark that did nothing, which is what the owner saw. So the
-/// command line is read too: this program, with `column` as its word.
-#[must_use]
-pub fn column_pid() -> Option<i32> {
-    let path = ronoctua_xdg::runtime_file(COLUMN_PID)?;
-    let pid: i32 = std::fs::read_to_string(path).ok()?.trim().parse().ok()?;
-    let me = i32::try_from(std::process::id()).ok()?;
-    if pid == me {
-        return None;
-    }
-    let line = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    is_a_column(&line).then_some(pid)
-}
-
-/// Whether a `/proc/<pid>/cmdline` is this program started as the column.
-fn is_a_column(cmdline: &[u8]) -> bool {
-    let mut words = cmdline.split(|b| *b == 0).filter(|w| !w.is_empty());
-    let program = words
-        .next()
-        .map(|w| String::from_utf8_lossy(w).into_owned())
-        .unwrap_or_default();
-    // THE WRAPPED NAME TOO: the installed shell is `wrapProgram`'d, and a
-    // column raised by `current_exe()` from inside it starts the real binary,
-    // `.ronoctua-shell-wrapped`.
-    let ours = std::path::Path::new(&program).file_name().is_some_and(|n| {
-        n.to_string_lossy()
-            .trim_start_matches('.')
-            .starts_with("ronoctua-shell")
-    });
-    ours && words.next() == Some(b"column".as_slice())
-}
-
-/// Ends the column that is up, if one is.
+/// Ends the column that is up, if one is — whoever holds the right column.
 pub fn end_the_column() -> bool {
-    column_pid().is_some_and(|pid| {
-        rustix::process::Pid::from_raw(pid).is_some_and(|p| {
-            rustix::process::kill_process(p, rustix::process::Signal::TERM).is_ok()
-        })
-    })
+    crate::right_column::end()
 }
 
-fn keep_the_pid() {
-    if let Some(path) = ronoctua_xdg::runtime_file(COLUMN_PID) {
-        let _ = std::fs::write(path, std::process::id().to_string());
-    }
-}
-
-fn forget_the_pid() {
-    if let Some(path) = ronoctua_xdg::runtime_file(COLUMN_PID)
-        && std::fs::read_to_string(&path).is_ok_and(|p| p.trim() == std::process::id().to_string())
-    {
-        let _ = std::fs::remove_file(path);
-    }
+/// Whether a column is up.
+#[must_use]
+pub fn column_is_up() -> bool {
+    crate::right_column::holder().is_some()
 }
 
 /// What the compositor configured, from either kind of surface: a side it
@@ -742,10 +719,19 @@ impl Picture {
 #[derive(Debug, Default)]
 struct PerSeat {
     at: (f64, f64),
+    /// The pointer is over this surface: between an `Enter` and a `Leave`.
+    /// `at` alone cannot say it — before the first `Enter` it is `(0, 0)`,
+    /// which is the header's corner, and the controls stayed up for good.
+    inside: bool,
     /// Dragging the list's bar.
     dragging: bool,
     /// Dragging the time bar.
     seeking: bool,
+    /// Dragging the volume's bar.
+    turning: bool,
+    /// When the picture was last clicked: a second click soon after is a
+    /// double click.
+    picture_clicked: Option<std::time::Instant>,
     lines_owed: f64,
     row_under_pointer: Option<usize>,
     /// The transport button under the pointer.
@@ -795,8 +781,19 @@ struct PlayerDoor {
     frame_sender: channel::Sender<usize>,
     offset: usize,
     message: Option<String>,
-    /// The transport as last DRAWN: `(first column, last column, id)`.
-    buttons: Vec<(u16, u16, &'static str)>,
+    /// The transport as last DRAWN: `(line, first column, last column, id)`
+    /// — the volume's glyph is on the time bar's line.
+    buttons: Vec<(u16, u16, u16, &'static str)>,
+    /// The window was made small on stage and the compositor has not yet
+    /// been told to float it in the corner — a window it has not mapped is
+    /// not in its tree to be found.
+    corner_owed: u8,
+    /// A timer is armed to ask for the corner again.
+    corner_timer: bool,
+
+    /// The stage this window was OPENED for, by a door without a window of
+    /// its own (`ronoctua-shell player maximized|pip|only`).
+    opened_for: Option<Stage>,
     /// Where everything was last laid out.
     layout: Layout,
     /// How the picture is shown.
@@ -807,34 +804,43 @@ struct PlayerDoor {
     controls_until: Option<std::time::Instant>,
     /// The timer that takes them away, armed only while they are shown.
     controls_timer: Option<calloop::RegistrationToken>,
-    /// The column's exclusive zone, to be said AGAIN in the commit that
-    /// maps it — see [`PlayerDoor::zone_in_the_mapping_commit`].
-    zone_owed: bool,
+    /// The column's first frame is owed a frame callback, whose answer means
+    /// the commit that mapped it was shown — see
+    /// [`PlayerDoor::settle_the_windows`].
+    settle_owed: bool,
 }
 
 impl PlayerDoor {
-    /// Says the column's exclusive zone again, so it travels in the commit
-    /// that MAPS the surface.
+    /// Tells the compositor to send the windows the layout it already
+    /// worked out — asked once the commit that MAPPED the column is known to
+    /// have been shown (the first frame's callback answers only then).
     ///
-    /// # Why, when it was said at creation already
+    /// # Why the windows were not told on their own
     ///
-    /// Because of what this compositor does with a layer's commit
-    /// (`sway/desktop/layer_shell.c`, `handle_surface_commit` in the pinned
-    /// source): every commit re-arranges the layers — and so the windows —
-    /// but the arrangement is only SENT to them (`transaction_commit_dirty`)
-    /// when the commit carries some layer state other than keyboard
-    /// interactivity. The commit that maps the column carries a buffer and no
-    /// state, so the windows were re-tiled and not told: the column opened
-    /// over them, and they moved at the next click anywhere — which is what
-    /// the owner saw. Invariant 3 forbids the patch; putting a state in that
-    /// commit is the client's half, and wlroots counts a value set again as
-    /// changed.
-    fn zone_in_the_mapping_commit(&mut self) {
-        if !std::mem::take(&mut self.zone_owed) {
-            return;
+    /// Two lines of the pinned source. A layer's exclusive zone is counted
+    /// only once the surface is MAPPED (`wlr_scene_layer_surface_v1_get_box`,
+    /// `surface->mapped && exclusive_zone > 0`), so the windows are re-tiled
+    /// by the commit that carries the first frame. And a layer's commit sends
+    /// the new layout out (`transaction_commit_dirty`) only when it also
+    /// changed some layer state (`handle_surface_commit`), which a frame does
+    /// not. The column opened over the windows, and they moved at the next
+    /// click anywhere — the owner's screenshot, twice.
+    ///
+    /// The first attempt said the zone again in that commit, and did nothing:
+    /// wlroots IGNORES a value set to what it already is
+    /// (`layer_surface_handle_set_exclusive_zone`). This one asks over IPC,
+    /// where every command ends in `transaction_commit_dirty`
+    /// (`Compositor::settle`).
+    fn settle_the_windows(&mut self) {
+        if self.wm.is_none() {
+            self.wm = crate::daemon::open_the_compositor().ok();
         }
-        if let Shell::Layer(layer) = &self.shell {
-            layer.set_exclusive_zone(i32::try_from(column_width()).unwrap_or(i32::MAX));
+        match self.wm.as_mut().map(|w| w.settle()) {
+            Some(Ok(())) => tracing::info!("the windows were told the column's room"),
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "the windows were not told the column's room")
+            }
+            None => tracing::warn!("no compositor to tell the column's room to"),
         }
     }
 
@@ -855,7 +861,7 @@ impl PlayerDoor {
     /// Whether the pointer rests on the controls drawn over the picture.
     fn pointer_on_controls(&self) -> bool {
         let (_, y) = self.here.at;
-        if y < 0.0 {
+        if !self.here.inside || y < 0.0 {
             return false;
         }
         let l = Self::line_at(y);
@@ -905,22 +911,39 @@ impl PlayerDoor {
         }
     }
 
-    /// Shows the picture alone, on the whole screen, or back in the door.
+    /// Shows the picture alone, on the whole screen, small in the corner, or
+    /// back in the door.
     ///
-    /// A column is a strip of the screen and cannot fill it: there, the
-    /// whole screen is the WINDOW, opened on it.
+    /// A column is a strip of the screen and can neither fill it nor float:
+    /// there, the whole screen and the corner are the WINDOW, opened for it —
+    /// and a second press closes that window instead of opening another
+    /// (`crate::player_stage`).
+    ///
+    /// A window OPENED for a stage is that stage and nothing else: leaving
+    /// it closes the window, which is the way back to the door that asked.
     fn set_stage(&mut self, to: Stage) {
-        if self.door == Door::Column && to == Stage::Maximized {
-            if let Ok(me) = std::env::current_exe()
-                && let Err(e) = std::process::Command::new(me)
-                    .args(["player", "maximized"])
-                    .stdin(std::process::Stdio::null())
-                    .spawn()
-            {
-                tracing::warn!(error = %e, "could not open the player on the whole screen");
+        if self.door == Door::Column && matches!(to, Stage::Maximized | Stage::Small) {
+            let show = if to == Stage::Small {
+                crate::player::Show::Small
+            } else {
+                crate::player::Show::Maximized
+            };
+            if let Err(e) = crate::player_stage::toggle(show) {
+                tracing::warn!(error = %e, "could not open the player's window for its stage");
             }
             return;
         }
+        // LEAVING A STAGE the window was not opened for goes back to the one
+        // it was — the small window made whole-screen and back is the small
+        // window again.
+        let to = match self.opened_for {
+            Some(home) if to == Stage::Off && self.stage != home => home,
+            Some(_) if to == Stage::Off => {
+                self.quit = true;
+                return;
+            }
+            _ => to,
+        };
         if let Shell::Window(w) = &self.shell {
             if to == Stage::Maximized {
                 w.set_fullscreen(None);
@@ -928,18 +951,116 @@ impl PlayerDoor {
                 w.unset_fullscreen();
             }
         }
+        // THE CORNER is the compositor's to give: floated, sized and placed
+        // there, and put back in the layout on the way out.
+        let small = Some(Self::small_size());
+        if to == Stage::Small && self.stage != Stage::Small {
+            if let Shell::Window(w) = &self.shell {
+                w.set_min_size(small);
+                w.set_max_size(small);
+            }
+            self.corner_owed = CORNER_TRIES;
+            self.float_in_the_corner();
+        } else if to != Stage::Small && self.stage == Stage::Small {
+            if let Shell::Window(w) = &self.shell {
+                w.set_min_size(None);
+                w.set_max_size(None);
+            }
+            self.corner_owed = 0;
+            self.with_my_window(|wm, id| wm.back_in_the_layout(id));
+        }
+        let was_small = self.stage == Stage::Small;
         self.stage = to;
+        // THE SIZE CHANGES WITH THE STAGE here, not with a configure: the
+        // small window's is its own (`take_the_size`).
+        if (to == Stage::Small) != was_small && self.width != 0 {
+            self.take_the_size();
+        }
         self.offset = 0;
         self.controls_until = None;
         self.wake_controls();
         self.owed = true;
     }
 
-    /// A press of `o` or `m`, or of their buttons: on, or back off.
+    /// Asks the compositor for the corner; while it cannot find this window
+    /// — not yet mapped — the ask is owed, and tried again on a TIMER.
+    ///
+    /// Not after the next frame: the frame that maps the window is the last
+    /// one a paused picture paints, and the ask made right after it reaches
+    /// the compositor before the commit does. With nothing playing no frame
+    /// follows, and the window stayed in the layout — the VM caught it.
+    fn float_in_the_corner(&mut self) {
+        if self.corner_owed == 0 {
+            return;
+        }
+        let corner = ronoctua_compositor::Corner {
+            width: u32::from(tokens::space::PLAYER_PIPWIDTH),
+            height: u32::from(tokens::space::PLAYER_PIPHEIGHT),
+            air: u32::from(tokens::space::PLAYER_PIPAIR),
+        };
+        if self.with_my_window(|wm, id| wm.float_in_corner(id, corner)) {
+            self.corner_owed = 0;
+            tracing::info!("the window was floated in the corner");
+            return;
+        }
+        self.corner_owed -= 1;
+        if self.corner_owed == 0 {
+            // SAID, because a small window that stayed big has no other way
+            // of telling anyone why.
+            tracing::warn!("the compositor never showed this window to float it in the corner");
+            return;
+        }
+        if self.corner_timer {
+            return;
+        }
+        let armed = self.handle.insert_source(
+            calloop::timer::Timer::from_duration(CORNER_WAIT),
+            |_, (), d: &mut Self| {
+                d.corner_timer = false;
+                d.float_in_the_corner();
+                calloop::timer::TimeoutAction::Drop
+            },
+        );
+        self.corner_timer = armed.is_ok();
+    }
+
+    /// Runs `ask` on this window, found in the compositor's tree by this
+    /// process and the app id; whether it was found and the ask went.
+    fn with_my_window(
+        &mut self,
+        ask: impl FnOnce(&mut dyn ronoctua_compositor::Compositor, u64) -> Result<()>,
+    ) -> bool {
+        if self.wm.is_none() {
+            self.wm = crate::daemon::open_the_compositor().ok();
+        }
+        let Some(wm) = self.wm.as_mut() else {
+            return false;
+        };
+        let me = i32::try_from(std::process::id()).ok();
+        let Some(id) = wm.windows().ok().and_then(|all| {
+            all.into_iter()
+                .find(|w| w.pid == me && w.app_id.as_deref() == Some(APP_ID))
+                .map(|w| w.id)
+        }) else {
+            return false;
+        };
+        match ask(wm.as_mut(), id) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(error = %e, "the compositor refused the window's place");
+                // A CONNECTION THAT FAILED is opened again next time.
+                self.wm = None;
+                false
+            }
+        }
+    }
+
+    /// A press of `o`, `i` or `m`, or of their buttons: on, or back off.
     fn toggle_stage(&mut self, show: crate::player::Show) {
         let to = match show {
             crate::player::Show::Only => Stage::Only,
             crate::player::Show::Maximized => Stage::Maximized,
+            crate::player::Show::Small => Stage::Small,
         };
         self.set_stage(if self.stage == to { Stage::Off } else { to });
     }
@@ -968,13 +1089,40 @@ impl PlayerDoor {
             cfg.new_size.1.unwrap_or(self.asked.1),
         );
         // SAID, because a size the compositor computed and never SENT is the
-        // defect `zone_in_the_mapping_commit` exists for, and only this line
+        // defect `settle_the_windows` exists for, and only this line
         // tells the two apart: the compositor's own tree shows the new size
         // either way.
         tracing::info!(width = self.asked.0, height = self.asked.1, door = ?self.door, "configured");
-        self.width = self.asked.0;
-        self.height = self.asked.1;
-        let (asked, scale) = (self.asked, self.scale);
+        self.take_the_size();
+    }
+
+    /// The small window's size: `space.player.pip*`, in logical pixels.
+    fn small_size() -> (u32, u32) {
+        (
+            u32::from(tokens::space::PLAYER_PIPWIDTH),
+            u32::from(tokens::space::PLAYER_PIPHEIGHT),
+        )
+    }
+
+    /// Lays the door out at the size it was asked — or, SMALL, at its own.
+    ///
+    /// A floating window's size is the one its COMMITS carry: the
+    /// compositor adopts it. The window kept committing the tiled size it had
+    /// been configured, and the corner came out floated, placed, and 512 by
+    /// 768 — measured in the VM, however many times the corner was asked
+    /// again. So on this stage the window owns its size: it draws at it, and
+    /// tells it as its minimum and maximum (`set_stage`).
+    fn take_the_size(&mut self) {
+        // `asked` STAYS the compositor's number: leaving the stage lays out
+        // at it again, without waiting for a configure that may not come.
+        let asked = if self.stage == Stage::Small {
+            Self::small_size()
+        } else {
+            self.asked
+        };
+        self.width = asked.0;
+        self.height = asked.1;
+        let scale = self.scale;
         if let Some(g) = self.gpu.as_mut() {
             let (shown_w, shown_h) = crate::hidpi::resized(g, asked, scale);
             self.width = shown_w;
@@ -1011,7 +1159,7 @@ impl PlayerDoor {
             return;
         };
         let layer = column_on(layer_shell, &self._compositor, &self.qh, Some(&output));
-        self.zone_owed = true;
+        self.settle_owed = true;
         // A NEW SURFACE IS A NEW GPU SURFACE: everything drawn on the old one
         // is made again on the first configure of this one.
         self.gpu = None;
@@ -1318,18 +1466,51 @@ impl PlayerDoor {
             if self.hinted.settled() {
                 self.paint();
             }
+            // AFTER A FRAME: the window is in the compositor's tree only once
+            // a buffer mapped it.
+            self.float_in_the_corner();
         }
     }
 
-    /// The time bar's track, in logical pixels: `(left, right)`.
+    /// The volume on the time bar's line, in cells: its glyph's first
+    /// column, and its track's `(first, end)` — at the right end, so the time
+    /// bar keeps the width it reads by.
+    fn volume_cells(&self) -> (u16, (u16, u16)) {
+        let end = MARGIN + self.columns;
+        let first = end.saturating_sub(tokens::space::PLAYER_VOLUMEBAR);
+        (first.saturating_sub(3), (first, end))
+    }
+
+    /// The time bar's track, in logical pixels: `(left, right)` — up to a
+    /// cell of air before the volume's glyph.
     fn bar_track(&self) -> (f32, f32) {
         let cell = Self::cell_px();
-        #[allow(clippy::cast_precision_loss)]
-        let right = self.width as f32 - cell * f32::from(MARGIN);
-        (
-            cell * f32::from(MARGIN),
-            right.max(cell * f32::from(MARGIN)),
-        )
+        let left = cell * f32::from(MARGIN);
+        let right = cell * f32::from(self.volume_cells().0.saturating_sub(1));
+        (left, right.max(left))
+    }
+
+    /// The volume's track, in logical pixels: `(left, right)`.
+    fn volume_track(&self) -> (f32, f32) {
+        let cell = Self::cell_px();
+        let (from, to) = self.volume_cells().1;
+        (cell * f32::from(from), cell * f32::from(to))
+    }
+
+    /// The volume at `x` on its track, in percent.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn volume_at(&self, x: f64) -> u8 {
+        let (l, r) = self.volume_track();
+        let f = ((x as f32 - l) / (r - l).max(1.0)).clamp(0.0, 1.0);
+        (f * f32::from(crate::player::VOLUME_MOST)).round() as u8
+    }
+
+    /// Whether `(x, y)` is on the volume's track.
+    fn on_the_volume(&self, x: f64, y: f64) -> bool {
+        let (l, r) = self.volume_track();
+        #[allow(clippy::cast_possible_truncation)]
+        let x = x as f32;
+        Self::line_at(y) == self.layout.bar && x >= l && x < r
     }
 
     /// Where on the time bar `x` is, as a fraction.
@@ -1472,7 +1653,7 @@ impl PlayerDoor {
             };
             // A GLYPH AND AIR ON BOTH SIDES: two cells a button, and the
             // click answers on both.
-            self.buttons.push((at, at + 2, id));
+            self.buttons.push((tl, at, at + 2, id));
             spans.push(span(
                 glyph_of(id, s, self.stage).to_string(),
                 at,
@@ -1495,7 +1676,12 @@ impl PlayerDoor {
             let cells = ronoctua_protocol::cells(&clock);
             let right = MARGIN + self.columns;
             let from = right.saturating_sub(cells).max(at + 1);
-            spans.push(span(clock, from, tl, tokens::color::TEXT_SECONDARY));
+            // WHERE IT FITS: the small window in the corner is narrower than
+            // the buttons and the clock, and a clock cut at the edge reads as
+            // a wrong time.
+            if from + cells <= right {
+                spans.push(span(clock, from, tl, tokens::color::TEXT_SECONDARY));
+            }
         }
 
         // THE TIME BAR: a rule, and the part already played in the accent.
@@ -1522,6 +1708,49 @@ impl PlayerDoor {
                 height: thickness,
                 color: tokens::color::STATE_ACCENT,
             });
+        }
+
+        // THE VOLUME, at the end of the same line: its glyph — a button that
+        // mutes — and a track of its own, filled to the volume and dimmed
+        // while muted. Hidden with the rest of the controls.
+        if shown {
+            let (glyph, _) = self.volume_cells();
+            let bl = self.layout.bar;
+            self.buttons.push((bl, glyph, glyph + 2, "player-mute"));
+            let colour = if under_button == Some("player-mute") {
+                tokens::color::STATE_ACCENT
+            } else {
+                tokens::color::TEXT_PRIMARY
+            };
+            spans.push(span(
+                glyph_of("player-mute", s, self.stage).to_string(),
+                glyph,
+                bl,
+                colour,
+            ));
+            let (vl, vr) = self.volume_track();
+            bar.push(ronoctua_render::quad::Quad {
+                x: vl,
+                y,
+                width: vr - vl,
+                height: thickness,
+                color: tokens::color::RULE_DEFAULT,
+            });
+            if let Some(s) = s {
+                let filled = f32::from(s.volume.min(crate::player::VOLUME_MOST))
+                    / f32::from(crate::player::VOLUME_MOST);
+                bar.push(ronoctua_render::quad::Quad {
+                    x: vl,
+                    y,
+                    width: (vr - vl) * filled,
+                    height: thickness,
+                    color: if s.muted {
+                        tokens::color::TEXT_DIM
+                    } else {
+                        tokens::color::STATE_ACCENT
+                    },
+                });
+            }
         }
 
         // THE ROWS, under all of it, scrolling.
@@ -1556,7 +1785,6 @@ impl PlayerDoor {
 
         let under_count = u32::try_from(under.len()).unwrap_or(0);
         under.extend(over);
-        self.zone_in_the_mapping_commit();
         let surface = self.shell.wl_surface().clone();
         let scale = self.scale;
         let told = &mut self.scale_told;
@@ -1591,6 +1819,15 @@ impl PlayerDoor {
         }
         // UNDER THE PICTURES the grounds and the time bar; OVER them the bands
         // and the bars; the text last. No depth test: later is on top.
+        // THE FRAME THAT MAPS THE COLUMN asks to be told when it is SHOWN:
+        // the answer can only come after the compositor read that commit and
+        // counted the zone, and only then is there a layout to send. A `sync`
+        // after presenting was the second attempt, and it raced: the driver
+        // may commit the frame on a thread of its own, so the `sync` could
+        // arrive first — measured in the VM, the window told 512 again.
+        if std::mem::take(&mut self.settle_owed) {
+            let _ = surface.frame(&self.qh, Mapped);
+        }
         let quads_ref = self.quads.as_ref();
         let images_ref = self.images.as_ref();
         if let Err(e) = gpu.frame(
@@ -1638,14 +1875,11 @@ impl PlayerDoor {
 
     /// The transport button at `(x, y)`, where it was DRAWN.
     fn button_at(&self, x: f64, y: f64) -> Option<&'static str> {
-        if Self::line_at(y) != self.layout.transport {
-            return None;
-        }
-        let c = Self::column_at(x);
+        let (l, c) = (Self::line_at(y), Self::column_at(x));
         self.buttons
             .iter()
-            .find(|(a, b, _)| c >= *a && c < *b)
-            .map(|(_, _, id)| *id)
+            .find(|(line, a, b, _)| l == *line && c >= *a && c < *b)
+            .map(|(_, _, _, id)| *id)
     }
 
     /// Whether `y` is on a picture.
@@ -1885,6 +2119,7 @@ impl PlayerDoor {
             // back over the picture.
             if !matches!(e.kind, PointerEventKind::Leave { .. }) {
                 self.here.at = e.position;
+                self.here.inside = true;
                 self.wake_controls();
             }
             match e.kind {
@@ -1912,17 +2147,24 @@ impl PlayerDoor {
                         self.seek_to(f);
                         continue;
                     }
+                    if self.here.turning {
+                        let percent = self.volume_at(e.position.0);
+                        self.tell(&Ask::Volume { percent });
+                        continue;
+                    }
                     self.here.row_under_pointer = self.row_at(e.position.1);
                     self.here.button_under = self.button_at(e.position.0, e.position.1);
                 }
                 PointerEventKind::Leave { .. } => {
                     self.here.at = (-1.0, -1.0);
+                    self.here.inside = false;
                     self.hinted.let_go();
                     if self.hinted.say(None) {
                         self.owed = true;
                     }
                     self.here.dragging = false;
                     self.here.seeking = false;
+                    self.here.turning = false;
                     self.here.row_under_pointer = None;
                     self.here.button_under = None;
                 }
@@ -1930,6 +2172,7 @@ impl PlayerDoor {
                     self.hinted.let_go();
                     self.here.dragging = false;
                     self.here.seeking = false;
+                    self.here.turning = false;
                 }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
                     if self.hinted.pressed(head, e.position.0, e.position.1) {
@@ -1950,11 +2193,20 @@ impl PlayerDoor {
                         }
                         match id {
                             "player-only" => self.toggle_stage(crate::player::Show::Only),
+                            "player-pip" => self.toggle_stage(crate::player::Show::Small),
                             "player-maximize" => {
                                 self.toggle_stage(crate::player::Show::Maximized);
                             }
                             _ => {}
                         }
+                        continue;
+                    }
+                    // THE VOLUME'S TRACK: a press sets it there, and holding
+                    // drags — the time bar's gesture, on its own track.
+                    if self.controls_shown() && self.on_the_volume(e.position.0, e.position.1) {
+                        self.here.turning = true;
+                        let percent = self.volume_at(e.position.0);
+                        self.tell(&Ask::Volume { percent });
                         continue;
                     }
                     // THE TIME BAR: a press seeks there, and holding drags.
@@ -1964,15 +2216,33 @@ impl PlayerDoor {
                         self.seek_to(f);
                         continue;
                     }
-                    // A PICTURE: a click plays or pauses, as on every player.
+                    // A PICTURE: a click plays or pauses, as on every player;
+                    // and a DOUBLE click puts it on the whole screen, or back.
+                    // The first click has already paused it by then, so the
+                    // second plays it again — what a double click leaves is
+                    // the screen changed and the film as it was.
                     if self.on_a_picture(e.position.1) {
                         self.tell(&Ask::Toggle);
+                        let now = std::time::Instant::now();
+                        let double = self
+                            .here
+                            .picture_clicked
+                            .is_some_and(|then| now.duration_since(then) <= DOUBLE_CLICK);
+                        if double {
+                            self.here.picture_clicked = None;
+                            self.toggle_stage(crate::player::Show::Maximized);
+                        } else {
+                            self.here.picture_clicked = Some(now);
+                        }
                         continue;
                     }
                     // A ROW: the first click selects, the second acts.
                     if let Some(row) = self.row_at(e.position.1) {
                         let rows = self.rows();
-                        let again = self.view.clicked(row, &rows);
+                        // BY ITS COLUMN too: the files are a grid, and a title
+                        // can carry a control at the end of its line.
+                        let column = Self::column_at(e.position.0).saturating_sub(MARGIN);
+                        let again = self.view.clicked_at(row, column, &rows);
                         let n = rows.len();
                         self.follow(n);
                         if again {
@@ -2107,27 +2377,31 @@ impl ProvidesRegistryState for PlayerDoor {
     registry_handlers![OutputState, SeatState];
 }
 
+/// The frame callback asked with the column's first frame.
+struct Mapped;
+
+impl wayland_client::Dispatch<wayland_client::protocol::wl_callback::WlCallback, Mapped>
+    for PlayerDoor
+{
+    fn event(
+        state: &mut Self,
+        _: &wayland_client::protocol::wl_callback::WlCallback,
+        event: wayland_client::protocol::wl_callback::Event,
+        _: &Mapped,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wayland_client::protocol::wl_callback::Event::Done { .. } = event {
+            state.settle_the_windows();
+        }
+    }
+}
+
 smithay_client_toolkit::delegate_registry!(PlayerDoor);
 smithay_client_toolkit::delegate_dispatch2!(PlayerDoor);
 
 #[cfg(test)]
 mod tests {
-    /// FAILS IF: a recycled pid is taken for the column — the toggle would
-    /// kill somebody else's process and raise nothing.
-    #[test]
-    fn only_the_column_is_the_column() {
-        assert!(super::is_a_column(
-            b"/nix/store/x/bin/ronoctua-shell\0column\0"
-        ));
-        assert!(!super::is_a_column(
-            b"/nix/store/x/bin/ronoctua-shell\0player\0"
-        ));
-        assert!(super::is_a_column(
-            b"/nix/store/x/bin/.ronoctua-shell-wrapped\0column\0"
-        ));
-        assert!(!super::is_a_column(b"/usr/bin/zsh\0column\0"));
-        assert!(!super::is_a_column(b""));
-    }
 
     use super::*;
 
@@ -2200,10 +2474,11 @@ mod tests {
 
     #[test]
     fn every_button_asks_the_player_something_and_has_a_command() {
-        for id in BUTTONS {
-            // THE TWO STAGE BUTTONS ARE THE DOOR'S, not the player's: they
+        // THE VOLUME'S GLYPH is a button too, on the time bar's line.
+        for id in BUTTONS.into_iter().chain(["player-mute"]) {
+            // THE THREE STAGE BUTTONS ARE THE DOOR'S, not the player's: they
             // change how the picture is shown, and nothing is asked.
-            let the_door_s = matches!(id, "player-only" | "player-maximize");
+            let the_door_s = matches!(id, "player-only" | "player-pip" | "player-maximize");
             assert!(ask_of(id).is_some() || the_door_s, "{id}");
             assert_ne!(glyph_of(id, None, Stage::Off), ' ', "{id}");
             assert!(

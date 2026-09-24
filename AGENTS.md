@@ -1805,7 +1805,9 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   **A COLUNA** (`player_window.rs`, `Door::Column`) é layer-shell TOP|RIGHT|BOTTOM com zona exclusiva
   da própria largura (`space.column.width`): a zona é recortada do que as superfícies criadas ANTES
   deixaram, então ela termina onde o rodapé começa — e um rodapé que sobe depois dela seria
-  estreitado, por isso ele a levanta de novo na partida. Uma só (`column.pid`). A janela (`p w`) é o
+  estreitado, por isso ele a levanta de novo na partida. **Uma só, e é um SLOT**
+  (`right_column.rs`, `Tenant`): quem toma a borda encerra quem a tinha, e a próxima coluna entra
+  como uma variante, nunca como um segundo arquivo — senão seriam duas lado a lado, que o inv. 14 nega. A janela (`p w`) é o
   mesmo anfitrião com `xdg_toplevel`. **Vídeos juntos** dividem UMA faixa sob o principal, lado a
   lado, dentro do mesmo teto. **Letra**: `.lrc` ao lado, a tag, e o LRCLIB; **SponsorBlock** pede
   pelo PREFIXO do SHA-256 do id (o serviço não sabe o vídeo). Os dois nascem DESLIGADOS e a linha
@@ -1837,11 +1839,38 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   janela assim): `Stage`, com a imagem tomando a superfície, tarja preta, e o cabeçalho e o
   transporte POR CIMA em `surface.transport` a cada atividade, sumindo 3 s depois da última — nunca
   com a mão sobre eles, e controle escondido não é alvo. `Esc` sai do palco antes de fechar.
-  **A coluna abria POR CIMA da janela** porque o commit que a MAPEIA re-arranja as janelas e não as
-  AVISA (`handle_surface_commit` só chama `transaction_commit_dirty` quando o commit leva estado de
-  layer): a coluna diz de novo a zona exclusiva no primeiro quadro
-  (`zone_in_the_mapping_commit`), e o `player-vm` espera a JANELA receber a largura nova — a árvore
-  do IPC mostra o que o compositor CALCULOU e passava com o defeito.
+  **Clique na imagem pausa, DOIS cliques põem na tela inteira** (e de volta): o primeiro já pausou,
+  o segundo toca de novo, então o que o duplo deixa é a tela mudada e o filme como estava. **A JANELA
+  PEQUENA NO CANTO** (`i`, ou `player pip`, `Stage::Small`) é pedida ao compositor pelo CONTRATO
+  (`Compositor::float_in_corner`, `Corner`): flutuante, fixa em todo workspace, `space.player.pip*`
+  (pixels, 384×216 e 16 de ar) no canto de baixo à direita da SALA que as janelas têm — a área do
+  workspace, que já desconta o rodapé e a coluna; o canto da TELA poria a imagem sobre o rodapé. Só
+  depois do primeiro quadro: janela não mapeada não está na árvore para ser achada. **Tela inteira e
+  canto, pedidos da coluna ou do rodapé, são um INTERRUPTOR** (`player_stage.rs`,
+  `player-stage.pid`): cada clique no glifo da coluna abria uma janela nova, e o dono as contou. A
+  janela aberta para um palco É aquele palco — sair dele a fecha, e é o caminho de volta a quem
+  pediu. **O volume é da linha da barra do tempo**: glifo que emudece e trilho de
+  `space.player.volumeBar` células de 0 a 130%, clique e arrasto; `-`, `=` e `0` no teclado.
+  **Os arquivos são UMA grade** (`Builder::grid`): até três colunas onde cabem (duas com nome
+  comprido, `space.player.browseColumn`), `..` primeiro e o cursor nascendo na primeira ENTRADA.
+  **`RET` e o duplo clique ACRESCENTAM à fila** e `P` toca sozinho; o que já está na fila PERGUNTA
+  antes de entrar de novo (a pergunta abre no `não`), e toda ação diz o que fez no minibuffer. O
+  caminho digitado é uma LINHA da mesma tela (`Target::Typed`), e o "em sincronia" escolhe pela mesma
+  tela com outro propósito (`Purpose::Follow`) — uma interface, e quem a usa diz para quê.
+  **A coluna abria POR CIMA da janela** porque a zona exclusiva só conta com a superfície MAPEADA
+  (`wlr_scene_layer_surface_v1_get_box`), então é o commit do primeiro quadro que re-arranja as
+  janelas — e esse commit não leva estado de layer, e sem estado o `handle_surface_commit` não chama
+  `transaction_commit_dirty`: o arranjo fica calculado e não enviado até o próximo clique. Dizer a
+  zona de novo NÃO serve (o wlroots ignora valor igual ao que já tem; foi o primeiro conserto, e não
+  fazia nada). O conserto é o `Compositor::settle` (um `nop` pelo IPC, que termina todo comando em
+  `transaction_commit_dirty`), pedido quando o PRIMEIRO QUADRO é mostrado (o frame callback
+  pedido nele). Um `sync` depois de apresentar foi a segunda tentativa e CORRIA: o driver pode fazer o
+  commit do quadro numa thread dele, e o `sync` chegava antes — a VM mostrou a janela recebendo de
+  novo a largura velha.
+  **E o teste do `player-vm` passou com o defeito**: comparava a última largura com a PRIMEIRA (o
+  padrão da janela antes de ser ladrilhada), e `[760, 512, 512]` era a janela nunca avisada. Agora
+  compara com a largura de ANTES da coluna; a sabotagem foi feita num compositor sem cabeça local
+  (`760 512 512` sem a chamada, `… 242` com ela, animações ligadas e desligadas).
   **O `.desktop` roda `ronoctua-shell play`** (toca e levanta a coluna), e o `apps::opens` prefere as
   entradas `br.ronoctua.*` — senão quem abre um filme é quem o diretório listou primeiro. **A lista
   de tipos é LIDA do `shared-mime-info` na build** (todo `audio/` e `video/`, mais os de
@@ -1851,7 +1880,18 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   maior parte daquele arquivo é o que ficou DE FORA: extensão que a base já dá a outra coisa
   (`.iso`, `.gsf`) ou que é de outro programa lá fora (`.cff`, `.bam`) só toca quando entregue.
   **XSPF e ASX o daemon abre** (`ronoctua-playlist`, o leitor da prévia descido a crate): o libmpv
-  não os conhece e termina na hora.
+  não os conhece e termina na hora. **E o que o libgme lê** (VGM, NSF, SPC, GBS, HES, KSS, AY, SAP,
+  GYM) **leva o demuxer NOMEADO** (`engine::load`): o ffmpeg os reconhece com nota 25 e o libmpv exige
+  26 — todos respondiam "formato não reconhecido", e o plano os contava como grátis; medido num VGM
+  que o `ffprobe` lia sem uma palavra. Baixar o limiar para todo arquivo deixaria um palpite fraco
+  vencer noutro lugar. **O player segue a mídia no perfil** (`profile.nix`): libmpv com `ffmpeg-full`
+  mais os decodificadores são **1 682 MiB** de fecho, então o `minimal` não o leva, e a tecla diz
+  "não instalado" (`client::NotInstalled`, pelo código 5 do `systemctl`) em vez de "não responde".
+  **O SponsorBlock tem uma linha por CATEGORIA** (`prefs::CATEGORIES`, as nove que são trecho de
+  tempo). **Duas máquinas se provam em duas VMs** (`player-remote-vm`): a API local do Tailscale é a
+  única coisa trocada — umas linhas de Python no soquete dele, e endereços da faixa da tailnet na
+  rede de teste —, e dali para frente é o código de verdade: código de seis dígitos (o errado é
+  recusado), filme por HTTP, e o seguidor abaixo de 80 ms.
   **Os arquivos são um NÍVEL da vista** (`f`, a linha `Navegar nos arquivos…`, `LEADER p l`;
   `player_browse.rs`): um anel com música, vídeos e clipes musicais (a ONZE pasta,
   `XDG_MUSIC_VIDEO_DIR`; sem ela declarada, a de MÚSICA que a máquina declara, nunca um nome

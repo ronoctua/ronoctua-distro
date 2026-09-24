@@ -60,6 +60,12 @@ in
     # distro, it is a broken one. What this line still turns off is the
     # things one installs to USE — which is the line this whole table draws.
     media.enable = lib.mkDefault full;
+    # THE PLAYER FOLLOWS THE MEDIA, and it is not a small thing: libmpv over
+    # `ffmpeg-full` is a closure of 1 487 MiB and the decoders another 670 —
+    # 1 682 MiB together, measured with `nix path-info -r`, most of it
+    # `ffmpeg-full`'s own reach (python, samba, opencv, flite, qtbase). A
+    # minimal system has no mpv and no VLC either; one line turns it on.
+    player.enable = lib.mkDefault full;
 
     # THE PRIMARY FACE IS NOT HERE, and that is the whole point of the line.
     #

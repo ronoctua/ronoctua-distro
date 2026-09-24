@@ -1227,8 +1227,32 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             label: key::CMD_PLAYER_ONLY,
         },
         Command {
+            id: "player-play-now",
+            label: key::CMD_PLAYER_PLAY_NOW,
+        },
+        Command {
+            id: "player-clear",
+            label: key::CMD_PLAYER_CLEAR,
+        },
+        Command {
+            id: "player-quieter",
+            label: key::CMD_PLAYER_QUIETER,
+        },
+        Command {
+            id: "player-louder",
+            label: key::CMD_PLAYER_LOUDER,
+        },
+        Command {
             id: "player-maximize",
             label: key::CMD_PLAYER_MAXIMIZE,
+        },
+        Command {
+            id: "player-pip",
+            label: key::CMD_PLAYER_PIP,
+        },
+        Command {
+            id: "player-mute",
+            label: key::CMD_PLAYER_MUTE,
         },
         // MICE, TOUCHPADS AND EVERY CURSOR — `s i i` in the footer and `s i w`
         // in a window, the doubled letter and the `w` every view of this
@@ -3600,6 +3624,12 @@ mod tests {
             "player-parent",
             "player-only",
             "player-maximize",
+            "player-play-now",
+            "player-clear",
+            "player-quieter",
+            "player-louder",
+            "player-pip",
+            "player-mute",
             "pointers-up",
             "pointers-down",
             "pointers-enter",

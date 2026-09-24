@@ -8596,18 +8596,37 @@ levada com a sessão), e o número dele volta a outro processo; perguntar só "o
 interruptor mandar `TERM` a quem o herdou, responder "fechei" e não abrir nada. Por isso a linha de
 comando é lida: este programa, com a palavra `column`.
 
-**A coluna põe um estado no commit que a mapeia, porque o compositor não avisa as janelas sem
-isso.** Um commit de layer re-arranja as janelas sempre, mas só MANDA a nova disposição quando leva
-algum estado de layer além da interatividade do teclado; o commit que mapeia a superfície leva só o
-buffer. Sem patch (invariante 3), o lado do cliente é dizer de novo a zona exclusiva no primeiro
-quadro — o wlroots conta um valor repetido como mudança. E a prova é a JANELA receber a largura
-nova: a árvore do IPC mostra o que foi calculado, e mostrava certo com a janela ainda larga.
+**A coluna pede ao compositor que avise as janelas, porque o commit que a mapeia não avisa.** A
+zona exclusiva só conta com a superfície mapeada, e o commit do primeiro quadro re-arranja as janelas
+sem mandar o arranjo — só manda quem também muda estado de layer. Repetir a zona não conta: o
+wlroots ignora um valor igual ao que já tem. Sem patch (invariante 3), o que resta é o IPC, onde todo
+comando termina mandando o que está pendente: um `nop`, pedido quando o primeiro quadro é MOSTRADO
+(o frame callback pedido nele) — só então a zona foi contada. Um `sync` depois de apresentar corria
+com o driver, que pode fazer o commit numa thread própria. E a prova é a JANELA receber uma largura NOVA
+depois da coluna, comparada com a de ANTES dela: comparada com a primeira de todas, o teste passava
+com o defeito.
 
 **A imagem sozinha é um palco, e os controles são dela só enquanto há atividade.** Fora do palco a
 faixa da imagem é um tom de superfície, e o quadro é pedido na proporção do vídeo para que ela
 apareça; no palco a imagem toma a superfície e o preto é a tarja do próprio player. O transporte
 volta por cima a cada gesto e sai sozinho, mas nunca sob a mão — um controle que some sob o ponteiro
 que ia apertá-lo é um controle que ninguém aperta — e escondido ele não é alvo de nada.
+
+**O perfil mínimo não leva o player, e a razão é um número.** libmpv sobre `ffmpeg-full` é um
+fecho de 1 487 MiB e os decodificadores mais 670 — 1 682 MiB juntos, quase tudo alcance do próprio
+`ffmpeg-full` (python, samba, opencv, flite, qtbase). Um sistema mínimo já não tem mpv nem VLC; o
+player segue a mídia na tabela do perfil, e uma linha o liga. Sem ele, as teclas dizem que ele não
+está instalado — "não responde, sobe sozinho" seria uma frase falsa ali.
+
+**A coluna da direita é um slot, e o inquilino é uma variante.** O invariante 14 fala da BORDA, não
+do player: no máximo uma coluna, uma de cada vez. Escrita como o arquivo do player, a regra valeria
+só para ele, e a próxima coisa que quisesse a borda traria um segundo arquivo — duas colunas lado a
+lado. O slot é declarado uma vez: quem o toma encerra quem o tinha.
+
+**O que o libgme lê precisa do demuxer nomeado.** O ffmpeg reconhece VGM, NSF, SPC e os irmãos com
+uma nota de sondagem de 25, e o libmpv exige 26; sem nome, todos terminavam em "formato não
+reconhecido". Baixar o limiar para todo arquivo deixaria um palpite fraco ganhar noutro lugar, então
+o nome vai só para essas extensões, nas opções do `loadfile`.
 
 ## 8. Desempenho, grafo e riscos
 

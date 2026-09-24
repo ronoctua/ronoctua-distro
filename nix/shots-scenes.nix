@@ -95,6 +95,27 @@
   # DRAWS: the headings, down the right edge, above the footer.
   { id = "player-column"; }
   { id = "player-window"; }
+  # THE PLAYER PLAYING, which the three above never show — the photo machine
+  # had no daemon, so every view said "nothing is loaded". The first scene
+  # starts it with a film and a song; the others stand on it.
+  { id = "player-playing"; }
+  # THE COLUMN WITH THE FILM: the picture in its own proportion, and the band
+  # around it in the theme's surface tone, not black.
+  {
+    id = "player-column-video";
+    needs = [ "player-playing" ];
+  }
+  # THE SONG'S LYRICS, the line being sung lit; it closes the column after.
+  {
+    id = "player-lyrics";
+    needs = [ "player-column-video" ];
+  }
+  # THE PICTURE ALONE and ON THE WHOLE SCREEN: with the controls over it right
+  # after opening, and without them once they have gone.
+  {
+    id = "player-stage";
+    needs = [ "player-playing" ];
+  }
   # THE OTHER HALF OF WHAT THE OWNER REPORTED: he could not find a way to turn
   # Tor on. The section lived behind `if let Some(scene)`, and the control
   # socket only answers when Tor is already running — so a stopped Tor drew no

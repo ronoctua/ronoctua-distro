@@ -718,6 +718,12 @@
   # filling the screen is the file manager's `theatre` pair, because it is
   # the same gesture — the glyph says where the button GOES.
   player-only = "md-fit_to_screen";
+  # EMPTY THE QUEUE, the glyph beside its title: a list with a line through.
+  player-clear-queue = "md-playlist_remove";
+  # THE SMALL WINDOW IN THE CORNER — picture-in-picture —, drawn as what it
+  # does: a frame with a smaller one in its bottom-right corner, which is
+  # where the window goes. A switch, lit while it is on.
+  player-pip = "md-picture_in_picture_bottom_right";
   player-volume = "md-volume_high";
   player-subtitles = "md-subtitles_outline";
   player-lyrics = "md-music_note";

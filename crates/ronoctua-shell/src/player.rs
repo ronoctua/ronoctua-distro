@@ -52,8 +52,14 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("f", "player-browse", Where::OutOfTheFiles),
     ("a", "player-add", Where::OnAFile),
     ("DEL", "player-parent", Where::InTheFiles),
+    ("P", "player-play-now", Where::OnAFile),
+    ("c", "player-clear", Where::OutOfTheFiles),
+    ("-", "player-quieter", Where::Anywhere),
+    ("=", "player-louder", Where::Anywhere),
     ("o", "player-only", Where::Anywhere),
     ("m", "player-maximize", Where::Anywhere),
+    ("i", "player-pip", Where::Anywhere),
+    ("0", "player-mute", Where::Anywhere),
 ];
 
 /// Where a key applies.
@@ -122,10 +128,22 @@ pub enum Press {
     Add,
     /// The folder above.
     Parent,
+    /// The file (or folder) alone, now: the queue replaced by it.
+    PlayNow,
+    /// Empty the queue, after a question.
+    Clear,
+    /// The volume down a step.
+    Quieter,
+    /// The volume up a step.
+    Louder,
     /// Only the picture, in this door.
     Only,
     /// The picture on the whole screen.
     Maximize,
+    /// The picture in a small window in the corner.
+    Pip,
+    /// Mute or unmute.
+    Mute,
     /// Leave the view.
     Escape,
 }
@@ -166,6 +184,8 @@ pub enum Target {
     LyricsOnline,
     /// Sponsored segments skipped, on or off.
     Sponsors,
+    /// One of SponsorBlock's categories, skipped or not.
+    Skip(&'static str),
     /// A door or a question: a command of the registry.
     Run(&'static str),
     /// Open the files.
@@ -180,8 +200,17 @@ pub enum Target {
     EnqueueFolder,
     /// A folder of the listing: `RET` enters it, `a` queues it whole.
     Folder(std::path::PathBuf),
-    /// A file of the listing: `RET` plays it alone, `a` queues it.
+    /// A file of the listing: `RET` puts it in the queue, `P` plays it alone.
     File(std::path::PathBuf),
+    /// A path or an address, typed: the question in the footer.
+    Typed,
+    /// Pick another video to play in step with this sound — the files, for
+    /// that purpose.
+    FollowPick,
+    /// Empty the queue: the glyph beside its title, and `c`.
+    ClearQueue,
+    /// An answer to the question on screen.
+    Answer(bool),
 }
 
 impl Target {
@@ -198,6 +227,7 @@ impl Target {
                 | Self::Subtitles
                 | Self::LyricsOnline
                 | Self::Sponsors
+                | Self::Skip(_)
                 | Self::Host(_)
                 | Self::Place
         )
@@ -212,6 +242,7 @@ impl Target {
                 | Self::EnqueueFolder
                 | Self::Folder(_)
                 | Self::File(_)
+                | Self::Typed
         )
     }
 
@@ -233,6 +264,46 @@ pub struct Row {
     pub target: Target,
     /// Its identity across a rebuild.
     pub spot: String,
+    /// When the line is a row of a GRID — the files, laid out in columns —
+    /// or carries a control beside its title: where each one is, and what it
+    /// does. `target` is then the one the cursor is on.
+    pub cells: Vec<Cell>,
+}
+
+/// One entry of a row laid out in columns, or a control on a title's line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cell {
+    /// Its first column, as a field's `at`.
+    pub from: u16,
+    /// How many columns it takes.
+    pub width: u16,
+    /// What a key or a click does on it.
+    pub target: Target,
+    /// Its identity across a rebuild.
+    pub spot: String,
+}
+
+/// What a choice of the files is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Purpose {
+    /// Into the queue: `RET` adds, `P` plays alone.
+    #[default]
+    Queue,
+    /// Another video, played in step with this sound.
+    Follow,
+}
+
+/// A question on screen, and what each answer does.
+#[derive(Debug, Clone, PartialEq)]
+struct Question {
+    /// What is asked, already in words.
+    sentence: String,
+    /// Where the cursor was, to go back to once it is answered.
+    back: (usize, usize),
+    /// What `yes` does.
+    yes: Box<Errand>,
+    /// What `no` does — and `Esc`.
+    no: Box<Errand>,
 }
 
 /// What the door has to do.
@@ -246,10 +317,13 @@ pub enum Errand {
     Run(&'static str),
     /// Tell the player.
     Tell(Ask),
+    /// Tell the player, and say what was done — the sentence already in
+    /// words.
+    TellSaying(Ask, String),
+    /// Say a sentence, already in words.
+    Said(String),
     /// Write the preferences, and tell the player to reread them.
     Keep(ronoctua_player::prefs::Preferences),
-    /// Say a sentence, by its key.
-    Say(&'static str),
     /// Show the picture alone, or on the whole screen — the DOOR's to do,
     /// because only a door has a picture to show.
     Show(Show),
@@ -262,6 +336,9 @@ pub enum Show {
     Only,
     /// Alone, on the whole screen.
     Maximized,
+    /// Alone, in a small window floating in the bottom-right corner —
+    /// picture-in-picture.
+    Small,
 }
 
 /// How far `←`/`→` move the position, in seconds.
@@ -291,6 +368,12 @@ pub struct View {
     left_at: Option<(usize, std::path::PathBuf)>,
     /// The folder just left by going up, for the cursor to land on.
     came_from: Option<std::path::PathBuf>,
+    /// Which entry of a grid row the cursor is on.
+    cell: usize,
+    /// The question on screen, when one is.
+    asking: Option<Question>,
+    /// A control on a title's line, clicked: what the next `RET` does.
+    clicked_control: Option<Target>,
 }
 
 /// The files level: which place, and the folder that is open.
@@ -298,6 +381,8 @@ pub struct View {
 struct Files {
     place: usize,
     listing: crate::player_browse::Listing,
+    /// What choosing a file does.
+    purpose: Purpose,
 }
 
 /// `m:ss`, or `h:mm:ss` from an hour on.
@@ -434,11 +519,14 @@ impl View {
             files: None,
             left_at: None,
             came_from: None,
+            cell: 0,
+            asking: None,
+            clicked_control: None,
         }
     }
 
     /// The files, where they were left, or the music folder the first time.
-    fn open_the_files(&mut self) {
+    fn open_the_files(&mut self, purpose: Purpose) {
         let (place, at) = self.left_at.clone().unwrap_or_else(|| {
             let places = crate::player_browse::places();
             (0, places[0].1.clone())
@@ -446,8 +534,10 @@ impl View {
         self.files = Some(Files {
             place,
             listing: crate::player_browse::list(&at),
+            purpose,
         });
         self.cursor = 0;
+        self.cell = 0;
         self.moved = false;
     }
 
@@ -458,6 +548,7 @@ impl View {
             self.left_at = Some((f.place, at.to_path_buf()));
         }
         self.cursor = 0;
+        self.cell = 0;
         self.moved = false;
         self.came_from = on.map(std::path::Path::to_path_buf);
     }
@@ -488,15 +579,43 @@ impl View {
         crate::chrome::hint_of(&here, texts)
     }
 
-    /// A click; `true` when it was the second on the same row.
-    pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
-        if rows.get(n).is_some_and(|r| !r.heading) {
-            let again = self.cursor == n;
-            self.moved = true;
-            self.cursor = n;
-            return again;
+    /// A click on row `n`, at `column` (a field's `at`); `true` when the
+    /// door should run what `RET` does — the second click on the same place,
+    /// or a click on a control beside a title, which acts at once.
+    pub fn clicked_at(&mut self, n: usize, column: u16, rows: &[Row]) -> bool {
+        let Some(row) = rows.get(n) else {
+            return false;
+        };
+        let cell = row
+            .cells
+            .iter()
+            .position(|c| column >= c.from && column < c.from + c.width);
+        // A CONTROL ON A TITLE'S LINE acts on the click: a title is not a
+        // place the cursor stops, so there is no first click to spend on it.
+        if row.heading {
+            if let Some(c) = cell {
+                self.clicked_control = Some(row.cells[c].target.clone());
+                return true;
+            }
+            return false;
         }
-        false
+        let again = self.cursor == n && (row.cells.is_empty() || cell == Some(self.cell));
+        self.moved = true;
+        self.cursor = n;
+        if let Some(c) = cell {
+            self.cell = c;
+        }
+        again
+    }
+
+    /// A click anywhere on row `n` — the first column.
+    #[cfg(test)]
+    pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
+        let column = rows
+            .get(n)
+            .and_then(|r| r.cells.get(self.cell).or_else(|| r.cells.first()))
+            .map_or(0, |c| c.from);
+        self.clicked_at(n, column, rows)
     }
 
     /// The cursor back on a real row after the rows changed.
@@ -508,16 +627,24 @@ impl View {
         // the entries are what a person came to walk.
         if !self.moved && self.files.is_some() {
             let came = self.came_from.take();
-            let here = rows
-                .iter()
-                .position(|r| match (&r.target, came.as_deref()) {
-                    (Target::Folder(p), Some(c)) => p == c,
-                    (Target::Folder(_) | Target::File(_), None) => true,
-                    _ => false,
-                });
-            if let Some(i) = here {
-                self.cursor = i;
-                return;
+            // THE FOLDER JUST LEFT, or else the first real entry — `..` is
+            // the way back, not what a person opened the folder for, and it
+            // is landed on only when there is nothing else.
+            let wanted: [&dyn Fn(&Target) -> bool; 3] = [
+                &|t| matches!((t, came.as_deref()), (Target::Folder(p), Some(c)) if p == c),
+                &|t| came.is_none() && matches!(t, Target::Folder(_) | Target::File(_)),
+                &|t| matches!(t, Target::Up),
+            ];
+            // THE ENTRIES ARE CELLS of a grid now: they are looked for in
+            // each, and the cursor lands on the row AND the column.
+            for is_it in wanted {
+                for (i, r) in rows.iter().enumerate().filter(|(_, r)| !r.heading) {
+                    if let Some(c) = r.cells.iter().position(|c| is_it(&c.target)) {
+                        self.cursor = i;
+                        self.cell = c;
+                        return;
+                    }
+                }
             }
         }
         if !self.moved
@@ -575,9 +702,56 @@ impl View {
             if !rows[at].heading {
                 self.cursor = at;
                 self.moved = true;
+                self.cell = self.cell.min(rows[at].cells.len().saturating_sub(1));
                 return;
             }
         }
+    }
+
+    /// Across a grid: `←`/`→` move between its columns, and past the foot
+    /// of one column `↓` goes on at the head of the next — the order the
+    /// names are read in, which is down each column (`Builder::grid`).
+    fn across(&mut self, rows: &[Row], press: Press) -> bool {
+        let Some(row) = rows.get(self.cursor) else {
+            return false;
+        };
+        if row.cells.len() < 2 && !matches!(press, Press::Up | Press::Down) {
+            return false;
+        }
+        let grid: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| !r.cells.is_empty() && !r.heading)
+            .map(|(i, _)| i)
+            .collect();
+        let (Some(&first), Some(&last)) = (grid.first(), grid.last()) else {
+            return false;
+        };
+        if !grid.contains(&self.cursor) {
+            return false;
+        }
+        match press {
+            Press::Less if self.cell > 0 => self.cell -= 1,
+            Press::More if self.cell + 1 < row.cells.len() => self.cell += 1,
+            Press::Down if self.cursor == last && self.cell + 1 < rows[first].cells.len() => {
+                self.cursor = first;
+                self.cell += 1;
+            }
+            Press::Up if self.cursor == first && self.cell > 0 => {
+                self.cell -= 1;
+                // THE FOOT OF THE COLUMN BEFORE, which may be shorter: the
+                // last row that has an entry in it.
+                self.cursor = grid
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|&i| rows[i].cells.len() > self.cell)
+                    .unwrap_or(first);
+            }
+            _ => return false,
+        }
+        self.moved = true;
+        true
     }
 
     /// A key.
@@ -588,8 +762,18 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
+        // A QUESTION ON SCREEN takes every key until it is answered.
+        if self.asking.is_some() {
+            return self.answering(press, state, columns, texts);
+        }
         self.settle_in(state, columns, texts);
         let rows = self.rows(state, columns, texts);
+        // A CONTROL BESIDE A TITLE, clicked: what it does, now.
+        if press == Press::Enter
+            && let Some(target) = self.clicked_control.take()
+        {
+            return self.act(&target, press, state, columns, texts);
+        }
         match press {
             // `Esc` AMONG THE FILES goes back to the view, one level, as
             // every view with levels does.
@@ -603,10 +787,21 @@ impl View {
             Press::Escape => return Errand::Close,
             Press::Browse => {
                 if self.files.is_none() {
-                    self.open_the_files();
+                    self.open_the_files(Purpose::Queue);
                     self.settle_in(state, columns, texts);
                 }
                 return Errand::Nothing;
+            }
+            Press::Clear => return self.ask_to_clear(state, texts),
+            Press::Quieter | Press::Louder => {
+                let now = state.map_or(100, |s| s.volume);
+                return Errand::Tell(Ask::Volume {
+                    percent: if press == Press::Louder {
+                        now.saturating_add(VOLUME_STEP).min(VOLUME_MOST)
+                    } else {
+                        now.saturating_sub(VOLUME_STEP)
+                    },
+                });
             }
             Press::Parent => {
                 if let Some(at) = self.files.as_ref().map(|f| f.listing.at.clone())
@@ -617,37 +812,70 @@ impl View {
                 }
                 return Errand::Nothing;
             }
-            Press::Up => {
-                self.walk(&rows, false);
+            Press::Up | Press::Down => {
+                if !self.across(&rows, press) {
+                    self.walk(&rows, press == Press::Down);
+                }
                 return Errand::Nothing;
             }
-            Press::Down => {
-                self.walk(&rows, true);
-                return Errand::Nothing;
-            }
+            // `←`/`→` ON A GRID move between its columns; elsewhere they turn
+            // the value of the row, below.
+            Press::Less | Press::More if self.across(&rows, press) => return Errand::Nothing,
             Press::Toggle => return Errand::Tell(Ask::Toggle),
             Press::Only => return Errand::Show(Show::Only),
             Press::Maximize => return Errand::Show(Show::Maximized),
+            Press::Pip => return Errand::Show(Show::Small),
+            Press::Mute => return Errand::Tell(Ask::Mute),
             Press::Next => return Errand::Tell(Ask::Next),
             Press::Previous => return Errand::Tell(Ask::Previous),
-            Press::Less | Press::More | Press::Enter | Press::Remove | Press::Add => {}
+            Press::Less
+            | Press::More
+            | Press::Enter
+            | Press::Remove
+            | Press::Add
+            | Press::PlayNow => {}
         }
         let target = rows
             .get(self.cursor)
             .map_or(Target::Nothing, |r| r.target.clone());
+        self.act(&target, press, state, columns, texts)
+    }
+
+    /// What a press does on a target — a row's, a grid cell's, or a
+    /// control's beside a title.
+    fn act(
+        &mut self,
+        target: &Target,
+        press: Press,
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        let target = target.clone();
         // A NEW FOLDER PUTS THE CURSOR BACK ON ZERO, which is its heading;
         // settling it here is what lands it on an entry. The doors never
         // settle after a key, and a cursor on a heading teaches no key of
         // the level — the photograph showed exactly that.
         if target.among_the_files() {
-            let errand = self.among_the_files(&target, press);
+            let errand = self.among_the_files(&target, press, state, texts);
             self.settle_in(state, columns, texts);
             return errand;
         }
-        if target == Target::Browse && press == Press::Enter {
-            self.open_the_files();
-            self.settle_in(state, columns, texts);
-            return Errand::Nothing;
+        if press == Press::Enter {
+            match target {
+                Target::Browse => {
+                    self.open_the_files(Purpose::Queue);
+                    self.settle_in(state, columns, texts);
+                    return Errand::Nothing;
+                }
+                Target::FollowPick => {
+                    self.open_the_files(Purpose::Follow);
+                    self.settle_in(state, columns, texts);
+                    return Errand::Nothing;
+                }
+                Target::ClearQueue => return self.ask_to_clear(state, texts),
+                _ => {}
+            }
         }
         // THE TWO SWITCHES ARE THIS VIEW'S: a ring of two, any key turns it.
         let mut p = self.prefs.clone();
@@ -662,29 +890,41 @@ impl View {
                 self.prefs = p.clone();
                 return Errand::Keep(p);
             }
+            Target::Skip(category) if press != Press::Remove => {
+                if let Some(i) = p.skipped.iter().position(|c| c == category) {
+                    p.skipped.remove(i);
+                } else {
+                    p.skipped.push(category.to_owned());
+                }
+                self.prefs = p.clone();
+                return Errand::Keep(p);
+            }
             _ => {}
         }
         turn(&target, press, state)
     }
 
     /// A press on a row of the files.
-    fn among_the_files(&mut self, target: &Target, press: Press) -> Errand {
-        let Some(open) = self.files.as_ref().map(|f| f.listing.at.clone()) else {
+    fn among_the_files(
+        &mut self,
+        target: &Target,
+        press: Press,
+        state: Option<&State>,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        use ronoctua_i18n::{Arg, key};
+        let Some((open, purpose)) = self
+            .files
+            .as_ref()
+            .map(|f| (f.listing.at.clone(), f.purpose))
+        else {
             return Errand::Nothing;
         };
-        // A FOLDER BECOMES ITS FILES here, walked down, and one with none is
-        // a sentence rather than an empty order.
-        let order = |folder: &std::path::Path, replace: bool| {
-            let items: Vec<String> = crate::player_browse::gather(folder)
-                .into_iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect();
-            if items.is_empty() {
-                Errand::Say(ronoctua_i18n::key::PLAYER_BROWSE_NOTHING_TO_PLAY)
-            } else {
-                Errand::Tell(Ask::Open { items, replace })
-            }
-        };
+        let queued: Vec<String> = state
+            .map(|s| s.queue.iter().map(|i| i.location.clone()).collect())
+            .unwrap_or_default();
+        let named = |p: &std::path::Path| file_name(p);
+        let count = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
         match (target, press) {
             (Target::Place, Press::Less | Press::More | Press::Enter) => {
                 let places = crate::player_browse::places();
@@ -707,66 +947,225 @@ impl View {
                 }
                 Errand::Nothing
             }
-            (Target::PlayFolder, Press::Enter) => order(&open, true),
-            (Target::PlayFolder | Target::EnqueueFolder, Press::Add)
-            | (Target::EnqueueFolder, Press::Enter) => order(&open, false),
+            // THE TYPED PATH OR ADDRESS is the question in the footer, for the
+            // same purpose the files are open for.
+            (Target::Typed, Press::Enter) => Errand::Run(match purpose {
+                Purpose::Queue => "player-enqueue",
+                Purpose::Follow => "player-follow",
+            }),
             (Target::Folder(p), Press::Enter) => {
                 self.go_to(&p.clone(), None);
                 Errand::Nothing
             }
-            (Target::Folder(p), Press::Add) => order(p, false),
-            // A FILE ALONE: `RET` plays it and only it, which is what the
-            // question `Play a file…` has always done with a path.
-            (Target::File(p), Press::Enter) => Errand::Tell(Ask::Open {
-                items: vec![p.to_string_lossy().into_owned()],
-                replace: true,
-            }),
-            (Target::File(p), Press::Add) => Errand::Tell(Ask::Open {
-                items: vec![p.to_string_lossy().into_owned()],
-                replace: false,
-            }),
+            // IN STEP, a file is the video to follow: chosen, it plays beside
+            // this sound, and the files close — the choice was made.
+            (Target::File(p), Press::Enter | Press::Add | Press::PlayNow)
+                if purpose == Purpose::Follow =>
+            {
+                self.files = None;
+                self.cursor = 0;
+                self.moved = false;
+                Errand::TellSaying(
+                    Ask::Follow {
+                        item: p.to_string_lossy().into_owned(),
+                    },
+                    texts.t_with(key::PLAYER_FOLLOWING, &[("name", &named(p))]),
+                )
+            }
+            (Target::Folder(_) | Target::PlayFolder | Target::EnqueueFolder, _)
+                if purpose == Purpose::Follow =>
+            {
+                Errand::Nothing
+            }
+            // A FILE, INTO THE QUEUE — `RET` and a double click. Once, unless
+            // somebody says twice.
+            (Target::File(p), Press::Enter | Press::Add) => {
+                let item = p.to_string_lossy().into_owned();
+                let added = Errand::TellSaying(
+                    Ask::Open {
+                        items: vec![item.clone()],
+                        replace: false,
+                    },
+                    texts.t_with(key::PLAYER_ADDED, &[("name", &named(p))]),
+                );
+                if queued.contains(&item) {
+                    self.ask(
+                        texts.t_with(key::PLAYER_ALREADY_QUEUED, &[("name", &named(p))]),
+                        added,
+                        Errand::Nothing,
+                    )
+                } else {
+                    added
+                }
+            }
+            // `P`: THE FILE ALONE, now — the queue replaced by it.
+            (Target::File(p), Press::PlayNow) => Errand::TellSaying(
+                Ask::Open {
+                    items: vec![p.to_string_lossy().into_owned()],
+                    replace: true,
+                },
+                texts.t_with(key::PLAYER_PLAYING_NOW, &[("name", &named(p))]),
+            ),
+            // A FOLDER WHOLE, played now or added.
+            (Target::Folder(_), Press::PlayNow)
+            | (Target::PlayFolder, Press::Enter | Press::PlayNow) => {
+                let folder = match target {
+                    Target::Folder(f) => f.clone(),
+                    _ => open.clone(),
+                };
+                let items = gathered(&folder);
+                if items.is_empty() {
+                    return Errand::Said(texts.t(key::PLAYER_BROWSE_NOTHING_TO_PLAY));
+                }
+                let n = count(items.len());
+                Errand::TellSaying(
+                    Ask::Open {
+                        items,
+                        replace: true,
+                    },
+                    texts.t_args(key::PLAYER_PLAYING_MANY, &[("count", Arg::Number(n))]),
+                )
+            }
+            (Target::Folder(_), Press::Add)
+            | (Target::EnqueueFolder | Target::PlayFolder, Press::Add)
+            | (Target::EnqueueFolder, Press::Enter) => {
+                let folder = match target {
+                    Target::Folder(f) => f.clone(),
+                    _ => open.clone(),
+                };
+                let items = gathered(&folder);
+                if items.is_empty() {
+                    return Errand::Said(texts.t(key::PLAYER_BROWSE_NOTHING_TO_PLAY));
+                }
+                let added = |items: Vec<String>| {
+                    let n = count(items.len());
+                    Errand::TellSaying(
+                        Ask::Open {
+                            items,
+                            replace: false,
+                        },
+                        texts.t_args(key::PLAYER_ADDED_MANY, &[("count", Arg::Number(n))]),
+                    )
+                };
+                let fresh: Vec<String> = items
+                    .iter()
+                    .filter(|i| !queued.contains(i))
+                    .cloned()
+                    .collect();
+                if fresh.len() == items.len() {
+                    return added(items);
+                }
+                // SOME ARE THERE ALREADY: again, or only the new ones.
+                let repeated = count(items.len() - fresh.len());
+                let sentence = texts.t_args(
+                    key::PLAYER_ALREADY_QUEUED_MANY,
+                    &[
+                        ("repeated", Arg::Number(repeated)),
+                        ("count", Arg::Number(count(items.len()))),
+                    ],
+                );
+                let no = if fresh.is_empty() {
+                    Errand::Said(texts.t(key::PLAYER_NOTHING_NEW))
+                } else {
+                    added(fresh)
+                };
+                self.ask(sentence, added(items), no)
+            }
             _ => Errand::Nothing,
         }
     }
 
-    /// The rows of the files level.
+    /// Puts a question on screen; `no` is where the cursor starts, and what
+    /// `Esc` answers — a question that appears on its own answers no.
+    fn ask(&mut self, sentence: String, yes: Errand, no: Errand) -> Errand {
+        self.asking = Some(Question {
+            sentence,
+            back: (self.cursor, self.cell),
+            yes: Box::new(yes),
+            no: Box::new(no),
+        });
+        self.cursor = 0;
+        self.cell = 0;
+        self.moved = false;
+        Errand::Nothing
+    }
+
+    /// A key while a question is on screen.
+    fn answering(
+        &mut self,
+        press: Press,
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        self.settle_in(state, columns, texts);
+        let rows = self.rows(state, columns, texts);
+        let answer = match press {
+            Press::Up | Press::Down => {
+                self.walk(&rows, press == Press::Down);
+                return Errand::Nothing;
+            }
+            Press::Escape => false,
+            Press::Enter => match rows.get(self.cursor).map(|r| &r.target) {
+                Some(Target::Answer(yes)) => *yes,
+                _ => return Errand::Nothing,
+            },
+            _ => return Errand::Nothing,
+        };
+        let Some(q) = self.asking.take() else {
+            return Errand::Nothing;
+        };
+        (self.cursor, self.cell) = q.back;
+        self.moved = true;
+        if answer { *q.yes } else { *q.no }
+    }
+
+    /// `c`, or the glyph beside the queue's title: a question first — a
+    /// queue built by hand is not something one key should take away.
+    fn ask_to_clear(&mut self, state: Option<&State>, texts: &ronoctua_i18n::Texts) -> Errand {
+        use ronoctua_i18n::key;
+        if state.is_none_or(|s| s.queue.is_empty()) {
+            return Errand::Said(texts.t(key::PLAYER_QUEUE_EMPTY));
+        }
+        self.ask(
+            texts.t(key::PLAYER_ASK_CLEAR),
+            Errand::TellSaying(Ask::Clear, texts.t(key::PLAYER_QUEUE_CLEARED)),
+            Errand::Nothing,
+        )
+    }
+
+    /// The rows of the files level: the folder (its place a ring on
+    /// `←`/`→`), a path or an address to type, the folder whole, and the
+    /// entries — `..` first — in columns.
     fn files_rows(&self, files: &Files, b: &mut Builder<'_>) {
         use ronoctua_i18n::key;
-        let places = crate::player_browse::places();
         let l = &files.listing;
-        b.heading(key::PLAYER_HEADING_BROWSE);
-        b.pair(
-            b.t(key::PLAYER_BROWSE_PLACE),
-            b.t(places[files.place.min(places.len() - 1)].0),
-            Target::Place,
-            "browse-place",
-        );
         b.pair(
             b.t(key::PLAYER_BROWSE_FOLDER),
             shown_path(&l.at),
-            Target::Nothing,
+            Target::Place,
             "browse-folder",
         );
-        if let Some(up) = l.at.parent() {
+        b.pair(
+            b.t(key::PLAYER_BROWSE_TYPE),
+            String::new(),
+            Target::Typed,
+            "browse-type",
+        );
+        if files.purpose == Purpose::Queue {
             b.pair(
-                b.t(key::PLAYER_BROWSE_UP),
-                shown_path(up),
-                Target::Up,
-                "browse-up",
+                b.t(key::PLAYER_BROWSE_PLAY_FOLDER),
+                String::new(),
+                Target::PlayFolder,
+                "browse-play-folder",
+            );
+            b.pair(
+                b.t(key::PLAYER_BROWSE_ENQUEUE_FOLDER),
+                String::new(),
+                Target::EnqueueFolder,
+                "browse-enqueue-folder",
             );
         }
-        b.pair(
-            b.t(key::PLAYER_BROWSE_PLAY_FOLDER),
-            String::new(),
-            Target::PlayFolder,
-            "browse-play-folder",
-        );
-        b.pair(
-            b.t(key::PLAYER_BROWSE_ENQUEUE_FOLDER),
-            String::new(),
-            Target::EnqueueFolder,
-            "browse-enqueue-folder",
-        );
         b.inert(crate::chrome::AIR);
         if let Some(why) = &l.refused {
             let said = b
@@ -779,27 +1178,36 @@ impl View {
                     tokens::color::STATE_WARNING,
                 )]);
             }
-            return;
         }
-        if l.folders.is_empty() && l.files.is_empty() {
-            b.note(key::PLAYER_BROWSE_EMPTY);
-            return;
+        // `..` FIRST, and always — the way back is where the eye starts.
+        let mut entries: Vec<(char, String, Target, String)> = Vec::new();
+        if l.at.parent().is_some() {
+            entries.push((
+                tokens::icon::FOLDER,
+                "..".to_owned(),
+                Target::Up,
+                "browse-..".to_owned(),
+            ));
         }
         for f in &l.folders {
-            b.entry(
+            entries.push((
                 tokens::icon::FOLDER,
                 file_name(f),
                 Target::Folder(f.clone()),
-                &format!("browse-{}", f.display()),
-            );
+                format!("browse-{}", f.display()),
+            ));
         }
         for (f, glyph) in l.files.iter().zip(&l.glyphs) {
-            b.entry(
+            entries.push((
                 *glyph,
                 file_name(f),
                 Target::File(f.clone()),
-                &format!("browse-{}", f.display()),
-            );
+                format!("browse-{}", f.display()),
+            ));
+        }
+        b.grid(&entries);
+        if l.refused.is_none() && l.folders.is_empty() && l.files.is_empty() {
+            b.note(key::PLAYER_BROWSE_EMPTY);
         }
     }
 
@@ -818,8 +1226,33 @@ impl View {
             left,
             room,
             cursor: self.cursor,
+            cell: self.cell,
             texts,
         };
+        // A QUESTION ON SCREEN is all that is drawn: it waits for an answer.
+        if let Some(q) = &self.asking {
+            b.heading(key::PLAYER_HEADING_QUESTION);
+            for line in crate::chrome::note_lines(&q.sentence, b.room) {
+                b.inert(vec![Builder::piece(
+                    b.left,
+                    line,
+                    tokens::color::TEXT_SECONDARY,
+                )]);
+            }
+            b.pair(
+                b.t(key::PLAYER_ANSWER_NO),
+                String::new(),
+                Target::Answer(false),
+                "no",
+            );
+            b.pair(
+                b.t(key::PLAYER_ANSWER_YES),
+                String::new(),
+                Target::Answer(true),
+                "yes",
+            );
+            return b.out;
+        }
         if let Some(files) = &self.files {
             self.files_rows(files, &mut b);
             return b.out;
@@ -961,8 +1394,13 @@ impl View {
                 )]);
             }
         }
-        // THE QUEUE: every item, the current one in the accent.
-        b.heading(key::PLAYER_HEADING_QUEUE);
+        // THE QUEUE: every item, the current one in the accent, and the
+        // glyph that empties it beside the title.
+        b.heading_with(
+            key::PLAYER_HEADING_QUEUE,
+            tokens::icon::PLAYER_CLEAR_QUEUE,
+            Target::ClearQueue,
+        );
         if s.queue.is_empty() {
             b.note(key::PLAYER_QUEUE_EMPTY);
         }
@@ -975,6 +1413,8 @@ impl View {
                 &format!("item-{i}-{}", item.location),
             );
         }
+        // OPEN, right under the queue: what fills it.
+        opening(&mut b);
         // IN STEP: other videos held to this sound.
         b.heading(key::PLAYER_HEADING_IN_STEP);
         b.note(key::PLAYER_ABOUT_IN_STEP);
@@ -990,14 +1430,15 @@ impl View {
                 &format!("follower-{i}-{}", p.item),
             );
         }
+        // THE SAME PICKER as `Open`, for another purpose: the file chosen
+        // plays in step, and a path or an address can be typed there too.
         b.pair(
             b.t(key::PLAYER_FOLLOW),
             String::new(),
-            Target::Run("player-follow"),
+            Target::FollowPick,
             "follow",
         );
         machines(&mut b, s);
-        opening(&mut b);
         self.settings(&mut b);
         b.out
     }
@@ -1030,6 +1471,36 @@ impl View {
             Target::Sponsors,
             "sponsorblock",
         );
+        // WHAT IS SKIPPED, one row a category, SET IN under the switch they
+        // belong to — hierarchy is air and colour here, never a rule.
+        let (left, room) = (b.left, b.room);
+        b.left += tokens::space::VIEW_NESTCELLS;
+        b.room = b.room.saturating_sub(tokens::space::VIEW_NESTCELLS);
+        for category in prefs::CATEGORIES {
+            b.pair(
+                b.t(skip_key(category)),
+                on_off(self.prefs.skipped.iter().any(|c| c == category), b.texts),
+                Target::Skip(category),
+                &format!("skip-{category}"),
+            );
+        }
+        (b.left, b.room) = (left, room);
+    }
+}
+
+/// Each category's name on screen.
+fn skip_key(category: &str) -> &'static str {
+    use ronoctua_i18n::key;
+    match category {
+        "sponsor" => key::PLAYER_SKIP_SPONSOR,
+        "selfpromo" => key::PLAYER_SKIP_SELFPROMO,
+        "interaction" => key::PLAYER_SKIP_INTERACTION,
+        "intro" => key::PLAYER_SKIP_INTRO,
+        "outro" => key::PLAYER_SKIP_OUTRO,
+        "preview" => key::PLAYER_SKIP_PREVIEW,
+        "hook" => key::PLAYER_SKIP_HOOK,
+        "music_offtopic" => key::PLAYER_SKIP_MUSIC_OFFTOPIC,
+        _ => key::PLAYER_SKIP_FILLER,
     }
 }
 
@@ -1106,18 +1577,7 @@ fn opening(b: &mut Builder<'_>) {
         Target::Browse,
         "browse",
     );
-    b.pair(
-        b.t(key::PLAYER_OPEN_FILE),
-        String::new(),
-        Target::Run("player-play-file"),
-        "open-file",
-    );
-    b.pair(
-        b.t(key::PLAYER_ENQUEUE),
-        String::new(),
-        Target::Run("player-enqueue"),
-        "enqueue",
-    );
+
     b.pair(
         b.t(key::PLAYER_OPEN_COLUMN),
         String::new(),
@@ -1244,7 +1704,10 @@ pub fn carry_out(errand: Errand, texts: &ronoctua_i18n::Texts) -> Result<Option<
     match errand {
         Errand::Nothing => Ok(None),
         Errand::Run(_) | Errand::Close | Errand::Show(_) => Err(errand),
-        Errand::Say(key) => Ok(Some(texts.t(key))),
+        Errand::Said(sentence) => Ok(Some(sentence)),
+        // THE SENTENCE UNLESS THE PLAYER REFUSED: then the refusal is what is
+        // true, and it is what is said.
+        Errand::TellSaying(ask, sentence) => Ok(Some(tell(&ask, texts).unwrap_or(sentence))),
         Errand::Tell(ask) => Ok(tell(&ask, texts)),
         Errand::Keep(p) => Ok(match ronoctua_player::prefs::store().write(&p) {
             Ok(()) => {
@@ -1263,8 +1726,12 @@ pub fn carry_out(errand: Errand, texts: &ronoctua_i18n::Texts) -> Result<Option<
 /// refused, in a sentence.
 #[must_use]
 pub fn tell(ask: &Ask, texts: &ronoctua_i18n::Texts) -> Option<String> {
-    if ronoctua_player::client::ensure().is_err() {
-        return Some(texts.t(ronoctua_i18n::key::PLAYER_NOT_RUNNING));
+    if let Err(e) = ronoctua_player::client::ensure() {
+        return Some(texts.t(if e.is::<ronoctua_player::client::NotInstalled>() {
+            ronoctua_i18n::key::PLAYER_NOT_INSTALLED
+        } else {
+            ronoctua_i18n::key::PLAYER_NOT_RUNNING
+        }));
     }
     match ronoctua_player::client::ask(ask) {
         Ok(ronoctua_player::wire::Say::Refused(t)) => Some(trouble_sentence(&t, texts)),
@@ -1354,6 +1821,14 @@ fn unescaped(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Every file a folder plays, as the player's items.
+fn gathered(folder: &std::path::Path) -> Vec<String> {
+    crate::player_browse::gather(folder)
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect()
+}
+
 /// A folder's name, or the whole path for the root.
 fn file_name(p: &std::path::Path) -> String {
     p.file_name().map_or_else(
@@ -1405,8 +1880,14 @@ pub fn press_of(id: &str) -> Option<Press> {
         "player-browse" => Press::Browse,
         "player-add" => Press::Add,
         "player-parent" => Press::Parent,
+        "player-play-now" => Press::PlayNow,
+        "player-clear" => Press::Clear,
+        "player-quieter" => Press::Quieter,
+        "player-louder" => Press::Louder,
         "player-only" => Press::Only,
         "player-maximize" => Press::Maximize,
+        "player-pip" => Press::Pip,
+        "player-mute" => Press::Mute,
         _ => return None,
     })
 }
@@ -1425,6 +1906,8 @@ struct Builder<'a> {
     left: u16,
     room: u16,
     cursor: usize,
+    /// Which entry of a grid row the cursor is on.
+    cell: usize,
     texts: &'a ronoctua_i18n::Texts,
 }
 
@@ -1451,6 +1934,7 @@ impl Builder<'_> {
             heading: true,
             target: Target::Nothing,
             spot: String::new(),
+            cells: Vec::new(),
         });
     }
 
@@ -1495,29 +1979,105 @@ impl Builder<'_> {
             heading: false,
             target,
             spot: spot.to_owned(),
+            cells: Vec::new(),
         });
     }
 
-    /// An entry of the files: its glyph, and its name as the strong half.
-    fn entry(&mut self, glyph: char, name: String, target: Target, spot: &str) {
-        let focused = self.cursor == self.out.len();
-        let colour = if focused {
-            tokens::color::TEXT_HERE_ACTS
+    /// The files' entries in up to three columns, filled DOWN each column
+    /// — the order a listing is read in, so `↓` is the next name — and
+    /// `←`/`→` across. Three where the room holds three of the longest name,
+    /// two where names are long, one where a column would cut every name to
+    /// a stub (`space.player.browseColumn`).
+    fn grid(&mut self, entries: &[(char, String, Target, String)]) {
+        if entries.is_empty() {
+            return;
+        }
+        let glyph_cells: u16 = 2;
+        let gap: u16 = 2;
+        let widest = entries
+            .iter()
+            .map(|(_, name, _, _)| ronoctua_protocol::cells(name))
+            .max()
+            .unwrap_or(0)
+            .saturating_add(glyph_cells + gap);
+        let floor = tokens::space::PLAYER_BROWSECOLUMN;
+        let columns: u16 = if self.room / 3 >= widest.max(floor) {
+            3
+        } else if self.room / 2 >= floor {
+            2
         } else {
-            tokens::color::TEXT_PRIMARY
+            1
         };
-        let glyph_cells = 2;
-        let name = ronoctua_render::layout::elide_end(&name, self.room.saturating_sub(glyph_cells));
-        self.out.push(Row {
-            fields: vec![
-                Self::piece(self.left, glyph.to_string(), tokens::color::TEXT_DIM),
-                Self::piece(self.left + glyph_cells, name, colour),
-            ],
-            focused,
-            heading: false,
-            target,
-            spot: spot.to_owned(),
-        });
+        let width = self.room / columns;
+        let count = entries.len();
+        let per = count.div_ceil(usize::from(columns));
+        for r in 0..per {
+            let focused_row = self.cursor == self.out.len();
+            let mut fields = Vec::new();
+            let mut cells = Vec::new();
+            for c in 0..columns {
+                let Some((glyph, name, target, spot)) = entries.get(usize::from(c) * per + r)
+                else {
+                    continue;
+                };
+                let from = self.left + c * width;
+                let here = focused_row && usize::from(c) == self.cell.min(usize::from(columns) - 1);
+                let colour = if here {
+                    tokens::color::TEXT_HERE_ACTS
+                } else {
+                    tokens::color::TEXT_PRIMARY
+                };
+                let name = ronoctua_render::layout::elide_end(
+                    name,
+                    width.saturating_sub(glyph_cells + gap),
+                );
+                fields.push(Self::piece(
+                    from,
+                    glyph.to_string(),
+                    tokens::color::TEXT_DIM,
+                ));
+                fields.push(Self::piece(from + glyph_cells, name, colour));
+                cells.push(Cell {
+                    from,
+                    width,
+                    target: target.clone(),
+                    spot: spot.clone(),
+                });
+            }
+            let on = self.cell.min(cells.len().saturating_sub(1));
+            let target = if focused_row {
+                cells.get(on).map_or(Target::Nothing, |c| c.target.clone())
+            } else {
+                cells.first().map_or(Target::Nothing, |c| c.target.clone())
+            };
+            let spot = cells.first().map(|c| c.spot.clone()).unwrap_or_default();
+            self.out.push(Row {
+                fields,
+                focused: focused_row,
+                heading: false,
+                target,
+                spot,
+                cells,
+            });
+        }
+    }
+
+    /// A title with a control at the end of its line — a glyph that acts on a
+    /// click (`View::clicked_at`); the key that does the same is taught in the
+    /// hint line.
+    fn heading_with(&mut self, key: &str, glyph: char, target: Target) {
+        self.heading(key);
+        if let Some(row) = self.out.last_mut() {
+            let at = self.left + self.room.saturating_sub(2);
+            row.fields
+                .push(Self::piece(at, glyph.to_string(), tokens::color::TEXT_DIM));
+            row.cells.push(Cell {
+                from: at,
+                width: 2,
+                target,
+                spot: "control".to_owned(),
+            });
+        }
     }
 
     /// An item of a list: the NAME is the strong half, as every list here
@@ -1541,6 +2101,7 @@ impl Builder<'_> {
             heading: false,
             target,
             spot: spot.to_owned(),
+            cells: Vec::new(),
         });
     }
 }
@@ -1668,6 +2229,7 @@ mod tests {
         v.files = Some(Files {
             place: 0,
             listing: crate::player_browse::list(at),
+            purpose: Purpose::Queue,
         });
         v.settle_in(None, 80, &texts());
         v
@@ -1696,39 +2258,49 @@ mod tests {
     }
 
     /// FAILS IF: the files stop being walked the way a person walks them —
-    /// into a folder, back up onto it, a file played alone or queued, and a
+    /// into a folder, back up onto it, a file added or played alone, and a
     /// folder queued whole.
     #[test]
     fn the_files_are_walked_played_and_queued() {
         let t = texts();
         let root = a_library("walked");
         let album = root.join("Album");
+        let song = album.join("01.ogg").to_string_lossy().into_owned();
         let mut v = among(&root);
-        // THE CURSOR LANDS ON THE FIRST ENTRY, the folder.
+        // THE CURSOR LANDS ON THE FIRST ENTRY, the folder — not on `..`.
         assert_eq!(on(&v), Target::Folder(album.clone()));
-        // `a` QUEUES IT WHOLE, pictures left out.
-        let Errand::Tell(Ask::Open { items, replace }) = v.key(Press::Add, None, 80, &t) else {
+        // `a` QUEUES IT WHOLE, pictures left out, and says so.
+        let Errand::TellSaying(Ask::Open { items, replace }, said) =
+            v.key(Press::Add, None, 80, &t)
+        else {
             panic!("a folder was not queued");
         };
         assert!(!replace);
         assert_eq!(items.len(), 2, "{items:?}");
+        assert!(!said.is_empty());
         // `RET` ENTERS IT, and the cursor is on its first file.
         assert_eq!(v.key(Press::Enter, None, 80, &t), Errand::Nothing);
         assert_eq!(on(&v), Target::File(album.join("01.ogg")));
-        // `RET` ON A FILE PLAYS IT ALONE; `a` PUTS IT IN THE QUEUE.
+        // `RET` ON A FILE ADDS IT; `P` PLAYS IT ALONE.
+        let Errand::TellSaying(ask, _) = v.key(Press::Enter, None, 80, &t) else {
+            panic!("RET did not add");
+        };
         assert_eq!(
-            v.key(Press::Enter, None, 80, &t),
-            Errand::Tell(Ask::Open {
-                items: vec![album.join("01.ogg").to_string_lossy().into_owned()],
-                replace: true,
-            })
-        );
-        assert_eq!(
-            v.key(Press::Add, None, 80, &t),
-            Errand::Tell(Ask::Open {
-                items: vec![album.join("01.ogg").to_string_lossy().into_owned()],
+            ask,
+            Ask::Open {
+                items: vec![song.clone()],
                 replace: false,
-            })
+            }
+        );
+        let Errand::TellSaying(ask, _) = v.key(Press::PlayNow, None, 80, &t) else {
+            panic!("P did not play");
+        };
+        assert_eq!(
+            ask,
+            Ask::Open {
+                items: vec![song],
+                replace: true,
+            }
         );
         // `DEL` GOES UP, and lands on the folder it came from.
         v.key(Press::Parent, None, 80, &t);
@@ -1738,6 +2310,104 @@ mod tests {
         assert!(v.files.is_none());
         assert_eq!(v.key(Press::Escape, None, 80, &t), Errand::Close);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// FAILS IF: a file already in the queue goes in again without a
+    /// question, or the question opens on `yes`, or `Esc` adds it.
+    #[test]
+    fn a_repeated_file_is_asked_about() {
+        let t = texts();
+        let root = a_library("repeated");
+        let one = root.join("one.flac");
+        let mut v = among(&root);
+        let state = State {
+            queue: vec![Item {
+                location: one.to_string_lossy().into_owned(),
+                title: None,
+            }],
+            ..State::default()
+        };
+        let rows = v.rows(Some(&state), 80, &t);
+        let (row, cell) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(i, r)| {
+                r.cells
+                    .iter()
+                    .position(|c| c.target == Target::File(one.clone()))
+                    .map(|c| (i, c))
+            })
+            .unwrap();
+        v.cursor = row;
+        v.cell = cell;
+        v.moved = true;
+        // THE QUESTION, and nothing sent yet.
+        assert_eq!(v.key(Press::Enter, Some(&state), 80, &t), Errand::Nothing);
+        assert!(v.asking.is_some());
+        let rows = v.rows(Some(&state), 80, &t);
+        assert_eq!(rows[v.cursor()].target, Target::Answer(false));
+        // `Esc` IS NO: nothing added, the files back.
+        assert_eq!(v.key(Press::Escape, Some(&state), 80, &t), Errand::Nothing);
+        assert!(v.asking.is_none() && v.files.is_some());
+        assert_eq!(on(&v), Target::File(one.clone()));
+        // ASKED AGAIN, `yes` adds it a second time.
+        v.key(Press::Enter, Some(&state), 80, &t);
+        v.key(Press::Down, Some(&state), 80, &t);
+        let Errand::TellSaying(Ask::Open { items, replace }, _) =
+            v.key(Press::Enter, Some(&state), 80, &t)
+        else {
+            panic!("yes did not add");
+        };
+        assert!(!replace);
+        assert_eq!(items, vec![one.to_string_lossy().into_owned()]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// FAILS IF: the entries stop being laid out in columns where there is
+    /// room, or `..` stops being the first of them, or `→` stops crossing.
+    #[test]
+    fn the_entries_are_a_grid_with_the_way_back_first() {
+        let t = texts();
+        let root = a_library("grid");
+        let mut v = among(&root);
+        let rows = v.rows(None, 200, &t);
+        let first = rows
+            .iter()
+            .find(|r| !r.cells.is_empty() && !r.heading)
+            .unwrap();
+        assert_eq!(first.cells[0].target, Target::Up);
+        assert!(first.cells.len() > 1, "a wide door gave one column");
+        // NARROW, one column.
+        let rows = v.rows(None, 30, &t);
+        assert!(rows.iter().all(|r| r.cells.len() <= 1 || r.heading));
+        // `→` MOVES ACROSS on a wide door.
+        v.settle_in(None, 200, &t);
+        let before = v.rows(None, 200, &t)[v.cursor()].target.clone();
+        v.key(Press::More, None, 200, &t);
+        let after = v.rows(None, 200, &t)[v.cursor()].target.clone();
+        assert_ne!(before, after);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// FAILS IF: clearing the queue stops asking first, or clears an empty
+    /// queue with a question about nothing.
+    #[test]
+    fn clearing_the_queue_asks_first() {
+        let t = texts();
+        let mut v = View::fresh();
+        let state = playing();
+        assert_eq!(v.key(Press::Clear, Some(&state), 80, &t), Errand::Nothing);
+        assert!(v.asking.is_some());
+        v.key(Press::Down, Some(&state), 80, &t);
+        assert!(matches!(
+            v.key(Press::Enter, Some(&state), 80, &t),
+            Errand::TellSaying(Ask::Clear, _)
+        ));
+        let mut v = View::fresh();
+        assert!(matches!(
+            v.key(Press::Clear, Some(&State::default()), 80, &t),
+            Errand::Said(_)
+        ));
     }
 
     /// FAILS IF: the files open with the cursor on their heading — where the
@@ -1774,7 +2444,7 @@ mod tests {
         v.clicked(at, &rows);
         assert_eq!(
             v.key(Press::Enter, None, 80, &t),
-            Errand::Say(ronoctua_i18n::key::PLAYER_BROWSE_NOTHING_TO_PLAY)
+            Errand::Said(t.t(ronoctua_i18n::key::PLAYER_BROWSE_NOTHING_TO_PLAY))
         );
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -1825,6 +2495,41 @@ mod tests {
             panic!("a follow");
         };
         assert_eq!(item, "/v/b.mkv");
+    }
+
+    /// FAILS IF: a category the daemon can skip has no row of its own —
+    /// the table's last arm answers for anything, so a forgotten one would be
+    /// drawn under another's name — or a row stops flipping its category.
+    #[test]
+    fn every_category_is_a_row_of_its_own_and_turns() {
+        use ronoctua_player::prefs::CATEGORIES;
+        let names: std::collections::HashSet<&str> =
+            CATEGORIES.iter().map(|c| super::skip_key(c)).collect();
+        assert_eq!(names.len(), CATEGORIES.len(), "two categories share a name");
+        let t = texts();
+        let s = playing();
+        let mut v = View::fresh();
+        v.prefs = ronoctua_player::prefs::Preferences::default();
+        let rows = v.rows(Some(&s), 80, &t);
+        for c in CATEGORIES {
+            assert!(
+                rows.iter().any(|r| r.target == Target::Skip(c)),
+                "{c} has no row"
+            );
+        }
+        let at = rows
+            .iter()
+            .position(|r| r.target == Target::Skip("intro"))
+            .expect("intro is a row");
+        v.clicked(at, &rows);
+        let Errand::Keep(p) = v.key(Press::Enter, Some(&s), 80, &t) else {
+            panic!("a category writes the preferences");
+        };
+        assert!(
+            p.skipped.iter().any(|c| c == "intro"),
+            "intro was not added"
+        );
+        assert!(p.skipped.iter().any(|c| c == "sponsor"), "the others moved");
     }
 
     #[test]

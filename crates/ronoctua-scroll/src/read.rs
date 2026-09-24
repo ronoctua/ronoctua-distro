@@ -38,6 +38,37 @@ fn walk(node: &Value, into: &mut Vec<Window>) {
     }
 }
 
+/// How much of window `id`'s container is NOT its content: `(width,
+/// height)` of the border and the title bar together, from the tree.
+///
+/// Three rectangles, because the tree moves the title bar OUT of `rect` and
+/// into `deco_rect`; `window_rect` is the content, inside `rect`. `None` for
+/// a window not found, or not yet laid out — its content still `0 × 0`.
+pub fn decoration_in(tree: &Value, id: u64) -> Option<(i64, i64)> {
+    fn find(node: &Value, id: u64) -> Option<&Value> {
+        if node.get("id").and_then(Value::as_u64) == Some(id) {
+            return Some(node);
+        }
+        ["nodes", "floating_nodes"]
+            .iter()
+            .filter_map(|kind| node.get(kind).and_then(Value::as_array))
+            .flatten()
+            .find_map(|kid| find(kid, id))
+    }
+    let node = find(tree, id)?;
+    let size = |key: &str| {
+        let r = node.get(key)?;
+        Some((
+            r.get("width").and_then(Value::as_i64)?,
+            r.get("height").and_then(Value::as_i64)?,
+        ))
+    };
+    let (outer_w, outer_h) = size("rect")?;
+    let (inner_w, inner_h) = size("window_rect")?;
+    let title = size("deco_rect").map_or(0, |(_, h)| h);
+    (inner_w > 0 && inner_h > 0).then_some((outer_w - inner_w, outer_h - inner_h + title))
+}
+
 /// One node, if it is a window.
 fn window_of(node: &Value) -> Option<Window> {
     // THE PID IS WHAT MAKES IT A WINDOW, and it is also the field the whole
@@ -95,6 +126,23 @@ pub fn focused_in(said: &Value) -> Option<String> {
         .find(|o| o.get("focused").and_then(Value::as_bool) == Some(true))
         .and_then(|o| o.get("name").and_then(Value::as_str))
         .map(ToOwned::to_owned)
+}
+
+/// The room windows have on the focused workspace, from the answer to
+/// `get_workspaces`.
+pub fn room_in(said: &Value) -> Option<crate::wire::Room> {
+    let focused = said
+        .as_array()?
+        .iter()
+        .find(|w| w.get("focused").and_then(Value::as_bool) == Some(true))?;
+    let rect = focused.get("rect")?;
+    let n = |k: &str| rect.get(k).and_then(Value::as_i64);
+    Some(crate::wire::Room {
+        x: n("x")?,
+        y: n("y")?,
+        width: n("width")?,
+        height: n("height")?,
+    })
 }
 
 fn output_of(o: &Value) -> Option<Output> {
@@ -509,5 +557,30 @@ mod tests {
         assert_eq!(focused_in(&said).as_deref(), Some("DP-2"));
         // And nothing focused is a legitimate answer.
         assert_eq!(focused_in(&json!([])), None);
+    }
+
+    /// FAILS IF: the title bar stops being counted — the tree keeps it in
+    /// `deco_rect`, out of `rect` — or a window not yet laid out gives a
+    /// decoration made of its whole size.
+    #[test]
+    fn the_decoration_is_border_and_title_bar() {
+        let tree = serde_json::json!({
+            "id": 1,
+            "nodes": [{
+                "id": 7,
+                "rect": {"x": 0, "y": 19, "width": 512, "height": 749},
+                "window_rect": {"x": 2, "y": 0, "width": 508, "height": 747},
+                "deco_rect": {"x": 0, "y": 0, "width": 512, "height": 19},
+                "nodes": []
+            }, {
+                "id": 8,
+                "rect": {"x": 0, "y": 0, "width": 512, "height": 768},
+                "window_rect": {"x": 0, "y": 0, "width": 0, "height": 0},
+                "nodes": []
+            }]
+        });
+        assert_eq!(decoration_in(&tree, 7), Some((4, 21)));
+        assert_eq!(decoration_in(&tree, 8), None);
+        assert_eq!(decoration_in(&tree, 9), None);
     }
 }

@@ -56,6 +56,13 @@ let
           -c:v libx264 -pix_fmt yuv420p $out/other.mp4
         ffmpeg -loglevel error -f lavfi -i sine=frequency=330:duration=30 \
           -metadata artist=Nobody -metadata title=Tone $out/tone.flac
+        # A MATROSKA WITH A SUBTITLE TRACK, which is what the subtitle ring is
+        # for: a line of text over thirty seconds.
+        printf '1\n00:00:00,000 --> 00:00:30,000\nhello\n' > sub.srt
+        ffmpeg -loglevel error -f lavfi -i testsrc2=size=320x180:rate=25:duration=30 \
+          -f lavfi -i sine=frequency=550:duration=30 -i sub.srt \
+          -map 0 -map 1 -map 2 -c:v libx264 -pix_fmt yuv420p -c:a aac -c:s srt \
+          -shortest $out/subbed.mkv
         tar xjf ${adplugSrc} --wildcards '*/test/testmus/ALLOYRUN.RAD' '*/test/testmus/GRABBAG.MID'
         cp */test/testmus/ALLOYRUN.RAD $out/tune.rad
         cp */test/testmus/GRABBAG.MID $out/song.mid
@@ -83,6 +90,27 @@ let
             mod += bytes(22) + bytes([0, 0, 0, 64, 0, 0, 0, 1])
         mod += bytes([1, 127]) + bytes(128) + b"M.K." + bytes(1024)
         open(out + "/mdat.tune", "wb").write(mod)
+        # AND THE SAME MODULE under the name everybody else gives it: that one
+        # is libopenmpt's, through ffmpeg, and not uade's.
+        open(out + "/tune.mod", "wb").write(mod)
+        # A VGM made by hand: one PSG tone held for thirty seconds. libgme
+        # reads it, and libmpv only when the demuxer is named — the score
+        # ffmpeg gives it is one below what libmpv accepts.
+        vgm = bytes([0x50, 0x8E, 0x50, 0x0F, 0x50, 0x90])
+        for _ in range(30):
+            vgm += bytes([0x61]) + struct.pack("<H", 44100)
+        vgm += bytes([0x66])
+        head = bytearray(0x40)
+        head[0:4] = b"Vgm "
+        struct.pack_into("<I", head, 0x04, 0x40 + len(vgm) - 4)
+        struct.pack_into("<I", head, 0x08, 0x150)
+        struct.pack_into("<I", head, 0x0C, 3579545)
+        struct.pack_into("<I", head, 0x18, 44100 * 30)
+        struct.pack_into("<I", head, 0x24, 60)
+        struct.pack_into("<H", head, 0x28, 0x0009)
+        head[0x2A] = 16
+        struct.pack_into("<I", head, 0x34, 0x40 - 0x34)
+        open(out + "/tune.vgm", "wb").write(bytes(head) + vgm)
         # A ZX Spectrum chip stream zxtune reads: a tone held for a minute.
         psg = b"PSG\x1a" + bytes(12) + bytes([7, 0x3E, 8, 15, 0, 100, 1, 0]) + bytes([0xFF]) * 3000
         open(out + "/tune.psg", "wb").write(psg)
@@ -145,8 +173,27 @@ let
         opaque = sum(1 for i in range(0, n, 97) if px[4*i+3] == 255) / len(range(0, n, 97))
         return {"w": w, "h": h, "lit": lit, "opaque": opaque}
 
+    def twice(of):
+        # TWO VIEWS AT ONCE, the second opened while the first is held.
+        views = []
+        for _ in range(2):
+            s = socket.socket(socket.AF_UNIX)
+            s.settimeout(10)
+            s.connect(path())
+            s.sendall((json.dumps({"ask": "preview", "width": 320, "height": 180, "of": of}) + "\n").encode())
+            data, fds, _, _ = socket.recv_fds(s, 512, 1)
+            head = json.loads(data.decode().strip())
+            views.append((s, fds[0], head["width"], head["height"]))
+        frames = []
+        for s, fd, w, h in views:
+            slot = s.recv(1)[0]
+            frames.append(os.pread(fd, w * h * 4, slot * (16 + w * h * 4) + 16))
+        return "same" if frames[0] == frames[1] else "different"
+
     what = sys.argv[1]
-    if what == "frame":
+    if what == "twice":
+        print(twice(json.loads(sys.argv[2])))
+    elif what == "frame":
         print(json.dumps(frame(json.loads(sys.argv[2]), *map(int, sys.argv[3:4]))))
     else:
         print(json.dumps(ask(json.loads(what))))
@@ -163,6 +210,7 @@ pkgs.testers.runNixOSTest {
       ronoctua-shell
       pkgs.python3
       pkgs.dbus
+      pkgs.playerctl
     ]
     ++ xvfb.packages;
     fonts.enableDefaultPackages = false;
@@ -214,7 +262,7 @@ pkgs.testers.runNixOSTest {
         film = plays("film.mp4")
         assert film["video"] == [640, 360], film["video"]
         plays("tone.flac")
-        for name in ["tune.sid", "song.mid", "stream.vag", "tune.sndh", "tune.rad", "tune.psg", "mdat.tune"]:
+        for name in ["tune.sid", "song.mid", "stream.vag", "tune.sndh", "tune.rad", "tune.psg", "mdat.tune", "tune.mod", "tune.vgm"]:
             plays(name)
 
     with subtest("an XSPF is opened into its tracks, and the first one plays"):
@@ -241,6 +289,27 @@ pkgs.testers.runNixOSTest {
         print(f)
         assert f["lit"] > 0.3, f"the picture is dark: {f}"
         assert f["opaque"] > 0.99, f"the picture is see-through: {f}"
+
+    with subtest("a Matroska's subtitle track is offered, and taken"):
+        s = plays("subbed.mkv")
+        subs = [t for t in s["tracks"] if t["kind"] == "sub"]
+        assert len(subs) == 1, s["tracks"]
+        player({"ask": "subtitle-track", "id": subs[0]["id"]})
+        machine.sleep(1)
+        now = [t for t in player({"ask": "look"})["tracks"] if t["kind"] == "sub"]
+        assert now and now[0]["selected"], now
+
+    with subtest("two views of one picture are one decode: the same bytes"):
+        # PAUSED, so both views get the frame on screen and nothing moves in
+        # between: a byte that differs is a second decode.
+        plays("film.mp4")
+        player({"ask": "pause"})
+        machine.sleep(1)
+        same = machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 python3 ${client} twice null"
+        ).strip()
+        assert same == "same", same
+        player({"ask": "play"})
 
     with subtest("a view opened on a PAUSED picture gets the frame on screen"):
         # A paused video — and an mp3's cover — sends no new frame; a view
@@ -282,6 +351,18 @@ pkgs.testers.runNixOSTest {
         machine.sleep(1)
         assert player({"ask": "look"})["playing"] is False
         player({"ask": "play"})
+
+    with subtest("playerctl sees the player, and its order is obeyed"):
+        bus = "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus"
+        players = machine.succeed(f"{bus} playerctl -l")
+        assert "ronoctua" in players, players
+        machine.succeed(f"{bus} playerctl -p ronoctua pause")
+        machine.sleep(1)
+        assert player({"ask": "look"})["playing"] is False
+        assert "Paused" in machine.succeed(f"{bus} playerctl -p ronoctua status")
+        machine.succeed(f"{bus} playerctl -p ronoctua play")
+        machine.sleep(1)
+        assert player({"ask": "look"})["playing"] is True
 
     with subtest("MPRIS: the queue is the track list, and it can be edited"):
         bus = "--address=unix:path=/run/user/0/bus"
@@ -340,9 +421,26 @@ pkgs.testers.runNixOSTest {
         machine.sleep(2)
         out_w, _, _, _ = compositor_geometry()
         before = window_box(sock, "br.ronoctua.player")
+        def widths():
+            said = machine.succeed(
+                "journalctl -u window --no-pager -o cat | grep 'configured' || true"
+            )
+            # THE LOG IS COLOURED even into the journal: the escapes go first.
+            said = re.sub(r"\x1b\[[0-9;]*m", "", said)
+            return [int(w) for w in re.findall(r"width=(\d+) height=\d+ door=Window", said)]
+        # PAUSED, and nothing touched: the owner's screen. A playing video
+        # repaints the window every frame and hid the defect in this test —
+        # it passed with a fix that did nothing.
+        player({"ask": "pause"})
+        machine.sleep(2)
+        told_before = widths()
+        # THE COMPOSITOR'S SOCKET TOO, as the footer hands it to the column it
+        # raises in a session: the column tells the windows their new room
+        # over IPC, and without it said "no compositor" and told nobody.
         machine.succeed(
             "systemd-run --unit=column ${xvfb.env} --setenv=WAYLAND_DISPLAY=wayland-1 "
             "--setenv=XDG_RUNTIME_DIR=/run/user/0 --setenv=HOME=/root "
+            f"--setenv=SCROLLSOCK={sock} --setenv=SWAYSOCK={sock} "
             "${ronoctua-shell}/bin/ronoctua-shell column"
         )
         machine.wait_until_succeeds("ls /run/user/0 | grep -q column.pid", timeout=30)
@@ -356,19 +454,77 @@ pkgs.testers.runNixOSTest {
         # what the compositor COMPUTED; the commit that mapped the column used
         # to re-tile without sending it, and the window kept its width under
         # the column until the next click anywhere — the owner's screenshot.
-        def widths():
-            said = machine.succeed(
-                "journalctl -u window --no-pager -o cat | grep 'configured' || true"
-            )
-            # THE LOG IS COLOURED even into the journal: the escapes go first.
-            said = re.sub(r"\x1b\[[0-9;]*m", "", said)
-            return [int(w) for w in re.findall(r"width=(\d+) height=\d+ door=Window", said)]
+        # AGAINST THE WIDTH IT HAD WHEN THE COLUMN OPENED, and a configure
+        # that came AFTER. Compared with the first width of all — the door's
+        # own default, before the compositor tiled it — this passed on the
+        # defect itself: `[760, 512, 512]` is a window that was never told.
         told = widths()
-        print(f"the window was configured at {told}")
-        assert len(told) >= 2 and told[-1] < told[0], (
-            f"the window was never told its new width: {told}"
+        after = told[len(told_before):]
+        print(f"the window was configured at {told_before} then {after}")
+        assert told_before and after and after[-1] < told_before[-1], (
+            f"the window was never told its new width: {told_before} then {after}"
         )
         machine.succeed("systemctl stop column window")
+
+    with subtest("the small window floats in the bottom-right corner of the room, over the rest"):
+        sock = socket_of("compositor")
+        env = (
+            "${xvfb.env} --setenv=WAYLAND_DISPLAY=wayland-1 "
+            "--setenv=XDG_RUNTIME_DIR=/run/user/0 --setenv=HOME=/root "
+            f"--setenv=SCROLLSOCK={sock} --setenv=SWAYSOCK={sock}"
+        )
+        # A WINDOW IN THE LAYOUT, for the small one to float over: floating
+        # means something only beside a window that does not.
+        machine.succeed(f"systemd-run --unit=window {env} ${ronoctua-shell}/bin/ronoctua-shell player")
+        await_windows(sock, 1, timeout=60)
+        machine.succeed(f"systemd-run --unit=pip {env} ${ronoctua-shell}/bin/ronoctua-shell player pip")
+        await_windows(sock, 2, timeout=60)
+        # THE SLOT, which is what lets the column's button close it again.
+        machine.wait_until_succeeds("grep -q ' pip' /run/user/0/ronoctua-player-stage.pid", timeout=30)
+        pid = int(machine.succeed("systemctl show -p MainPID --value pip").strip())
+        msg = f"SCROLLSOCK={sock} SWAYSOCK={sock} ${scroll}/bin/scrollmsg"
+        room = next(
+            w["rect"] for w in json.loads(machine.succeed(f"{msg} -t get_workspaces"))
+            if w["focused"]
+        )
+        def placed():
+            tree = json.loads(machine.succeed(f"{msg} -t get_tree"))
+            def look(node, floating):
+                if node.get("pid") == pid:
+                    return node, floating
+                for kid in node.get("nodes", []):
+                    found = look(kid, floating)
+                    if found:
+                        return found
+                for kid in node.get("floating_nodes", []):
+                    found = look(kid, True)
+                    if found:
+                        return found
+                return None
+            return look(tree, False)
+        # TOKENS, read back from the numbers the build baked: 384 x 216, 16 of
+        # air (`space.player.pip*`).
+        w, h, air = 384, 216, 16
+        box = want = None
+        # THE CONTENT is what is asked (`window_rect`), and the CONTAINER is
+        # what sits `air` from the corner: `rect` plus the title bar the tree
+        # keeps in `deco_rect`. The test's compositor draws one, 19 pixels,
+        # and the first form of this came out 19 short.
+        for _ in range(30):
+            node, floating = placed()
+            r, c, d = node["rect"], node["window_rect"], node.get("deco_rect") or {}
+            title = d.get("height", 0)
+            box = (c["width"], c["height"], r["x"], r["y"] - title)
+            want = (w, h, room["x"] + room["width"] - r["width"] - air,
+                    room["y"] + room["height"] - r["height"] - title - air)
+            if floating and box == want:
+                break
+            machine.sleep(1)
+        print(f"room {room}, the small window {box}, floating {floating}, wanted {want}")
+        assert floating, "the small window is in the layout, not floating"
+        assert box == want, f"the small window is at {box}, not {want}"
+        assert node.get("sticky"), "the small window does not follow the workspaces"
+        machine.succeed("systemctl stop pip window compositor")
 
     with subtest("nothing panicked"):
         journal = machine.succeed("journalctl -u player --no-pager")

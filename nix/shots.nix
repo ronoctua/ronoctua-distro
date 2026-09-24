@@ -28,13 +28,45 @@
   ronoctua-shell,
   ronoctua-brain,
   ronoctua-transfers,
+  # THE PLAYER'S DAEMON, so the player can be photographed PLAYING: without it
+  # every view it has says "nothing is loaded", which is the one state a
+  # picture of a player proves least about.
+  ronoctua-player,
   fonts,
 }:
 
 let
   # The player's scenes, read by `exec` from the test script — which is at
   # the kernel's 128 KiB ceiling for one argument (see `testScript`).
+  # WHAT THE PLAYER PLAYS in the pictures: a film in the proportion of a film,
+  # so the band around it in the column shows, and a song with its lyrics
+  # beside it, a line every three seconds.
+  playerMedia = pkgs.runCommand "shots-player-media" { nativeBuildInputs = [ pkgs.ffmpeg-full ]; } ''
+    mkdir -p $out
+    ffmpeg -loglevel error -f lavfi -i testsrc2=size=640x360:rate=25:duration=120 \
+      -f lavfi -i sine=frequency=440:duration=120 -c:v libx264 -pix_fmt yuv420p \
+      -c:a aac -shortest -metadata title="A film" $out/film.mp4
+    ffmpeg -loglevel error -f lavfi -i sine=frequency=330:duration=120 \
+      -metadata artist=Nobody -metadata title="A song" $out/song.flac
+    for i in $(seq 0 39); do
+      s=$((i * 3))
+      printf '[%02d:%02d.00]The %s line of the song\n' $((s / 60)) $((s % 60)) "$i"
+    done > $out/song.lrc
+  '';
+
+  # THE PLAYER'S SOCKET, asked from outside the screen: what it says it plays
+  # is the assertion a picture cannot make on its own.
+  playerClient = pkgs.writeText "shots-player-client.py" ''
+    import json, socket, sys
+    s = socket.socket(socket.AF_UNIX)
+    s.settimeout(30)
+    s.connect("/run/user/0/ronoctua-player.sock")
+    s.sendall((sys.argv[1] + "\n").encode())
+    print(s.makefile().readline().strip())
+  '';
+
   playerScenes = pkgs.writeText "shots-player-scenes.py" ''
+    import json
     if wanted("player"):
         with subtest("the player, before anything was played"):
             control("player-open")
@@ -81,6 +113,95 @@ let
             machine.sleep(1)
             machine.succeed("DISPLAY=:99 xdotool key Escape")
             machine.sleep(1)
+
+    def to_player(what):
+        return json.loads(machine.succeed(f"${pkgs.python3}/bin/python3 ${playerClient} '{json.dumps(what)}'"))
+
+    def stage_window(unit, how):
+        machine.succeed(
+            f"systemd-run --unit={unit} ${xvfb.env} "
+            "--setenv=WAYLAND_DISPLAY=wayland-1 --setenv=HOME=/root "
+            "--setenv=XDG_RUNTIME_DIR=/run/user/0 "
+            f"${ronoctua-shell}/bin/ronoctua-shell player {how}"
+        )
+        machine.wait_until_succeeds(f"pgrep -f '[r]onoctua-shell player {how}'", timeout=60)
+
+    if wanted("player-playing"):
+        with subtest("the player playing: a film and a song, in the footer's view"):
+            machine.succeed(
+                "systemd-run --unit=player --setenv=XDG_RUNTIME_DIR=/run/user/0 "
+                "--setenv=HOME=/root "
+                "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
+                "${ronoctua-player}/bin/ronoctua-player"
+            )
+            machine.wait_until_succeeds("test -S /run/user/0/ronoctua-player.sock", timeout=30)
+            said = to_player({"ask": "open", "replace": True,
+                              "items": ["${playerMedia}/film.mp4", "${playerMedia}/song.flac"]})
+            assert said["say"] == "done", said
+            machine.wait_until_succeeds(
+                "${pkgs.python3}/bin/python3 ${playerClient} '{\"ask\": \"look\"}' | grep -q '\"playing\":true'",
+                timeout=30,
+            )
+            machine.sleep(3)
+            s = to_player({"ask": "look"})
+            assert s["current"] == 0 and len(s["queue"]) == 2 and s["position"] > 1, s
+            control("player-open")
+            shot("33g-player-playing", lines=15)
+            focus_compositor()
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
+            machine.sleep(1)
+
+    if wanted("player-column-video"):
+        with subtest("the column with the film: the picture, and the theme's tone around it"):
+            control("player-column")
+            machine.wait_until_succeeds("pgrep -f '[r]onoctua-shell column'", timeout=60)
+            machine.sleep(5)
+            shot("33h-player-column-video")
+            s = to_player({"ask": "look"})
+            assert s["video"] and s["playing"], s
+
+    if wanted("player-lyrics"):
+        with subtest("the column with the song: its lyrics, the line being sung lit"):
+            to_player({"ask": "jump", "index": 1})
+            machine.wait_until_succeeds(
+                "${pkgs.python3}/bin/python3 ${playerClient} '{\"ask\": \"look\"}' | grep -q '\"lyrics\":\\[{'",
+                timeout=30,
+            )
+            machine.sleep(4)
+            shot("33i-player-lyrics")
+            s = to_player({"ask": "look"})
+            assert s["current"] == 1 and len(s["lyrics"]) == 40, s
+            # THE COLUMN GOES before the stage: one tenant on the right edge.
+            control("player-column")
+            machine.wait_until_fails("pgrep -f '[r]onoctua-shell column'", timeout=30)
+
+    if wanted("player-stage"):
+        with subtest("the picture alone, in the window and on the whole screen"):
+            to_player({"ask": "jump", "index": 0})
+            machine.sleep(2)
+            stage_window("only", "only")
+            # RIGHT AFTER OPENING the controls are over the picture: opening
+            # is activity. Three seconds later they are gone.
+            machine.sleep(2)
+            shot("33j-player-only")
+            # THE HEADER'S BAND, measured: ink while the controls are up, none
+            # once they have gone. Without this the second picture passed with
+            # the controls stuck on the screen — which the first form did, for
+            # a pointer that had never entered reading as one on the header.
+            cw, ch, cx, cy = compositor_geometry()
+            ww, wh, wx, wy = window_box(sock, "br.ronoctua.player")
+            header = f"{ww}x18+{cx + wx}+{cy + wy + 4}"
+            up = rows_with_ink(header)
+            assert up > 0, "the controls were not over the picture after opening"
+            machine.sleep(5)
+            shot("33k-player-only-quiet")
+            gone = rows_with_ink(header)
+            assert gone == 0, f"the controls did not go: {gone} row(s) of ink in the header"
+            machine.succeed("systemctl stop only")
+            stage_window("maximized", "maximized")
+            machine.sleep(3)
+            shot("33l-player-maximized")
+            machine.succeed("systemctl stop maximized")
 
     if wanted("player-column"):
         with subtest("the player's column, down the right edge"):

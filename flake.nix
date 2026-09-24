@@ -1005,6 +1005,8 @@
           # a file onto a folder and then asks whether the file MOVED is asking
           # a question only the daemon can answer.
           ronoctua-transfers = rust.transfers;
+          # AND THE PLAYER, so it is photographed playing and not waiting.
+          ronoctua-player = rust.player;
         };
 
         # AND ONE PACKAGE PER SCENE, so a delivery can photograph the screen it
@@ -1033,6 +1035,7 @@
             ronoctua-shell = rust.shell;
             ronoctua-brain = rust.brain;
             ronoctua-transfers = rust.transfers;
+            ronoctua-player = rust.player;
           };
         }) (map (s: s.id) (import ./nix/shots-scenes.nix))
       )

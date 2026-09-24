@@ -101,12 +101,14 @@ mod notifications_window;
 mod paint;
 mod player;
 mod player_browse;
+mod player_stage;
 mod player_window;
 mod pointers;
 mod pointers_window;
 mod power;
 mod power_window;
 mod power_words;
+mod right_column;
 mod seats;
 // A NAME TOO LONG FOR ITS COLUMN, walking sideways a cell at a time.
 mod slide;
@@ -350,12 +352,14 @@ fn main() -> Result<()> {
         }
         // THE PLAYER, in a window and in the column on the right: one host,
         // two kinds of surface (`player_window::Door`).
-        // `player only` and `player maximized` open it with the picture alone,
-        // in the window or on the whole screen.
+        // `player only`, `player maximized` and `player pip` open it with the
+        // picture alone: in the window, on the whole screen, or small in the
+        // corner.
         Some("player") => {
             let stage = match std::env::args().nth(2).as_deref() {
                 Some("only") => player_window::Stage::Only,
                 Some("maximized") => player_window::Stage::Maximized,
+                Some("pip") => player_window::Stage::Small,
                 _ => player_window::Stage::Off,
             };
             return player_window::host_it(player_window::Door::Window, stage)
@@ -386,7 +390,7 @@ fn main() -> Result<()> {
                 ),
                 replace: true,
             })?;
-            if player_window::column_pid().is_none() {
+            if !player_window::column_is_up() {
                 let me = std::env::current_exe().context("where this program is")?;
                 std::process::Command::new(me)
                     .arg("column")

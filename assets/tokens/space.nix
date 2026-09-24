@@ -879,6 +879,27 @@
     pictures = 12;
   };
 
+  # THE PLAYER'S OWN MEASURES, in cells.
+  #
+  # `browseColumn` is the narrowest a column of the file browser gets: the
+  # browser lays its folders and files out in up to three columns where the
+  # room allows, and a column narrower than this cuts every name to a stub —
+  # so below twice this the browser is one column. `volumeBar` is the volume's
+  # track in the transport, beside the clock.
+  #
+  # `pip*` are the small window in the corner — picture-in-picture — and they
+  # are LOGICAL PIXELS, not cells: the window holds a picture and nothing laid
+  # out on the grid, and what the compositor is asked is a size in pixels.
+  # 16:9 at 384 wide, because most of what plays in one is a video; `pipAir`
+  # is the room between it and the two edges it sits against.
+  player = {
+    browseColumn = 24;
+    volumeBar = 10;
+    pipWidth = 384;
+    pipHeight = 216;
+    pipAir = 16;
+  };
+
   # THE BROWSER EXTENSION'S POPUP, and this is the THIRD block in this file
   # measured in PIXELS rather than in cells.
   #

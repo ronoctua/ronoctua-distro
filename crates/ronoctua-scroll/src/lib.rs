@@ -34,8 +34,8 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
 use ronoctua_compositor::{
-    Ask, Compositor, Deed, Device, Event, Events, FocusFollows, Output, Seat, SeatAsk, Setting,
-    Window,
+    Ask, Compositor, Corner, Deed, Device, Event, Events, FocusFollows, Output, Seat, SeatAsk,
+    Setting, Window,
 };
 use serde_json::Value;
 
@@ -220,6 +220,16 @@ impl Compositor for Scroll {
         self.run("reload")
     }
 
+    fn settle(&mut self) -> Result<()> {
+        // `nop` DOES NOTHING, and that is the point: every command that
+        // arrives over IPC ends in `transaction_commit_dirty`
+        // (`sway/ipc-server.c`, the `IPC_COMMAND` arm, in the pinned source),
+        // which is what sends the windows a layout the compositor already
+        // arranged — here, the one it arranged when a layer surface was
+        // mapped and did not send.
+        self.run("nop")
+    }
+
     fn devices(&mut self) -> Result<Vec<Device>> {
         Ok(read::devices_in(&self.request(wire::Kind::Inputs, "")?))
     }
@@ -248,6 +258,22 @@ impl Compositor for Scroll {
 
     fn focus_window(&mut self, id: u64) -> Result<()> {
         self.run(&format!("[con_id={id}] focus"))
+    }
+
+    fn float_in_corner(&mut self, id: u64, corner: Corner) -> Result<()> {
+        let said = self.request(wire::Kind::Workspaces, "")?;
+        let room = read::room_in(&said).context("no focused workspace to put the window in")?;
+        // THE CORNER IS THE CONTENT'S SIZE, and the compositor sizes the
+        // CONTAINER: border and title bar are added, whatever style this
+        // session draws them in.
+        let tree = self.request(wire::Kind::Tree, "")?;
+        let decoration =
+            read::decoration_in(&tree, id).context("the window is not laid out yet")?;
+        self.run(&wire::corner_command(id, corner, room, decoration))
+    }
+
+    fn back_in_the_layout(&mut self, id: u64) -> Result<()> {
+        self.run(&wire::laid_command(id))
     }
 
     fn leave(&mut self) -> Result<()> {

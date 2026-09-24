@@ -2159,6 +2159,14 @@ let
     player = rust.player;
   };
 
+  # TWO MACHINES IN STEP: pairing by a code, the film over HTTP from the one
+  # followed, and the follower within 80 ms — over a real network, with only
+  # the Tailscale daemon's local API stood in for.
+  playerRemoteVm = import ./player-remote-vm.nix {
+    inherit pkgs lib;
+    player = rust.player;
+  };
+
   displayVm = import ./display-vm.nix {
     inherit pkgs lib fonts;
     inherit scroll;
@@ -23147,6 +23155,7 @@ let
     display-vm = displayVm;
     camera-vm = cameraVm;
     player-vm = playerVm;
+    player-remote-vm = playerRemoteVm;
     bluetooth-vm = bluetoothVm;
     network-vm = networkVm;
     impermanence-vm = impermanenceVm;

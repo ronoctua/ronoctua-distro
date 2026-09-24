@@ -30,6 +30,25 @@ fn beside_me() -> Option<PathBuf> {
     it.exists().then_some(it)
 }
 
+/// The player is not on this machine: its unit does not exist.
+///
+/// A profile can leave it out (`ronoctua.player.enable`), and "not answering,
+/// it starts on its own" would then be a sentence that is not true. The
+/// shell asks for this by type and says so.
+#[derive(Debug)]
+pub struct NotInstalled;
+
+impl std::fmt::Display for NotInstalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the player is not installed on this machine")
+    }
+}
+
+impl std::error::Error for NotInstalled {}
+
+/// `systemctl`'s answer for a unit it does not know.
+const UNIT_NOT_FOUND: i32 = 5;
+
 /// One spawn at a time in this process: two threads asking at once would
 /// race two daemons for one socket.
 static SPAWNING: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -68,12 +87,15 @@ pub fn ensure() -> Result<PathBuf> {
         // would otherwise stay down until the next login. A user unit: nothing
         // is asked of anyone. The nested loop never asks, because the unit is
         // the INSTALLED player and the loop is a second copy with its own.
-        let _ = std::process::Command::new(SYSTEMCTL)
+        let asked = std::process::Command::new(SYSTEMCTL)
             .args(["--user", "start", "--no-block", "ronoctua-player.service"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
+        if asked.is_ok_and(|s| s.code() == Some(UNIT_NOT_FOUND)) {
+            return Err(NotInstalled.into());
+        }
     }
     let until = Instant::now() + Duration::from_secs(3);
     while Instant::now() < until {

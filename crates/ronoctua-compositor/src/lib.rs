@@ -74,6 +74,22 @@ pub struct Window {
     pub is_focused: bool,
 }
 
+/// A small window kept in the bottom-right corner, over the others —
+/// picture-in-picture.
+///
+/// The corner is of the ROOM WINDOWS HAVE on the screen the window is on,
+/// not of the screen: the footer and the right column are carved out of it,
+/// and a corner of the whole screen would put the picture over the footer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Corner {
+    /// Its width, in logical pixels.
+    pub width: u32,
+    /// Its height, in logical pixels.
+    pub height: u32,
+    /// The air between it and the two edges it sits against.
+    pub air: u32,
+}
+
 // ---------------------------------------------------------------------
 // OUTPUTS — the monitors the compositor draws onto.
 // ---------------------------------------------------------------------
@@ -620,6 +636,17 @@ pub trait Compositor: Send {
     /// happened is the reading that follows.
     fn reread(&mut self) -> Result<()>;
 
+    /// Sends the windows the layout the compositor has already worked out
+    /// and not yet told them.
+    ///
+    /// A layer surface's exclusive zone is counted in the commit that MAPS
+    /// it, and there the windows are re-tiled and NOT told — the
+    /// compositor only sends a new layout from a commit that also changes
+    /// some layer state. So a column opened over the windows, and they moved
+    /// at the next click anywhere. Invariant 3 forbids the patch; this is the
+    /// request that flushes it from outside, and it changes nothing else.
+    fn settle(&mut self) -> Result<()>;
+
     /// Every input device it can see.
     fn devices(&mut self) -> Result<Vec<Device>>;
 
@@ -646,6 +673,13 @@ pub trait Compositor: Send {
 
     /// Focus a window by id.
     fn focus_window(&mut self, id: u64) -> Result<()>;
+
+    /// Float a window, small, in the bottom-right corner (see [`Corner`]),
+    /// and keep it there on every workspace.
+    fn float_in_corner(&mut self, id: u64, corner: Corner) -> Result<()>;
+
+    /// Put a window floated by [`Self::float_in_corner`] back in the layout.
+    fn back_in_the_layout(&mut self, id: u64) -> Result<()>;
 
     /// End the session.
     fn leave(&mut self) -> Result<()>;
@@ -718,6 +752,9 @@ impl Compositor for Absent {
     fn reread(&mut self) -> Result<()> {
         Self::nothing_there()
     }
+    fn settle(&mut self) -> Result<()> {
+        Self::nothing_there()
+    }
     fn devices(&mut self) -> Result<Vec<Device>> {
         Ok(Vec::new())
     }
@@ -737,6 +774,12 @@ impl Compositor for Absent {
         Self::nothing_there()
     }
     fn focus_window(&mut self, _id: u64) -> Result<()> {
+        Self::nothing_there()
+    }
+    fn float_in_corner(&mut self, _id: u64, _corner: Corner) -> Result<()> {
+        Self::nothing_there()
+    }
+    fn back_in_the_layout(&mut self, _id: u64) -> Result<()> {
         Self::nothing_there()
     }
     fn leave(&mut self) -> Result<()> {
@@ -792,6 +835,8 @@ pub enum Said {
     Deed(&'static str, Option<String>),
     /// A re-read, which is also the whole of undo.
     Reread,
+    /// The windows told the layout already worked out.
+    Settled,
     /// A setting asked of a device.
     Input(String, Setting),
     /// Something asked of a seat.
@@ -802,6 +847,10 @@ pub enum Said {
     Closed,
     /// A window was focused by id.
     Focused(u64),
+    /// A window was floated in the corner.
+    Cornered(u64, Corner),
+    /// A window was put back in the layout.
+    Laid(u64),
     /// The session was ended.
     Left,
 }
@@ -865,6 +914,11 @@ impl Compositor for Scripted {
         self.told.push(Said::Reread);
         Ok(())
     }
+    fn settle(&mut self) -> Result<()> {
+        self.allowed()?;
+        self.told.push(Said::Settled);
+        Ok(())
+    }
     fn devices(&mut self) -> Result<Vec<Device>> {
         self.allowed()?;
         Ok(self.devices.clone())
@@ -912,6 +966,16 @@ impl Compositor for Scripted {
     fn focus_window(&mut self, id: u64) -> Result<()> {
         self.allowed()?;
         self.told.push(Said::Focused(id));
+        Ok(())
+    }
+    fn float_in_corner(&mut self, id: u64, corner: Corner) -> Result<()> {
+        self.allowed()?;
+        self.told.push(Said::Cornered(id, corner));
+        Ok(())
+    }
+    fn back_in_the_layout(&mut self, id: u64) -> Result<()> {
+        self.allowed()?;
+        self.told.push(Said::Laid(id));
         Ok(())
     }
     fn leave(&mut self) -> Result<()> {

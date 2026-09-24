@@ -539,7 +539,7 @@ fn step(
         let _ = mpv.set("vid", if role == Role::Sound { "no" } else { "auto" });
         let at = remote::master_now(m, remote::clock_ms(), offset);
         let _ = mpv.set("start", &format!("{at:.3}"));
-        mpv.command(&["loadfile", &url, "replace"])?;
+        crate::engine::load(&mpv, &url, "replace")?;
         let _ = mpv.set("pause", if m.playing { "no" } else { "yes" });
         *loaded = Some(now);
         *settling = Some(Instant::now());

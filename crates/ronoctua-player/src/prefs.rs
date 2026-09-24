@@ -21,6 +21,21 @@ pub const LRCLIB_HOST: &str = "lrclib.net";
 /// The host sponsored segments are asked of.
 pub const SPONSORBLOCK_HOST: &str = "sponsor.ajay.app";
 
+/// Every category of SponsorBlock a player can SKIP — the ones that are a
+/// stretch of time. `poi_highlight` is a point and `chapter` a label; neither
+/// is something to jump over, and the service's own player leaves them out.
+pub const CATEGORIES: [&str; 9] = [
+    "sponsor",
+    "selfpromo",
+    "interaction",
+    "intro",
+    "outro",
+    "preview",
+    "hook",
+    "music_offtopic",
+    "filler",
+];
+
 /// The segments skipped when nobody chose: the ones that are not the video.
 pub const SKIPPED_BY_DEFAULT: &[&str] = &["sponsor", "selfpromo", "interaction"];
 

@@ -326,7 +326,7 @@ impl Engine {
         let _ = mpv.command(&["playlist-clear"]);
         let _ = mpv.command(&["stop"]);
         for item in &queue {
-            let _ = mpv.command(&["loadfile", &loadable(&item.location), "append"]);
+            let _ = load(&mpv, &item.location, "append");
         }
         if let Some(at) = current {
             let _ = mpv.set("start", &format!("{position:.3}"));
@@ -782,6 +782,41 @@ fn expanded(items: Vec<String>) -> Vec<String> {
     out
 }
 
+/// The names libgme reads: the music of consoles and 8-bit computers, one
+/// chip's register writes.
+///
+/// # Why they are named at all
+///
+/// Because ffmpeg recognizes them at a probe SCORE of 25 and libmpv asks for
+/// 26 (`demuxer-lavf-probescore`), so every one of them was answered
+/// "unrecognized file format" — measured on a VGM that `ffprobe` read
+/// without a word. The plan counted them as free with `ffmpeg-full`; nothing
+/// had played one. Lowering the threshold for every file would let a weak
+/// guess win elsewhere, so the demuxer is named for these names only.
+const GAME_MUSIC: [&str; 11] = [
+    "vgm", "vgz", "nsf", "nsfe", "spc", "gbs", "hes", "kss", "ay", "sap", "gym",
+];
+
+/// The options a file is loaded with: libgme named for the names it reads.
+fn load_options(location: &str) -> Option<&'static str> {
+    let path = location.split(['?', '#']).next().unwrap_or(location);
+    let extension = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
+    GAME_MUSIC
+        .contains(&extension.as_str())
+        .then_some("demuxer-lavf-format=libgme")
+}
+
+/// Loads one item — through its decoder when one of ours reads it, and with
+/// the demuxer named when libmpv would not find it on its own.
+pub(crate) fn load(mpv: &Mpv, location: &str, how: &str) -> Result<()> {
+    let target = loadable(location);
+    match load_options(location) {
+        // `loadfile <url> <flags> <index> <options>`: -1 is "no index".
+        Some(options) => mpv.command(&["loadfile", &target, how, "-1", options]),
+        None => mpv.command(&["loadfile", &target, how]),
+    }
+}
+
 pub(crate) fn loadable(location: &str) -> String {
     let p = Path::new(location);
     if !location.contains("://") && decoders::for_path(p).is_some() {
@@ -825,7 +860,7 @@ impl Engine {
         apply_repeat(&mpv, self.state.repeat);
         // THE QUEUE IT REMEMBERED, loaded without playing.
         for item in &self.state.queue {
-            mpv.command(&["loadfile", &loadable(&item.location), "append"])?;
+            load(&mpv, &item.location, "append")?;
         }
         self.mpv = Some(mpv.clone());
         spawn_events(mpv.clone(), shared.clone());
@@ -862,7 +897,7 @@ impl Engine {
                     } else {
                         "append-play"
                     };
-                    mpv.command(&["loadfile", &loadable(item), how])?;
+                    load(&mpv, item, how)?;
                 }
                 if replace {
                     mpv.set("pause", "no")?;
@@ -994,7 +1029,7 @@ impl Engine {
                 if let Some(t) = main.float("time-pos") {
                     let _ = mpv.set("start", &format!("{t:.3}"));
                 }
-                mpv.command(&["loadfile", &loadable(&item), "replace"])?;
+                load(&mpv, &item, "replace")?;
                 spawn_quiet_events(mpv.clone());
                 self.followers.push(Follower {
                     item,
@@ -1655,6 +1690,22 @@ mod tests {
 
     /// FAILS IF: a list libmpv cannot read reaches it whole, or one it CAN read
     /// is opened here and loses its laziness.
+    /// FAILS IF: a name only libgme reads reaches libmpv without the demuxer
+    /// named, and is refused as an unrecognized format — or the option
+    /// leaks onto a file that libmpv finds on its own.
+    #[test]
+    fn the_music_of_consoles_names_its_demuxer() {
+        let gme = Some("demuxer-lavf-format=libgme");
+        assert_eq!(super::load_options("/m/tune.vgm"), gme);
+        assert_eq!(super::load_options("/m/Zelda.SPC"), gme);
+        assert_eq!(
+            super::load_options("http://100.1.2.3:45517/m/a.nsf?k=1"),
+            gme
+        );
+        assert_eq!(super::load_options("/m/song.flac"), None);
+        assert_eq!(super::load_options("/m/tune.sid"), None);
+    }
+
     #[test]
     fn the_lists_libmpv_does_not_know_are_opened_here() {
         let dir = std::env::temp_dir().join(format!("ronoctua-expand-{}", std::process::id()));

@@ -8,8 +8,8 @@ use std::os::unix::net::UnixStream;
 
 use anyhow::{Context as _, Result, bail};
 use ronoctua_compositor::{
-    AccelProfile, Arity, Ask, ButtonMap, ClickMethod, Deed, DragLock, FingerDrag, FocusFollows,
-    KeyboardSetting, ScrollMethod, SeatAsk, SendEvents, Setting, Transform,
+    AccelProfile, Arity, Ask, ButtonMap, ClickMethod, Corner, Deed, DragLock, FingerDrag,
+    FocusFollows, KeyboardSetting, ScrollMethod, SeatAsk, SendEvents, Setting, Transform,
 };
 
 /// The six bytes that start every message, in both directions.
@@ -145,6 +145,52 @@ pub fn command_of(at: &str, ask: Ask) -> Option<String> {
         }
     };
     Some(said)
+}
+
+/// The room windows have on a screen: a workspace's `rect`, which is the
+/// output less every exclusive zone — the footer and the right column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Room {
+    /// Its left edge, in the layout's logical pixels.
+    pub x: i64,
+    /// Its top edge.
+    pub y: i64,
+    /// Its width.
+    pub width: i64,
+    /// Its height.
+    pub height: i64,
+}
+
+/// The commands that float a window in the bottom-right corner of `room`,
+/// its CONTENT `corner`'s size: `decoration` is what border and title bar
+/// add to it (`read::decoration_in`), because `resize set` sizes the
+/// container — with the title bar the VM draws, the picture came out 19
+/// pixels short.
+///
+/// ONE LINE, AND COMMAS: a criteria holds for every command after it up to
+/// a `;`, so the four act on the one window. `sticky` keeps it on every
+/// workspace, which is what a picture-in-picture is for. `absolute`, because
+/// the room is in the layout's coordinates and a plain `move position` is
+/// counted from the workspace's corner.
+#[must_use]
+pub fn corner_command(id: u64, corner: Corner, room: Room, decoration: (i64, i64)) -> String {
+    let (w, h, air) = (
+        i64::from(corner.width) + decoration.0,
+        i64::from(corner.height) + decoration.1,
+        i64::from(corner.air),
+    );
+    let x = room.x + (room.width - w - air).max(0);
+    let y = room.y + (room.height - h - air).max(0);
+    format!(
+        "[con_id={id}] floating enable, sticky enable, \
+         resize set width {w} px height {h} px, move absolute position {x} px {y} px"
+    )
+}
+
+/// The commands that put a window floated by [`corner_command`] back.
+#[must_use]
+pub fn laid_command(id: u64) -> String {
+    format!("[con_id={id}] sticky disable, floating disable")
 }
 
 /// The one word a transform is written with.
@@ -606,6 +652,48 @@ mod tests {
             )
             .unwrap(),
             "move container to workspace number 4; workspace number 4"
+        );
+    }
+
+    /// FAILS IF: the picture-in-picture leaves the room windows have — over
+    /// the footer or the column —, or the four commands stop acting on the
+    /// one window.
+    #[test]
+    fn the_corner_is_of_the_room_and_one_window() {
+        let corner = Corner {
+            width: 320,
+            height: 180,
+            air: 16,
+        };
+        let room = Room {
+            x: 1920,
+            y: 0,
+            width: 1500,
+            height: 1000,
+        };
+        assert_eq!(
+            corner_command(7, corner, room, (0, 0)),
+            "[con_id=7] floating enable, sticky enable, resize set width 320 px height 180 px, \
+             move absolute position 3084 px 804 px"
+        );
+        assert!(!corner_command(7, corner, room, (0, 0)).contains(';'));
+        // BORDER AND TITLE BAR are added to the content, and the corner is
+        // the container's.
+        assert!(
+            corner_command(7, corner, room, (4, 23))
+                .contains("width 324 px height 203 px, move absolute position 3080 px 781 px")
+        );
+        // A ROOM SMALLER THAN THE PICTURE keeps it at the room's corner, not
+        // before it.
+        let tiny = Room {
+            width: 100,
+            height: 100,
+            ..room
+        };
+        assert!(corner_command(7, corner, tiny, (0, 0)).ends_with("position 1920 px 0 px"));
+        assert_eq!(
+            laid_command(7),
+            "[con_id=7] sticky disable, floating disable"
         );
     }
 }

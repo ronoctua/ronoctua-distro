@@ -3216,14 +3216,7 @@ pub fn run() -> Result<()> {
     // is carved from what the surfaces made BEFORE it leave, and this footer
     // was just made after it — left alone, the column would narrow the
     // modeline. See `player_window`.
-    if crate::player_window::end_the_column()
-        && let Ok(me) = std::env::current_exe()
-    {
-        let _ = std::process::Command::new(me)
-            .arg("column")
-            .stdin(std::process::Stdio::null())
-            .spawn();
-    }
+    crate::right_column::raise_again();
     // AND WHO HAS A CAMERA OPEN — any program, from `/proc`. A browser opens
     // the device directly and no graph hears of it, so the kernel's answer is
     // the only one that covers everybody; measured, a walk costs under 8 ms.
@@ -6702,7 +6695,8 @@ impl Footer {
             }
             "player-up" | "player-down" | "player-less" | "player-more" | "player-enter"
             | "player-remove" | "player-add" | "player-parent" | "player-only"
-            | "player-maximize"
+            | "player-maximize" | "player-play-now" | "player-clear" | "player-quieter"
+            | "player-louder" | "player-pip" | "player-mute"
                 if self.player_view.is_some() =>
             {
                 if let Some(press) = crate::player::press_of(id) {
@@ -12984,7 +12978,9 @@ impl Footer {
                 .into_iter()
                 .enumerate()
                 .map(|(n, r)| ExpansionRow {
-                    click: (!r.heading).then_some(Click::Player(n)),
+                    // A TITLE WITH A CONTROL takes a click too: the glyph
+                    // at the end of its line is the control.
+                    click: (!r.heading || !r.cells.is_empty()).then_some(Click::Player(n)),
                     fields: r.fields,
                     foot: false,
                     ..ExpansionRow::empty_one()
@@ -14696,9 +14692,12 @@ impl Footer {
                 // THE MOUSE AIMS, AND THE SECOND CLICK ACTS — invariant 19.
                 let width = self.screen_columns();
                 let mut already = false;
+                // BY ITS COLUMN too: the files are a grid, and the queue's
+                // title carries the control that empties it.
+                let column = self.here.cell_under_pointer.unwrap_or(0);
                 if let Some(v) = self.player_view.as_mut() {
                     let rows = v.rows(self.player.as_ref(), width, &self.texts);
-                    already = v.clicked(n, &rows);
+                    already = v.clicked_at(n, column, &rows);
                 }
                 if already {
                     self.player_press(crate::player::Press::Enter);
@@ -19114,17 +19113,11 @@ impl Footer {
             }
             // THE FOOTER HAS NO PICTURE: showing one alone, or on the whole
             // screen, is the window's, opened already that way.
+            // A SWITCH, like the column's: pressed again, the window it
+            // opened goes (`crate::player_stage`).
             Err(crate::player::Errand::Show(show)) => {
-                let how = match show {
-                    crate::player::Show::Only => "only",
-                    crate::player::Show::Maximized => "maximized",
-                };
-                if let Ok(me) = std::env::current_exe() {
-                    self.open_foreign(
-                        &me.to_string_lossy(),
-                        &["player".to_owned(), how.to_owned()],
-                        None,
-                    );
+                if let Err(e) = crate::player_stage::toggle(show) {
+                    tracing::warn!(error = %e, "could not open the player's window for its stage");
                 }
             }
             Err(_) => {}
