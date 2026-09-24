@@ -701,7 +701,7 @@ impl State {
     ///
     /// # Why two of them are conditional
     ///
-    /// Because `m a` and `m p` answer a COUNTDOWN — stop it, or start now —
+    /// Because `, a` and `, p` answer a COUNTDOWN — stop it, or start now —
     /// and there is not always one. Taught unconditionally they would be two
     /// rungs of the ladder that do nothing most of the time, and the ladder is
     /// cut at the width of the line: two dead rungs push two live ones off the
@@ -1054,7 +1054,7 @@ impl State {
             // sentence gets. Laying the sentence out and then discovering the
             // key does not fit is how a line comes to spill — the band next
             // door makes the same argument in the same words, and this screen
-            // proved it: the sentence ran to the edge and `m n` landed on the
+            // proved it: the sentence ran to the edge and `, n` landed on the
             // last three letters of it.
             let room = if self.mind.notice.act.is_empty() {
                 pen.columns()

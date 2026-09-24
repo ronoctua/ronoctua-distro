@@ -127,6 +127,14 @@ rec {
   # why it answers that way is written here, in Nix, which never reaches the
   # kernel.
   #
+  # `start_compositor` gives it a `PATH` with a SHELL. Every `exec` the
+  # compositor runs is `execlp("sh", "sh", "-c", …)`, and a transient unit's
+  # `PATH` here is four store paths with no `sh` in any: every `exec` of every
+  # compositor test failed with "execve failed" in a log nobody read. The
+  # binds that go through our binary (the view of every workspace's mode, the
+  # chords `through_shell` writes) are exactly that, and the session and
+  # `.#dev` both hand the compositor a `PATH` that has one.
+  #
   # `_the_compositors_window` — it finds the window BY BEING THE ONLY CHILD of
   # the X root, never by its title. This compositor maps a window with no name
   # at all (`0x200004 (has no name): ()  1024x768+0+0`), so a helper that
@@ -251,6 +259,7 @@ rec {
             "--setenv=WLR_BACKENDS=x11 "
             f"--setenv=SCROLLSOCK={sock} "
             f"--setenv=SWAYSOCK={sock} "
+            "--setenv=PATH=${pkgs.bash}/bin "
             f"{package}/bin/scroll -c {config}"
         )
         try:

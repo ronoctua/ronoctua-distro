@@ -340,6 +340,7 @@ group-terminal = terminal
 group-workspace = workspace
 cmd-workspace-overview = Workspace overview
 cmd-window-float = Toggle floating
+cmd-workspace-all = See every workspace at once
 cmd-workspace-go = Go to workspace
 cmd-workspace-move = Move window to workspace
 
@@ -480,6 +481,8 @@ cmd-wm-jump-floating = Jump to a floating window by letter
 
 cmd-wm-overview = See the whole workspace at once
 cmd-wm-overview-all = See every workspace at once
+cmd-wm-overview-all-on = Show every workspace at once
+cmd-wm-overview-all-off = Back from every workspace to one
 cmd-wm-zoom-out = Zoom the workspace out a little
 cmd-wm-zoom-in = Zoom the workspace in a little
 cmd-wm-zoom-reset = Put the workspace back to its own size
@@ -4750,3 +4753,7 @@ player-trouble-unsupported = No decoder here reads { $format }.
 player-trouble-no-engine = The player could not start its engine: { $why }
 player-typed-elsewhere = Type it in the footer: the question is open there.
 hint-player = { $what }. Click for the column on the right.
+hint-workspace = Workspace { $number } — click goes there, the right button shows every workspace at once
+hint-workspace-current = Workspace { $number }, the one in front — click fits all of it on the screen, or puts it back; the right button shows every workspace at once
+overview-back = back to the normal view
+overview-mouse = a click on a window goes into it

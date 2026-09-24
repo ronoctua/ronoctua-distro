@@ -959,6 +959,8 @@ CONTRAST_GATES = (
     ("brain.countdown", ("brain.background",), 60, 70),
     ("modeline.state.normal", ("modeline.background",), 15, 20),
     ("modeline.state.alternate", ("modeline.background",), 45, 60),
+    # A BLUETOOTH DEVICE'S MARK, at the rung every other mark reads at.
+    ("modeline.device", ("modeline.background",), 40, 45),
     ("notification.quiet", ("notification.background",), 43, 45),
     ("notification.loud", ("notification.background",), 45, 60),
     ("notification.countdown", ("notification.background",), 15, 20),
@@ -1125,6 +1127,12 @@ DISTANCE_GATES = (
     ("text.subtle.explain", "text.primary", 0.03, 0.04),
     ("text.subtle.explain", "text.secondary", 0.03, 0.04),
     ("text.subtle.explain", "text.dim", 0.03, 0.04),
+    # A DEVICE'S MARK beside the others on the modeline: told from the marks'
+    # own tone (the whole point of it), from the accent (the keyboard's), and
+    # from the alarm a device at the danger level turns into.
+    ("modeline.device", "text.secondary", 0.04, 0.05),
+    ("modeline.device", "state.accent", 0.04, 0.05),
+    ("modeline.device", "state.error", 0.06, 0.08),
     ("state.error", "state.critical", 0.04, 0.05),
     # THE MESSAGE AND THE BUTTON UNDER IT. They are drawn one line apart on the
     # same ground and they are not the same kind of thing — one is read, the

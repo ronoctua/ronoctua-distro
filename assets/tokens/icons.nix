@@ -704,7 +704,10 @@
   # of every pair designed together: `repeat`, `repeat_once` and `repeat_off`
   # are one drawing in three states, and a ring drawn from three families would
   # twitch at every press.
-  player = "md-play_circle_outline";
+  # THE MODELINE MARK, and a PLAIN triangle: the outlined circle drew the
+  # triangle a third of the cell, and at the modeline's size the owner could
+  # not read it as "playing". It pairs with `pause`, which never had a ring.
+  player = "md-play";
   player-previous = "md-skip_previous";
   player-next = "md-skip_next";
   player-stop = "md-stop";

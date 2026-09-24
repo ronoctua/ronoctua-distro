@@ -456,7 +456,11 @@ fn scroll_chords() -> Vec<Chord> {
         d("C-<wheel-down>", "Ctrl+button5", "wm-content-bigger"),
         // --- the overview ---
         d("TAB", "Tab", "wm-overview"),
-        d("S-TAB", "Shift+Tab", "wm-overview-all"),
+        // EVERY WORKSPACE THROUGH US, and not the compositor's toggle: that
+        // view is said by no reply and no event, so the footer — which prints
+        // the key back out of it while it is on — has to be the one that
+        // turns it on.
+        through_shell("S-TAB", "Shift+Tab", "workspace-all"),
         d("<back>", "button8", "wm-overview"),
         // --- full screen and floating ---
         d("C-f", "Ctrl+f", "wm-full-layout"),

@@ -327,6 +327,7 @@ group-terminal = terminal
 group-workspace = workspace
 cmd-workspace-overview = Panorama dos espaços
 cmd-window-float = Alternar flutuante
+cmd-workspace-all = Ver todos os espaços de uma vez
 cmd-workspace-go = Ir para o espaço
 cmd-workspace-move = Levar a janela para o espaço
 
@@ -466,6 +467,8 @@ cmd-wm-jump-floating = Pular para uma janela flutuante por letra
 
 cmd-wm-overview = Ver a área de trabalho inteira de uma vez
 cmd-wm-overview-all = Ver todas as áreas de trabalho de uma vez
+cmd-wm-overview-all-on = Mostrar todos os espaços de uma vez
+cmd-wm-overview-all-off = Voltar de todos os espaços para um
 cmd-wm-zoom-out = Afastar um pouco a área de trabalho
 cmd-wm-zoom-in = Aproximar um pouco a área de trabalho
 cmd-wm-zoom-reset = Devolver a área de trabalho ao tamanho dela
@@ -4742,3 +4745,7 @@ player-trouble-unsupported = Nenhum decodificador aqui lê { $format }.
 player-trouble-no-engine = O player não conseguiu subir o motor: { $why }
 player-typed-elsewhere = Digite no rodapé: a pergunta está aberta lá.
 hint-player = { $what }. Clique para a coluna à direita.
+hint-workspace = Espaço { $number } — clique leva até ele, o botão direito mostra todos os espaços de uma vez
+hint-workspace-current = Espaço { $number }, o da frente — clique encaixa ele inteiro na tela, ou desfaz; o botão direito mostra todos os espaços de uma vez
+overview-back = volta à visão normal
+overview-mouse = um clique numa janela entra nela

@@ -43,6 +43,8 @@ pub enum Kind {
     Inputs = 100,
     /// Every seat.
     Seats = 101,
+    /// How the focused workspace is laid out: its scale, its overview.
+    Scroller = 120,
 }
 
 /// An event's kind, as it comes back.
@@ -61,6 +63,11 @@ pub const EVENT_SHUTDOWN: u32 = EVENT_BIT | 6;
 pub const EVENT_INPUT: u32 = EVENT_BIT | 21;
 /// A key mode was entered or left.
 pub const EVENT_MODE: u32 = EVENT_BIT | 2;
+/// A workspace appeared, went, took the focus, moved or was renamed.
+pub const EVENT_WORKSPACE: u32 = EVENT_BIT;
+/// Something about how a workspace is laid out changed — its overview among
+/// them.
+pub const EVENT_SCROLLER: u32 = EVENT_BIT | 30;
 
 /// Writes one message.
 pub fn send(to: &mut UnixStream, kind: Kind, payload: &str) -> Result<()> {

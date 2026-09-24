@@ -95,6 +95,47 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   rodapé ouve o evento `mode` (`Event::ModeChanged`): marca na modeline (clique sai) e as teclas
   do modo na linha de dicas, da mesma tabela. Cobra o `every-compositor-shortcut-is-bound`, que lê
   o `config.in` PINADO e acusa atalho que falte — inclusive o próximo que o upstream acrescentar.
+- **Os espaços que TÊM algo aberto são números na modeline** (`workspaces.rs`), e só quando são
+  DOIS OU MAIS: um é onde a pessoa já está, e nenhum é a mesa vazia. Chegam pelo MESMO fio de
+  eventos do modo (`Event::Workspaces`, a lista inteira, pedida por `get_workspaces` a cada
+  evento `workspace` e a cada janela que abre, fecha ou MUDA de lugar — título mudando não
+  pergunta nada), e não por uma tarefa do brain, que não fala com o compositor e bate de minuto em
+  minuto. "Tem algo" é o `focus` da resposta não vir vazio: o `nodes` ali é sempre `[]`. O atual é
+  `text.primary` e os outros `text.dim` — nunca o acento, que na modeline é do teclado. E são as
+  PRIMEIRAS marcas da DIREITA, à esquerda do player (a ordem do dono, e o degrau é o que ordena
+  aquele lado), contadas da BORDA: à esquerda, depois do nome do buffer, clicar num número trocava o
+  buffer, o nome mudava de largura e os números fugiam de baixo da mão (quatro colunas, medido na
+  bateria de fotos). Clique vai ao espaço — e no espaço que JÁ está na frente encaixa ele
+  inteiro na tela (`scale_workspace overview`), e o segundo clique desfaz — e o botão direito
+  mostra TODOS os espaços (`scale_workspaces`, o `workspace-all` nosso). As teclas são as mesmas:
+  `LEADER 1`…`9`, `LEADER 0` e `TAB a`. **Todos os espaços de uma vez NÃO recebe clique fora das
+  miniaturas, e não há como fazer receber**: o `node_at_coords` do compositor, nesse modo, só
+  devolve o que está DENTRO da figura de um espaço — nem layer-shell, nem fundo —, e com nada sob o
+  ponteiro nenhum bind de mouse casa (`click_region` zero). Rodapé e fundo ficam surdos até o modo
+  acabar, e mudar isso é patch (inv. 3). **O que o mouse alcança são as MINIATURAS**, e o que ele faz ali é o do
+  próprio compositor: um clique numa janela a FOCA — e o rodapé fecha a vista quando o foco muda
+  enquanto ela está ligada (`Footer::focus_moved`), que é o "entrar nela" que o dono pediu. **Bind
+  de mouse nenhum dispara nessa vista, e foi MEDIDO**: um `--whole-window` que dispara na vista
+  normal (clique real e sintético, `seat - cursor press`) não dispara ali nem num modo dela, e bind
+  de TECLA no mesmo modo dispara. Por isso não há "botão direito volta": a tentativa foi um modo do
+  compositor só para a vista, que custava a leader (dentro de um modo ela não existe) e não
+  comprava nada. A linha sob a modeline diz `LEADER 0` e o clique (`overview_hint`); no panorama
+  de UM espaço ela diz `LEADER TAB TAB`. **E a bateria de fotos não tinha `exec`**: o `PATH` da
+  unidade do compositor ali não tem `sh`, e todo `exec` do compositor falhava com "execve failed"
+  num log que ninguém lia — o `start_compositor` passou a dar um. **E quem sabe se ele está ligado é o
+  RODAPÉ**: resposta nenhuma e evento nenhum do compositor dizem isso (`root->overview`), então toda
+  porta passa por ele e ele diz `enable`/`disable`, nunca o `toggle` — o acorde `Super+Shift+Tab` vai
+  pelo nosso binário (`THROUGH_US` no check dos atalhos do compositor), e o `LEADER :` pelo nome cai
+  no mesmo lugar. O panorama de UM espaço tem evento (`scroller`, `Event::Scaled`). **Na lista da leader os nove dígitos são UMA
+  linha** (`leader::condensed_root`, `1…9`), e a tecla dela — o que o CLIQUE aperta — é `TAB`: um
+  clique não diz qual número, então abre o grupo em que cada espaço é uma linha. **E um comando
+  nosso que leva número chegava ao compositor SEM ele**: o braço de `run_with` que traduz
+  `workspace-go` para o feito passava `None`, então `LEADER TAB 3` pedia `workspace number` e era
+  recusado.
+- **As marcas de aparelho Bluetooth têm COR própria** (`modeline.device`, família `device` em toda
+  semente): um azul desbotado no degrau do `text.secondary` das outras marcas — matiz é outro TIPO
+  de coisa, não outra importância. Nos dois temas cujos cinzas já são azuis (`frost`, `flashbang`)
+  ela leva mais croma, senão é o texto ao lado; o alarme de bateria vence.
 - **`Ctrl+Alt+Del` é o RESGATE** (7 toques em 2 s ainda forçam): janela flutuante, ou VT 8 sem
   compositor.
 - **Rodapé morto tem uma LINHA que sobrevive a ele** (`ronoctua-shell lifeline <unidade>`): uma

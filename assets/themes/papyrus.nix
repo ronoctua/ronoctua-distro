@@ -105,6 +105,13 @@
       text-chroma = 0.14;
       text-shift = -10;
     };
+    # A CONNECTED BLUETOOTH DEVICE on the modeline (`modeline.device`): a
+    # faded blue, so a device reads as a device beside the other marks.
+    device = {
+      hue = 235;
+      text-chroma = 0.36;
+      text-shift = 0;
+    };
     alternate = {
       hue = 195;
       text-chroma = 0.34;

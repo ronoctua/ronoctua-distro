@@ -841,6 +841,14 @@ struct Footer {
     camera_holders: Vec<String>,
     /// The compositor's key mode, while one is on (`actions::modes`).
     compositor_mode: Option<String>,
+    /// Whether EVERY workspace is shown at once (`workspace-all`).
+    ///
+    /// Kept here because nothing else can say it: no reply and no event of
+    /// the compositor's carries that view, so every way of turning it on
+    /// goes through this footer — the leader, the chord (through our
+    /// binary), a click, and `LEADER :` by name. A compositor that starts
+    /// again starts without it, and so does this.
+    every_workspace: bool,
     /// Whether the modeline may draw the camera mark (`studio.json`'s
     /// `mark`), refreshed when the studio rereads its settings.
     camera_mark_allowed: bool,
@@ -2422,6 +2430,7 @@ pub fn run() -> Result<()> {
         player: None,
         camera_holders: Vec::new(),
         compositor_mode: None,
+        every_workspace: false,
         camera_mark_allowed: ronoctua_studio::prefs::store().read().mark
             == ronoctua_studio::prefs::Mark::WhenInUse,
         keys: crate::keys_link::Keys {
@@ -2824,6 +2833,25 @@ pub fn run() -> Result<()> {
                 // A KEY MODE, which nothing else on screen would say.
                 if let ronoctua_compositor::Event::ModeChanged(m) = &e {
                     state.compositor_mode.clone_from(m);
+                }
+                // A CLICK ON A WINDOW WHILE EVERY WORKSPACE IS SHOWN GOES INTO
+                // IT: the compositor focuses what was clicked, and the view
+                // closes on that. It is the only way the mouse has out — in
+                // that view the compositor matches no mouse binding at all
+                // (measured: a `--whole-window` bind fires in the normal view
+                // and never there, from a real click or a synthetic one), and
+                // hands no click to this footer. Asked BEFORE the state takes
+                // the event, which is what says the focus MOVED.
+                if state.every_workspace && state.focus_moved(&e) {
+                    state.show_every_workspace(false);
+                }
+                // A COMPOSITOR THAT LEFT, or one heard from the start again,
+                // shows one workspace: its views are not kept across a start.
+                if matches!(
+                    e,
+                    ronoctua_compositor::Event::Leaving | ronoctua_compositor::Event::Windows(_)
+                ) {
+                    state.every_workspace = false;
                 }
                 state.windows.apply_to(&e);
                 state.states_arrived();
@@ -3742,6 +3770,7 @@ impl Footer {
         // THE POOL, RESOLVED ONCE: it is a `Vec`, so it is bound before the
         // call rather than borrowed inside the struct literal.
         let devices = crate::bluetooth::modeline(&self.bluetooth_scene);
+        let workspaces = crate::workspaces::shown(self.windows.workspaces());
         let mode = self
             .compositor_mode
             .as_deref()
@@ -3795,6 +3824,7 @@ impl Footer {
                 camera: self.camera_in_use(),
                 recording: self.studio_rolling(),
                 player: self.player.as_ref().and_then(crate::player::mark),
+                workspaces: &workspaces,
                 compositor_mode: mode.as_deref(),
                 // SYNCTHING, and it is the only mark that may draw while all
                 // is WELL. That is the owner's choice and it is theirs to
@@ -4215,6 +4245,26 @@ impl Footer {
             }
             return;
         }
+        // A WORKSPACE NUMBER: the left button goes there, the right one opens
+        // the overview. This is the second mark whose right button means
+        // something else, and for the same reason as the state's: there are
+        // two things to do with a workspace from here — be on it, or see all
+        // of them to choose — and both are what the leader's `1`…`9` and `0`
+        // do, so the pointer reaches no door the keyboard cannot.
+        if let Some(n) = crate::workspaces::number_of(id) {
+            let in_front = self.current_workspace() == Some(n);
+            if !forward {
+                self.run_command("workspace-all");
+            } else if in_front {
+                // THE ONE ALREADY IN FRONT zooms out to fit whole on the
+                // screen, and the next click puts it back: going where one
+                // already is would be a click that does nothing.
+                self.run_command("workspace-overview");
+            } else {
+                self.run_with("workspace-go", Some(&n.to_string()));
+            }
+            return;
+        }
         if id != "state" {
             return;
         }
@@ -4239,6 +4289,22 @@ impl Footer {
     /// the buffer's name is the buffer's name — and a sentence explaining each
     /// of them would be a tooltip in everything but the surface it is drawn on.
     fn segment_hint(&self) -> Option<String> {
+        // A WORKSPACE NUMBER says what each button does with it.
+        if let Some(n) = self
+            .here
+            .segment_under_pointer
+            .and_then(crate::workspaces::number_of)
+        {
+            let sentence = if self.current_workspace() == Some(n) {
+                ronoctua_i18n::key::HINT_WORKSPACE_CURRENT
+            } else {
+                ronoctua_i18n::key::HINT_WORKSPACE
+            };
+            return Some(self.texts.t_args(
+                sentence,
+                &[("number", ronoctua_i18n::Arg::Number(i64::from(n)))],
+            ));
+        }
         // A DEVICE'S MARK, by its place in the pool: which thing it is, what
         // it is called, and the percentage when there is one — the same two
         // numbers the mark itself draws by.
@@ -6279,6 +6345,93 @@ impl Footer {
         self.run_with(id, None);
     }
 
+    /// Whether `event` moves the focus to another window or workspace than
+    /// the one in front now.
+    fn focus_moved(&self, event: &ronoctua_compositor::Event) -> bool {
+        use ronoctua_compositor::Event;
+        match event {
+            Event::FocusChanged(Some(id)) => self.windows.focused().map(|w| w.id) != Some(*id),
+            Event::Workspaces(all) => {
+                let now = all.iter().find(|w| w.focused).and_then(|w| w.number);
+                now.is_some() && now != self.current_workspace()
+            }
+            _ => false,
+        }
+    }
+
+    /// The number of the workspace in front, when it has one.
+    fn current_workspace(&self) -> Option<u32> {
+        self.windows
+            .workspaces()
+            .iter()
+            .find(|w| w.focused)
+            .and_then(|w| w.number)
+    }
+
+    /// Shows every workspace at once, or one again — said as `enable` or
+    /// `disable`, never as the toggle, so a repeated order cannot invert
+    /// what the footer believes.
+    fn show_every_workspace(&mut self, on: bool) {
+        let id = if on {
+            "wm-overview-all-on"
+        } else {
+            "wm-overview-all-off"
+        };
+        let Some(spoken) = ronoctua_scroll::deeds::spoken_of(id) else {
+            tracing::warn!(deed = id, "a deed the generated table does not have");
+            return;
+        };
+        match open_the_compositor().and_then(|mut wm| wm.deed(&spoken.deed, None)) {
+            Ok(()) => self.every_workspace = on,
+            Err(e) => {
+                let m = format!("{e:#}");
+                tracing::warn!(deed = id, error = %m, "the compositor refused");
+                self.echo_message(m);
+            }
+        }
+    }
+
+    /// The line under the modeline while an overview is on: the key that
+    /// goes back to the normal view.
+    ///
+    /// Every workspace at once takes no click at all — the compositor hands
+    /// the pointer only to what is inside a workspace's picture, and this
+    /// footer is not — so the keyboard is the way back, and this is where
+    /// it is said. The workspace in front zoomed out still takes clicks, and
+    /// its number on the modeline puts it back too.
+    fn overview_hint(
+        every_workspace: bool,
+        scaled: bool,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<Vec<crate::chrome::Piece>> {
+        use crate::chrome::Piece;
+        if every_workspace {
+            // THE KEY, and the mouse's way: a click on a window goes into it
+            // (`Footer::focus_moved`).
+            let keys = format!(
+                "{} {}",
+                crate::leader(),
+                crate::leader::EVERY_WORKSPACE_KEYS
+            );
+            return Some(vec![
+                Piece::key(keys, false).about("workspace-all"),
+                Piece::prose(format!(" {}", texts.t(ronoctua_i18n::key::OVERVIEW_BACK)))
+                    .about("workspace-all"),
+                Piece::separator(),
+                Piece::prose(texts.t(ronoctua_i18n::key::OVERVIEW_MOUSE)).about("workspace-all"),
+            ]);
+        }
+        let (keys, command) = if scaled {
+            (crate::leader::OVERVIEW_KEYS, "workspace-overview")
+        } else {
+            return None;
+        };
+        Some(vec![
+            Piece::key(format!("{} {keys}", crate::leader()), false).about(command),
+            Piece::prose(format!(" {}", texts.t(ronoctua_i18n::key::OVERVIEW_BACK))).about(command),
+        ])
+    }
+
     /// An item chosen from a list the shell itself built.
     ///
     /// Today the only such list is the buffers, and the id is the compositor's
@@ -6362,6 +6515,20 @@ impl Footer {
     /// the keymap has no way of carrying a number: a sequence is a path to an
     /// id, not a call with a parameter.
     fn run_with(&mut self, id: &str, argument: Option<&str>) {
+        // EVERY WORKSPACE AT ONCE, by any of its names: the footer keeps
+        // whether that view is on (`every_workspace`), so the compositor's own
+        // three spellings come here too — run by name from `LEADER :`, the
+        // toggle would leave the footer saying the opposite of the screen.
+        let wanted = match id {
+            "workspace-all" | "wm-overview-all" => Some(!self.every_workspace),
+            "wm-overview-all-on" => Some(true),
+            "wm-overview-all-off" => Some(false),
+            _ => None,
+        };
+        if let Some(on) = wanted {
+            self.show_every_workspace(on);
+            return;
+        }
         // EVERY DEED OF THE COMPOSITOR, on one path.
         //
         // There used to be two — a fast one for the curated handful and a slow
@@ -7693,7 +7860,13 @@ impl Footer {
                 if let Some(spoken) = crate::actions::deed_of(otherwise)
                     .or_else(|| ronoctua_scroll::deeds::spoken_of(otherwise))
                 {
-                    self.compositor_action(move |wm| wm.deed(&spoken.deed, None));
+                    // THE ARGUMENT GOES ALONG. It was `None` here, and every
+                    // one of ours that takes a number — `workspace-go`,
+                    // `workspace-move` — reached the compositor without it:
+                    // `LEADER TAB 3` asked for `workspace number` and was
+                    // refused.
+                    let argument = argument.map(ToOwned::to_owned);
+                    self.compositor_action(move |wm| wm.deed(&spoken.deed, argument.as_deref()));
                     return;
                 }
                 // NOT just a `warn` in the log. A command that shows up in
@@ -10619,7 +10792,7 @@ impl Footer {
         self.refresh_buffer_keymap();
 
         self.inputs = match self.tree.resolve(&[]) {
-            ronoctua_keymap::Resolution::Prefix(e) => e,
+            ronoctua_keymap::Resolution::Prefix(e) => crate::leader::condensed_root(e),
             // A keymap with no binding at all: there is nothing to show, and
             // capturing the keyboard would only take input away from the buffers.
             _ => {
@@ -11562,7 +11735,7 @@ impl Footer {
     /// and `LEADER b p`, and the owner asked for `LEADER b` to open the brain
     /// with nothing in between — which the keymap refuses to combine with a
     /// sequence hanging off `b`. What they do already existed inside the
-    /// brain's own buffer, as `m a` and `m p`, and that is what this now
+    /// brain's own buffer, as `, a` and `, p`, and that is what this now
     /// prints.
     ///
     /// The band keeps three ways to be answered, and none of them was lost:
@@ -11600,7 +11773,7 @@ impl Footer {
     /// # Why the shell does it and not the daemon that asked
     ///
     /// Because a notice names a COMMAND ID and carries nothing to do — that is
-    /// what makes its button reachable by `LEADER :`, by the buffer's `m n`
+    /// what makes its button reachable by `LEADER :`, by the buffer's `, n`
     /// and by a click on the line, all through one door. The brain's own watch
     /// does the same thing on its schedule; this is the press.
     fn keep_the_clock_right(&mut self) {
@@ -15652,6 +15825,8 @@ impl Footer {
         // arriving over the power view was enough.
         let showing = self.view();
         let compositor_mode = self.compositor_mode.as_deref();
+        let every_workspace = self.every_workspace;
+        let scaled = self.windows.scaled();
         // THE WIDTH THE HINT'S VIEWS DECIDE AT, taken with the rest before the
         // closure borrows: which keys a line teaches comes from the row under
         // the cursor, and which row that is follows the width.
@@ -15733,9 +15908,11 @@ impl Footer {
                 // A COMPOSITOR KEY MODE, with nothing of ours open: the line
                 // teaches the mode's keys, because nothing else on screen
                 // says the keys changed meaning.
-                ViewState::NoneOf => {
-                    compositor_mode.and_then(|m| crate::actions::mode_hint(m, texts))
-                }
+                ViewState::NoneOf => compositor_mode
+                    .and_then(|m| crate::actions::mode_hint(m, texts))
+                    // AN OVERVIEW, likewise: what the screen became is not
+                    // what it was, and the way back is a key.
+                    .or_else(|| Self::overview_hint(every_workspace, scaled, texts)),
                 _ => None,
             }
             .filter(|h| !h.is_empty())
@@ -16159,6 +16336,10 @@ impl Footer {
                 .filter(|(_, shown)| shown.alarmed)
                 .filter_map(|(i, _)| crate::bluetooth::POOL.get(i).copied())
                 .collect();
+            let current_workspace = crate::workspaces::shown(self.windows.workspaces())
+                .into_iter()
+                .find(|w| w.current)
+                .and_then(|w| crate::workspaces::id_of(w.number));
             self.modeline_placed = placed
                 .iter()
                 .map(|c| {
@@ -16177,7 +16358,14 @@ impl Footer {
                         &c.text,
                         c.column,
                         modeline_line,
-                        segment_color(c.id, with_keyboard, state_is_base, battery_danger, &alarmed),
+                        segment_color(
+                            c.id,
+                            with_keyboard,
+                            state_is_base,
+                            battery_danger,
+                            &alarmed,
+                            current_workspace,
+                        ),
                         c.edge,
                     )
                 })
@@ -16385,6 +16573,12 @@ impl Footer {
                 vec![crate::chrome::Piece::said(p.clone())]
             } else if let Some(h) = &held_pieces {
                 let mut out = h.clone();
+                // A SPACE BEFORE THE DOT when the hint ends on a word: the
+                // sentence below starts with `·` and was glued to it
+                // (`back to the normal view· RCtrl`, photographed).
+                if out.last().is_some_and(|p| !p.text.ends_with(' ')) {
+                    out.push(crate::chrome::Piece::prose(" ".to_owned()));
+                }
                 // AND THE KEYS THAT OPEN AND WALK IT, open or shut. Appended
                 // to the hint and not on a line of its own, because this line
                 // is where this system teaches a key that is in no registry —
@@ -21261,12 +21455,22 @@ fn segment_color(
     state_is_base: bool,
     battery_danger: bool,
     alarmed: &[&'static str],
+    current_workspace: Option<&'static str>,
 ) -> tokens::Color {
     match id {
+        // A WORKSPACE NUMBER: the one in front brighter, the rest quiet — and
+        // never the accent, which on this line is the keyboard's.
+        _ if crate::workspaces::number_of(id).is_some() => {
+            crate::workspaces::colour_of(current_workspace == Some(id))
+        }
         // A DEVICE'S BATTERY AT THE DANGER LEVEL, by the same rule and the
         // same number as the machine's own: the drawing has already changed,
         // and the colour is what is seen before the drawing is read.
         _ if alarmed.contains(&id) => tokens::color::STATE_ERROR,
+        // A CONNECTED DEVICE, in a faded blue of its own: the owner asked for
+        // the devices to read apart from the rest of the line. Below the
+        // alarm, which wins when the battery is at the danger level.
+        _ if crate::bluetooth::POOL.contains(&id) => tokens::color::MODELINE_DEVICE,
         // THE BATTERY AT THE DANGER LEVEL — 15% and below, the owner's number —
         // is the one thing on this line that changes colour by VALUE: the
         // glyph already changed drawing, and the colour is what is seen before
@@ -21357,6 +21561,22 @@ fn narrow_buffer_keymap(
 
 #[cfg(test)]
 mod tests {
+    /// FAILS IF: a device's mark loses its own colour, the alarm stops
+    /// winning over it, or the current workspace stops being told from the
+    /// others.
+    #[test]
+    fn a_device_has_its_colour_and_the_alarm_wins() {
+        use ronoctua_tokens::color;
+        let paint = |id, alarmed: &[&'static str], current| {
+            super::segment_color(id, false, true, false, alarmed, current)
+        };
+        assert_eq!(paint("bt-2", &[], None), color::MODELINE_DEVICE);
+        assert_eq!(paint("bt-2", &["bt-2"], None), color::STATE_ERROR);
+        assert_eq!(paint("vpn", &[], None), color::TEXT_SECONDARY);
+        assert_eq!(paint("ws-3", &[], Some("ws-3")), color::TEXT_PRIMARY);
+        assert_eq!(paint("ws-1", &[], Some("ws-3")), color::TEXT_DIM);
+    }
+
     /// FAILS IF: a mark drawn from the border is hit by the column from the
     /// left again. With the grid's remainder half a cell, the pointer on the
     /// RIGHT half of the player's glyph is one cell further from the left than

@@ -792,18 +792,7 @@ pkgs.testers.runNixOSTest {
 
     if wanted("footer"):
         with subtest("the footer at rest — two lines, and no bell"):
-            # AT REST IS A CLAIM, AND IT WAS NEVER CHECKED.
-            #
-            # This scene is named for a state it did not put the footer into:
-            # run after the others, the network view from the scene above was
-            # still up and the surface was 314 px — twelve lines. The shot
-            # below crops the last two, so it looked right either way, which is
-            # how a subtest photographs something other than its own name for
-            # as long as nobody measures.
-            #
-            # `Esc` closes one level, so a view several deep needs several. The
-            # X focus first, because under Xvfb nobody has it by default and a
-            # key with nowhere to go is a key that changes nothing.
+            # WHY: `nix/shots-scenes.nix`, under the scene's id.
             focus_compositor()
             for _ in range(8):
                 machine.succeed("DISPLAY=:99 xdotool key Escape")
@@ -1122,18 +1111,7 @@ pkgs.testers.runNixOSTest {
             machine.sleep(1)
             shot("15-hover-on-the-windows-facts")
 
-            # AND THE SENTENCE ABOUT THAT FACT COMES OUT IN TWO INKS.
-            #
-            # The owner read a cut label in this very panel and asked for both
-            # halves in full on the message line *and* told apart — *"a cor da
-            # legenda e do valor devem se diferenciar"*. The line used to be one
-            # run in one token, so the only way to see the fix is to count both
-            # tokens ON THAT LINE.
-            #
-            # CROPPED TO THE LINE, and to this window's own half: the whole
-            # frame carries `text.subtle.default` in every hint on screen, so a
-            # measurement of the frame would pass with the sentence in a single
-            # colour. The message line of this door is its FIRST.
+            # WHY: `nix/shots-scenes.nix`, under the scene's id.
             def sentence_inks(into):
                 """The two registers on this door's message line."""
                 crop(f"{w_w // 2}x{LINE}+{x_w}+{y_w}", into=into)
@@ -1236,18 +1214,7 @@ pkgs.testers.runNixOSTest {
             machine.sleep(2)
             shot("18-window-listing-scrolled-to-the-end")
 
-            # AND A FILE OF LETTERS, WITH ITS OWN CONTENT IN THE PANEL.
-            #
-            # THE DEFECT THIS IS THE PICTURE OF: the owner selected a markdown
-            # file and the preview said "there is no picture inside this kind of
-            # file". The panel is not an image panel — it answers what is IN a
-            # file — and every one of the eighteen shots above photographed it
-            # with a picture or with nothing, so the sentence was on his screen and
-            # in none of ours.
-            #
-            # A `.nix` on purpose: it is the file this repository is made of, the
-            # type is one we invent ourselves in `mime-glyphs.nix`, and its
-            # highlight uses four of the twelve tokens in one screenful.
+            # WHY: `nix/shots-scenes.nix`, under the scene's id.
             machine.succeed("mkdir -p /root/shots/code")
             # FROM THE STORE, and not from a heredoc written here.
             #
@@ -2054,19 +2021,7 @@ pkgs.testers.runNixOSTest {
             machine.sleep(2)
             shot("43-the-facts-and-the-button-in-their-corner")
 
-            # THE THUMB FOLLOWS THE HAND, and over a file WITH a globe.
-            #
-            # The owner felt this one under his fingers: *"ao clicar e arrastar
-            # com o mouse uma scrollbar que tem o globo, a barra da scrollbar se
-            # desloca imediatamente muito abaixo da posição de onde está o
-            # cursor"*. The thumb was drawn from the panel MINUS the globe's
-            # pinned band and the drag divided by the whole panel, so the two
-            # disagreed by a picture's height — and only on a file that carries
-            # a coordinate, which is why no other scene could have caught it.
-            #
-            # DRAGGED TO THE MIDDLE and not to an end: at either end both
-            # arithmetics land in the same place, and the gap between them is
-            # widest half way down.
+            # WHY: `nix/shots-scenes.nix`, under the scene's id.
             bar_x = x_f + w_f - 6
             mid = y_f + h_f // 2
             machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
@@ -2198,18 +2153,7 @@ pkgs.testers.runNixOSTest {
 
     if wanted("thumbnails"):
         with subtest("the entries side by side, as pictures"):
-            # A FOLDER MADE HERE, because this repository carries no pictures
-            # (invariant 13) and the whole question is what a picture looks like
-            # in a cell.
-            #
-            # THE COLOUR IS CHOSEN TO BE UNANSWERABLE BY TEXT. Every assertion
-            # below counts pixels of it, and `AGENTS.md` records what happens
-            # when that colour is near a token's: the glyphs answer. Magenta is
-            # in none of the eleven themes — greys, greens, cyans, a navy, a
-            # red, a white one and a cream, and the nearest tone of the two
-            # light ones measures 0.19 away — and
-            # a filled rectangle of it at four per cent fuzz is
-            # a question no antialiased letter can answer.
+            # WHY: `nix/shots-scenes.nix`, under the scene's id.
             machine.succeed("mkdir -p /root/thumbs")
             for name in ("a-picture.png", "b-picture.png"):
                 machine.succeed(
@@ -2837,6 +2781,88 @@ pkgs.testers.runNixOSTest {
             # taken in that instant would pass over a dead process.
             machine.succeed("systemctl is-active footer")
             shot("34-the-pointer-on-the-hint-line", lines=3)
+
+    if wanted("workspaces"):
+        with subtest("the workspaces that hold something, on the modeline"):
+            # WHY: `nix/shots-scenes.nix`, beside the id.
+            ask = f"SCROLLSOCK={sock} SWAYSOCK={sock} ${scroll}/bin/scrollmsg "
+
+            def changed(a, b):
+                return float(machine.succeed(
+                    f"magick /tmp/{a}.png /tmp/{b}.png -compose difference "
+                    "-composite -threshold 0 -format '%[fx:mean]' info:"
+                ))
+
+            def leader_then(key):
+                machine.succeed(
+                    "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+                    "${ronoctua-shell}/bin/ronoctua-shell leader"
+                )
+                machine.sleep(1)
+                if key:
+                    machine.succeed(f"DISPLAY=:99 xdotool key {key}")
+                machine.sleep(1)
+
+            def scaled():
+                said = _json.loads(machine.succeed(ask + "-t get_scroller"))
+                return said["scroller"]["overview"]
+            for _ in range(8):
+                machine.succeed("DISPLAY=:99 xdotool key Escape")
+            control("network-window")
+            machine.sleep(2)
+            shot("50-one-workspace", lines=3)
+            machine.succeed(ask + "workspace number 3")
+            control("power-window")
+            machine.sleep(2)
+            shot("51-on-the-third", lines=3)
+            bar = pixels_of("/tmp/51-on-the-third.png", "#" + token_hex("modeline.background"))
+            rows = (min(y for _, y in bar), max(y for _, y in bar))
+            quiet = [(x, y) for x, y in pixels_of("/tmp/51-on-the-third.png", "#" + token_hex("text.dim"))
+                     if rows[0] <= y <= rows[1]]
+            alone = [(x, y) for x, y in pixels_of("/tmp/50-one-workspace.png", "#" + token_hex("text.dim"))
+                     if rows[0] <= y <= rows[1]]
+            print(f"quiet number pixels: {len(alone)} alone, {len(quiet)} with two")
+            assert len(quiet) > len(alone), "no quiet number was drawn for the first workspace"
+            w, h, x, y = compositor_geometry()
+            cx = sum(p[0] for p in quiet) // len(quiet)
+            at = f"{x + cx} {y + h - 3 * LINE + (rows[0] + rows[1]) // 2}"
+            machine.succeed(f"DISPLAY=:99 xdotool mousemove {at} click 1")
+            machine.sleep(1)
+            now = _json.loads(machine.succeed(ask + "-t get_workspaces"))
+            assert [s["num"] for s in now if s["focused"]] == [1], now
+            shot("52-on-the-first")
+            machine.succeed(f"DISPLAY=:99 xdotool mousemove {at} click 3")
+            machine.sleep(2)
+            shot("53-every-workspace")
+            moved = changed("52-on-the-first", "53-every-workspace")
+            print(f"share of the screen the overview changed: {moved}")
+            assert moved > 0.1, "the right button showed no workspace"
+            leader_then("0")
+            shot("54-back-to-one")
+            back = changed("52-on-the-first", "54-back-to-one")
+            print(f"share still changed after LEADER 0: {back}")
+            assert back < 0.1, "LEADER 0 did not bring one workspace back"
+            machine.succeed(f"DISPLAY=:99 xdotool mousemove {at} click 3")
+            machine.sleep(2)
+            machine.succeed(f"DISPLAY=:99 xdotool mousemove {x + w // 2} {y + h * 2 // 3} click 1")
+            machine.sleep(2)
+            now = _json.loads(machine.succeed(ask + "-t get_workspaces"))
+            assert [s["num"] for s in now if s["focused"]] == [3], now
+            shot("55-into-the-third")
+            assert changed("53-every-workspace", "55-into-the-third") > 0.1, "still every workspace"
+            for _ in range(2):
+                machine.succeed(f"DISPLAY=:99 xdotool mousemove {at} click 1")
+                machine.sleep(2)
+            assert scaled(), "a click on the number in front did not zoom it out"
+            machine.succeed(f"DISPLAY=:99 xdotool mousemove {x + w // 2} {y + h // 3}")
+            machine.sleep(1)
+            shot("56-zoomed-out")
+            machine.succeed(f"DISPLAY=:99 xdotool mousemove {at} click 1")
+            machine.sleep(2)
+            assert not scaled(), "the second click did not put it back"
+            leader_then(None)
+            shot("57-the-leader")
+            machine.succeed("DISPLAY=:99 xdotool key Escape")
 
     if wanted("lifeline"):
         with subtest("the line that outlives the footer"):

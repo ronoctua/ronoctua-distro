@@ -55,7 +55,8 @@ use serde::{Deserialize, Serialize};
 /// A window, reduced to what the modeline uses (section 7.1 of the plan).
 ///
 /// Fields a compositor has and we do not: position, size, column,
-/// workspace, urgency, focus timestamp. They come in when a segment needs them, and
+/// urgency, focus timestamp. The workspace is not one either: a window does
+/// not say where it is, a [`Workspace`] says whether it holds any. They come in when a segment needs them, and
 /// not before — every field here is contract surface to maintain.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Window {
@@ -72,6 +73,23 @@ pub struct Window {
     pub pid: Option<i32>,
     /// Whether it is the focused window. There are zero or one.
     pub is_focused: bool,
+}
+
+/// A workspace, reduced to what the modeline draws of it.
+///
+/// It is the whole of what the numbers on the modeline need: which one it is,
+/// whether it is the one in front, and whether anything is open on it. Its
+/// windows are NOT listed — "is there anything" is one field of the
+/// compositor's reply, and "which" would be a walk of the whole tree on every
+/// window that opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Workspace {
+    /// Its number, or `None` when it has a name that is not one.
+    pub number: Option<u32>,
+    /// Whether it is the focused workspace. There is one per session.
+    pub focused: bool,
+    /// Whether anything is open on it, floating windows included.
+    pub occupied: bool,
 }
 
 /// A small window kept in the bottom-right corner, over the others —
@@ -536,6 +554,20 @@ pub enum Event {
     /// compositor with no bar says so nowhere — so the footer does, and this
     /// is how it hears.
     ModeChanged(Option<String>),
+    /// The complete list of workspaces, sent again whenever a workspace
+    /// appears, goes, takes the focus, or has a window open, close or move.
+    ///
+    /// Always the whole list and never a delta: a compositor has a handful
+    /// of workspaces, and merging deltas is where the defects live.
+    Workspaces(Vec<Workspace>),
+    /// Whether the focused workspace is zoomed out to fit all of it on the
+    /// screen — its OVERVIEW, the compositor's `scale_workspace overview`.
+    ///
+    /// Said again when the overview is turned on or off and when another
+    /// workspace takes the focus, which carries its own. The overview of
+    /// EVERY workspace is not this, and no compositor event says it: it is
+    /// kept by whoever turns it on.
+    Scaled(bool),
     /// Any other event. See the comment at the top of the module.
     Ignored,
 }
@@ -1014,6 +1046,8 @@ impl Events for Rehearsed {
 pub struct State {
     windows: Vec<Window>,
     focus: Option<u64>,
+    workspaces: Vec<Workspace>,
+    scaled: bool,
 }
 
 impl State {
@@ -1051,6 +1085,8 @@ impl State {
                 }
             }
             Event::FocusChanged(id) => self.focus = *id,
+            Event::Workspaces(all) => self.workspaces = all.clone(),
+            Event::Scaled(on) => self.scaled = *on,
             // A MONITOR MOVING SAYS NOTHING ABOUT THE WINDOWS, and neither
             // does the session ending: both are listened to elsewhere, and
             // here they have to be as inert as an unknown event.
@@ -1077,6 +1113,18 @@ impl State {
     #[must_use]
     pub fn all_windows(&self) -> &[Window] {
         &self.windows
+    }
+
+    /// Every workspace, in the compositor's order.
+    #[must_use]
+    pub fn workspaces(&self) -> &[Workspace] {
+        &self.workspaces
+    }
+
+    /// Whether the focused workspace is zoomed out to fit on the screen.
+    #[must_use]
+    pub fn scaled(&self) -> bool {
+        self.scaled
     }
 
     /// How many windows the compositor has.

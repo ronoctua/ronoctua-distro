@@ -314,11 +314,14 @@ impl Watching {
         wire::send(
             &mut stream,
             wire::Kind::Subscribe,
-            // WINDOW, OUTPUT, SHUTDOWN, INPUT AND MODE, AND NOTHING ELSE.
-            // Every other subscription is a wake and a repaint for something
-            // no part of this shell reads. `mode` is how the footer knows a
-            // key mode is on, which nothing else on screen says.
-            r#"["window","output","shutdown","input","mode"]"#,
+            // WINDOW, OUTPUT, SHUTDOWN, INPUT, MODE AND WORKSPACE, AND
+            // NOTHING ELSE. Every other subscription is a wake and a repaint
+            // for something no part of this shell reads. `mode` is how the
+            // footer knows a key mode is on, which nothing else on screen
+            // says; `workspace` is how the modeline knows which of them hold
+            // something, and `scroller` whether the one in front is zoomed out
+            // to its overview.
+            r#"["window","output","shutdown","input","mode","workspace","scroller"]"#,
         )?;
         let mut waiting = std::collections::VecDeque::new();
         // The subscribe's own reply, and anything that raced it.
@@ -342,11 +345,20 @@ impl Watching {
                 before.push(e);
             }
         };
-        // The reading first, then whatever raced it.
+        // The reading first, then whatever raced it — and the workspaces
+        // last, because that reply was computed after everything above.
         let mut all = std::collections::VecDeque::new();
         all.push_back(Event::Windows(read::windows_in(&tree)));
         all.extend(waiting);
         all.extend(before);
+        let (raced, workspaces) = workspaces_now(&mut stream)?;
+        all.extend(raced);
+        all.push_back(workspaces);
+        // AND WHETHER THE ONE IN FRONT IS ZOOMED OUT: a footer that starts in
+        // the middle of an overview would otherwise say nothing about it.
+        let (raced, said) = asked(&mut stream, wire::Kind::Scroller)?;
+        all.extend(raced);
+        all.extend(scaled_in(&said));
         Ok(Self {
             stream,
             waiting: all,
@@ -377,11 +389,84 @@ impl Watching {
                     return Err(e);
                 }
             };
-            if let Some(e) = event_of(kind, &body) {
-                return Ok(Some(e));
+            let e = event_of(kind, &body);
+            if !moves_a_workspace(kind, &body) {
+                if let Some(e) = e {
+                    return Ok(Some(e));
+                }
+                continue;
             }
+            // ASKED ON THIS SAME SOCKET, and without the reader's deadline:
+            // a reply is not an event that may never come, and giving up
+            // halfway would leave it to be read later as if it were one.
+            if self.deadline {
+                self.stream.set_read_timeout(None)?;
+                self.deadline = false;
+            }
+            let (raced, workspaces) = workspaces_now(&mut self.stream)?;
+            self.waiting.extend(e);
+            self.waiting.extend(raced);
+            self.waiting.push_back(workspaces);
         }
     }
+}
+
+/// Whether an event may change which workspaces hold something, or which
+/// one is in front.
+///
+/// Every workspace event, and a window that opened, closed or moved — the
+/// three things that change what a workspace holds. A title changing does
+/// not, and asking on every one would be a round trip per keystroke in a
+/// terminal that puts the command line in its title.
+fn moves_a_workspace(kind: u32, body: &str) -> bool {
+    match kind {
+        wire::EVENT_WORKSPACE => true,
+        wire::EVENT_WINDOW => serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|said| {
+                said.get("change")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .is_some_and(|change| matches!(change.as_str(), "new" | "close" | "move")),
+        _ => false,
+    }
+}
+
+/// Asks for the workspaces on a subscribed socket.
+///
+/// The events that arrive before the reply come back FIRST, and in order:
+/// the compositor answers one thing at a time, so they happened before the
+/// reply was computed, and the reply already includes them — nothing that
+/// raced it needs asking again.
+fn workspaces_now(stream: &mut UnixStream) -> Result<(Vec<Event>, Event)> {
+    let (raced, said) = asked(stream, wire::Kind::Workspaces)?;
+    Ok((raced, Event::Workspaces(read::workspaces_in(&said))))
+}
+
+/// Asks one question on a subscribed socket, and hands back the events that
+/// raced the reply — first, and in order — with the reply itself.
+fn asked(stream: &mut UnixStream, kind: wire::Kind) -> Result<(Vec<Event>, Value)> {
+    wire::send(stream, kind, "")?;
+    let mut raced = Vec::new();
+    loop {
+        let (came, body) = wire::receive(stream)?;
+        if came & wire::EVENT_BIT == 0 {
+            let said: Value = serde_json::from_str(&body).context("a reply that is not JSON")?;
+            return Ok((raced, said));
+        }
+        if let Some(e) = event_of(came, &body) {
+            raced.push(e);
+        }
+    }
+}
+
+/// Whether the workspace a `scroller` object describes is in its overview.
+fn scaled_in(said: &Value) -> Option<Event> {
+    said.get("scroller")
+        .and_then(|s| s.get("overview"))
+        .and_then(Value::as_bool)
+        .map(Event::Scaled)
 }
 
 impl Events for Watching {
@@ -409,6 +494,16 @@ fn event_of(kind: u32, body: &str) -> Option<Event> {
     match kind {
         wire::EVENT_OUTPUT => Some(Event::ScreensChanged),
         wire::EVENT_SHUTDOWN => Some(Event::Leaving),
+        // What a workspace event says is read again whole, by the caller
+        // (`moves_a_workspace`), and never from the event itself.
+        wire::EVENT_WORKSPACE => None,
+        // THE OVERVIEW turned on or off, or another workspace in front with
+        // its own. Every other change of layout (a scale step, the insert
+        // side, the focus mode) says nothing the footer draws.
+        wire::EVENT_SCROLLER => match said.get("change").and_then(Value::as_str) {
+            Some("overview" | "workspace") => scaled_in(&said),
+            _ => Some(Event::Ignored),
+        },
         // `default` is the absence of a mode, and is said as one.
         wire::EVENT_MODE => {
             let name = said.get("change").and_then(Value::as_str)?;
@@ -456,6 +551,16 @@ fn event_of(kind: u32, body: &str) -> Option<Event> {
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    /// Writes one message of any kind, as the compositor would: an event
+    /// carries a kind no request has.
+    fn send_raw(to: &mut UnixStream, kind: u32, body: &str) {
+        let mut all = b"i3-ipc".to_vec();
+        all.extend_from_slice(&u32::try_from(body.len()).unwrap().to_ne_bytes());
+        all.extend_from_slice(&kind.to_ne_bytes());
+        all.extend_from_slice(body.as_bytes());
+        to.write_all(&all).unwrap();
+    }
 
     #[test]
     fn a_message_goes_out_the_way_the_protocol_says() {
@@ -572,6 +677,79 @@ mod tests {
             Some(Event::Ignored),
             "a keyboard's layout is not a pointer's business"
         );
+    }
+
+    #[test]
+    fn a_window_opening_asks_for_the_workspaces_and_what_raced_comes_first() {
+        let (ours, mut theirs) = UnixStream::pair().unwrap();
+        let mut watching = Watching {
+            stream: ours,
+            waiting: std::collections::VecDeque::new(),
+            deadline: false,
+        };
+        let server = std::thread::spawn(move || {
+            send_raw(
+                &mut theirs,
+                wire::EVENT_WINDOW,
+                r#"{"change":"new","container":{"id":4,"pid":1,"name":"a"}}"#,
+            );
+            let (kind, _) = wire::receive(&mut theirs).unwrap();
+            assert_eq!(kind, wire::Kind::Workspaces as u32);
+            // An event that was already on its way when the question came.
+            send_raw(&mut theirs, wire::EVENT_MODE, r#"{"change":"resize"}"#);
+            send_raw(
+                &mut theirs,
+                wire::Kind::Workspaces as u32,
+                r#"[{"num":1,"focused":false,"focus":[4]},{"num":3,"focused":true,"focus":[9]}]"#,
+            );
+        });
+        let got: Vec<Event> = (0..3)
+            .map(|_| watching.next_one().unwrap().unwrap())
+            .collect();
+        server.join().unwrap();
+        assert!(matches!(got[0], Event::WindowChanged(ref w) if w.id == 4));
+        assert_eq!(got[1], Event::ModeChanged(Some("resize".to_owned())));
+        let Event::Workspaces(ref all) = got[2] else {
+            panic!("expected the workspaces, got {:?}", got[2]);
+        };
+        assert_eq!(all.len(), 2);
+        assert!(all[1].focused && all[1].occupied);
+    }
+
+    #[test]
+    fn the_overview_turning_on_or_off_is_said() {
+        let on = r#"{"change":"overview","scroller":{"workspace":"1","overview":true}}"#;
+        assert_eq!(
+            event_of(wire::EVENT_SCROLLER, on),
+            Some(Event::Scaled(true))
+        );
+        let moved = r#"{"change":"workspace","scroller":{"workspace":"3","overview":false}}"#;
+        assert_eq!(
+            event_of(wire::EVENT_SCROLLER, moved),
+            Some(Event::Scaled(false))
+        );
+        let step = r#"{"change":"scale","scroller":{"workspace":"3","overview":false}}"#;
+        assert_eq!(event_of(wire::EVENT_SCROLLER, step), Some(Event::Ignored));
+    }
+
+    #[test]
+    fn a_title_changing_does_not_ask_for_the_workspaces() {
+        // A terminal writes its command line into its title: a round trip
+        // per keystroke, for nothing a workspace can say.
+        assert!(!moves_a_workspace(
+            wire::EVENT_WINDOW,
+            r#"{"change":"title","container":{"id":1}}"#
+        ));
+        for change in ["new", "close", "move"] {
+            assert!(moves_a_workspace(
+                wire::EVENT_WINDOW,
+                &format!(r#"{{"change":"{change}","container":{{"id":1}}}}"#)
+            ));
+        }
+        assert!(moves_a_workspace(
+            wire::EVENT_WORKSPACE,
+            r#"{"change":"focus"}"#
+        ));
     }
 
     #[test]

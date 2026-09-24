@@ -571,7 +571,14 @@ let
       # Left out, and why: a deed with criteria names one program.
       LEFT_OUT = {'jump criteria [app_id="firefox"]'}
 
+      # A DEED OF THEIRS THAT GOES THROUGH OUR BINARY, and why: every
+      # workspace at once is said by no reply and no event, so the footer —
+      # which shows the key back out of it — turns it on itself.
+      THROUGH_US = {"scale_workspaces toggle": "workspace-all"}
+
       def ours_as(command):
+          if command in THROUGH_US:
+              return ["command " + THROUGH_US[command]]
           if command.startswith("exec "):
               for needle, ours_id in PROGRAMS:
                   if needle in command:
@@ -2641,6 +2648,11 @@ let
         # (`Never`/`WhenOff`/`WhenOn`), like Syncthing's, and for the same
         # reason that changes nothing here.
         "clip", "history",
+        # AND THREE THAT ANSWERED THE CLICK BEFORE THIS LIST NAMED THEM, each a
+        # door the keyboard has: `camera` runs `camera-settings-open`
+        # (`LEADER s c c`), `player` runs `player-column` (`LEADER p c`), and
+        # `compositor-mode` leaves the mode, which is the mode's own `Esc`.
+        "camera", "player", "compositor-mode",
     }
     if acted != agreed:
         gaps.append(
@@ -2709,6 +2721,22 @@ let
         gaps.append("`bluetooth-device` is not what the view's own RET runs")
     if '"bluetooth-open"' not in keymap:
         gaps.append("the device marks have no equivalent key")
+    for id in ('"camera-settings-open"', '"player-column"'):
+        if id not in clicked or id not in keymap:
+            gaps.append(f"a mark runs {id} without a key doing the same")
+    # THE WORKSPACE NUMBERS, likewise by name: `ws-1`..`ws-10` carry digits.
+    # The left button goes to the number drawn and the right one opens the
+    # overview — and both are keys: `LEADER 1`…`9`, `LEADER 0` and `TAB TAB`.
+    places = read(shell / "workspaces.rs")
+    if 'pub const POOL: [&str; 10] = [' not in places or '"ws-10"' not in places:
+        gaps.append("the workspace pool is not the ten ids this check knows")
+    if "workspaces::number_of(id)" not in clicked:
+        gaps.append("a click on a workspace number reaches nothing")
+    for id in ('"workspace-go"', '"workspace-all"', '"workspace-overview"'):
+        if id not in clicked:
+            gaps.append(f"a workspace number does not run {id}")
+        if id not in keymap:
+            gaps.append(f"the workspace numbers' {id} has no equivalent key")
 
     # 2) WHAT A CLICK ON THE NOTIFICATION BAND CAN DO.
     #

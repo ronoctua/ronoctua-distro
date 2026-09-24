@@ -310,6 +310,15 @@
   overview-all = {
     text = "scale_workspaces toggle";
   };
+  # THE SAME VIEW, said as ON and OFF. The toggle cannot be asked where it is
+  # (no reply and no event carries it), so the footer, which keeps the
+  # answer, says which one it wants.
+  overview-all-on = {
+    text = "scale_workspaces enable";
+  };
+  overview-all-off = {
+    text = "scale_workspaces disable";
+  };
   zoom-out = {
     text = "scale_workspace incr -0.05";
   };

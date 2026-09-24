@@ -161,6 +161,19 @@
   #     subtest is NAMED for. It passed while the brain's row was up and the
   #     surface was three lines, which in a full battery it is not — the
   #     brain's own scene comes nine scenes later.
+  #
+  # AT REST IS A CLAIM, AND IT WAS NEVER CHECKED.
+  #
+  # This scene is named for a state it did not put the footer into:
+  # run after the others, the network view from the scene above was
+  # still up and the surface was 314 px — twelve lines. The shot
+  # below crops the last two, so it looked right either way, which is
+  # how a subtest photographs something other than its own name for
+  # as long as nobody measures.
+  #
+  # `Esc` closes one level, so a view several deep needs several. The
+  # X focus first, because under Xvfb nobody has it by default and a
+  # key with nowhere to go is a key that changes nothing.
   {
     id = "footer";
     alone = true;
@@ -256,6 +269,32 @@
   # while the band it was written for was already gone. What answers the
   # question is the DIFFERENCE — 808 against 4357 with the band, 877
   # without it.
+  #
+  # AND A FILE OF LETTERS, WITH ITS OWN CONTENT IN THE PANEL.
+  #
+  # THE DEFECT THIS IS THE PICTURE OF: the owner selected a markdown
+  # file and the preview said "there is no picture inside this kind of
+  # file". The panel is not an image panel — it answers what is IN a
+  # file — and every one of the eighteen shots above photographed it
+  # with a picture or with nothing, so the sentence was on his screen and
+  # in none of ours.
+  #
+  # A `.nix` on purpose: it is the file this repository is made of, the
+  # type is one we invent ourselves in `mime-glyphs.nix`, and its
+  # highlight uses four of the twelve tokens in one screenful.
+  #
+  # AND THE SENTENCE ABOUT THAT FACT COMES OUT IN TWO INKS.
+  #
+  # The owner read a cut label in this very panel and asked for both
+  # halves in full on the message line *and* told apart — *"a cor da
+  # legenda e do valor devem se diferenciar"*. The line used to be one
+  # run in one token, so the only way to see the fix is to count both
+  # tokens ON THAT LINE.
+  #
+  # CROPPED TO THE LINE, and to this window's own half: the whole
+  # frame carries `text.subtle.default` in every hint on screen, so a
+  # measurement of the frame would pass with the sentence in a single
+  # colour. The message line of this door is its FIRST.
   {
     id = "manager-window";
     needs = [ "manager" ];
@@ -350,6 +389,20 @@
   # THE FACTS GIVEN THE WHOLE REGION, which rides on the window door for the
   # reason the three above do: what it photographs is a panel of the manager
   # that scene opened, and alone it would photograph an empty desktop.
+  #
+  # THE THUMB FOLLOWS THE HAND, and over a file WITH a globe.
+  #
+  # The owner felt this one under his fingers: *"ao clicar e arrastar
+  # com o mouse uma scrollbar que tem o globo, a barra da scrollbar se
+  # desloca imediatamente muito abaixo da posição de onde está o
+  # cursor"*. The thumb was drawn from the panel MINUS the globe's
+  # pinned band and the drag divided by the whole panel, so the two
+  # disagreed by a picture's height — and only on a file that carries
+  # a coordinate, which is why no other scene could have caught it.
+  #
+  # DRAGGED TO THE MIDDLE and not to an end: at either end both
+  # arithmetics land in the same place, and the gap between them is
+  # widest half way down.
   {
     id = "facts-wide";
     needs = [ "manager-window" ];
@@ -357,6 +410,19 @@
   # THE LISTING'S OTHER SHAPE. It rides on the window the manager's scene
   # opened, like the three above it, and it makes its own folder: the picture it
   # counts pixels of has to be one this repository does not carry (invariant 13).
+  #
+  # A FOLDER MADE HERE, because this repository carries no pictures
+  # (invariant 13) and the whole question is what a picture looks like
+  # in a cell.
+  #
+  # THE COLOUR IS CHOSEN TO BE UNANSWERABLE BY TEXT. Every assertion
+  # below counts pixels of it, and `AGENTS.md` records what happens
+  # when that colour is near a token's: the glyphs answer. Magenta is
+  # in none of the eleven themes — greys, greens, cyans, a navy, a
+  # red, a white one and a cream, and the nearest tone of the two
+  # light ones measures 0.19 away — and
+  # a filled rectangle of it at four per cent fuzz is
+  # a question no antialiased letter can answer.
   {
     id = "thumbnails";
     needs = [ "manager-window" ];
@@ -589,6 +655,26 @@
   # is shown only with the line open (`Footer::explain_rows`), so a sweep over
   # a shut one would never draw the row whose count once closed the ring.
   { id = "hints"; }
+  # THE WORKSPACES THAT HOLD SOMETHING, as numbers on the modeline. One
+  # window alone draws none; a second one on workspace 3 draws `1 3`, with 3
+  # brighter. The quiet number is FOUND in `text.dim` on the modeline's rows,
+  # counted against the picture with one workspace, and clicked: the answer
+  # is the compositor's own `get_workspaces`, read from outside the screen.
+  # The right button then shows EVERY workspace (`scale_workspaces`), which
+  # no IPC reply reports: the proof is the picture — the SHARE of the screen
+  # that changed, as `%[fx:mean]` of the difference. `compare -metric AE`
+  # prints its count scaled by the build's quantum (1.96e9 for 29 862 pixels)
+  # and in a different order on each version; the mean is one number —
+  # 0.399 with the overview, 0 for the same picture, and the minibuffer row a
+  # no-op click could change is 0.035 of the screen: the floor is 0.1.
+  # Then `LEADER 0` goes back (compared with the picture before the
+  # overview), and — every workspace shown again — a left click on the
+  # third's window goes INTO it: the compositor focuses it and the footer
+  # closes the view on that (`Footer::focus_moved`), so `get_workspaces` says
+  # the third is in front and the screen is no longer the overview. Then two clicks on the `1` — go there, then zoom it out,
+  # which `get_scroller` answers — and a third puts it back. The pictures in
+  # between show the line under the modeline saying the way back.
+  { id = "workspaces"; }
   # THE LINE THAT OUTLIVES THE FOOTER, and the keyboard reaching its options.
   #
   # `Esc` and not `x`: the owner read the photograph and asked for the key that

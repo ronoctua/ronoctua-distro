@@ -1081,5 +1081,13 @@
       normal = "neutral.text-muted"; # the same as `text.dim`
       alternate = "success.solid"; # the same green as `state.success`
     };
+    # A CONNECTED BLUETOOTH DEVICE — every one of its marks, in a family of
+    # its own (`device`, in every seed): a faded blue, at the same rung as
+    # `text.secondary`, which every other mark wears. The owner asked for the
+    # devices to read apart from the rest of the line, and a hue at the same
+    # luminance is a KIND of thing, not a louder one. Not the accent, which is
+    # the keyboard's; and a device whose battery is at the danger level still
+    # takes `state.error` over this.
+    device = "device.text";
   };
 }

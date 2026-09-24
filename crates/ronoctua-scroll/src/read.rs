@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use ronoctua_compositor::{
     AccelProfile, ButtonMap, ClickMethod, Device, DeviceKind, DragLock, FingerDrag, Logical, Mode,
-    Output, PointerSettings, ScrollMethod, Seat, SendEvents, Transform, Window,
+    Output, PointerSettings, ScrollMethod, Seat, SendEvents, Transform, Window, Workspace,
 };
 use serde_json::Value;
 
@@ -126,6 +126,36 @@ pub fn focused_in(said: &Value) -> Option<String> {
         .find(|o| o.get("focused").and_then(Value::as_bool) == Some(true))
         .and_then(|o| o.get("name").and_then(Value::as_str))
         .map(ToOwned::to_owned)
+}
+
+/// Every workspace, from the answer to `get_workspaces`.
+///
+/// OCCUPIED IS `focus` NOT BEING EMPTY: the reply does not describe the
+/// tiled children (`nodes` is always `[]` there), but `focus` lists the id of
+/// every direct child, tiled and floating, and a workspace with nothing open
+/// has none. The floating list is asked too, so the answer does not rest on
+/// one field alone.
+#[must_use]
+pub fn workspaces_in(said: &Value) -> Vec<Workspace> {
+    let Some(all) = said.as_array() else {
+        return Vec::new();
+    };
+    let non_empty = |w: &Value, k: &str| {
+        w.get(k)
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty())
+    };
+    all.iter()
+        .map(|w| Workspace {
+            // `-1` is how the compositor says the name is not a number.
+            number: w
+                .get("num")
+                .and_then(Value::as_i64)
+                .and_then(|n| u32::try_from(n).ok()),
+            focused: w.get("focused").and_then(Value::as_bool) == Some(true),
+            occupied: non_empty(w, "focus") || non_empty(w, "floating_nodes"),
+        })
+        .collect()
 }
 
 /// The room windows have on the focused workspace, from the answer to
@@ -557,6 +587,36 @@ mod tests {
         assert_eq!(focused_in(&said).as_deref(), Some("DP-2"));
         // And nothing focused is a legitimate answer.
         assert_eq!(focused_in(&json!([])), None);
+    }
+
+    /// FAILS IF: a workspace holding only a floating window reads as empty,
+    /// a named one invents a number, or the focused empty one reads as
+    /// occupied — the shape is the pinned compositor's `get_workspaces`,
+    /// where `nodes` is always empty and `focus` is what lists the children.
+    #[test]
+    fn a_workspace_is_occupied_when_it_lists_a_child() {
+        let said = json!([
+            {"num": 1, "name": "1", "focused": false, "nodes": [], "focus": [11, 12], "floating_nodes": []},
+            {"num": 2, "name": "2", "focused": true, "nodes": [], "focus": [], "floating_nodes": []},
+            {"num": -1, "name": "mail", "focused": false, "nodes": [], "focus": [30], "floating_nodes": []},
+            {"num": 4, "name": "4", "focused": false, "nodes": [], "focus": [],
+             "floating_nodes": [{"id": 40}]}
+        ]);
+        let all = workspaces_in(&said);
+        let seen: Vec<(Option<u32>, bool, bool)> = all
+            .iter()
+            .map(|w| (w.number, w.focused, w.occupied))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (Some(1), false, true),
+                (Some(2), true, false),
+                (None, false, true),
+                (Some(4), false, true),
+            ]
+        );
+        assert!(workspaces_in(&json!({})).is_empty());
     }
 
     /// FAILS IF: the title bar stops being counted — the tree keeps it in

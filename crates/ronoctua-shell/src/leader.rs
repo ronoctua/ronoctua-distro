@@ -648,15 +648,15 @@ impl Leader {
 /// asked for `LEADER b` to open the brain with nothing in between, and the
 /// keymap refuses — at BUILD time — a sequence that is both a command and the
 /// prefix of another. So `b a` and `b p` had to go, and what they did already
-/// existed inside the buffer under its own leader: `m a` and `m p`.
+/// existed inside the buffer under its own leader: `, a` and `, p`.
 ///
 /// This is what the band prints, so the line that appears without anybody
 /// asking still says where the keyboard's answer is. The mouse keeps both
 /// buttons on the band itself; the keyboard opens the brain first.
-pub const BRAIN_ABORT_KEYS: &str = "m a";
+pub const BRAIN_ABORT_KEYS: &str = ", a";
 
 /// The same, for `brain-proceed`.
-pub const BRAIN_PROCEED_KEYS: &str = "m p";
+pub const BRAIN_PROCEED_KEYS: &str = ", p";
 
 /// The commands reachable by NAME and by name only.
 ///
@@ -672,7 +672,7 @@ pub const BRAIN_PROCEED_KEYS: &str = "m p";
 /// `brain-abort` and `brain-proceed` are the band's two answers. They had
 /// keys — `LEADER b a` and `LEADER b p` — until `LEADER b` became the brain
 /// itself, and a sequence cannot be a command and the prefix of another. What
-/// they do lives in the brain's buffer as `m a` and `m p`; they stay in the
+/// they do lives in the brain's buffer as `, a` and `, p`; they stay in the
 /// registry because the band CLICKS them and `LEADER :` reaches them by name.
 ///
 /// `brain-start-emacs` is what a standing notice offers. A sequence for it
@@ -703,10 +703,10 @@ pub const BY_NAME_ONLY: &[&str] = &[
 
 /// And for the button a standing notice offers.
 ///
-/// `m n`, inside the brain, for the same reason the two above are `m a` and
-/// `m p`: the band's controls are answered from the brain's own buffer, and
+/// `, n`, inside the brain, for the same reason the two above are `, a` and
+/// `, p`: the band's controls are answered from the brain's own buffer, and
 /// the band prints what that buffer binds.
-pub const BRAIN_NOTICE_KEYS: &str = "m n";
+pub const BRAIN_NOTICE_KEYS: &str = ", n";
 
 /// The prefix the buffer's STATE chooser hangs off — `w`, the window's letter,
 /// where the buffer commands live — and the key under it.
@@ -766,6 +766,47 @@ pub const KEEP_LID_KEYS: &str = "s p l";
 ///
 /// A keymap collision, a malformed command id, or a binding pointing at a
 /// command that does not exist. All three are programming errors.
+/// The root of the list, with the nine workspace digits drawn as ONE row.
+///
+/// `LEADER 1`…`9` are nine bindings and one gesture, and nine rows saying
+/// "Go to workspace" spent a column of the list that is the scarce resource
+/// there. The row reads `1…9`, and its key — what a CLICK on it presses — is
+/// `TAB`: a click cannot say which number, so it opens the workspace group,
+/// where each one is a row of its own. The digits still work from the
+/// keyboard; only the drawing is condensed, and only at the root.
+#[must_use]
+pub fn condensed_root(entries: Vec<ronoctua_keymap::Entry>) -> Vec<ronoctua_keymap::Entry> {
+    let is_a_digit = |e: &ronoctua_keymap::Entry| {
+        e.command.as_deref() == Some("workspace-go")
+            && matches!(
+                e.key.as_str(),
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+            )
+    };
+    let Some(first) = entries.iter().position(is_a_digit) else {
+        return entries;
+    };
+    let label = entries[first].label.clone();
+    let mut out: Vec<ronoctua_keymap::Entry> = Vec::with_capacity(entries.len());
+    for (i, e) in entries.into_iter().enumerate() {
+        if i == first {
+            out.push(ronoctua_keymap::Entry {
+                key: RANGE_ROW.to_owned(),
+                sym: ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Tab),
+                label: label.clone(),
+                command: Some("workspace-go".to_owned()),
+                is_group: false,
+            });
+        } else if !is_a_digit(&e) {
+            out.push(e);
+        }
+    }
+    out
+}
+
+/// How the condensed row of workspace digits is written in the list.
+pub const RANGE_ROW: &str = "1…9";
+
 pub fn default_of() -> Result<(Tree, Registry)> {
     // Labels are text KEYS (invariant 8), and they come from the CONSTANTS
     // generated from `assets/i18n/*.ftl`. Writing the string by hand would compile and
@@ -897,7 +938,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // They are registered HERE, and not only in the buffer, because the
         // line they belong to is the FOOTER'S: it appears with no window open
         // and it is clickable, and the mouse may not reach a door the keyboard
-        // does not. The buffer has its own `m a` and `m p` for the same two
+        // does not. The buffer has its own `, a` and `, p` for the same two
         // verbs — same letters, its own prefix — and the two never meet: a
         // buffer's sequence is resolved by the buffer's process.
         Command {
@@ -912,7 +953,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         //
         // A command of the registry and not a special case inside the band,
         // because that is what makes a notice's button a thing anybody can
-        // reach: `LEADER :` runs it by name, the buffer's `m n` runs it, and
+        // reach: `LEADER :` runs it by name, the buffer's `, n` runs it, and
         // the band clicks it. A notice names a COMMAND ID; it does not carry
         // a thing to do.
         Command {
@@ -1631,6 +1672,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "workspace-overview",
             label: key::CMD_WORKSPACE_OVERVIEW,
         },
+        // EVERY WORKSPACE AT ONCE, and ours rather than the compositor's
+        // toggle: nothing the compositor says tells whether that view is on,
+        // so the footer keeps the answer and says `enable` or `disable`.
+        Command {
+            id: "workspace-all",
+            label: key::CMD_WORKSPACE_ALL,
+        },
         // ---------------------------------------------------------------
         // THE ONES THAT EXISTED ONLY AS A KEY OR ONLY AS A SOCKET ORDER.
         //
@@ -2334,6 +2382,20 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // costs one table line and saves one decision per use.
         // ---------------------------------------------------------------
         ("TAB TAB", "workspace-overview", None),
+        // THE REST OF WHAT A WORKSPACE CAN DO FROM HERE, which the group did
+        // not have: every workspace at once (`a`, the same as `LEADER 0`),
+        // back to the one before (`b`), and choosing one by the label the
+        // compositor draws on it (`s`).
+        ("TAB a", "workspace-all", None),
+        ("TAB b", "wm-workspace-back", None),
+        ("TAB s", "wm-jump-workspaces", None),
+        // THE OVERVIEW OF EVERY WORKSPACE AT THE TOP LEVEL, on `0`, beside
+        // `1`…`9` going to one (the ranges below): the owner's keys, and the
+        // zero is the one that shows them all rather than a tenth place. It
+        // is `scale_workspaces`, and not the `TAB TAB` overview: that one fits
+        // the windows of ONE workspace, and with a single window open it
+        // changes nothing on screen — which is how the owner read it.
+        ("0", "workspace-all", None),
         ("TAB j", "workspace-next", None),
         ("TAB k", "workspace-previous", None),
         ("TAB ]", "workspace-next", None),
@@ -2479,10 +2541,10 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         //
         // So the two that used to sit beside it — `b a` and `b p`, the band's
         // answers — are gone from here. They live in the buffer's own keymap
-        // as `m a` and `m p`, which is where everything else this screen does
+        // as `, a` and `, p`, which is where everything else this screen does
         // already lived, and the band now draws THOSE notations. The cost,
         // said plainly: somebody at the keyboard answers a countdown with
-        // `LEADER b` and then `m a`, where it used to be `LEADER b a`. The
+        // `LEADER b` and then `, a`, where it used to be `LEADER b a`. The
         // band keeps both buttons for the mouse.
         ("b", "brain-open", None),
         // `LEADER s u` — `u` for update, under the SYSTEM group, beside the
@@ -2741,6 +2803,10 @@ pub fn default_of() -> Result<(Tree, Registry)> {
     const LAST: &str = "9";
     let ranges: Vec<(String, &str, &'static str)> = (1..=9)
         .map(|n| (format!("TAB {n}"), "workspace-go", DIGITS[n - 1]))
+        // AND AT THE TOP LEVEL, one key shorter — the owner's `LEADER 1`…`9`,
+        // the same numbers the modeline draws for the workspaces that hold
+        // something.
+        .chain((1..=9).map(|n| (n.to_string(), "workspace-go", DIGITS[n - 1])))
         .chain((1..=9).map(|n| (format!("TAB m {n}"), "workspace-move", DIGITS[n - 1])))
         .chain([
             ("TAB 0".to_owned(), "workspace-go", LAST),
@@ -2811,6 +2877,13 @@ pub const LOCALE_KEYS: &str = "s l l";
 
 /// The regions' view's keys, BESIDE its binding — see [`GLANCE_KEYS`].
 pub const GEO_KEYS: &str = "s g g";
+
+/// The key that turns every workspace at once on and off, BESIDE its binding:
+/// the line under the modeline prints it while that view is on.
+pub const EVERY_WORKSPACE_KEYS: &str = "0";
+
+/// The key that zooms the workspace in front out and back, likewise.
+pub const OVERVIEW_KEYS: &str = "TAB TAB";
 
 pub const OF_LAUNCHER_VIEW: &[(&str, &str)] = &[("C-s", "apps-pin")];
 
@@ -3416,6 +3489,82 @@ mod tests {
         }
     }
 
+    /// FAILS IF: `LEADER 1`…`9` stop going to their workspace, or `LEADER 0`
+    /// stops opening the overview — the keys the modeline's numbers teach.
+    #[test]
+    fn a_digit_at_the_top_goes_to_its_workspace_and_zero_shows_them_all() {
+        let (tree, _) = default_of().unwrap();
+        for n in 1..=9u32 {
+            let mut l = Leader::default();
+            l.activate();
+            let d = char::from_digit(n, 10).unwrap();
+            match l.key(&tree, Key::simple(Sym::Char(d))) {
+                Effect::Run("workspace-go", Some(arg)) => {
+                    assert_eq!(arg, n.to_string(), "`LEADER {d}`");
+                }
+                otherwise => panic!("`LEADER {d}` did not go to workspace {n}: {otherwise:?}"),
+            }
+        }
+        let mut l = Leader::default();
+        l.activate();
+        assert_eq!(
+            l.key(&tree, Key::simple(Sym::Char('0'))),
+            Effect::Run("workspace-all", None)
+        );
+    }
+
+    /// FAILS IF: the keys the line under the modeline prints to leave an
+    /// overview stop being the keys that do it.
+    #[test]
+    fn the_keys_printed_to_leave_an_overview_are_bound() {
+        let (tree, _) = default_of().unwrap();
+        for (keys, wanted) in [
+            (EVERY_WORKSPACE_KEYS, "workspace-all"),
+            (OVERVIEW_KEYS, "workspace-overview"),
+            ("TAB a", "workspace-all"),
+        ] {
+            let seq = parse_sequence(keys).unwrap();
+            assert!(
+                matches!(tree.resolve(&seq), ronoctua_keymap::Resolution::Command(id, None) if id == wanted),
+                "`{keys}` is not `{wanted}`"
+            );
+        }
+    }
+
+    /// FAILS IF: the root list draws the nine digits as nine rows again, or
+    /// the condensed row's click stops opening the workspace group.
+    #[test]
+    fn the_nine_digits_are_one_row_whose_click_opens_the_workspaces() {
+        let (tree, _) = default_of().unwrap();
+        let ronoctua_keymap::Resolution::Prefix(root) = tree.resolve(&[]) else {
+            panic!("the root is not a list");
+        };
+        let shown = condensed_root(root.clone());
+        assert_eq!(root.len() - shown.len(), 8, "nine rows became one");
+        let row = shown
+            .iter()
+            .find(|e| e.key == RANGE_ROW)
+            .expect("no `1…9` row");
+        assert_eq!(row.command.as_deref(), Some("workspace-go"));
+        assert!(!shown.iter().any(|e| e.key == "3"));
+        // `0` is another thing — every workspace at once — and keeps its row.
+        assert!(shown.iter().any(|e| e.key == "0"));
+        // THE CLICK PRESSES `sym`, and `sym` opens the group where each
+        // workspace is a row of its own.
+        let mut l = Leader::default();
+        l.activate();
+        match l.key(&tree, row.sym) {
+            Effect::Continue { inputs } => {
+                assert!(
+                    inputs
+                        .iter()
+                        .any(|e| e.key == "3" && e.command.as_deref() == Some("workspace-go"))
+                );
+            }
+            otherwise => panic!("the `1…9` row did not open the workspaces: {otherwise:?}"),
+        }
+    }
+
     #[test]
     fn the_zero_goes_to_the_last_workspace() {
         // The keyboard's convention: zero closes the row after nine. With
@@ -3518,6 +3667,7 @@ mod tests {
         // one more indirection for the same effect. What matters is that
         // adding a binding with no action BREAKS something.
         const WITH_ACTION: &[&str] = &[
+            "workspace-all",
             "session-quit",
             "notif-open",
             "notif-window",

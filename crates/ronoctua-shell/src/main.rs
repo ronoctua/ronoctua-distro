@@ -127,6 +127,7 @@ mod theme_chooser;
 mod thumbs;
 mod toolkits;
 mod transfers;
+mod workspaces;
 mod world;
 // `LEADER s u`, the animated mark on the modeline, and the window that watches
 // a run happen. It knows no step: the sequence is `assets/updates.nix`.
@@ -731,6 +732,9 @@ pub struct Marks<'a> {
     /// (`player::mark`). Absent with nothing loaded — a modeline at rest says
     /// nothing.
     pub player: Option<char>,
+    /// The numbered workspaces that hold something — empty when fewer than
+    /// two do (`workspaces::shown`, where the owner's rule lives).
+    pub workspaces: &'a [crate::workspaces::Shown],
     /// The compositor's key mode, by its name, while one is on.
     pub compositor_mode: Option<&'a str>,
     /// SYNCTHING, and it is the only mark whose very existence is a choice.
@@ -987,14 +991,45 @@ pub fn segments(
             removable: true,
         });
     }
-    // THE PLAYER, one rung below the privacy marks: what is playing is worth
-    // a cell, and it is the first of the right-hand marks to go on a line too
-    // narrow for everything — the sound itself says it is there.
+    // THE PLAYER, the FARTHEST of the right-hand marks from the edge — only
+    // the workspace numbers sit to its left (the owner's order). The rung is
+    // what places a mark on this side, lowest against the border, so it is
+    // also the first of them to go on a line too narrow for everything: the
+    // sound itself says it is there.
     if let Some(glyph) = marks.player {
         out.push(Segment {
             id: "player",
             text: glyph.to_string(),
-            priority: 3,
+            priority: 14,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // THE WORKSPACES THAT HOLD SOMETHING, one number each: one segment per
+    // number because a segment has one colour, and the current one is drawn
+    // brighter.
+    //
+    // THE FIRST OF THE RIGHT-HAND MARKS, reading left to right, and to the
+    // left of the player (the owner's order): the highest rung on this side,
+    // since the rung is what places a mark here. Counted from the EDGE, so a
+    // click that changes the buffer — and with it the name's length — leaves
+    // them where the hand is; on the left, after the name, they slid four
+    // columns away from it (measured in the photo battery).
+    //
+    // PUSHED FROM THE LAST TO THE FIRST: one rung for all of them, and a tie
+    // keeps the order of declaration from the edge inwards, so the highest
+    // number is the one against the player and they read `1 3 4`. They are
+    // the first to go on a narrow screen — each is also `LEADER 1`…`9`.
+    for shown in marks.workspaces.iter().rev() {
+        let Some(id) = crate::workspaces::id_of(shown.number) else {
+            continue;
+        };
+        out.push(Segment {
+            id,
+            text: shown.number.to_string(),
+            priority: 15,
             min_cols: 1,
             side: Side::Right,
             shrink: Shrink::Cut,
@@ -1210,6 +1245,56 @@ pub fn minibuffer_at_rest() -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// FAILS IF: a workspace number moves when the focused buffer changes —
+    /// clicking one changes the buffer, and a number that slides with the
+    /// name's length leaves the hand that clicked it over something else.
+    #[test]
+    fn the_workspace_numbers_do_not_move_with_the_buffer() {
+        let shown = [
+            crate::workspaces::Shown {
+                number: 1,
+                current: true,
+            },
+            crate::workspaces::Shown {
+                number: 3,
+                current: false,
+            },
+        ];
+        let marks = Marks {
+            workspaces: &shown,
+            ..Marks::default()
+        };
+        let at = |name: &str| {
+            layout::resolve(80, &segments(name, "power", "", 0, &marks))
+                .into_iter()
+                .filter(|c| crate::workspaces::number_of(c.id).is_some())
+                .map(|c| c.column)
+                .collect::<Vec<_>>()
+        };
+        let short = at("*Power*");
+        assert_eq!(short.len(), 2, "both numbers are drawn");
+        assert_eq!(short, at("*a much longer buffer name*"));
+        // AND THEY READ IN ORDER, to the left of the player's mark.
+        let with_player = Marks {
+            workspaces: &shown,
+            player: Some(tokens::icon::PLAYER),
+            ..Marks::default()
+        };
+        let placed = layout::resolve(80, &segments("*Power*", "power", "", 0, &with_player));
+        let column = |id: &str| {
+            placed
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| c.column)
+                .unwrap_or_else(|| panic!("`{id}` was not placed"))
+        };
+        assert!(column("ws-1") < column("ws-3"), "the numbers read `1 3`");
+        assert!(
+            column("ws-3") < column("player"),
+            "the numbers are left of the player"
+        );
+    }
     use super::*;
     use ronoctua_render::layout;
 
@@ -1293,6 +1378,7 @@ mod tests {
                         tunnel: true,
                         tailscale: true,
                         tor: true,
+                        workspaces: &[],
                     },
                 ),
             ) {
