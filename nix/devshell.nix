@@ -127,24 +127,22 @@ pkgs.mkShell {
     # repository gets the hook the first time they run `nix develop`, and not
     # from a README instruction nobody reads.
     #
-    # THE TEST IS WHETHER IT RESOLVES, and not whether the link exists. It used
-    # to be `! -L`, and a symlink whose store path the garbage collector took
-    # is still a symlink: the condition stayed false for ever and the hook
-    # stayed dead. Git does not say so either — it reports that it cannot run
-    # the hook, which reads like a permission problem and is not one. `-e`
-    # follows the link, so a dangling one is relinked at the next `nix
-    # develop`, which is also what happens when this derivation changes.
-    if [ -d .git ] && [ ! -e .git/hooks/pre-commit ]; then
-      mkdir -p .git/hooks
-      ln -sf ${gitHooks}/hooks/pre-commit .git/hooks/pre-commit
-      echo "  pre-commit hook installed (fmt + clippy)"
-      echo
-    fi
-    if [ -d .git ] && [ ! -e .git/hooks/commit-msg ]; then
-      mkdir -p .git/hooks
-      ln -sf ${gitHooks}/hooks/commit-msg .git/hooks/commit-msg
-      echo "  commit-msg hook installed (no agent signs a commit)"
-      echo
+    # THE TEST IS WHERE IT POINTS, and not whether it exists or resolves. It
+    # used to be `! -L`, and a symlink whose store path the garbage collector
+    # took is still a symlink: the hook stayed dead, and git reports it as a
+    # hook it cannot run, which reads like a permission problem. Then it was
+    # `! -e`, which relinks a dangling one but keeps an OLD one that still
+    # resolves — the commit-msg hook was changed and the link went on running
+    # the first form. So each hook is relinked whenever it is not this
+    # derivation's.
+    if [ -d .git ]; then
+      for hook in pre-commit commit-msg; do
+        if [ "$(readlink ".git/hooks/$hook" || true)" != "${gitHooks}/hooks/$hook" ]; then
+          mkdir -p .git/hooks
+          ln -sfn "${gitHooks}/hooks/$hook" ".git/hooks/$hook"
+          echo "  $hook hook installed"
+        fi
+      done
     fi
 
     # `tokens.wit` is GENERATED, and `wit_bindgen::generate!` takes the path
