@@ -59,6 +59,7 @@ members = [
   "crates/ronoctua-camera",
   "crates/ronoctua-effects",
   "crates/ronoctua-segment",
+  "crates/ronoctua-gestures",
   "crates/ronoctua-studio",
   "crates/ronoctua-frames",
   "crates/ronoctua-player",
@@ -83,7 +84,9 @@ publish = false
 # --- Wayland -----------------------------------------------------------
 # Integration with the compositor is through IPC and wlr-layer-shell (invariant
 # 3), plus the standard protocols the owner approved one by one: the data
-# device, screen capture, and the virtual keyboard below.
+# device, screen capture, the virtual keyboard below, and the virtual pointer
+# (`zwlr_virtual_pointer_v1`, from `wayland-protocols-wlr`: the hand gestures'
+# one door, `ronoctua-shell/src/virtual_pointer.rs`).
 # The `system` feature swaps the pure-Rust backend for the libwayland one (FFI).
 # It is NOT optional: only it exposes `display_ptr` and `as_ptr`, the C pointers
 # wgpu needs to create the Surface. With the default backend those

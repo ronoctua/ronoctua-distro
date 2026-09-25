@@ -966,6 +966,8 @@ CONTRAST_GATES = (
     ("modeline.state.alternate", ("modeline.background",), 45, 60),
     # A BLUETOOTH DEVICE'S MARK, at the rung every other mark reads at.
     ("modeline.device", ("modeline.background",), 40, 45),
+    # AND THE CAMERA'S, at the same rung.
+    ("modeline.watching", ("modeline.background",), 40, 45),
     ("notification.quiet", ("notification.background",), 43, 45),
     ("notification.loud", ("notification.background",), 45, 60),
     ("notification.countdown", ("notification.background",), 15, 20),
@@ -1146,6 +1148,14 @@ DISTANCE_GATES = (
     ("modeline.device", "text.secondary", 0.04, 0.05),
     ("modeline.device", "state.accent", 0.04, 0.05),
     ("modeline.device", "state.error", 0.06, 0.08),
+    # THE CAMERA'S MARKS, beside the device's and the recording one: told
+    # from the marks' own tone, from the accent, from the device blue they sit
+    # next to, and from the danger red the recording mark wears — looking is
+    # not recording, and the two can be lit at once.
+    ("modeline.watching", "text.secondary", 0.04, 0.05),
+    ("modeline.watching", "state.accent", 0.04, 0.05),
+    ("modeline.watching", "modeline.device", 0.06, 0.08),
+    ("modeline.watching", "state.error", 0.06, 0.08),
     ("state.error", "state.critical", 0.04, 0.05),
     # THE MESSAGE AND THE BUTTON UNDER IT. They are drawn one line apart on the
     # same ground and they are not the same kind of thing — one is read, the

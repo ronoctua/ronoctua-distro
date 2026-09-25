@@ -214,6 +214,7 @@
           downloads = atlasData.sources ++ [
             pkgs.bibata-cursors.src
             segmentModel
+            handModels.task
           ];
         }
       }/bin/ronoctua-keep-sources";
@@ -478,6 +479,7 @@
           cacheRs
           cameraEffectsRs
           segmentModel
+          handModels
           syntaxRs
           compositorDeeds
           ;
@@ -565,6 +567,9 @@
 
       # THE SEGMENTATION MODEL, pinned by version and hash.
       segmentModel = pkgs.callPackage ./nix/segment-model.nix { };
+
+      # THE HAND MODELS the gestures run, pinned by version and hash.
+      handModels = pkgs.callPackage ./nix/hand-model.nix { };
 
       # THE SYNTAX TABLE, generated from `assets/syntax.nix` — the same shape
       # again, and it takes `mimeDb` because a language claims MIME TYPES and
@@ -853,6 +858,8 @@
               player = rust.player;
               # The segmentation model its background effects run.
               inherit segmentModel;
+              # And the hands', which the gestures read.
+              inherit handModels;
               # The cache sweep, extracted for the brain's reason and one of
               # its own: a program whose job is `unlink` must not have the
               # whole shell in its closure.

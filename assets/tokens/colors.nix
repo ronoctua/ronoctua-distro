@@ -1111,5 +1111,11 @@
     # the keyboard's; and a device whose battery is at the danger level still
     # takes `state.error` over this.
     device = "device.text";
+    # THE CAMERA IS LOOKING — the camera-in-use mark and the gestures' —, in a
+    # family of its own (`watching`, in every seed): a faded pink leaning to
+    # red, at the device's rung. The owner asked for it beside the Bluetooth
+    # blue: the same quietness, another KIND of thing. Not the danger red,
+    # which is the RECORDING mark's: looking is not yet keeping.
+    watching = "watching.text";
   };
 }

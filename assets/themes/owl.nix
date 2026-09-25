@@ -129,6 +129,12 @@
       text-chroma = 0.36;
       text-shift = 0;
     };
+    # The camera's marks (`modeline.watching`): a faded pink leaning to red.
+    watching = {
+      hue = 10;
+      text-chroma = 0.36;
+      text-shift = 0;
+    };
     # The key whose meaning changes with the section that has the keyboard.
     alternate = {
       hue = 183;

@@ -687,16 +687,7 @@ pkgs.testers.runNixOSTest {
         with subtest("the clipboard with an EMPTY history — the photographed defect"):
             control("clipboard-open")
             shot("30-clipboard-empty", lines=10)
-            # THE REGION CARRIES MORE THAN ONE LINE OF INK, and that is the
-            # measurement — not a word on it.
-            #
-            # Before the fix the drawn list was ONE row ("Nothing copied yet") and
-            # the other three lines were painted OUTSIDE the region entirely, at
-            # `end - 3`, `end - 2` and `end - 1`, which with `grid.lines == 1`
-            # land on the modeline, the minibuffer and that single row. So the
-            # region itself held one inked row while the screen showed four lines
-            # of clipboard. Now every one of them is a ROW, and the region is as
-            # tall as they are.
+            # WHY: `nix/shots-scenes.nix`, beside the id.
             w, h, x, y = compositor_geometry()
             region = f"{w}x{10 * LINE}+{x}+{y + h - 10 * LINE}"
             inked = rows_with_ink(region)
@@ -808,17 +799,7 @@ pkgs.testers.runNixOSTest {
             machine.sleep(1)
             shot("1-footer-at-rest", lines=2)
 
-            # AND A CLICK ON THE EMPTY MINIBUFFER IS THE LEADER.
-            #
-            # The owner's rule: *"caso não haja nada aberto no minibuffer,
-            # quero que, ao clicar com o botão esquerdo do mouse nele, ocorra o
-            # mesmo que ocorreria se eu clicasse a tecla leader"*. This is the
-            # scene where nothing IS open, which is the whole precondition.
-            #
-            # MEASURED BY THE FOOTER'S OWN HEIGHT and not by pixels: the list
-            # is the surface growing upwards, so what says it opened is the
-            # layout the shell resolved — a fact from outside the picture, which
-            # a cursor or a stale frame cannot answer.
+            # WHY: `nix/shots-scenes.nix`, beside the id.
             def footer_height():
                 said = machine.succeed(
                     "journalctl -u footer --no-pager"
@@ -1032,15 +1013,7 @@ pkgs.testers.runNixOSTest {
             machine.sleep(1)
             shot("14-hover-on-the-facts")
 
-            # AND A LISTING THAT IS ACTUALLY CUT, which no shot here had.
-            #
-            # Every manager shot above opens on a folder with one file, so no
-            # section scrolls and no bar is drawn — which is why the owner's
-            # photograph of TWO BARS in one column could not be reproduced from
-            # this file. The footer used to draw its own generic bar over the
-            # manager's per-section one: two rectangles in the same cell, moving
-            # against different totals. Forty files make the listing scroll, and
-            # the picture then has exactly one bar in it or the defect is back.
+            # WHY: `nix/shots-scenes.nix`, beside the id.
             machine.succeed("mkdir -p /root/many && touch /root/many/f-{01..40}.txt")
             for _ in range(8):
                 machine.succeed("DISPLAY=:99 xdotool key Escape")
@@ -1136,17 +1109,7 @@ pkgs.testers.runNixOSTest {
             machine.succeed("xwd -display :99 -root -out /tmp/screen.xwd")
             here = sentence_inks("/tmp/two-inks-here.png")
 
-            # AND THE SAME LINE OVER ANOTHER FACT, because two inks ALONE prove
-            # nothing.
-            #
-            # A hint carries both registers too — the key in `strong`, the prose
-            # around it in `default` — so a measurement of one line would go
-            # green with the sentence never drawn at all, which is the shape of
-            # every empty assertion this file has been bitten by. What a hint
-            # cannot do is CHANGE when the pointer moves from one fact to
-            # another: two facts have different names and different values, so
-            # the ink they cover differs. The hint would give the same two
-            # numbers twice.
+            # WHY: `nix/shots-scenes.nix`, beside the id.
             machine.succeed(
                 "DISPLAY=:99 xdotool mousemove "
                 f"{x_w + 450} {y_w + h_w - 5 * LINE - 6}"
@@ -1179,16 +1142,7 @@ pkgs.testers.runNixOSTest {
             machine.sleep(1)
             shot("22-the-cut-label-says-itself")
 
-            # AND THE FACTS SCROLLED TO THE END, which is the photograph the owner
-            # sent twice.
-            #
-            # No shot here ever reached the last row of a panel, so the gap under
-            # the thumb could not be seen from this file: the track was
-            # `lines × line_px` and a surface is not a whole number of lines, so at
-            # the last offset the thumb stopped short by the residue and the
-            # background showed through below it. The wheel takes it to the end;
-            # what has to be true in the picture is that the thumb's bottom and the
-            # window's bottom are the same pixel.
+            # WHY: `nix/shots-scenes.nix`, beside the id.
             for _ in range(12):
                 machine.succeed("DISPLAY=:99 xdotool click 5")
             machine.sleep(2)
@@ -1357,17 +1311,7 @@ pkgs.testers.runNixOSTest {
                 "magick /tmp/screen.xwd -crop "
                 f"{panel} +repage /tmp/after.png"
             )
-            # BY SIGNATURE, and not by `compare`.
-            #
-            # `compare`'s EXIT CODE is its answer — nought when the pictures match,
-            # one when they differ — so every attempt to keep the command from
-            # "failing" also threw away the result. The first version wrapped it in
-            # `|| true` and read an error message as "they differ"; the second
-            # measured two crops of different sizes and got away with it.
-            #
-            # A signature is one number per picture. Two of them are equal or they
-            # are not, and a magick that fell over gives two empty strings — which
-            # compare EQUAL, so the assertion below fails rather than passes.
+            # WHY: `nix/shots-scenes.nix`, beside the id.
             def signature(path):
                 return machine.succeed(
                     f"magick {path} -format '%#' info:"
@@ -1558,18 +1502,7 @@ pkgs.testers.runNixOSTest {
             )
             shot("23-miniplayer-held")
 
-            # THREE: THE SHAPE IS RIGHT, and this one assertion catches what the
-            # owner photographed.
-            #
-            # Measured as the BOX OF THE FILM'S OWN COLOUR, which is the picture and
-            # nothing else. A plain threshold was the first attempt and it answered
-            # 250x658 — the whole panel, text included — so it passed whatever the
-            # picture looked like.
-            #
-            # The GIF is 240x180, four to three. Under the old defect the player
-            # declared its frames 512 by 32 and the doors stretched that inside a
-            # box measured from the STILL, so the picture came out a band of roughly
-            # sixteen to one.
+            # WHY: `nix/shots-scenes.nix`, beside the id.
             box = machine.succeed(
                 f"magick /tmp/held-0.png -fuzz 4% "
                 f"-fill white -opaque '{FILM[held[0]]}' -fill black +opaque white "
@@ -1819,16 +1752,7 @@ pkgs.testers.runNixOSTest {
             machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
             machine.sleep(2)
             control("files-window")
-            # WAITED ON THE PROCESS, and not on the journal.
-            #
-            # The scene above greps the footer's log for the window announcing
-            # itself, which is fine there and wrong here: the manager was just
-            # killed, so an announcement inside the last lines is the OLD
-            # window's, and a `tail` short enough to exclude it is a `tail` that
-            # misses the new one behind everything the film scene logged. The
-            # process is a fact from outside the picture and the kill above
-            # makes it unambiguous — which is the rule `AGENTS.md` records for
-            # the white mouse pointer.
+            # WHY: `nix/shots-scenes.nix`, beside the id.
             machine.wait_until_succeeds(
                 "pgrep -f '[b]in/ronoctua-shell files'", timeout=60
             )
@@ -1908,18 +1832,7 @@ pkgs.testers.runNixOSTest {
                 fuzz=4,
             )
 
-            # AND THE HAND TURNS IT, which is the half no unit test reaches.
-            #
-            # The owner reported the whole of the mouse as dead — *"ao tentar
-            # clicar e arrastar nada ocorre"* — and the cause was that the
-            # picture's rows carried a field of NO WIDTH, so the press found
-            # nothing to grab. What proves the fix is not a target in a table:
-            # it is pressing on the figure, moving, and the pixels being
-            # different afterwards.
-            #
-            # `mousedown`/`mousemove`/`mouseup` and not `click`, because a drag
-            # is exactly what `xdotool click` is not — the file already records
-            # that `xdotool key` releases what it presses.
+            # WHY: `nix/shots-scenes.nix`, beside the id.
             def picture_of(into):
                 crop(f"{w_g // 4}x{h_g}+{x_g + 3 * (w_g // 4)}+{y_g}", into=into)
 
@@ -2307,18 +2220,7 @@ pkgs.testers.runNixOSTest {
 
     if wanted("brain-buffer"):
         with subtest("the brain's own window, with a real daemon behind it"):
-            # WHY THIS EXISTS BESIDE `--mind`.
-            #
-            # `nix run .#png --mind` draws the same component through the same
-            # `paint`, in a fifth of a second, and that is what every review of
-            # this screen uses. What it cannot prove is that the WINDOW opens:
-            # the door, the descriptor's gate, the capability, the thread that
-            # holds the daemon's socket, and the host actually pushing a mind
-            # in. This is that half, and it is the half that used to be missing
-            # in the other direction — the owner could not photograph the brain
-            # at all.
-            #
-            # It needs the `brain` scene, which is what starts the daemon.
+            # WHY: `nix/shots-scenes.nix`, beside the id.
             control("brain-open")
             # THE PROCESS, and not a sleep or a pixel. A buffer opens as a
             # window of this same binary re-exec'd with `buffer <wasm>`, so

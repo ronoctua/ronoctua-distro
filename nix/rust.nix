@@ -49,6 +49,8 @@
   cameraEffectsRs,
   # The person-segmentation model (`nix/segment-model.nix`), read at run time.
   segmentModel,
+  # The two hand models (`nix/hand-model.nix`), a directory, the same way.
+  handModels,
   syntaxRs,
   mimeDb,
   i18nRs,
@@ -179,6 +181,8 @@ let
       # input — which its test embeds. By NAME, not every `.txt`: the same
       # trap as the `.wgsl`, and it too only showed in the Nix build.
       (src + "/crates/ronoctua-segment/src/reference.txt")
+      # And the hand models', the TFLite runtime's output, for the same test.
+      (src + "/crates/ronoctua-segment/src/reference-hands.txt")
     ];
   };
 
@@ -614,6 +618,8 @@ let
     # model update must not rebuild the workspace, and absence is a refusal
     # drawn on the background effects, not an error.
     RONOCTUA_SEGMENT_MODEL = "${segmentModel}";
+    # THE HAND MODELS, for the same reason: the gestures refuse without them.
+    RONOCTUA_HAND_MODELS = "${handModels}";
     # THE FALLBACK FACES. Absent, the renderer keeps its four embedded ones and
     # says how many it has (`Text::coverage`) — which is what the installer and
     # the rescue console run with, and they draw two Latin languages.
@@ -1031,6 +1037,8 @@ rec {
       # AND THE MODEL, so `the_mask_is_mediapipes_own` compares against
       # MediaPipe instead of returning early and proving nothing.
       RONOCTUA_SEGMENT_MODEL = "${segmentModel}";
+      # And the hands', so `the_outputs_are_tflites_own` compares.
+      RONOCTUA_HAND_MODELS = "${handModels}";
     }
   );
 

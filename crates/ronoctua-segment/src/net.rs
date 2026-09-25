@@ -134,6 +134,53 @@ enum Op {
         sw: usize,
         sh: usize,
     },
+    MaxPool {
+        x: usize,
+        y: usize,
+        pad: Pad,
+        sw: usize,
+        sh: usize,
+        fw: usize,
+        fh: usize,
+        act: Act,
+    },
+    Prelu {
+        x: usize,
+        alpha: usize,
+        y: usize,
+    },
+    /// Zero padding; `pads` is `[before, after]` per NHWC axis.
+    Pad {
+        x: usize,
+        y: usize,
+        pads: [[usize; 2]; 4],
+    },
+    /// The data does not move: only the shape changes, and the shape is the
+    /// output tensor's.
+    Reshape {
+        x: usize,
+        y: usize,
+    },
+    /// Along `axis`, counted on the four-dimensional padded shape.
+    Concat {
+        xs: Vec<usize>,
+        y: usize,
+        axis: usize,
+        act: Act,
+    },
+    /// A mean over height and width — the only reduction either hand model
+    /// asks for.
+    MeanSpatial {
+        x: usize,
+        y: usize,
+    },
+    FullyConnected {
+        x: usize,
+        w: usize,
+        b: Option<usize>,
+        y: usize,
+        act: Act,
+    },
 }
 
 /// A graph ready to run.
@@ -143,7 +190,8 @@ pub struct Net {
     consts: Vec<Option<Vec<f32>>>,
     ops: Vec<Op>,
     input: usize,
-    output: usize,
+    outputs: Vec<usize>,
+    threads: usize,
 }
 
 /// The per-run buffers, kept between frames so a frame allocates nothing.
@@ -222,11 +270,14 @@ impl Net {
         let operators = graph.tables(3).ok_or(Refusal::Malformed("operators"))?;
 
         let mut shapes = Vec::with_capacity(tensors.len());
+        let mut ranks = Vec::with_capacity(tensors.len());
         let mut consts: Vec<Option<Vec<f32>>> = Vec::with_capacity(tensors.len());
         let mut halves: Vec<Option<Vec<f32>>> = Vec::with_capacity(tensors.len());
         let mut ints: Vec<Option<Vec<i32>>> = Vec::with_capacity(tensors.len());
         for t in &tensors {
-            shapes.push(shape4(&t.ints(0).unwrap_or_default()));
+            let dims = t.ints(0).unwrap_or_default();
+            shapes.push(shape4(&dims));
+            ranks.push(dims.len().clamp(1, 4));
             let kind = t.u8(1, FLOAT32);
             let data = buffers
                 .get(t.u32(2, 0) as usize)
@@ -281,6 +332,7 @@ impl Net {
         };
 
         let mut ops = Vec::new();
+        let mut packed: Vec<usize> = Vec::new();
         for op in &operators {
             let code = codes
                 .get(op.u32(0, 0) as usize)
@@ -321,25 +373,51 @@ impl Net {
                             })?;
                     consts[y] = Some(values);
                 }
-                3 => ops.push(o(&|t| {
-                    Ok(Op::Conv {
-                        x: i(0)?,
-                        w: i(1)?,
-                        b: i(2)?,
-                        y,
-                        pad: pad_of(t.u8(0, 0)),
-                        sw: us(t.i32(1, 1)),
-                        sh: us(t.i32(2, 1)),
-                        act: act_of(t.u8(3, 0))?,
-                    })
-                    .and_then(|op| {
-                        if t.i32(4, 1) != 1 || t.i32(5, 1) != 1 {
-                            Err(Refusal::Unsupported("dilated CONV_2D".into()))
+                3 => {
+                    // PACKED at load, `[oc][kh][kw][ic]` → `[kh][kw][ic][oc]`:
+                    // the inner loop then runs along the output channels, which
+                    // is contiguous in both the weights and the accumulator and
+                    // is what the compiler vectorises. Measured on the hand
+                    // landmark model: see `Net::conv`.
+                    let w = i(1)?;
+                    if !packed.contains(&w) {
+                        let [oc, kh, kw, ic] = shapes[w];
+                        if let Some(raw) = consts[w].as_ref() {
+                            let mut out = vec![0.0f32; raw.len()];
+                            for o in 0..oc {
+                                for k in 0..kh * kw {
+                                    for c in 0..ic {
+                                        out[(k * ic + c) * oc + o] =
+                                            raw[(o * kh * kw + k) * ic + c];
+                                    }
+                                }
+                            }
+                            consts[w] = Some(out);
+                            packed.push(w);
                         } else {
-                            Ok(op)
+                            return Err(Refusal::Unsupported("CONV_2D by live weights".into()));
                         }
-                    })
-                })?),
+                    }
+                    ops.push(o(&|t| {
+                        Ok(Op::Conv {
+                            x: i(0)?,
+                            w: i(1)?,
+                            b: i(2)?,
+                            y,
+                            pad: pad_of(t.u8(0, 0)),
+                            sw: us(t.i32(1, 1)),
+                            sh: us(t.i32(2, 1)),
+                            act: act_of(t.u8(3, 0))?,
+                        })
+                        .and_then(|op| {
+                            if t.i32(4, 1) != 1 || t.i32(5, 1) != 1 {
+                                Err(Refusal::Unsupported("dilated CONV_2D".into()))
+                            } else {
+                                Ok(op)
+                            }
+                        })
+                    })?);
+                }
                 4 => ops.push(o(&|t| {
                     if t.i32(3, 1) != 1 {
                         return Err(Refusal::Unsupported("depth multiplier".into()));
@@ -424,18 +502,109 @@ impl Net {
                         sh: us(word(2)),
                     });
                 }
+                17 => ops.push(o(&|t| {
+                    Ok(Op::MaxPool {
+                        x: i(0)?,
+                        y,
+                        pad: pad_of(t.u8(0, 0)),
+                        sw: us(t.i32(1, 1)),
+                        sh: us(t.i32(2, 1)),
+                        fw: us(t.i32(3, 1)),
+                        fh: us(t.i32(4, 1)),
+                        act: act_of(t.u8(5, 0))?,
+                    })
+                })?),
+                54 => ops.push(Op::Prelu {
+                    x: i(0)?,
+                    alpha: i(1)?,
+                    y,
+                }),
+                34 => {
+                    let x = i(0)?;
+                    let raw = ints[i(1)?]
+                        .clone()
+                        .ok_or_else(|| Refusal::Unsupported("PAD by a live tensor".into()))?;
+                    let rank = ranks[x];
+                    if raw.len() != 2 * rank || raw.iter().any(|p| *p < 0) {
+                        return Err(Refusal::Malformed("pad amounts"));
+                    }
+                    let mut pads = [[0usize; 2]; 4];
+                    for axis in 0..rank {
+                        pads[4 - rank + axis] = [
+                            usize::try_from(raw[2 * axis]).unwrap_or(0),
+                            usize::try_from(raw[2 * axis + 1]).unwrap_or(0),
+                        ];
+                    }
+                    ops.push(Op::Pad { x, y, pads });
+                }
+                22 => ops.push(Op::Reshape { x: i(0)?, y }),
+                2 => {
+                    let rank = ranks[y];
+                    let raw = opts.map_or(0, |t| t.i32(0, 0));
+                    let axis = if raw < 0 { rank as i32 + raw } else { raw };
+                    let axis = usize::try_from(axis)
+                        .ok()
+                        .filter(|a| *a < rank)
+                        .ok_or(Refusal::Malformed("concatenation axis"))?;
+                    let xs = (0..ins.len()).map(i).collect::<Result<Vec<_>, _>>()?;
+                    ops.push(Op::Concat {
+                        xs,
+                        y,
+                        axis: axis + 4 - rank,
+                        act: act_of(opts.map_or(0, |t| t.u8(1, 0)))?,
+                    });
+                }
+                40 => {
+                    let x = i(0)?;
+                    let axes = ints[i(1)?].clone().unwrap_or_default();
+                    let rank = ranks[x] as i32;
+                    let mut axes: Vec<i32> = axes
+                        .iter()
+                        .map(|a| if *a < 0 { rank + a } else { *a })
+                        .collect();
+                    axes.sort_unstable();
+                    if rank != 4 || axes != [1, 2] {
+                        return Err(Refusal::Unsupported("MEAN over other axes".into()));
+                    }
+                    ops.push(Op::MeanSpatial { x, y });
+                }
+                9 => {
+                    if opts.is_some_and(|t| t.u8(1, 0) != 0) {
+                        return Err(Refusal::Unsupported(
+                            "shuffled FULLY_CONNECTED weights".into(),
+                        ));
+                    }
+                    let b = match ins.get(2) {
+                        Some(v) if *v >= 0 => Some(slot(*v)?),
+                        _ => None,
+                    };
+                    ops.push(Op::FullyConnected {
+                        x: i(0)?,
+                        w: i(1)?,
+                        b,
+                        y,
+                        act: act_of(opts.map_or(0, |t| t.u8(0, 0)))?,
+                    });
+                }
                 n => return Err(Refusal::Unsupported(format!("builtin {n}"))),
             }
         }
 
         let input = slot(*inputs.first().ok_or(Refusal::Malformed("no input"))?)?;
-        let output = slot(*outputs.first().ok_or(Refusal::Malformed("no output"))?)?;
+        let outputs = outputs
+            .iter()
+            .map(|o| slot(*o))
+            .collect::<Result<Vec<_>, _>>()?;
+        if outputs.is_empty() {
+            return Err(Refusal::Malformed("no output"));
+        }
         Ok(Self {
             shapes,
             consts,
             ops,
             input,
-            output,
+            outputs,
+            threads: 1,
         })
     }
 
@@ -445,10 +614,22 @@ impl Net {
         [s[1], s[2], s[3]]
     }
 
-    /// The output's height, width and channels.
+    /// The first output's height, width and channels.
     pub fn output_shape(&self) -> [usize; 3] {
-        let s = self.shapes[self.output];
+        let s = self.shapes[self.outputs[0]];
         [s[1], s[2], s[3]]
+    }
+
+    /// Splits the two convolutions over up to `threads` threads. One (the
+    /// default) never spawns: the camera's segmentation runs beside the
+    /// effects, which are the frame's budget.
+    pub fn set_threads(&mut self, threads: usize) {
+        self.threads = threads.max(1);
+    }
+
+    /// How many outputs the graph has.
+    pub fn outputs(&self) -> usize {
+        self.outputs.len()
     }
 
     /// Runs the graph on an NHWC input and gives back the output tensor.
@@ -457,7 +638,24 @@ impl Net {
     ///
     /// When `input` is not exactly the size [`Net::input_shape`] says — a
     /// caller error, not a data error.
-    pub fn run<'s>(&self, input: &[f32], scratch: &'s mut Scratch) -> &'s [f32] {
+    pub fn run<'s>(&'s self, input: &[f32], scratch: &'s mut Scratch) -> &'s [f32] {
+        self.run_all(input, scratch);
+        self.output(scratch, 0)
+    }
+
+    /// Output `n` of the last [`Net::run_all`] on `scratch`, in the order the
+    /// graph declares them.
+    pub fn output<'s>(&'s self, scratch: &'s Scratch, n: usize) -> &'s [f32] {
+        let t = self.outputs[n];
+        self.consts[t].as_deref().unwrap_or(&scratch.values[t])
+    }
+
+    /// Runs the graph; every output is then read with [`Net::output`].
+    ///
+    /// # Panics
+    ///
+    /// As [`Net::run`].
+    pub fn run_all(&self, input: &[f32], scratch: &mut Scratch) {
         let [h, w, c] = self.input_shape();
         assert_eq!(input.len(), h * w * c, "input size");
         scratch.values.resize_with(self.shapes.len(), Vec::new);
@@ -467,7 +665,6 @@ impl Net {
         for op in &self.ops {
             self.step(op, v);
         }
-        &scratch.values[self.output]
     }
 
     fn get<'a>(&'a self, v: &'a [Vec<f32>], t: usize) -> &'a [f32] {
@@ -598,6 +795,83 @@ impl Net {
                     [sw, sh],
                 );
             }
+            Op::MaxPool {
+                x,
+                y,
+                pad,
+                sw,
+                sh,
+                fw,
+                fh,
+                act,
+            } => self.max_pool(
+                self.get(v, x),
+                &mut out,
+                [x, y],
+                pad,
+                [sw, sh],
+                [fw, fh],
+                act,
+            ),
+            Op::Prelu { x, alpha, y } => self.broadcast(
+                self.get(v, x),
+                self.get(v, alpha),
+                &mut out,
+                [x, alpha, y],
+                Act::None,
+                |p, a| if p >= 0.0 { p } else { p * a },
+            ),
+            Op::Pad { x, y, pads } => self.pad(self.get(v, x), &mut out, [x, y], pads),
+            Op::Reshape { x, .. } => out.copy_from_slice(self.get(v, x)),
+            Op::Concat {
+                ref xs,
+                y,
+                axis,
+                act,
+            } => {
+                let so = self.shapes[y];
+                let outer: usize = so[..axis].iter().product();
+                let mut k = 0;
+                for n in 0..outer {
+                    for &t in xs {
+                        let inner: usize = self.shapes[t][axis..].iter().product();
+                        let src = &self.get(v, t)[n * inner..][..inner];
+                        for (d, s) in out[k..k + inner].iter_mut().zip(src) {
+                            *d = activate(*s, act);
+                        }
+                        k += inner;
+                    }
+                }
+            }
+            Op::MeanSpatial { x, .. } => {
+                let [_, h, w, c] = self.shapes[x];
+                let src = self.get(v, x);
+                for p in 0..h * w {
+                    for (d, s) in out[..c].iter_mut().zip(&src[p * c..][..c]) {
+                        *d += s;
+                    }
+                }
+                let n = (h * w).max(1) as f32;
+                for d in &mut out[..c] {
+                    *d /= n;
+                }
+            }
+            Op::FullyConnected { x, w, b, y, act } => {
+                let [_, _, _, units] = self.shapes[y];
+                let weights = self.get(v, w);
+                let depth = weights.len() / units.max(1);
+                let src = self.get(v, x);
+                let bias = b.map(|b| self.get(v, b));
+                let rows = src.len() / depth.max(1);
+                for r in 0..rows {
+                    let row = &src[r * depth..][..depth];
+                    for u in 0..units {
+                        let sum =
+                            dot(row, &weights[u * depth..][..depth]) + bias.map_or(0.0, |b| b[u]);
+                        out[r * units + u] = activate(sum, act);
+                    }
+                }
+            }
         }
         v[out_of(op)] = out;
     }
@@ -618,9 +892,12 @@ impl Net {
         let [oc, kh, kw, _] = self.shapes[t[1]];
         let [_, oh, ow, _] = self.shapes[t[2]];
         let (pt, pl) = padding(pad, [ih, iw], [oh, ow], [kh, kw], s);
-        let mut acc = vec![0.0f32; oc];
-        for oy in 0..oh {
+        // `w` is PACKED (`[kh][kw][ic][oc]`, see `Net::read`): each input
+        // value is spread over every output channel at once.
+        let work = oh * ow * oc * kh * kw * ic;
+        by_rows(out, ow * oc, self.threads, work, |oy, row| {
             for ox in 0..ow {
+                let acc = &mut row[ox * oc..][..oc];
                 acc.copy_from_slice(&b[..oc]);
                 for ky in 0..kh {
                     let iy = (oy * s[1] + ky) as isize - pt as isize;
@@ -633,18 +910,19 @@ impl Net {
                             continue;
                         }
                         let px = &x[(iy as usize * iw + ix as usize) * ic..][..ic];
-                        for (o, a) in acc.iter_mut().enumerate() {
-                            let wk = &w[((o * kh + ky) * kw + kx) * ic..][..ic];
-                            *a += dot(px, wk);
+                        let wk = &w[(ky * kw + kx) * ic * oc..][..ic * oc];
+                        for (p, row) in px.iter().zip(wk.chunks_exact(oc)) {
+                            for (a, q) in acc.iter_mut().zip(row) {
+                                *a += p * q;
+                            }
                         }
                     }
                 }
-                let dst = &mut out[(oy * ow + ox) * oc..][..oc];
-                for (d, a) in dst.iter_mut().zip(&acc) {
-                    *d = activate(*a, act);
+                for a in acc.iter_mut() {
+                    *a = activate(*a, act);
                 }
             }
-        }
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -663,9 +941,10 @@ impl Net {
         let [_, kh, kw, _] = self.shapes[t[1]];
         let [_, oh, ow, _] = self.shapes[t[2]];
         let (pt, pl) = padding(pad, [ih, iw], [oh, ow], [kh, kw], s);
-        for oy in 0..oh {
+        let work = oh * ow * c * kh * kw;
+        by_rows(out, ow * c, self.threads, work, |oy, row| {
             for ox in 0..ow {
-                let dst = &mut out[(oy * ow + ox) * c..][..c];
+                let dst = &mut row[ox * c..][..c];
                 dst.copy_from_slice(&b[..c]);
                 for ky in 0..kh {
                     let iy = (oy * s[1] + ky) as isize - pt as isize;
@@ -688,7 +967,7 @@ impl Net {
                     *d = activate(*d, act);
                 }
             }
-        }
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -742,6 +1021,16 @@ impl Net {
         if sa == so && sb == so {
             for ((o, p), q) in out.iter_mut().zip(a).zip(b) {
                 *o = activate(f(*p, *q), act);
+            }
+            return;
+        }
+        // One value per CHANNEL on the right (PReLU's slopes, a bias): the
+        // general index arithmetic below cost the palm detector 7.6 ms of 52.
+        if sa == so && sb[..3] == [1, 1, 1] && sb[3] == so[3] {
+            for (o, p) in out.chunks_exact_mut(so[3]).zip(a.chunks_exact(so[3])) {
+                for ((o, p), q) in o.iter_mut().zip(p).zip(b) {
+                    *o = activate(f(*p, *q), act);
+                }
             }
             return;
         }
@@ -852,6 +1141,62 @@ impl Net {
     }
 }
 
+impl Net {
+    #[allow(clippy::too_many_arguments)]
+    fn max_pool(
+        &self,
+        x: &[f32],
+        out: &mut [f32],
+        t: [usize; 2],
+        pad: Pad,
+        s: [usize; 2],
+        f: [usize; 2],
+        act: Act,
+    ) {
+        let [_, ih, iw, c] = self.shapes[t[0]];
+        let [_, oh, ow, _] = self.shapes[t[1]];
+        let (pt, pl) = padding(pad, [ih, iw], [oh, ow], [f[1], f[0]], s);
+        for oy in 0..oh {
+            for ox in 0..ow {
+                let y0 = (oy * s[1]) as isize - pt as isize;
+                let x0 = (ox * s[0]) as isize - pl as isize;
+                let dst = &mut out[(oy * ow + ox) * c..][..c];
+                dst.fill(f32::NEG_INFINITY);
+                for iy in y0.max(0)..(y0 + f[1] as isize).min(ih as isize) {
+                    for ix in x0.max(0)..(x0 + f[0] as isize).min(iw as isize) {
+                        let px = &x[(iy as usize * iw + ix as usize) * c..][..c];
+                        for (d, p) in dst.iter_mut().zip(px) {
+                            *d = d.max(*p);
+                        }
+                    }
+                }
+                for d in dst.iter_mut() {
+                    *d = activate(*d, act);
+                }
+            }
+        }
+    }
+
+    /// Zero padding on every axis; `out` arrives zeroed.
+    fn pad(&self, x: &[f32], out: &mut [f32], t: [usize; 2], pads: [[usize; 2]; 4]) {
+        let si = self.shapes[t[0]];
+        let so = self.shapes[t[1]];
+        let c = si[3];
+        for n in 0..si[0] {
+            for yy in 0..si[1] {
+                for xx in 0..si[2] {
+                    let src = &x[((n * si[1] + yy) * si[2] + xx) * c..][..c];
+                    let at =
+                        (((n + pads[0][0]) * so[1] + yy + pads[1][0]) * so[2] + xx + pads[2][0])
+                            * so[3]
+                            + pads[3][0];
+                    out[at..at + c].copy_from_slice(src);
+                }
+            }
+        }
+    }
+}
+
 fn out_of(op: &Op) -> usize {
     match *op {
         Op::Conv { y, .. }
@@ -863,7 +1208,14 @@ fn out_of(op: &Op) -> usize {
         | Op::HardSwish { y, .. }
         | Op::Logistic { y, .. }
         | Op::Resize { y, .. }
-        | Op::TransposeBias { y, .. } => y,
+        | Op::TransposeBias { y, .. }
+        | Op::MaxPool { y, .. }
+        | Op::Prelu { y, .. }
+        | Op::Pad { y, .. }
+        | Op::Reshape { y, .. }
+        | Op::Concat { y, .. }
+        | Op::MeanSpatial { y, .. }
+        | Op::FullyConnected { y, .. } => y,
     }
 }
 
@@ -894,6 +1246,39 @@ fn activate(v: f32, act: Act) -> f32 {
         Act::Relu => v.max(0.0),
         Act::Relu6 => v.clamp(0.0, 6.0),
     }
+}
+
+/// Below this many multiplications an operator is not worth a thread: spawning
+/// one costs tens of microseconds.
+const WORTH_A_THREAD: usize = 200_000;
+
+/// Calls `f(row, slice)` for every output row, split into bands over up to
+/// `threads` scoped threads when `work` is worth it.
+fn by_rows(
+    out: &mut [f32],
+    row_len: usize,
+    threads: usize,
+    work: usize,
+    f: impl Fn(usize, &mut [f32]) + Sync,
+) {
+    let rows = out.len() / row_len.max(1);
+    if threads <= 1 || rows < 2 || work < WORTH_A_THREAD {
+        for (r, row) in out.chunks_exact_mut(row_len).enumerate() {
+            f(r, row);
+        }
+        return;
+    }
+    let per = rows.div_ceil(threads.min(rows));
+    std::thread::scope(|s| {
+        for (t, band) in out.chunks_mut(per * row_len).enumerate() {
+            let f = &f;
+            s.spawn(move || {
+                for (k, row) in band.chunks_exact_mut(row_len).enumerate() {
+                    f(t * per + k, row);
+                }
+            });
+        }
+    });
 }
 
 fn dot(a: &[f32], b: &[f32]) -> f32 {

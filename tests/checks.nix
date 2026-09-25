@@ -11449,6 +11449,39 @@ let
     END
   '';
 
+  one-virtual-pointer = mkCheck "one-virtual-pointer" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: whether ANY other file names the protocol, anywhere in it —
+    # the twin of `one-virtual-keyboard`. `code_of` because the needles are
+    # names in CODE; `ronoctua-pointers` spells the device's NAME as a string
+    # to leave it out, and a comment may say what the exception is.
+    crates = pathlib.Path("${../crates}")
+    needles = ("zwlr_virtual_pointer", "ZwlrVirtualPointer", "virtual_pointer::v1")
+    wrong, looked = [], 0
+    for path in sorted(crates.rglob("*.rs")):
+        looked += 1
+        if path.name == "virtual_pointer.rs" and "ronoctua-shell" in path.parts:
+            continue
+        code = code_of(path.read_text())
+        if any(n in code for n in needles):
+            wrong.append(str(path.relative_to(crates)))
+    floor(looked, 300, "Rust files read")
+    door = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/virtual_pointer.rs").read_text())
+    if "create_virtual_pointer" not in door:
+        print("ERROR: virtual_pointer.rs no longer makes the pointer where this looks", file=sys.stderr)
+        sys.exit(1)
+    if wrong:
+        print("ERROR: a file other than ronoctua-shell/src/virtual_pointer.rs names the virtual pointer:", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        sys.exit(1)
+    print("OK: only virtual_pointer.rs moves the pointer for somebody else")
+    END
+  '';
+
   one-input-device-boundary = mkCheck "one-input-device-boundary" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
@@ -23027,6 +23060,7 @@ let
       keys-polkit-is-narrow
       one-input-device-boundary
       one-virtual-keyboard
+      one-virtual-pointer
       keys-rules-carry-the-leader
       every-window-knows-its-scale
       every-list-window-has-a-bar
@@ -23117,6 +23151,7 @@ let
       keys-polkit-is-narrow
       one-input-device-boundary
       one-virtual-keyboard
+      one-virtual-pointer
       keys-rules-carry-the-leader
       every-window-knows-its-scale
       every-list-window-has-a-bar

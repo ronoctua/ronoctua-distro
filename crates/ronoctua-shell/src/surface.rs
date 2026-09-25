@@ -418,6 +418,16 @@ struct Footer {
     /// The virtual keyboard its keys go out through — `None` where the
     /// compositor offers none. See `crate::virtual_keys`.
     osk_keys: Option<crate::virtual_keys::Keys>,
+    /// HAND GESTURES (`LEADER m g`), while they are on: `None` is off, and
+    /// then the camera is not asked for. See `crate::gestures`.
+    gestures: Option<crate::gestures::On>,
+    /// The pointer gestures move — `None` where the compositor offers none.
+    /// See `crate::virtual_pointer`.
+    gesture_pointer: Option<crate::virtual_pointer::Pointer>,
+    /// Where the studio's readings arrive, handed to each feed.
+    hands_sender: Option<channel::Sender<ronoctua_studio::client::Heard>>,
+    /// This footer's queue, for the Wayland objects a reading makes.
+    queue: QueueHandle<Footer>,
     /// The keys as the LAST FRAME placed them, per screen, with the pixel the
     /// keyboard starts at — for the pointer and the finger, for the reason
     /// `brain_placed` is: what is touched has to be what was DRAWN.
@@ -618,6 +628,12 @@ struct Footer {
     /// from `actions::chords()` on every draw, and a stored copy would be the
     /// second truth the manual exists in order not to be.
     manual: bool,
+    /// Which manual is open (`None` is the LIST of them, what `LEADER h`
+    /// opens), the list's cursor — an index into what the query leaves — and
+    /// what has been typed to filter it. See `crate::manual`.
+    manual_which: Option<crate::manual::Which>,
+    manual_cursor: usize,
+    manual_query: String,
     /// The first visible line of the expanded region.
     ///
     /// The region has a ceiling (`expansion_ceiling`), and what goes past it only
@@ -1363,6 +1379,12 @@ struct ExpansionRow {
     /// same place would draw one over the other. Whoever chooses is
     /// [`Footer::expansion`], in a single place — the drawing only obeys.
     pixmap: Option<String>,
+    /// The key of a DRAWING that spans this line and the ones under it, in the
+    /// key column — a gesture of the manual. See `Footer::manual_rows`.
+    picture: Option<String>,
+    /// This line has the drawing's column on its left (it belongs to a
+    /// gesture), so the left column is measured that wide.
+    beside_picture: bool,
     /// The key, in the left column. Empty when there is none.
     key: String,
     /// The main text — the **command id**, when there is one.
@@ -1448,6 +1470,8 @@ enum Click {
     Candidate(usize),
     /// A row of the shell history's view, by its place in the drawn list.
     History(usize),
+    /// A manual in the list of manuals, by its place in what the query left.
+    Manual(usize),
     /// A row of the clipboard, by its place in the drawn list.
     ///
     /// ITS OWN VARIANT, and the reason is a defect that shipped: the clipboard
@@ -1553,6 +1577,8 @@ impl ExpansionRow {
         Self {
             icon: None,
             pixmap: None,
+            picture: None,
+            beside_picture: false,
             key: String::new(),
             text: String::new(),
             highlights: Vec::new(),
@@ -1596,7 +1622,11 @@ impl ExpansionRow {
             };
         }
         Measure {
-            key: layout::width(&self.key),
+            key: if self.beside_picture {
+                layout::width(&self.key).max(tokens::space::GESTURES_PICTURECELLS)
+            } else {
+                layout::width(&self.key)
+            },
             text: layout::width(&self.text),
             icon: self.icon.is_some() || self.pixmap.is_some(),
         }
@@ -2380,6 +2410,10 @@ pub fn run() -> Result<()> {
         brain_hint: None,
         osk: None,
         osk_keys: crate::virtual_keys::Keys::bind(&globals, &qh),
+        gestures: None,
+        gesture_pointer: crate::virtual_pointer::Pointer::bind(&globals, &qh),
+        hands_sender: None,
+        queue: qh.clone(),
         osk_placed: Vec::new(),
         osk_hover: None,
         osk_hint: None,
@@ -2419,6 +2453,9 @@ pub fn run() -> Result<()> {
         clip_image: None,
         clip_version: 0,
         manual: false,
+        manual_which: None,
+        manual_cursor: 0,
+        manual_query: String::new(),
         offset: 0,
         right_ctrl: false,
         keyboard_hold: KeyboardHold::default(),
@@ -3266,6 +3303,17 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the studio channel: {e}"))?;
+    // THE HANDS, while gestures are on: each feed is handed this sender, and
+    // what it hears comes back here to be done.
+    let (hands_sender, hands_heard) = channel::channel::<ronoctua_studio::client::Heard>();
+    handle
+        .insert_source(hands_heard, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(h) = event {
+                state.hands_heard(h);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the hands channel: {e}"))?;
+    state.hands_sender = Some(hands_sender);
     // THE PLAYER'S STATE, for its mark and its view. `watch` does NOT start
     // the daemon — a footer starting is not somebody asking for music — and
     // keeps knocking until one answers.
@@ -3864,6 +3912,7 @@ impl Footer {
                 // program with a camera open, ours included.
                 camera: self.camera_in_use(),
                 recording: self.studio_rolling(),
+                gestures: self.gestures.is_some(),
                 player: self.player.as_ref().and_then(crate::player::mark),
                 workspaces: &workspaces,
                 compositor_mode: mode.as_deref(),
@@ -4199,6 +4248,11 @@ impl Footer {
             self.run_command("audio-open");
             return;
         }
+        // GESTURES: the mark is the switch that turns them off.
+        if id == "gestures" {
+            self.run_command("gestures");
+            return;
+        }
         // AND THE CAMERA'S TWO, to the camera's settings.
         if id == "camera" || id == "recording" {
             self.run_command("camera-settings-open");
@@ -4467,6 +4521,7 @@ impl Footer {
                 &[("programs", &self.camera_holders.join(", "))],
             )),
             "recording" => Some(self.texts.t(ronoctua_i18n::key::HINT_RECORDING)),
+            "gestures" => Some(self.texts.t(ronoctua_i18n::key::HINT_GESTURES)),
             // THE PLAYER SAYS WHAT IS PLAYING — the one thing its glyph
             // cannot.
             "player" => {
@@ -7103,6 +7158,8 @@ impl Footer {
             }
             // THE COLUMN TOGGLES: one that is up is closed, else one is raised.
             "onscreen-keyboard" => self.toggle_the_keyboard(),
+            "gestures" => self.toggle_gestures(),
+            "gestures-calibrate" => self.calibrate_gestures(),
             "player-column" => {
                 if !crate::player_window::end_the_column() {
                     self.raise_the_column();
@@ -7593,11 +7650,16 @@ impl Footer {
             }
             // THE MANUAL. It keeps the keyboard while open, like the `M-x`:
             // without that the arrows would go to the buffers and scroll nothing.
-            "help-shortcuts" => {
-                if !self.region_is_free("help-shortcuts") {
+            // THE MANUALS: a LIST, where each opens — no manual has a key of
+            // its own, the owner's rule. See `crate::manual::Which`.
+            "help" => {
+                if !self.region_is_free("help") {
                     return;
                 }
                 self.manual = true;
+                self.manual_which = None;
+                self.manual_cursor = 0;
+                self.manual_query.clear();
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
@@ -10845,28 +10907,7 @@ impl Footer {
         // by unknown sequence — the manual would close by itself on the first
         // gesture of reading.
         if self.view() == ViewState::Manual {
-            use ronoctua_keymap::Sym;
-            match key.sym {
-                Sym::Esc => {
-                    self.manual = false;
-                    self.first_page();
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-                // One LINE at a time, and not a page: the manual is read
-                // straight through, and skipping a screen per arrow loses the
-                // context between what has just been read and what comes. Paging
-                // has its own key (`CtrlRight`+arrows).
-                Sym::Down | Sym::Up => {
-                    let step = if key.sym == Sym::Down { 1 } else { -1 };
-                    if self.scroll_by(step) {
-                        self.draw_and_paint();
-                    }
-                }
-                // Nothing else touches it. It is read-only, and a key that
-                // "almost" works teaches that there is something to type there.
-                _ => {}
-            }
+            self.manual_key(key);
             return;
         }
 
@@ -12265,31 +12306,9 @@ impl Footer {
             self.put_the_keyboard_away();
             return;
         }
-        let machine = ronoctua_pointers::keyboards::Machine::from_env();
-        // THE MACHINE'S FIRST LAYOUT, when it declares several: a keyboard of
-        // our own cycles its own list.
-        let layout = machine
-            .layout
-            .split(',')
-            .next()
-            .unwrap_or("us")
-            .trim()
-            .to_owned();
-        let variant = machine
-            .variant
-            .split(',')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_owned();
-        let layout = if layout.is_empty() {
-            "us".to_owned()
-        } else {
-            layout
-        };
         self.osk = Some(crate::osk::Board::new(
             crate::osk::store().read(),
-            crate::osk::Language { layout, variant },
+            crate::osk::machine_language(),
         ));
         if self.osk_keys.is_none() && !self.osk_said_nothing {
             self.osk_said_nothing = true;
@@ -12298,6 +12317,439 @@ impl Footer {
         }
         self.apply_geometry(self.interactivity());
         self.draw_and_paint();
+    }
+
+    /// The manuals the query leaves, best first.
+    fn manual_found(&self) -> Vec<crate::manual::Which> {
+        let names: Vec<String> = crate::manual::Which::ALL
+            .iter()
+            .map(|w| self.texts.t(w.name()))
+            .collect();
+        let keys: Vec<[&str; 1]> = names.iter().map(|n| [n.as_str()]).collect();
+        let items: Vec<&[&str]> = keys.iter().map(|k| &k[..]).collect();
+        crate::minibuffer::rank(&self.manual_query.to_lowercase(), &items)
+            .into_iter()
+            .map(|i| crate::manual::Which::ALL[i])
+            .collect()
+    }
+
+    /// Opens the manual under the list's cursor — or the open one, when
+    /// `window` pulls it out of the footer — here or in a window of its own.
+    fn manual_open(&mut self, window: bool) {
+        let which = self
+            .manual_which
+            .or_else(|| self.manual_found().get(self.manual_cursor).copied());
+        let Some(which) = which else {
+            return;
+        };
+        if window {
+            if let Ok(me) = std::env::current_exe() {
+                self.open_foreign(
+                    &me.to_string_lossy(),
+                    &["manual".to_owned(), which.word().to_owned()],
+                    None,
+                );
+            }
+            // OUT OF THE FOOTER: the window is where it is read now, and a
+            // second copy under it would hold the keyboard for nothing.
+            self.manual = false;
+            self.manual_which = None;
+            self.manual_query.clear();
+        } else {
+            self.manual_which = Some(which);
+        }
+        self.first_page();
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// A key while a manual — or the list of them — has the footer.
+    fn manual_key(&mut self, key: ronoctua_keymap::Key) {
+        use ronoctua_keymap::Sym;
+        let plain = !key.mods.ctrl && !key.mods.alt && !key.mods.logo;
+        match (self.manual_which, key.sym) {
+            // `C-w`, and not a letter: in the list, letters FILTER.
+            (_, Sym::Char('w')) if key.mods.ctrl => self.manual_open(true),
+            // ONE LEVEL BACK: out of a manual to the list, out of the list.
+            (Some(_), Sym::Esc) => {
+                self.manual_which = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            (None, Sym::Esc) => {
+                self.manual = false;
+                self.manual_query.clear();
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            // One LINE at a time, and not a page: a manual is read straight
+            // through, and skipping a screen per arrow loses the context
+            // between what has just been read and what comes.
+            (Some(_), Sym::Down | Sym::Up) => {
+                let step = if key.sym == Sym::Down { 1 } else { -1 };
+                if self.scroll_by(step) {
+                    self.draw_and_paint();
+                }
+            }
+            (None, Sym::Down) => {
+                let last = self.manual_found().len().saturating_sub(1);
+                self.manual_cursor = (self.manual_cursor + 1).min(last);
+                self.draw_and_paint();
+            }
+            (None, Sym::Up) => {
+                self.manual_cursor = self.manual_cursor.saturating_sub(1);
+                self.draw_and_paint();
+            }
+            (None, Sym::Enter) => self.manual_open(false),
+            // THE QUERY, a cluster at a time — the minibuffer's rule.
+            (None, Sym::Backspace) => {
+                let cut = layout::cells_of(&self.manual_query)
+                    .last()
+                    .map_or(0, str::len);
+                self.manual_query
+                    .truncate(self.manual_query.len().saturating_sub(cut));
+                self.manual_cursor = 0;
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            (None, Sym::Char(c)) if plain && !c.is_control() => {
+                self.manual_query.push(c);
+                self.manual_cursor = 0;
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            // Nothing else touches it. A manual is read-only, and a key that
+            // "almost" works teaches that there is something to type there.
+            _ => {}
+        }
+    }
+
+    /// The region's lines while a manual — or the list of them — is open.
+    fn manual_rows(&self) -> Vec<ExpansionRow> {
+        let t = &self.texts;
+        let Some(which) = self.manual_which else {
+            // THE LIST: a heading, what has been typed, and every manual it
+            // leaves — the name in the key column, lit where the query
+            // matched, the sentence beside it.
+            let mut rows = vec![
+                ExpansionRow {
+                    text: t.t(ronoctua_i18n::key::MANUAL_LIST),
+                    text_color: tokens::color::TEXT_HEADING,
+                    ..ExpansionRow::empty_one()
+                },
+                if self.manual_query.is_empty() {
+                    ExpansionRow {
+                        text: t.t(ronoctua_i18n::key::MANUAL_FILTER_EMPTY),
+                        text_color: tokens::color::TEXT_DIM,
+                        ..ExpansionRow::empty_one()
+                    }
+                } else {
+                    ExpansionRow {
+                        text: self.manual_query.clone(),
+                        text_color: tokens::color::TEXT_PRIMARY,
+                        ..ExpansionRow::empty_one()
+                    }
+                },
+            ];
+            let found = self.manual_found();
+            if found.is_empty() {
+                rows.push(ExpansionRow {
+                    text: t.t(ronoctua_i18n::key::MANUAL_NONE),
+                    text_color: tokens::color::TEXT_DIM,
+                    ..ExpansionRow::empty_one()
+                });
+            }
+            for (i, w) in found.into_iter().enumerate() {
+                let name = t.t(w.name());
+                let about = t.t(w.about());
+                // THE CURSOR IS A COLOUR (`the-cursor-is-a-colour`): the name
+                // takes the accent where the keyboard is.
+                let here = i == self.manual_cursor;
+                rows.push(ExpansionRow {
+                    highlights: crate::minibuffer::match_up(
+                        &self.manual_query.to_lowercase(),
+                        &name,
+                    )
+                    .map(|(_, p)| p)
+                    .unwrap_or_default(),
+                    key: name,
+                    key_flush_right: false,
+                    separator: false,
+                    key_color: if here {
+                        tokens::color::STATE_ACCENT
+                    } else {
+                        tokens::color::TEXT_LABEL_ACTS
+                    },
+                    text: about.clone(),
+                    text_color: if here {
+                        tokens::color::TEXT_HERE_ACTS
+                    } else {
+                        tokens::color::TEXT_DIM
+                    },
+                    description: Some(about),
+                    click: Some(Click::Manual(i)),
+                    ..ExpansionRow::empty_one()
+                });
+            }
+            return rows;
+        };
+        // AN OPEN MANUAL: its lines, and nothing else — the way to a window
+        // is `C-w`, on the hint line.
+        let mut rows = Vec::new();
+        // WRAPPED TO THE ROOM the grid leaves the text: the colon column is
+        // the key's width plus the inset and a cell, the text two past it,
+        // and the bar takes the last.
+        let lines = crate::manual::laid_out(
+            which.lines(t, &crate::leader_chord()),
+            self.screen_columns(),
+            crate::chrome::INSET + 4,
+            crate::chrome::INSET + 1,
+        );
+        for l in lines {
+            let text_color = match l.tone {
+                // A section title in the group tone: it organizes, it does
+                // not run.
+                crate::manual::Tone::Heading => tokens::color::TEXT_HEADING,
+                crate::manual::Tone::Plain | crate::manual::Tone::Pose => {
+                    tokens::color::TEXT_SECONDARY
+                }
+                // WHAT A GESTURE DOES, the loudest: it is what the eye looks
+                // for down the column, the owner's ask.
+                crate::manual::Tone::Function => tokens::color::TEXT_PRIMARY,
+                crate::manual::Tone::Detail | crate::manual::Tone::Air => tokens::color::TEXT_DIM,
+            };
+            rows.push(ExpansionRow {
+                key: l.key,
+                description: l.beside_picture.then(|| l.description.clone()),
+                text: l.description,
+                text_color,
+                picture: l.picture.map(crate::manual::gesture_art_key),
+                beside_picture: l.beside_picture,
+                separator: !l.beside_picture,
+                // THE TEXT STAYS IN THE RIGHT COLUMN, past the drawing: a line
+                // with no key otherwise takes the whole width, and it was
+                // drawn under the picture.
+                aside: l.beside_picture,
+                ..ExpansionRow::empty_one()
+            });
+        }
+        rows
+    }
+
+    /// Rasterises the gestures' drawings the open manual shows, once per size
+    /// and theme — into the same map the applications' pixmaps live in, under
+    /// keys that cannot meet theirs.
+    fn prepare_gesture_art(&mut self) {
+        if !self.manual || self.manual_which != Some(crate::manual::Which::Gestures) {
+            return;
+        }
+        for g in ronoctua_gestures::GESTURES {
+            let key = crate::manual::gesture_art_key(g);
+            if self.icons.contains_key(&key) {
+                continue;
+            }
+            let pixels = crate::manual::gesture_art(g);
+            self.icons.insert(key, pixels);
+        }
+    }
+
+    /// Turns hand gestures on, or off.
+    fn toggle_gestures(&mut self) {
+        if self.gestures.is_some() {
+            self.gestures_off(true);
+            return;
+        }
+        let Some(sender) = self.hands_sender.clone() else {
+            return;
+        };
+        let feed = ronoctua_studio::client::hands(move |h| {
+            let _ = sender.send(h);
+        });
+        let mut reader = ronoctua_gestures::Reader::new();
+        reader.set_area(crate::gestures::store().read().area());
+        self.gestures = Some(crate::gestures::On {
+            feed,
+            reader,
+            calibrating: None,
+            keymap: crate::osk::keymap_of(&crate::osk::machine_language()),
+            saw_a_hand: false,
+        });
+        let m = self.texts.t(if self.gesture_pointer.is_some() {
+            ronoctua_i18n::key::ECHO_GESTURES_ON
+        } else {
+            ronoctua_i18n::key::ECHO_GESTURES_MOVE_NOTHING
+        });
+        self.echo_message(m);
+        self.draw_and_paint();
+    }
+
+    /// Asks for the four corners of the screen, pointed at and pinched —
+    /// turning gestures on first when they are off.
+    fn calibrate_gestures(&mut self) {
+        if self.gestures.is_none() {
+            self.toggle_gestures();
+        }
+        if let Some(on) = self.gestures.as_mut() {
+            on.calibrating = Some(Vec::new());
+            let m = self.texts.t(crate::gestures::CORNERS[0]);
+            self.echo_message(m);
+            self.draw_and_paint();
+        }
+    }
+
+    /// Turns gestures off: every button and key they hold is let go first,
+    /// and dropping the feed closes the camera.
+    fn gestures_off(&mut self, say: bool) {
+        let Some(mut on) = self.gestures.take() else {
+            return;
+        };
+        let _ = on.reader.let_go();
+        if let Some(p) = self.gesture_pointer.as_mut() {
+            p.let_go();
+        }
+        drop(on);
+        if say {
+            let m = self.texts.t(ronoctua_i18n::key::ECHO_GESTURES_OFF);
+            self.echo_message(m);
+        }
+        self.draw_and_paint();
+    }
+
+    /// One thing the studio said about the hands.
+    fn hands_heard(&mut self, heard: ronoctua_studio::client::Heard) {
+        use ronoctua_gestures::{Button, Event};
+        use ronoctua_studio::client::Heard;
+        let seen = match heard {
+            Heard::Refused(t) => {
+                let m = crate::camera::trouble_sentence(&t, &self.texts);
+                self.gestures_off(false);
+                self.echo_message(m);
+                self.draw_and_paint();
+                return;
+            }
+            Heard::Seen(seen) => seen,
+        };
+        // SAID ONCE per switch-on, so a log answers which link broke: no line
+        // is a studio that never saw a hand.
+        if !seen.hands.is_empty()
+            && let Some(on) = self.gestures.as_mut()
+            && !on.saw_a_hand
+        {
+            on.saw_a_hand = true;
+            tracing::info!(
+                hands = seen.hands.len(),
+                "the gestures saw their first hand"
+            );
+        }
+        let Some(on) = self.gestures.as_mut() else {
+            return;
+        };
+        let events = on.reader.read(&crate::gestures::reading_of(&seen));
+        let keymap = on.keymap.clone();
+        // THE FIRST SEAT, by name: it is the first cursor's (`ronoctua-pointers`
+        // never attaches to it), and the one `plan` keeps drawn while the
+        // gestures' pointer is on it. The first seat LISTED is whichever the
+        // compositor announced first.
+        let seat = self
+            .seats
+            .seats()
+            .find(|s| {
+                self.seats
+                    .info(s)
+                    .and_then(|i| i.name)
+                    .is_some_and(|n| n == "seat0")
+            })
+            .or_else(|| self.seats.seats().next());
+        let mut drawn = false;
+        for e in events {
+            // CALIBRATING: a pinch takes the corner the finger is at, and
+            // nothing else a hand does acts.
+            if let Some(on) = self.gestures.as_mut()
+                && let Some(corners) = on.calibrating.as_mut()
+            {
+                if e == Event::Press(Button::Left)
+                    && let Some(at) = on.reader.pointing_at()
+                {
+                    corners.push(at);
+                    let next = crate::gestures::CORNERS.get(corners.len()).copied();
+                    let key = if let Some(k) = next {
+                        k
+                    } else {
+                        let area = ronoctua_gestures::Area::around(corners);
+                        on.calibrating = None;
+                        match area {
+                            Some(a) => {
+                                on.reader.set_area(a);
+                                let prefs = crate::gestures::Prefs {
+                                    area: Some([a.left, a.top, a.right, a.bottom]),
+                                };
+                                if let Err(err) = crate::gestures::store().write(&prefs) {
+                                    tracing::warn!(error = %err, "the calibrated area was not written");
+                                }
+                                ronoctua_i18n::key::ECHO_GESTURES_CALIBRATED
+                            }
+                            None => ronoctua_i18n::key::ECHO_GESTURES_CALIBRATION_FAILED,
+                        }
+                    };
+                    let m = self.texts.t(key);
+                    self.echo_message(m);
+                    drawn = true;
+                }
+                continue;
+            }
+            match e {
+                Event::Point { x, y } => {
+                    if let (Some(p), Some(seat)) = (self.gesture_pointer.as_mut(), seat.as_ref()) {
+                        p.ready(&self.queue, seat);
+                        p.to(x, y);
+                    }
+                }
+                Event::Press(b) | Event::Release(b) => {
+                    let which = match b {
+                        Button::Left => crate::virtual_pointer::Button::Left,
+                        Button::Right => crate::virtual_pointer::Button::Right,
+                    };
+                    if let (Some(p), Some(seat)) = (self.gesture_pointer.as_mut(), seat.as_ref()) {
+                        p.ready(&self.queue, seat);
+                        p.button(which, matches!(e, Event::Press(_)));
+                    }
+                }
+                Event::Scroll(lines) => {
+                    if let (Some(p), Some(seat)) = (self.gesture_pointer.as_mut(), seat.as_ref()) {
+                        p.ready(&self.queue, seat);
+                        p.scroll(lines);
+                    }
+                }
+                Event::Off => {
+                    self.gestures_off(true);
+                    return;
+                }
+                other => {
+                    if let Some(said) = crate::gestures::said_of(other) {
+                        let m = self.texts.t(said);
+                        self.echo_message(m);
+                        drawn = true;
+                    }
+                    if let Some(code) = crate::gestures::key_of(other) {
+                        if let (Some(k), Some(keymap), Some(seat)) =
+                            (self.osk_keys.as_mut(), keymap.as_deref(), seat.as_ref())
+                        {
+                            k.ready(&self.queue, seat, keymap);
+                            k.key(code, true);
+                            k.key(code, false);
+                        }
+                    } else if let Some(id) = crate::gestures::command_of(other) {
+                        self.run_with(id, None);
+                        drawn = true;
+                    }
+                }
+            }
+        }
+        if drawn {
+            self.draw_and_paint();
+        }
     }
 
     /// Puts the keyboard away, letting go of every key it holds first — a
@@ -13477,23 +13929,7 @@ impl Footer {
         }
         // THE MANUAL wins: it captured the whole keyboard, like the `M-x`.
         if self.view() == ViewState::Manual {
-            return crate::manual::assemble(&self.texts, &crate::leader_chord())
-                .into_iter()
-                .map(|l| ExpansionRow {
-                    key: l.key,
-                    // In the manual the description IS the item: there is no command
-                    // to show, and there is nothing to click — it is only read.
-                    text: l.description,
-                    // A section title in the group tone, for the same reason as the
-                    // `+submenu`: it organizes, it does not run.
-                    text_color: if l.title {
-                        tokens::color::TEXT_HEADING
-                    } else {
-                        tokens::color::TEXT_SECONDARY
-                    },
-                    ..ExpansionRow::empty_one()
-                })
-                .collect();
+            return self.manual_rows();
         }
         // THE APPLICATIONS, in the same region and by the same mechanism. Three
         // columns: the glyph, the name (with the search highlight) and the
@@ -13521,6 +13957,8 @@ impl Footer {
                 .enumerate()
                 .filter_map(|(i, _)| l.at(i).map(|e| (i, e)))
                 .map(|(i, e)| ExpansionRow {
+                    picture: None,
+                    beside_picture: false,
                     // THE PIXMAP ONCE IT HAS ARRIVED, the glyph while it has not.
                     //
                     // The choice is HERE, and in a single place: the two drawn
@@ -13651,6 +14089,8 @@ impl Footer {
                 .iter()
                 .enumerate()
                 .map(|(i, item)| ExpansionRow {
+                    picture: None,
+                    beside_picture: false,
                     // TWO COLUMNS: the name and the description.
                     //
                     // The id alone was not enough with 172 commands —
@@ -15350,6 +15790,16 @@ impl Footer {
             // used to hand out `Candidate`, which routes into the `M-x`
             // finder — so with `M-x` closed the candidate list was empty and
             // clicking a clipboard row did nothing at all.
+            // SELECT, AND THE SECOND CLICK OPENS (invariant 19): the click is
+            // the cursor, and `Enter` on the cursor is what opens.
+            Some(Click::Manual(n)) => {
+                if self.manual_cursor == n {
+                    self.manual_open(false);
+                } else {
+                    self.manual_cursor = n;
+                    self.draw_and_paint();
+                }
+            }
             Some(Click::History(n)) => {
                 if let Some(v) = self.history.as_mut() {
                     v.clicked(n);
@@ -16385,6 +16835,9 @@ impl Footer {
         // request is asynchronous: this frame goes out with the glyphs, and the
         // next one with whatever has arrived.
         self.request_visible_icons();
+        // AND THE GESTURES' DRAWINGS, when their manual is open — rasterised
+        // here, before the borrows, for the same reason.
+        self.prepare_gesture_art();
         // THE KEYBOARD OF EVERY SCREEN, laid out before the loop's borrows: it
         // remembers what it placed (`osk_placed`), which is a write to `self`.
         let mut keyboards: Vec<_> = (0..self.screens.len())
@@ -16560,6 +17013,7 @@ impl Footer {
         let showing = self.view();
         let compositor_mode = self.compositor_mode.as_deref();
         let every_workspace = self.every_workspace;
+        let manual_open = self.manual_which.is_some();
         let scaled = self.windows.scaled();
         // THE WIDTH THE HINT'S VIEWS DECIDE AT, taken with the rest before the
         // closure borrows: which keys a line teaches comes from the row under
@@ -16636,6 +17090,17 @@ impl Footer {
                 // like every other now: on the minibuffer's line, elided with
                 // an ellipsis, and the rest reachable through the fold.
                 ViewState::Clipboard => Some(clipboard.hint(texts)),
+                // THE MANUALS: which keys walk the list — or the manual — and
+                // `C-w`, the window, which is on this line and not a line of
+                // the page (the owner's rule: a page is what it shows).
+                ViewState::Manual => Some(crate::chrome::hint_of(
+                    if manual_open {
+                        crate::manual::OF_A_MANUAL
+                    } else {
+                        crate::manual::OF_THE_LIST
+                    },
+                    texts,
+                )),
                 // THE SHELL'S HISTORY: `s` syncs and `S-<arrows>` turn a
                 // value, and nothing on a row says so.
                 ViewState::History => history.as_ref().map(|v| v.hint(texts)),
@@ -17969,6 +18434,36 @@ impl Footer {
                             + (line_height - side) / 2.0,
                         width: side,
                         height: side,
+                    },
+                ));
+            }
+            // AND THE GESTURES' DRAWINGS, each in the key column of its first
+            // line and as tall as the gesture's lines — only when all of them
+            // are on screen: nothing clips here, and a drawing whose lines
+            // scrolled away would hang over the modeline.
+            let picture_lines = crate::manual::GESTURE_LINES;
+            for (i, line) in visible.iter().enumerate() {
+                let Some(key) = &line.picture else {
+                    continue;
+                };
+                if i + picture_lines > visible.len() {
+                    continue;
+                }
+                let Some(Some(rgba)) = self.icons.get(key) else {
+                    continue;
+                };
+                let (base, grid_y) = grid.position(i);
+                let (bw, bh) = crate::manual::gesture_art_box();
+                #[allow(clippy::cast_precision_loss)]
+                let (w, h) = (rgba.width as f32, rgba.height as f32);
+                pixmaps.push((
+                    key.clone(),
+                    ronoctua_render::image::Area {
+                        x: f32::from(base + crate::chrome::INSET) * cell + (bw - w).max(0.0) / 2.0,
+                        y: f32::from(first_of_expansion + grid_y) * line_height
+                            + (bh - h).max(0.0) / 2.0,
+                        width: w.min(bw),
+                        height: h.min(bh),
                     },
                 ));
             }
@@ -22241,6 +22736,10 @@ fn segment_color(
         "battery" if battery_danger => tokens::color::STATE_ERROR,
         // RECORDING OR STREAMING is a warning as much as a mark.
         "recording" => tokens::color::STATE_ERROR,
+        // THE CAMERA IS LOOKING — some program has one open, or the gestures
+        // read the hands: a faded pink of its own, at the device's rung and
+        // beside it. Not the recording red: looking is not yet keeping.
+        "camera" | "gestures" => tokens::color::MODELINE_WATCHING,
         // A KEY MODE IS ON: every key means something else until it ends.
         "compositor-mode" => tokens::color::STATE_ACCENT,
         // THE KIND OF BUFFER. It used to carry the accent, from when it was the
@@ -22334,6 +22833,8 @@ mod tests {
             super::segment_color(id, false, true, false, alarmed, current)
         };
         assert_eq!(paint("bt-2", &[], None), color::MODELINE_DEVICE);
+        assert_eq!(paint("camera", &[], None), color::MODELINE_WATCHING);
+        assert_eq!(paint("gestures", &[], None), color::MODELINE_WATCHING);
         assert_eq!(paint("bt-2", &["bt-2"], None), color::STATE_ERROR);
         assert_eq!(paint("vpn", &[], None), color::TEXT_SECONDARY);
         assert_eq!(paint("ws-3", &[], Some("ws-3")), color::TEXT_PRIMARY);

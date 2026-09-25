@@ -11,9 +11,18 @@
 //! # Nothing runs for nobody
 //!
 //! Sources exist only while somebody consumes the program: a preview window,
-//! a recording, a stream, or the virtual camera ([`Engine::wanted`]). With
-//! none of them the loop drops every source — the camera's light goes out —
-//! and sleeps on a condition variable until an ask wakes it.
+//! a recording, a stream, or the virtual camera ([`Engine::wanted`]) — or
+//! somebody reads the HANDS ([`crate::hands`]). With none of them the loop
+//! drops every source — the camera's light goes out — and sleeps on a
+//! condition variable until an ask wakes it.
+//!
+//! # Hands alone compose nothing
+//!
+//! Read by nobody else, the camera is opened SMALL ([`HANDS_SIZE`], which is
+//! what the palm detector's 192² needs and a quarter of a 720p frame to
+//! decode) and the loop draws no program: the only work left is the hands'
+//! own thread. A consumer of the program arriving reopens the camera at the
+//! program's size, and leaving closes it back.
 
 use std::{
     collections::HashMap,
@@ -65,9 +74,18 @@ pub struct Engine {
     measured: u32,
     fps_clock: Instant,
     model: Option<Arc<Vec<u8>>>,
+    /// Who reads the hands, and the two models' bytes when installed.
+    pub(crate) hand_readers: Vec<UnixStream>,
+    hand_models: Option<Arc<(Vec<u8>, Vec<u8>)>>,
+    pub(crate) hands_running: bool,
+    /// The sources now open were opened for the hands alone, small.
+    light: bool,
     dirty: bool,
     last_broadcast: Instant,
 }
+
+/// The camera's size when only the hands read it.
+pub const HANDS_SIZE: (u32, u32) = (640, 360);
 
 /// The engine and the bell that wakes its loop.
 pub type Shared = Arc<(Mutex<Engine>, Condvar)>;
@@ -124,19 +142,71 @@ impl Engine {
             measured: 0,
             fps_clock: Instant::now(),
             model,
+            hand_readers: Vec::new(),
+            hand_models: crate::hands::models(),
+            hands_running: false,
+            light: false,
             dirty: true,
             last_broadcast: Instant::now(),
         }
     }
 
-    /// Whether anything consumes the program.
+    /// Whether anything needs a source open.
     pub fn wanted(&self) -> bool {
+        self.composing() || !self.hand_readers.is_empty()
+    }
+
+    /// Whether anything consumes the PROGRAM, which is what makes the loop
+    /// compose.
+    pub fn composing(&self) -> bool {
         !self.viewers.is_empty()
             || self.recording.is_some()
             || self.streaming.is_some()
             || self.virtual_cam.is_some()
             || self.photo_due
             || self.countdown.is_some()
+    }
+
+    /// The source the hands are read from: the scene's camera when the
+    /// program is being composed (one device, one capture), the default
+    /// camera otherwise.
+    fn hands_source(&self) -> Source {
+        if self.composing()
+            && let Some(i) = self.book.camera_layer(&self.scene)
+            && let Some(scene) = self.book.scene(&self.scene)
+        {
+            return scene.layers[i].source.clone();
+        }
+        Source::Camera { identity: None }
+    }
+
+    /// The newest frame of the hands' source, and whether it is mirrored.
+    pub(crate) fn hands_frame(&self) -> Option<(Arc<Frame>, bool)> {
+        let (_, live) = self.sources.get(&self.hands_source().key())?;
+        let frame = live.shared.frame.lock().ok()?.clone()?;
+        Some((
+            frame,
+            live.shared
+                .mirrored
+                .load(std::sync::atomic::Ordering::Relaxed),
+        ))
+    }
+
+    /// Adds a reader of the hands, starting their thread; refused, with the
+    /// reason on the connection, when the models are not installed.
+    pub fn add_hand_reader(&mut self, stream: UnixStream, shared: &Shared) {
+        let Some(models) = self.hand_models.clone() else {
+            let mut out = stream;
+            let _ = wire::write_line(&mut out, &Say::Refused(Trouble::NoHandModel));
+            return;
+        };
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
+        self.hand_readers.push(stream);
+        self.dirty = true;
+        if !self.hands_running {
+            self.hands_running = true;
+            crate::hands::start(shared.clone(), models);
+        }
     }
 
     fn setup(&self) -> Setup {
@@ -156,14 +226,31 @@ impl Engine {
             self.sources.clear();
             return;
         }
-        let mut need: Vec<Source> = self.book.sources_of(&self.scene);
+        let light = !self.composing();
+        if light != self.light {
+            // Opened at the other size: reopened, which is the one moment the
+            // camera's light blinks.
+            self.sources.clear();
+            self.light = light;
+        }
+        let mut need: Vec<Source> = if light {
+            Vec::new()
+        } else {
+            self.book.sources_of(&self.scene)
+        };
+        if !self.hand_readers.is_empty() {
+            let hands = self.hands_source();
+            if !need.contains(&hands) {
+                need.push(hands);
+            }
+        }
         let mut chains: HashMap<String, ronoctua_effects::Chain> = HashMap::new();
         if let Some(scene) = self.book.scene(&self.scene) {
             for l in scene.layers.iter().filter(|l| l.visible) {
                 chains.entry(l.source.key()).or_insert_with(|| l.chain());
             }
         }
-        if self.prefs.virtual_sends == Sends::Camera && self.virtual_cam.is_some() {
+        if !light && self.prefs.virtual_sends == Sends::Camera && self.virtual_cam.is_some() {
             let cam = Source::Camera { identity: None };
             if !need.contains(&cam) {
                 need.push(cam);
@@ -171,7 +258,10 @@ impl Engine {
         }
         let keys: Vec<String> = need.iter().map(Source::key).collect();
         self.sources.retain(|k, _| keys.contains(k));
-        let setup = self.setup();
+        let mut setup = self.setup();
+        if light {
+            setup.program = HANDS_SIZE;
+        }
         for s in need {
             let key = s.key();
             let (_, live) = self
@@ -455,7 +545,7 @@ impl Engine {
     pub fn ask(&mut self, ask: Ask, shared: &Shared) -> Say {
         self.dirty = true;
         match ask {
-            Ask::Watch | Ask::Look | Ask::Preview => {}
+            Ask::Watch | Ask::Look | Ask::Preview | Ask::Hands => {}
             Ask::Photo => {
                 if self.prefs.countdown > 0 {
                     self.countdown =
@@ -884,6 +974,15 @@ pub fn run(shared: &Shared) {
                 continue;
             }
             e.sync_sources();
+            if !e.composing() {
+                // The hands alone: their thread reads the source, and there
+                // is no program to draw.
+                if e.dirty {
+                    e.broadcast();
+                }
+                let _ = bell.wait_timeout(e, Duration::from_millis(500));
+                continue;
+            }
             let camera_only = (e.prefs.virtual_sends == Sends::Camera && e.virtual_cam.is_some())
                 .then(|| e.camera_frame())
                 .flatten();
@@ -1084,6 +1183,7 @@ pub fn serve_one(stream: UnixStream, shared: &Shared) {
     let Ok(mut e) = lock.lock() else { return };
     match ask {
         Ask::Watch => e.add_watcher(stream),
+        Ask::Hands => e.add_hand_reader(stream, shared),
         Ask::Preview => {
             if let Err(err) = e.add_viewer(stream) {
                 tracing::warn!(error = %err, "a preview was refused");

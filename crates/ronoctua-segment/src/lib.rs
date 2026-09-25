@@ -28,8 +28,10 @@
 #![forbid(unsafe_code)]
 
 mod flat;
+mod hands;
 mod net;
 
+pub use hands::{Hand, Hands, Palm, Square};
 pub use net::{Net, Refusal, Scratch};
 
 /// A person-probability per cell, `0.0` background to `1.0` person.

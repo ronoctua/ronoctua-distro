@@ -83,6 +83,7 @@ mod lifeline;
 mod locale;
 mod locale_window;
 mod manual;
+mod manual_window;
 // The pure half of the brain bridge — the daemon's records turned into the
 // WIT's. Split out so `ronoctua-render-png` can link it without linking the
 // footer's line, which is what made the brain photographable at all.
@@ -90,6 +91,7 @@ mod camera;
 mod camera_settings;
 mod camera_settings_window;
 mod camera_window;
+mod gestures;
 mod mind_wire;
 mod minibuffer;
 mod motion;
@@ -134,6 +136,7 @@ mod world;
 // a run happen. It knows no step: the sequence is `assets/updates.nix`.
 mod update_window;
 mod virtual_keys;
+mod virtual_pointer;
 
 /// The layer-shell surface's namespace.
 ///
@@ -339,6 +342,14 @@ fn main() -> Result<()> {
         }
         Some("history") => {
             return history_window::host_it();
+        }
+        // A MANUAL in a window: the list `LEADER h` opens hands the word.
+        Some("manual") => {
+            let which = std::env::args()
+                .nth(2)
+                .and_then(|w| manual::Which::of_word(&w))
+                .unwrap_or(manual::Which::Shortcuts);
+            return manual_window::host_it(which).context("host a manual");
         }
         Some("syncthing") => {
             return syncthing_window::host_it().context("host the syncthing view");
@@ -730,6 +741,8 @@ pub struct Marks<'a> {
     pub camera: bool,
     /// The studio is recording or streaming.
     pub recording: bool,
+    /// Hand gestures are on: the camera reads hands (`LEADER m g`).
+    pub gestures: bool,
     /// The player has something loaded: its glyph says playing or paused
     /// (`player::mark`). Absent with nothing loaded — a modeline at rest says
     /// nothing.
@@ -1002,7 +1015,7 @@ pub fn segments(
         out.push(Segment {
             id: "player",
             text: glyph.to_string(),
-            priority: 14,
+            priority: 16,
             min_cols: 1,
             side: Side::Right,
             shrink: Shrink::Cut,
@@ -1031,20 +1044,37 @@ pub fn segments(
         out.push(Segment {
             id,
             text: shown.number.to_string(),
-            priority: 15,
+            priority: 17,
             min_cols: 1,
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
         });
     }
-    // THE CAMERA, at the microphone's rung and for its reason: something is
-    // WATCHING, which is worth a cell whatever else the line has to say.
+    // THE CAMERA, between the player and the devices — the owner's order: the
+    // two marks that say the camera is LOOKING (this and the gestures', in
+    // their own faded pink) sit together, after the workspace numbers and
+    // the player and before the Bluetooth marks. The rung places a mark on
+    // this side, so it is the rung that moved: from the microphone's 2 to
+    // just above the devices' 10–13.
     if marks.camera {
         out.push(Segment {
             id: "camera",
             text: tokens::icon::CAMERA_IN_USE.to_string(),
-            priority: 2,
+            priority: 14,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // HAND GESTURES, beside the camera and to its left: the camera is open
+    // FOR THIS, and the mark is also the way to turn it off.
+    if marks.gestures {
+        out.push(Segment {
+            id: "gestures",
+            text: tokens::icon::GESTURES.to_string(),
+            priority: 15,
             min_cols: 1,
             side: Side::Right,
             shrink: Shrink::Cut,
@@ -1354,6 +1384,7 @@ mod tests {
                         listening: true,
                         camera: true,
                         recording: true,
+                        gestures: true,
                         // AND A KEY MODE, the longest of their names: the
                         // fullest line has to survive it beside the rest.
                         compositor_mode: Some("alternar largura"),

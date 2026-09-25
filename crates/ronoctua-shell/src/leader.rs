@@ -699,6 +699,10 @@ pub const BY_NAME_ONLY: &[&str] = &[
     // setting touched once in a while.
     "player-shuffle",
     "player-repeat",
+    // CALIBRATING THE GESTURES happens once per camera placement, and the
+    // gestures themselves are one key away: a second sequence for it would
+    // be a line of the list spent on something done once.
+    "gestures-calibrate",
 ];
 
 /// And for the button a standing notice offers.
@@ -1065,6 +1069,14 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "onscreen-keyboard",
             label: key::CMD_ONSCREEN_KEYBOARD,
+        },
+        Command {
+            id: "gestures",
+            label: key::CMD_GESTURES,
+        },
+        Command {
+            id: "gestures-calibrate",
+            label: key::CMD_GESTURES_CALIBRATE,
         },
         Command {
             id: "camera-settings-open",
@@ -1975,9 +1987,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // THE MANUAL. It exists because the chords left the tap list:
         // what one holds has to appear somewhere, and the tap
         // list was not that place — see `manual.rs`.
+        //
+        // AND IT IS A LIST: `LEADER h` opens the manuals — the shortcuts', the
+        // gestures' — and no manual has a key of its own (the owner's rule).
+        // Each opens from the list, here or in a window. See `manual::Which`.
         Command {
-            id: "help-shortcuts",
-            label: key::CMD_HELP_SHORTCUTS,
+            id: "help",
+            label: key::CMD_HELP,
         },
         // ---------------------------------------------------------------
         // NETWORK — the SEVENTH view of the expanded region.
@@ -2521,6 +2537,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `k` for KEYBOARD — the one on the screen, for a finger. `s k` is
         // the physical keyboards' settings, which are another thing.
         ("m k", "onscreen-keyboard", None),
+        ("m g", "gestures", None),
         // `i` for ICONS, and not `g` for glyphs: the Nerd Fonts browser is the
         // first collection, and others are going to come in — the group is born with the
         // name of what it is going to hold, and not with the first item's.
@@ -2659,10 +2676,10 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // column's own title, so the feature existed for whoever pressed `TAB`
         // twice inside a screen they had already opened.
         ("n f", "notif-filters", None),
-        // `h` for help, as in Doom. A group with a single item is the honest
-        // beginning: the other help content comes in here, and the group already
-        // exists to receive it.
-        ("h s", "help-shortcuts", None),
+        // `h` for help, as in Doom — and a COMMAND, not a group: it opens the
+        // list of manuals, which is where the help's content lives now, each
+        // manual chosen there and none with a key of its own (the owner's rule).
+        ("h", "help", None),
         // ---------------------------------------------------------------
         // NETWORK, under SYSTEM — `s n`, by the owner's decision: the radio
         // is the machine's, beside its memory, its disks and its power, and
@@ -2752,7 +2769,6 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // happened.
         ("t i", key::GROUP_IDENTIFIED),
         ("n", key::GROUP_NOTIFICATION),
-        ("h", key::GROUP_HELP),
         // `s` for SYSTEM — what the machine is doing to itself, as opposed to
         // what one is doing with it: memory, disks, the update, the theme —
         // and the network and Syncthing, which moved in from the first level.
@@ -3732,6 +3748,8 @@ mod tests {
             "pointers-window",
             "camera-open",
             "onscreen-keyboard",
+            "gestures",
+            "gestures-calibrate",
             "camera-settings-open",
             "camera-settings-window",
             "camera-settings-up",
@@ -3864,7 +3882,7 @@ mod tests {
             "bluetooth-up",
             "bluetooth-down",
             "keyboard-restore",
-            "help-shortcuts",
+            "help",
             "mx-open",
             "apps-open",
             "buffer-switch",

@@ -16,7 +16,8 @@ linhas. Scroll como compositor, camada de shell própria em Rust. O porquê de c
    **Exceções aprovadas pelo dono, uma a uma** — protocolos Wayland PADRÃO, nunca patch:
    `wl_data_device` (arrastar), `ext-image-copy-capture-v1` (a captura do estúdio) e
    `zwp_virtual_keyboard_v1` (o teclado na tela, 2026-09-25; só o `virtual_keys.rs` o nomeia,
-   cobra o `one-virtual-keyboard`).
+   cobra o `one-virtual-keyboard`) e `zwlr_virtual_pointer_v1` (os gestos, 2026-09-25; só o
+   `virtual_pointer.rs`, cobra o `one-virtual-pointer`).
 4. **O shell nunca reimplementa layout de janelas.** Um `xdg_toplevel` por buffer nativo.
 5. **Sem lógica Nix reimplementada em Rust.**
 6. **Nada imperativo.** Se não está no flake, não existe.
@@ -159,6 +160,63 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   duas fileiras mais alto. A altura é em QUARTOS de linha (1, 2 e 2½): quatro fileiras dão sempre
   linhas inteiras, e a legenda de uma fileira que começa no meio de uma linha vai no meio da tecla
   por `Size::Lowered`, o deslocamento em pixels que o renderizador passou a aceitar.
+- **`LEADER m g` são os GESTOS COM AS MÃOS, e são TRÊS processos com um papel cada**: o
+  estúdio VÊ (é a única porta da câmera; `Ask::Hands` abre a câmera enquanto a conexão existe, e o
+  rodapé morto a fecha por construção), o `ronoctua-gestures` ENTENDE (puro, sem dependência:
+  pontos e um relógio viram eventos) e o rodapé FAZ — ponteiro pelo `virtual_pointer.rs`, `Esc` e
+  setas pelo `virtual_keys.rs`, e todo comando pelo `run_with`, o mesmo caminho da leader. **Os
+  modelos são o `hand_landmarker` do MediaPipe rodando no NOSSO interpretador**
+  (`ronoctua-segment`, que ganhou os sete operadores deles e várias saídas), conferido contra o
+  runtime TFLite (`ai-edge-litert`) numa entrada sintética; a busca da palma (22 ms) só roda com
+  menos de duas mãos seguidas e a cada três quadros, e o resto do tempo a mão é lida no quadrado
+  que a leitura anterior deixou (18 ms), a 12 leituras por segundo e 5 sem mão nenhuma, numa
+  thread só — duas cortavam a espera e custavam um quarto a mais de CPU, e leveza foi o pedido
+  (medido: ~75% de um núcleo com as duas mãos na imagem). **Só com os gestos a câmera abre
+  PEQUENA** (640×360) e o estúdio não compõe programa nenhum. **A lateralidade do modelo é o
+  CONTRÁRIO do nome**: abaixo de ½ é a mão DIREITA na imagem espelhada, medido com o dono
+  levantando uma mão por vez, e nada nos metadados do modelo diz isso. **Os limiares saíram das
+  mãos do dono**, gravadas passo a passo (só os números dos pontos, fora da árvore) e reproduzidas
+  no leitor: um quadro só de uma pose é o modelo adivinhando (o botão exige duas leituras
+  seguidas), a mão em repouso cai na pose do ponteiro com os dedos JUNTOS (ele só começa com
+  indicador e médio a 0,45 palmo — de propósito 0,41–0,95, por acaso 0,26–0,44 — e depois não
+  pergunta mais, senão o arrasto, que fecha os dedos, se perderia), mãos paradas no COLO abriam a visão geral e
+  desligavam os gestos (mão cortada pela borda da imagem não é lida — o modelo ADIVINHA o que não
+  vê —, dez dedos, dois médios e rock exigem a mão ERGUIDA, a até 40° do vertical, e os braços
+  cruzados exigem as mãos no alto da imagem), o polegar dobra durante a varredura (bastam os quatro dedos, e a mão tem de estar
+  ERGUIDA, senão a mão indo ao mouse move o foco), e toda varredura tem a sua volta, que não move
+  nada por 2,5 s. Cada um virou um teste com uma mão desenhada, nunca a gravação. **Comando espera o gesto ser
+  SEGURADO** (350 ms, 250 na seta, e 600 no que joga algo fora: fechar janela, desligar), dispara uma
+  vez só até a pose ser solta, e todo comando disparado é ECOADO — engano visto é engano
+  aprendido. **A maior parte dos comandos é de DUAS mãos**, a pedido do dono, para cortar falso
+  positivo: uma mão fazendo outra coisa cai numa pose por acaso muito mais que duas juntas. O
+  ponteiro é indicador e médio juntos (o polegar dobrado; esticado, é rolar), e os BOTÕES dele são
+  a OUTRA mão — aberta segura o esquerdo, o hang loose dá um direito; os dois indicadores apontando
+  são a seta, cruzados em X são o `Esc` (perguntado antes das setas e dos braços cruzados), três
+  dedos nas duas mãos trocam o espaço, os dois dedos médios fecham a janela e os BRAÇOS CRUZADOS
+  são o único gesto que desliga. O braço cruzado sai da lateralidade sem modelo de corpo: o modelo
+  diz qual mão é pela forma dela, então cruzar troca os LUGARES e não a resposta. Onde o dedo aponta
+  é uma ÁREA da imagem mapeada na tela (`gestures-calibrate` a mede apontando os quatro cantos; `gestures.json`).
+  Desliga no reinício de propósito: câmera que liga sozinha no login não é "fácil de desligar".
+  **O MANUAL É GERADO** (`manual::gestures`) de `ronoctua_gestures::GESTURES`, e o `gesture_of` é
+  um `match` exaustivo: evento sem linha no manual não compila. **E é DESENHADO**
+  (`ronoctua_gestures::art`): um SVG por gesto, todos da MESMA mão — palma, quatro dedos esticados
+  ou dobrados, polegar fora ou dentro, posta, girada e espelhada —, em `currentColor` (a tinta é o
+  token do tema), ao lado de três linhas: o que FAZ (a mais alta), a pose e o resto. **O cursor dos gestos
+  é o cursor 1** (o ponteiro virtual nasce no `seat0` pelo NOME) e o `ronoctua-pointers` conta esse
+  ponteiro como mão do cursor 1 — sem isso, máquina sem mouse, que é quando os gestos SÃO o mouse,
+  escondia o cursor 100 ms depois de cada movimento. **As duas marcas de "a câmera está olhando"**
+  (câmera aberta e gestos) têm TOM próprio (`modeline.watching`, família `watching` em toda
+  semente: um rosa desbotado puxado ao vermelho, no degrau do azul do Bluetooth, com portões contra
+  ele, contra o texto das marcas, o acento e o vermelho da GRAVAÇÃO) e LUGAR próprio, a pedido do
+  dono: números dos espaços, player, gestos, câmera, Bluetooth. O rock abre e fecha a COLUNA do
+  player (`player-column`), não a vista do minibuffer.
+- **`LEADER h` é a LISTA DOS MANUAIS, e manual nenhum tem tecla própria** (regra do dono;
+  `manual::Which`): digitar FILTRA (a busca do `LEADER :`, `minibuffer::rank`, letras acesas), `RET`
+  ou o segundo clique abre no rodapé, e `C-w` — nunca uma letra, que ali filtra — abre numa JANELA
+  (`manual_window.rs`, `ronoctua-shell manual <palavra>`). Aberto no rodapé, a primeira linha é o
+  mesmo "abrir numa janela", clicável, e `Esc` volta à lista. As duas portas desenham as MESMAS
+  linhas, e o desenho de um gesto só aparece com as três linhas dele na tela: nada recorta aqui, e
+  um desenho cujas linhas rolaram penduraria sobre a modeline.
 - **O contador de página da leader é um CONTROLE** (`page_control`, lido da borda como foi
   desenhado): o clique esquerdo avança, o direito volta, e os dois dão a volta — a tecla para nas
   pontas. E a paginação para no INÍCIO da última página (`last_page_start`): parava em

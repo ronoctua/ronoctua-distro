@@ -52,6 +52,9 @@ pub struct Shared {
     pub chain_era: AtomicU64,
     /// Frames published, for the rate the state reports.
     pub published: AtomicU64,
+    /// The camera is shown as a mirror — the hands read it as the person sees
+    /// it either way.
+    pub mirrored: AtomicBool,
     stop: AtomicBool,
 }
 
@@ -378,6 +381,7 @@ fn camera(shared: &Shared, identity: Option<&str>, setup: &Setup) {
             tracing::info!(?refused, "controls the camera would not take");
         }
         let (w, h) = compose::fit_within(mode.width, mode.height, setup.program.0, setup.program.1);
+        shared.mirrored.store(per.mirror, Ordering::Relaxed);
         let mut capture = match Capture::open(&cam, &mode, w, h, per.mirror) {
             Ok(c) => c,
             Err(e) => {

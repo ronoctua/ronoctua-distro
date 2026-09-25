@@ -790,6 +790,7 @@ pub fn trouble_sentence(t: &Trouble, texts: &ronoctua_i18n::Texts) -> String {
         }
         Trouble::CameraSilent => texts.t(key::STUDIO_TROUBLE_CAMERA_SILENT),
         Trouble::NoModel => texts.t(key::STUDIO_TROUBLE_NO_MODEL),
+        Trouble::NoHandModel => texts.t(key::STUDIO_TROUBLE_NO_HAND_MODEL),
         Trouble::NoBackdrop => texts.t(key::STUDIO_TROUBLE_NO_BACKDROP),
         Trouble::NoFfmpeg => texts.t(key::STUDIO_TROUBLE_NO_FFMPEG),
         Trouble::NoScreen => texts.t(key::STUDIO_TROUBLE_NO_SCREEN),
@@ -1052,6 +1053,7 @@ mod tests {
             Trouble::CameraBusy { by: "x".into() },
             Trouble::CameraSilent,
             Trouble::NoModel,
+            Trouble::NoHandModel,
             Trouble::NoBackdrop,
             Trouble::NoFfmpeg,
             Trouble::NoScreen,

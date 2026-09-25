@@ -935,6 +935,15 @@ let
       # THE CURSOR THEMES, where the compositor looks for the one each seat is
       # given (`nix/cursors.nix`) — the same path the installed unit sets.
       export XCURSOR_PATH="${cursors}/share/icons''${XCURSOR_PATH:+:$XCURSOR_PATH}"
+      # THE CURSOR IS DRAWN IN HERE, and not by the host. A nested backend
+      # hands the cursor's IMAGE to the host, which puts it where the HOST's
+      # pointer is — so a cursor moved from inside (the hand gestures'
+      # virtual pointer) moved, answered hovers and clicks, and was drawn
+      # nowhere: the owner turned gestures on and saw nothing. Software
+      # cursors put it in the nested frame, at the nested position. On the
+      # installed system the cursor is the display's own plane, which the seat
+      # moves, and none of this applies.
+      export WLR_NO_HARDWARE_CURSORS=1
       scroll --config "$cfg" > "$compositor_log" 2>&1 &
       compositor_pid=$!
       # AND THE WATCHER IS TOLD WHICH PROCESS THAT IS.

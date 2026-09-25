@@ -78,6 +78,8 @@ in
         # The segmentation model; absent, the three background effects are
         # drawn refusing and everything else works.
         RONOCTUA_SEGMENT_MODEL = "${ronoctua.segmentModel}";
+        # The hand models; absent, gestures are refused with a sentence.
+        RONOCTUA_HAND_MODELS = "${ronoctua.handModels}";
       };
       serviceConfig = {
         ExecStart = "${ronoctua.studio}/bin/ronoctua-studio";

@@ -122,3 +122,80 @@ pub fn watch(on_state: impl Fn(Option<State>) + Send + 'static) -> Arc<AtomicBoo
 pub fn preview() -> Result<crate::preview::Feed> {
     crate::preview::open(&ensure()?)
 }
+
+/// What a reader of the hands is told.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Heard {
+    /// One frame's hands.
+    Seen(crate::wire::Seen),
+    /// The studio refused (the models are not installed); nothing more comes.
+    Refused(crate::wire::Trouble),
+}
+
+/// A reader of the hands; DROPPING IT closes the connection, and with the
+/// last reader gone the studio closes the camera.
+pub struct HandsFeed {
+    stop: Arc<AtomicBool>,
+    stream: Arc<std::sync::Mutex<Option<UnixStream>>>,
+}
+
+impl Drop for HandsFeed {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // Shut down, not just flagged: with no camera no line ever comes, and
+        // a thread blocked in a read would keep the camera asked for.
+        if let Ok(s) = self.stream.lock()
+            && let Some(s) = s.as_ref()
+        {
+            let _ = s.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
+/// Reads the hands on a thread of its own, starting the daemon when nobody
+/// answers and coming back when it went away — until the feed is dropped or
+/// the studio refuses.
+pub fn hands(on_heard: impl Fn(Heard) + Send + 'static) -> HandsFeed {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stream: Arc<std::sync::Mutex<Option<UnixStream>>> = Arc::default();
+    let (gone, held) = (stop.clone(), stream.clone());
+    let _ = std::thread::Builder::new()
+        .name("studio-hands".into())
+        .spawn(move || {
+            while !gone.load(Ordering::SeqCst) {
+                let run = || -> Result<bool> {
+                    let s = UnixStream::connect(ensure()?)?;
+                    if let Ok(mut h) = held.lock() {
+                        *h = s.try_clone().ok();
+                    }
+                    if gone.load(Ordering::SeqCst) {
+                        return Ok(true);
+                    }
+                    let mut out = BufWriter::new(s.try_clone()?);
+                    write_line(&mut out, &Ask::Hands)?;
+                    let mut input = BufReader::new(s);
+                    while let Some(say) = read_line::<Say>(&mut input)? {
+                        if gone.load(Ordering::SeqCst) {
+                            return Ok(true);
+                        }
+                        match say {
+                            Say::Hands(seen) => on_heard(Heard::Seen(seen)),
+                            Say::Refused(t) => {
+                                on_heard(Heard::Refused(t));
+                                return Ok(true);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Ok(false)
+                };
+                match run() {
+                    Ok(true) => return,
+                    Ok(false) => {}
+                    Err(e) => tracing::debug!(error = %e, "studio hands"),
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+    HandsFeed { stop, stream }
+}

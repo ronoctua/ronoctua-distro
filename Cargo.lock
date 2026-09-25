@@ -2877,6 +2877,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-gestures"
+version = "0.1.0"
+
+[[package]]
 name = "ronoctua-http"
 version = "0.1.0"
 dependencies = [
@@ -3163,6 +3167,7 @@ dependencies = [
  "ronoctua-display",
  "ronoctua-effects",
  "ronoctua-files",
+ "ronoctua-gestures",
  "ronoctua-i18n",
  "ronoctua-inspect",
  "ronoctua-keyboards",

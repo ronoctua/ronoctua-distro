@@ -1,4 +1,6 @@
-//! The shortcut manual — `LEADER h s`.
+//! The manuals — `LEADER h` lists them, and each opens from the list, in the
+//! footer or in a window of its own. The first, and the reason this file
+//! exists, is the SHORTCUTS'.
 //!
 //! # Why it exists
 //!
@@ -29,14 +31,234 @@
 
 use ronoctua_i18n::{Texts, key};
 
-/// One line of the manual: the key and what it does.
+/// The manuals there are — the list `LEADER h` opens. A manual has NO key
+/// of its own (the owner's rule): it is chosen from this list, where `RET`
+/// opens it in the footer and `w` in a window of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Which {
+    /// The shortcuts: the chords, the compositor's modes, the emergency and
+    /// media keys.
+    Shortcuts,
+    /// The hand gestures, drawn.
+    Gestures,
+}
+
+impl Which {
+    /// Every manual, in the list's order.
+    pub const ALL: [Self; 2] = [Self::Shortcuts, Self::Gestures];
+
+    /// Its name in the list.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Shortcuts => key::MANUAL_SHORTCUTS,
+            Self::Gestures => key::MANUAL_GESTURES,
+        }
+    }
+
+    /// What the list says about it under the pointer.
+    #[must_use]
+    pub const fn about(self) -> &'static str {
+        match self {
+            Self::Shortcuts => key::ABOUT_MANUAL_SHORTCUTS,
+            Self::Gestures => key::ABOUT_MANUAL_GESTURES,
+        }
+    }
+
+    /// The word the window is opened with: `ronoctua-shell manual <word>`.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Shortcuts => "shortcuts",
+            Self::Gestures => "gestures",
+        }
+    }
+
+    /// The manual a word names.
+    #[must_use]
+    pub fn of_word(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|w| w.word() == word)
+    }
+
+    /// Its lines, in the active language.
+    #[must_use]
+    pub fn lines(self, texts: &Texts, chord: &str) -> Vec<Line> {
+        match self {
+            Self::Shortcuts => aired(assemble(texts, chord)),
+            Self::Gestures => aired(gestures(texts)),
+        }
+    }
+}
+
+/// The keys of the LIST of manuals, as the hint line teaches them. `ESC` is
+/// not here: it leaves one level everywhere, and the line does not teach a
+/// key that is the same in every view.
+pub const OF_THE_LIST: &[(&str, &str)] = &[
+    ("<down>", "manual-next"),
+    ("<up>", "manual-previous"),
+    ("RET", "manual-open"),
+    ("C-w", "manual-window"),
+];
+
+/// And of an OPEN manual.
+pub const OF_A_MANUAL: &[(&str, &str)] = &[
+    ("<down>", "manual-down"),
+    ("<up>", "manual-up"),
+    ("C-w", "manual-window"),
+];
+
+/// How a line of a manual is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    /// A section's title.
+    Heading,
+    /// A shortcut: its key, and what it does.
+    Plain,
+    /// WHAT A GESTURE DOES — the line the eye looks for, so it is the one
+    /// drawn loudest.
+    Function,
+    /// How the hands are held for it.
+    Pose,
+    /// The rest of what there is to know about it.
+    Detail,
+    /// A line with nothing on it — the AIR before a heading, which a heading
+    /// glued to the content above it does not have: hierarchy here is colour
+    /// and air (invariant 15), and the owner read the missing air off the
+    /// screen.
+    Air,
+}
+
+/// One line of a manual.
 pub struct Line {
-    /// How the combination is written — `SUPER + ←`.
+    /// How the combination is written — `SUPER + ←`. Empty on a gesture's
+    /// lines, whose left column is the drawing.
     pub key: String,
-    /// What it does, in the active language.
+    /// What it says, in the active language.
     pub description: String,
-    /// A section header, and not a shortcut.
-    pub title: bool,
+    /// How it is drawn.
+    pub tone: Tone,
+    /// The gesture DRAWN to the left of this line and the ones under it
+    /// ([`ronoctua_gestures::art::picture`]): set on a gesture's first line.
+    pub picture: Option<&'static str>,
+    /// Whether this line belongs to a gesture, and so has the drawing's
+    /// column on its left.
+    pub beside_picture: bool,
+}
+
+impl Line {
+    /// A section header.
+    #[must_use]
+    pub fn heading(description: String) -> Self {
+        Self {
+            key: String::new(),
+            description,
+            tone: Tone::Heading,
+            picture: None,
+            beside_picture: false,
+        }
+    }
+
+    /// A shortcut.
+    #[must_use]
+    pub const fn plain(key: String, description: String) -> Self {
+        Self {
+            key,
+            description,
+            tone: Tone::Plain,
+            picture: None,
+            beside_picture: false,
+        }
+    }
+
+    /// A line of air.
+    #[must_use]
+    pub const fn air() -> Self {
+        Self {
+            key: String::new(),
+            description: String::new(),
+            tone: Tone::Air,
+            picture: None,
+            beside_picture: false,
+        }
+    }
+
+    /// Whether it is a section header.
+    #[must_use]
+    pub fn title(&self) -> bool {
+        self.tone == Tone::Heading
+    }
+}
+
+/// How wide a manual's LEFT column is, in cells: its widest key, or the
+/// drawings' column when it has drawings. Both doors measure it here, so the
+/// text they wrap is wrapped to the room they draw it in.
+#[must_use]
+pub fn key_column(lines: &[Line]) -> u16 {
+    lines
+        .iter()
+        .map(|l| {
+            if l.beside_picture {
+                ronoctua_tokens::space::GESTURES_PICTURECELLS
+            } else {
+                ronoctua_render::layout::width(&l.key)
+            }
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// The manual as a door `columns` wide draws it: every line WRAPPED to the
+/// room its column leaves, never cut — a manual is read whole, and what an
+/// ellipsis takes is always the end of a sentence (the owner's rule; the
+/// same one `chrome::note_lines` keeps for notes).
+///
+/// `lead` is how many cells the door puts before the text column besides the
+/// key's own — its colon, its gaps and its bar; a HEADING takes the whole
+/// width less `edge`. A wrapped line's continuation keeps the tone and the
+/// drawing's column, and no key and no drawing of its own.
+#[must_use]
+pub fn laid_out(lines: Vec<Line>, columns: u16, lead: u16, edge: u16) -> Vec<Line> {
+    let key = key_column(&lines);
+    let text_room = columns.saturating_sub(key + lead).max(8);
+    let heading_room = columns.saturating_sub(edge).max(8);
+    let mut out = Vec::with_capacity(lines.len());
+    for l in lines {
+        if l.tone == Tone::Air {
+            out.push(l);
+            continue;
+        }
+        let room = if l.title() { heading_room } else { text_room };
+        let mut pieces =
+            ronoctua_render::layout::wrap(&l.description, room, usize::MAX).into_iter();
+        let first = pieces.next().unwrap_or_default();
+        let (tone, beside) = (l.tone, l.beside_picture);
+        out.push(Line {
+            description: first,
+            ..l
+        });
+        for rest in pieces {
+            out.push(Line {
+                key: String::new(),
+                description: rest,
+                tone,
+                picture: None,
+                beside_picture: beside,
+            });
+        }
+    }
+    out
+}
+
+/// A line of air before every heading but the first — see [`Tone::Air`].
+fn aired(lines: Vec<Line>) -> Vec<Line> {
+    let mut out = Vec::with_capacity(lines.len() + 8);
+    for l in lines {
+        if l.title() && !out.is_empty() {
+            out.push(Line::air());
+        }
+        out.push(l);
+    }
+    out
 }
 
 /// Assembles the whole manual, in the active language.
@@ -46,91 +268,207 @@ pub struct Line {
 /// whoever defines the bind (see [`crate::leader_chord`]), and not this module.
 #[must_use]
 pub fn assemble(texts: &Texts, chord: &str) -> Vec<Line> {
-    let mut out = vec![Line {
-        key: String::new(),
-        description: texts.t(key::HELP_CHORDS),
-        title: true,
-    }];
+    let mut out = vec![Line::heading(texts.t(key::HELP_CHORDS))];
 
     // THE CHORDS, in the table's order — which is the order in which they make
     // sense together (focus, move, window, spaces, open), and not alphabetical.
     let nested = crate::actions::nested();
     for a in crate::actions::full_chords() {
-        out.push(Line {
-            key: format!("{chord} + {}", a.shows_for(nested)),
-            description: texts.t(&a.label()),
-            title: false,
-        });
+        out.push(Line::plain(
+            format!("{chord} + {}", a.shows_for(nested)),
+            texts.t(&a.label()),
+        ));
     }
 
     // THE COMPOSITOR'S MODES, each under its own title: the chord that opens
     // it is above with the others, and what the keys do once inside is here —
     // the only place besides the hint line a mode draws while it is on.
     for mode in crate::actions::modes() {
-        out.push(Line {
-            key: String::new(),
-            description: texts.t(&format!("{}{}", ronoctua_cmd::KEY_PREFIX_OF, mode.deed)),
-            title: true,
-        });
+        out.push(Line::heading(texts.t(&format!(
+            "{}{}",
+            ronoctua_cmd::KEY_PREFIX_OF,
+            mode.deed
+        ))));
         for k in &mode.keys {
-            out.push(Line {
-                key: k.shows.clone(),
-                description: texts.t(&format!("{}{}", ronoctua_cmd::KEY_PREFIX_OF, k.command)),
-                title: false,
-            });
+            out.push(Line::plain(
+                k.shows.clone(),
+                texts.t(&format!("{}{}", ronoctua_cmd::KEY_PREFIX_OF, k.command)),
+            ));
         }
-        out.push(Line {
-            key: "ESC".to_owned(),
-            description: texts.t(&format!("{}wm-mode-default", ronoctua_cmd::KEY_PREFIX_OF)),
-            title: false,
-        });
+        out.push(Line::plain(
+            "ESC".to_owned(),
+            texts.t(&format!("{}wm-mode-default", ronoctua_cmd::KEY_PREFIX_OF)),
+        ));
     }
 
     // THE EMERGENCY BINDS. They are what one looks for when the leader does not
     // answer — and that is why the manual needs them more than any other line. A
     // manual that only documents the happy path fails exactly when it is
     // consulted.
-    out.push(Line {
-        key: String::new(),
-        description: texts.t(key::HELP_EMERGENCY),
-        title: true,
-    });
+    out.push(Line::heading(texts.t(key::HELP_EMERGENCY)));
     for (key, _, command) in crate::actions::emergency() {
         let description = if command == crate::actions::LEADER_ALTERNATE {
             texts.t(key::HELP_LEADER_ALTERNATE)
         } else {
             texts.t(&format!("{}{command}", ronoctua_cmd::KEY_PREFIX_OF))
         };
-        out.push(Line {
-            key: key.to_owned(),
-            description,
-            title: false,
-        });
+        out.push(Line::plain(key.to_owned(), description));
     }
 
     // THE KEYBOARD'S TOP ROW, for the emergency binds' reason: a key that is
     // bound and appears in no list is a key nobody can find out about. These
     // are the only bare binds besides those four, and they are the ones a
     // person is most likely to press without ever reading anything.
-    out.push(Line {
-        key: String::new(),
-        description: texts.t(key::HELP_MEDIA),
-        title: true,
-    });
+    out.push(Line::heading(texts.t(key::HELP_MEDIA)));
     for (key, _, command) in crate::actions::media() {
-        out.push(Line {
-            key: key.to_owned(),
-            description: texts.t(&format!("{}{command}", ronoctua_cmd::KEY_PREFIX_OF)),
-            title: false,
-        });
+        out.push(Line::plain(
+            key.to_owned(),
+            texts.t(&format!("{}{command}", ronoctua_cmd::KEY_PREFIX_OF)),
+        ));
     }
 
     out
 }
 
+/// How many lines a gesture takes, and so how tall its drawing is: what it
+/// does, how the hands are held, and the rest.
+pub const GESTURE_LINES: usize = 3;
+
+// THE DRAWING IS AS TALL AS THE LINES, and the token and this number are two
+// spellings of one fact: the compiler holds them together.
+const _: () = assert!(GESTURE_LINES == ronoctua_tokens::space::GESTURES_PICTURELINES as usize);
+
+/// The gestures' manual, in the active language: every row of
+/// [`ronoctua_gestures::GESTURES`] as three lines beside its DRAWING — what it
+/// does (the loudest), how the hands are held, and the rest. Generated at
+/// opening for the reason the shortcuts' manual is: a gesture added to the
+/// reader is a picture and three lines here with no step in between, and one
+/// missing a sentence or a picture fails a test below.
+#[must_use]
+pub fn gestures(texts: &Texts) -> Vec<Line> {
+    let mut out = vec![Line::heading(texts.t(key::HELP_GESTURES))];
+    for g in ronoctua_gestures::GESTURES {
+        let line = |description: String, tone: Tone, picture: Option<&'static str>| Line {
+            key: String::new(),
+            description,
+            tone,
+            picture,
+            beside_picture: true,
+        };
+        out.push(line(
+            texts.t(&format!("gesture-{g}-title")),
+            Tone::Function,
+            Some(g),
+        ));
+        out.push(line(texts.t(&format!("gesture-{g}")), Tone::Pose, None));
+        out.push(line(
+            texts.t(&format!("gesture-{g}-does")),
+            Tone::Detail,
+            None,
+        ));
+        // AND AIR BETWEEN ONE GESTURE AND THE NEXT: a drawing with three lines
+        // beside it, glued to the next one's, read as one long block.
+        if Some(g) != ronoctua_gestures::GESTURES.last() {
+            out.push(Line::air());
+        }
+    }
+    out
+}
+
+/// The box a gesture's drawing is fitted in, in logical pixels: as wide as
+/// the manual's picture column and as tall as a gesture's lines.
+#[must_use]
+pub fn gesture_art_box() -> (f32, f32) {
+    let size = ronoctua_tokens::text::size();
+    (
+        f32::from(ronoctua_tokens::space::GESTURES_PICTURECELLS)
+            * ronoctua_tokens::metrics::cell_width(size),
+        f32::from(ronoctua_tokens::space::GESTURES_PICTURELINES)
+            * ronoctua_tokens::metrics::line_height(size),
+    )
+}
+
+/// The key of a gesture's drawing: the gesture, the size and the theme — the
+/// ink is `currentColor` resolved in THIS theme, and a key without it would
+/// keep the old ink on the GPU after a switch (`buffer::svg_key`'s lesson).
+#[must_use]
+pub fn gesture_art_key(id: &str) -> String {
+    let (w, h) = gesture_art_box();
+    format!(
+        "gesture:{id}:{w:.0}x{h:.0}:{}",
+        ronoctua_tokens::theme::current().position()
+    )
+}
+
+/// A gesture's drawing, rasterised to fit its box, in the manual's ink.
+#[must_use]
+pub fn gesture_art(id: &str) -> Option<ronoctua_render::image::Rgba> {
+    let svg = ronoctua_gestures::art::picture(id)?;
+    let [r, g, b, _] = ronoctua_tokens::color::TEXT_SECONDARY.to_rgba8();
+    let svg = svg.replace("currentColor", &format!("#{r:02X}{g:02X}{b:02X}"));
+    let (w, h) = gesture_art_box();
+    // THE DRAWING IS TWICE AS WIDE AS TALL: the side that fits is the smaller
+    // of the box's width and twice its height. `Natural` and not `Fill`:
+    // `Fill` answers a SQUARE, which squeezed into this box drew every
+    // gesture at half its height — measured on the owner's screen.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let side = w.min(2.0 * h).floor() as u32;
+    let r =
+        ronoctua_notify::icon::from_svg(svg.as_bytes(), side, ronoctua_notify::icon::Fit::Natural)?;
+    Some(ronoctua_render::image::Rgba {
+        width: r.width,
+        height: r.height,
+        pixels: r.pixels,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use ronoctua_i18n::Texts;
+
+    #[test]
+    fn every_gesture_has_its_picture_and_its_three_sentences() {
+        let texts = Texts::from_env();
+        let m = super::gestures(&texts);
+        let n = ronoctua_gestures::GESTURES.len();
+        assert_eq!(
+            m.len(),
+            n * super::GESTURE_LINES + (n - 1) + 1,
+            "and air between"
+        );
+        for l in m
+            .iter()
+            .filter(|l| !l.title() && l.tone != super::Tone::Air)
+        {
+            assert!(
+                !l.description.starts_with('['),
+                "a gesture line with no text: {}",
+                l.description
+            );
+        }
+        let drawn: Vec<&str> = m.iter().filter_map(|l| l.picture).collect();
+        assert_eq!(
+            drawn,
+            ronoctua_gestures::GESTURES,
+            "one drawing each, in order"
+        );
+        for g in drawn {
+            assert!(
+                ronoctua_gestures::art::picture(g).is_some(),
+                "{g} has no drawing"
+            );
+        }
+    }
+
+    #[test]
+    fn every_manual_is_named_and_opens_by_its_word() {
+        let texts = Texts::from_env();
+        for w in super::Which::ALL {
+            assert!(!texts.t(w.name()).starts_with('['));
+            assert!(!texts.t(w.about()).starts_with('['));
+            assert_eq!(super::Which::of_word(w.word()), Some(w));
+        }
+    }
 
     #[test]
     fn every_chord_shows_up_in_the_manual() {
@@ -177,7 +515,62 @@ mod tests {
                 "a missing text key: {}",
                 l.description
             );
-            assert!(l.title || !l.key.is_empty(), "a shortcut with no key");
+            assert!(l.title() || !l.key.is_empty(), "a shortcut with no key");
+        }
+    }
+
+    #[test]
+    fn a_long_sentence_is_wrapped_and_never_cut() {
+        let texts = Texts::from_env();
+        let whole = super::Which::Gestures.lines(&texts, "SUPER");
+        let narrow = super::laid_out(super::Which::Gestures.lines(&texts, "SUPER"), 50, 4, 1);
+        let join = |ls: &[super::Line]| {
+            ls.iter()
+                .filter(|l| l.tone != super::Tone::Air)
+                .map(|l| l.description.clone())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert!(
+            narrow.len() > whole.len(),
+            "something was wrapped at 50 columns"
+        );
+        assert_eq!(
+            join(&whole).split_whitespace().collect::<Vec<_>>(),
+            join(&narrow).split_whitespace().collect::<Vec<_>>(),
+            "every word is still there"
+        );
+        let room = 50 - super::key_column(&narrow) - 4;
+        for l in narrow.iter().filter(|l| !l.title()) {
+            assert!(
+                ronoctua_render::layout::width(&l.description) <= room,
+                "{}",
+                l.description
+            );
+        }
+        assert_eq!(
+            narrow.iter().filter(|l| l.picture.is_some()).count(),
+            ronoctua_gestures::GESTURES.len(),
+            "a drawing each, never repeated on a continuation"
+        );
+    }
+
+    #[test]
+    fn every_heading_but_the_first_has_air_above_it() {
+        let texts = Texts::from_env();
+        for w in super::Which::ALL {
+            let m = w.lines(&texts, "SUPER");
+            for (i, l) in m.iter().enumerate().skip(1) {
+                if l.title() {
+                    assert_eq!(
+                        m[i - 1].tone,
+                        super::Tone::Air,
+                        "{:?}: {}",
+                        w,
+                        l.description
+                    );
+                }
+            }
         }
     }
 

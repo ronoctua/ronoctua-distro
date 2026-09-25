@@ -708,6 +708,11 @@
   # And the one that says the studio is RECORDING or STREAMING, drawn in the
   # danger tone: a mark that is also a warning.
   recording = "md-record_rec";
+  # HAND GESTURES ARE ON (`LEADER m g`): the camera is reading hands. Just an
+  # OPEN HAND, the owner's choice — not the waving one, whose lines of motion
+  # are noise at one cell, nor `md-gesture_tap`, the notification's "has
+  # actions".
+  gestures = "md-hand_back_right";
 
   # THE PLAYER (`LEADER p`, the column on the right, the modeline's mark).
   #

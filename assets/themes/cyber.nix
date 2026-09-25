@@ -124,6 +124,12 @@
       text-chroma = 0.36;
       text-shift = 0;
     };
+    # The camera's marks (`modeline.watching`): a faded pink leaning to red.
+    watching = {
+      hue = 10;
+      text-chroma = 0.36;
+      text-shift = 0;
+    };
     alternate = {
       hue = 180;
       text-chroma = 0.34;

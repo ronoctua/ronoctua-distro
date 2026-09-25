@@ -1,0 +1,20 @@
+[package]
+name = "ronoctua-gestures"
+description = "What a pose of the hands means: a pointer, a click, a scroll, a command. Zero dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ZERO DEPENDENCIES, and no clock, thread, file or device.
+#
+# The studio says WHERE the hands are (21 points each, from the camera); this
+# crate says what a pose MEANS, and the footer does it. Held apart because
+# the meaning is where every threshold lives — how close is a touch, how long
+# before a command fires — and a pure function of points and a timestamp is
+# what lets every one of them be a test instead of a demonstration.
+[dependencies]
+
+[lints]
+workspace = true

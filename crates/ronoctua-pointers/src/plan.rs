@@ -116,6 +116,28 @@ pub fn follows_the_keyboards(id: &str) -> bool {
     id.starts_with(KEYBOARD_REMAPPER)
 }
 
+/// The name the compositor gives EVERY pointer made through the virtual
+/// pointer protocol (`wlr_virtual_pointer_v1.c`), vendor and product zero.
+const VIRTUAL_POINTER: &str = "0:0:wlr_virtual_pointer_v1";
+
+/// Whether a pointing device is a VIRTUAL pointer — the one hand gestures
+/// move (`ronoctua-shell`'s `virtual_pointer.rs`).
+///
+/// It is put on the seat its client names, and moves THAT seat's cursor: a
+/// cursor of its own would be a second arrow on screen that only a hand in
+/// front of the camera moves, and a seat line for it would be written for a
+/// device that is gone the moment gestures are off.
+#[must_use]
+pub fn is_a_virtual_pointer(id: &str) -> bool {
+    id == VIRTUAL_POINTER
+}
+
+/// Whether a device is never given a cursor: the keyboards' own pointer and
+/// the virtual one.
+fn not_a_hand(id: &str) -> bool {
+    follows_the_keyboards(id) || is_a_virtual_pointer(id)
+}
+
 /// The `vendor:product` of an identifier, when it names a real one — what
 /// two interfaces of ONE physical device share.
 ///
@@ -181,7 +203,7 @@ pub fn plan_with(devices: &[Device], prefs: &Preferences, emulated: &[String]) -
     let a_real_hand = devices.iter().any(|d| {
         d.kind.points()
             && !is_emulated(d)
-            && !follows_the_keyboards(&d.id)
+            && !not_a_hand(&d.id)
             && ronoctua_keys::wire::unit_of_twin(&d.id).is_none()
     });
     // THE NUMBERS ALREADY TAKEN, by any device ever remembered — present or
@@ -190,7 +212,7 @@ pub fn plan_with(devices: &[Device], prefs: &Preferences, emulated: &[String]) -
     let mut taken: BTreeSet<u16> = prefs
         .devices
         .iter()
-        .filter(|(id, _)| !follows_the_keyboards(id))
+        .filter(|(id, _)| !not_a_hand(id))
         .filter_map(|(_, d)| d.cursor)
         .collect();
     // THE VIRTUAL MACHINE'S POINTERS ARE ONE HAND: its tablet and its two
@@ -217,7 +239,7 @@ pub fn plan_with(devices: &[Device], prefs: &Preferences, emulated: &[String]) -
 
     for d in devices.iter().filter(|d| {
         d.kind.points()
-                && !follows_the_keyboards(&d.id)
+                && !not_a_hand(&d.id)
                 // A KEYBOARD'S TWIN IS NEVER A HAND, whatever libinput
                 // decided it is: its seat is its keyboard's (`keyboards`).
                 && ronoctua_keys::wire::unit_of_twin(&d.id).is_none()
@@ -297,9 +319,17 @@ pub fn plan_with(devices: &[Device], prefs: &Preferences, emulated: &[String]) -
     }
 
     by_cursor.entry(FIRST).or_default();
+    // THE GESTURES' POINTER MOVES THE FIRST CURSOR (the footer makes it on
+    // `seat0`), and it IS a hand for that cursor's being drawn: without it, a
+    // machine whose mouse is on another cursor — or that has no mouse, which
+    // is when gestures are the mouse — hid the first cursor 100 ms after every
+    // movement the hand made.
+    let gestures = devices.iter().any(|d| is_a_virtual_pointer(&d.id));
     for (number, ids) in by_cursor {
         let c = prefs.cursor(number);
-        let shown = c.enabled && out.devices.iter().any(|d| d.cursor == number && d.on);
+        let shown = c.enabled
+            && ((number == FIRST && gestures)
+                || out.devices.iter().any(|d| d.cursor == number && d.on));
         out.cursors.push(CursorPlan {
             number,
             seat: seat_of(number),
@@ -465,6 +495,34 @@ mod tests {
         assert_eq!(p.cursors[2].seat, "ronoctua-cursor-3");
         assert_eq!(p.cursors[1].colour, 1, "each cursor a colour of its own");
         assert_eq!(p.placed.len(), 3, "and all three are written down");
+    }
+
+    #[test]
+    fn the_gestures_pointer_takes_no_cursor() {
+        let mut devices = vec![device(VIRTUAL_POINTER, DeviceKind::Mouse)];
+        devices.extend(laptop());
+        let p = plan(&devices, &detecting());
+        assert!(p.devices.iter().all(|d| !is_a_virtual_pointer(&d.id)));
+        assert_eq!(p.devices[0].cursor, FIRST, "the touchpad keeps cursor one");
+        assert!(p.placed.iter().all(|(id, _)| !is_a_virtual_pointer(id)));
+    }
+
+    #[test]
+    fn the_gestures_pointer_keeps_the_first_cursor_drawn() {
+        // No mouse at all: the gestures are the only hand there is.
+        let alone = plan(&[device(VIRTUAL_POINTER, DeviceKind::Mouse)], &detecting());
+        let first = alone.cursors.iter().find(|c| c.number == FIRST).unwrap();
+        assert!(first.shown, "the cursor the hand moves is drawn");
+        // Without it, the same machine hides the first cursor.
+        let none = plan(&[], &detecting());
+        assert!(
+            !none
+                .cursors
+                .iter()
+                .find(|c| c.number == FIRST)
+                .unwrap()
+                .shown
+        );
     }
 
     #[test]

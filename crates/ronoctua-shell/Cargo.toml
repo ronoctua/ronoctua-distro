@@ -103,6 +103,8 @@ ronoctua-audio = { path = "../ronoctua-audio" }
 # controls), the studio's wire and preview, and the effect table the rings walk.
 ronoctua-camera = { path = "../ronoctua-camera" }
 ronoctua-studio = { path = "../ronoctua-studio" }
+# What a pose of the hands means (`gestures.rs`).
+ronoctua-gestures = { path = "../ronoctua-gestures" }
 # The player's CLIENT only: its socket, its words and its frames. The engine is
 # `ronoctua-player-engine`, a crate of its own, so libmpv never reaches here.
 ronoctua-player = { path = "../ronoctua-player" }
@@ -147,8 +149,9 @@ ronoctua-memory = { path = "../ronoctua-memory" }
 ronoctua-brain = { path = "../ronoctua-brain" }
 
 # Integration with the compositor through wlr-layer-shell and IPC (invariant 3),
-# and the virtual keyboard the owner approved as its exception — see
-# `src/virtual_keys.rs`, the only file that names it.
+# and the virtual keyboard and pointer the owner approved as its exceptions —
+# see `src/virtual_keys.rs` and `src/virtual_pointer.rs`, the only files that
+# name them.
 smithay-client-toolkit.workspace = true
 wayland-client.workspace = true
 wayland-protocols-wlr.workspace = true

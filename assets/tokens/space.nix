@@ -920,6 +920,16 @@
   #
   # `label` is the width of the words that name a row of the keyboard's own
   # settings, before the keys that answer them.
+  # THE GESTURES' MANUAL (`LEADER h`, then the gestures): each gesture's
+  # DRAWING, beside its three lines. `pictureLines` is how many lines it spans
+  # — the manual gives every gesture that many (what it does, how, the rest) —
+  # and `pictureCells` how wide, which is twice its height at the grid's
+  # 0.6 cell: the drawings are two hands side by side.
+  gestures = {
+    pictureLines = 3;
+    pictureCells = 16;
+  };
+
   osk = {
     lowQuarters = 4;
     mediumQuarters = 8;

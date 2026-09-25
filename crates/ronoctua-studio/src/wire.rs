@@ -177,6 +177,10 @@ pub enum Ask {
     },
     /// Read the settings and the scene book again.
     Reload,
+    /// The hands in the camera, one [`Say::Hands`] per frame read, until the
+    /// client leaves. The connection is what keeps the camera open: a client
+    /// that dies closes it by construction.
+    Hands,
 }
 
 /// Why something does not work, for a sentence on screen. Each has a text key
@@ -195,6 +199,8 @@ pub enum Trouble {
     CameraSilent,
     /// The segmentation model is not installed; background effects refuse.
     NoModel,
+    /// The hand models are not installed; gestures refuse.
+    NoHandModel,
     /// A replaced background has no picture chosen.
     NoBackdrop,
     /// ffmpeg is not reachable.
@@ -342,6 +348,29 @@ pub enum Say {
     Done,
     /// Not taken, and why.
     Refused(Trouble),
+    /// The hands one camera frame showed.
+    Hands(Seen),
+}
+
+/// The hands of one frame, as the person sees them (mirrored).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Seen {
+    /// The frame's width over its height: `x` and `y` are each in `0..1` of
+    /// their own side, and a distance needs both in one unit.
+    pub aspect: f32,
+    /// Milliseconds since the daemon started, from a monotonic clock.
+    pub at: u64,
+    /// Up to two.
+    pub hands: Vec<SeenHand>,
+}
+
+/// One hand.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SeenHand {
+    /// MediaPipe's 21 points: `[x, y, z]`, `x` and `y` in `0..1`.
+    pub points: Vec<[f32; 3]>,
+    /// The person's right hand.
+    pub right: bool,
 }
 
 /// One JSON object and a newline.

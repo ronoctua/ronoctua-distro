@@ -796,6 +796,40 @@ pub fn store() -> ronoctua_store::Store<Prefs> {
     ronoctua_store::Store::at(home(), FILE)
 }
 
+/// The machine's own language: its FIRST layout, when it declares several —
+/// a keyboard of our own cycles its own list.
+#[must_use]
+pub fn machine_language() -> Language {
+    let machine = ronoctua_pointers::keyboards::Machine::from_env();
+    let first = |s: &str| s.split(',').next().unwrap_or("").trim().to_owned();
+    let layout = first(&machine.layout);
+    Language {
+        layout: if layout.is_empty() {
+            "us".to_owned()
+        } else {
+            layout
+        },
+        variant: first(&machine.variant),
+    }
+}
+
+/// The keymap text of `language`, as the virtual keyboard is given it —
+/// for keys sent with the keyboard put away (the gestures' `Esc` and arrows).
+#[must_use]
+pub fn keymap_of(language: &Language) -> Option<String> {
+    let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+    xkb::Keymap::new_from_names(
+        &context,
+        "",
+        "",
+        &language.layout,
+        &language.variant,
+        None,
+        xkb::KEYMAP_COMPILE_NO_FLAGS,
+    )
+    .map(|k| k.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1))
+}
+
 /// A language: an xkb layout and its variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Language {
