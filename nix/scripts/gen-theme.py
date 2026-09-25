@@ -246,9 +246,10 @@ PROTAN_BAND = (158.0, 172.0)
 #: knows no theme by name.
 REGRESSION_TOLERANCE = 0.03
 
-#: The colours `nix/shots.nix` asserts NEVER appear on screen; no token may
-#: come near them. Distance is Euclidean in encoded RGB, divided by √3; the
-#: shots match with an 18% fuzz, so a quarter keeps a margin over it, and the
+#: The colours a test film is drawn in (ffmpeg's `testsrc2`), which a
+#: photograph (`nix run .#shot`) looks for on screen to find the film: no token
+#: may come near them. Distance is Euclidean in encoded RGB, divided by √3; a
+#: scene matches with an 18% fuzz, so a quarter keeps a margin over it, and the
 #: content floor sits just above the fuzz itself.
 FILM_COLOURS = ("#FF00FF", "#00FFFF", "#FFFF00", "#FF6000")
 #: The desk when the person wants none of the theme's colour under the

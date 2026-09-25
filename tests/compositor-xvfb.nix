@@ -120,8 +120,8 @@ rec {
   # # THE REASONS LIVE HERE AND NOT IN THE DOCSTRINGS
   #
   # Every byte of the string below travels as ONE KERNEL ARGUMENT in every
-  # test that uses it, and the photo battery is already near the 128 KiB wall
-  # (`the-shots-script-fits-in-an-argument`). Past it the build dies with
+  # test that uses it, and the kernel's wall for one is 128 KiB. Past it the
+  # build dies with
   # `Argument list too long`, naming neither the file nor the size. So a
   # helper keeps the sentence that says what it answers, and the argument for
   # why it answers that way is written here, in Nix, which never reaches the

@@ -2330,7 +2330,7 @@ de atualização o desenham lá sem erguer; só o gerenciador de arquivos ergue)
 os cinzas da escada e entre a faixa de seleção e cada cinza que a ladeia (o par que o dono mediu),
 degraus adjacentes de toda escada (≥ 0,012, L monótona), matiz entre as cinco famílias do rodapé
 (≥ 14°), acento fora da faixa 158–172° (colapsa sobre o vermelho na protanopia), pares categóricos e
-ordinais, e as quatro cores-filme do `shots.nix`. Deficiência de visão de cor é Warn e nunca Fail —
+ordinais, e as quatro cores-filme (as do `testsrc2`, que uma foto procura na tela). Deficiência de visão de cor é Warn e nunca Fail —
 verde e amarelo do próprio owl estão a 0,009 sob deuteranopia, e o glifo carrega o significado. A
 regressão compara cada chave gerada com `assets/themes/owl.reference.nix`, os 52 literais congelados
 do dia das sementes: acima de ΔE_ok 0,03 é falha de build, salvo chave listada em `deviations` com

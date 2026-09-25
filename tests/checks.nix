@@ -13568,72 +13568,6 @@ let
     END
   '';
 
-  # THE PHOTO BATTERY'S SCRIPT FITS IN ONE KERNEL ARGUMENT.
-  #
-  # # What it catches, and it is MUTE without this
-  #
-  # The whole of `nix/shots.nix`'s Python reaches the builder as ONE
-  # environment variable, and `execve` caps a single argument or variable at
-  # `MAX_ARG_STRLEN` — 128 KiB, a constant of the kernel and not of Nix. Past
-  # it the build dies with
-  #
-  #     error: executing '…/bash': Argument list too long
-  #
-  # which names neither the file, nor the variable, nor the size. It was met
-  # while adding the glance's scene: 131 779 bytes against 131 072, over by
-  # seven hundred, after a delivery that had nothing to do with any of it.
-  #
-  # # What to do when it trips
-  #
-  # MOVE THE PROSE, not the assertions. Half that script is comments, and they
-  # are the repository's reasons — but a scene's reasons belong beside its id
-  # in `nix/shots-scenes.nix`, which is Nix and never reaches the kernel. That
-  # move bought three kilobytes the day this check was written.
-  #
-  # The margin is ONE KILOBYTE because that is what is left. It is about a
-  # paragraph, which is the right unit of warning: the next paragraph is the
-  # one that would have broken it.
-  the-shots-script-fits-in-an-argument =
-    let
-      script = self.packages.${pkgs.stdenv.hostPlatform.system}.shots.driver.testScript;
-    in
-    mkCheck "the-shots-script-fits-in-an-argument" [ pkgs.python3 ] ''
-      cat > script.py <<'SCRIPT'
-      ${script}
-      SCRIPT
-      python3 - <<'END'
-      import pathlib, sys
-
-      # THE HEREDOC ABOVE IS INDENTED BY NIX, so the size is measured on the
-      # eval'd string and not on this copy: what matters is the byte count of
-      # what goes into the environment.
-      size = len(pathlib.Path("script.py").read_bytes())
-
-      # `MAX_ARG_STRLEN` — 32 pages, and a page is 4 KiB on every platform this
-      # builds for. Written out because the kernel does not export it and
-      # nothing in the failure says it.
-      WALL = 32 * 4096
-      MARGIN = 1024
-
-      if size > WALL - MARGIN:
-          print(
-              f"ERROR: the photo battery's script is {size} bytes, and one kernel "
-              f"argument holds {WALL}.",
-              file=sys.stderr,
-          )
-          print("", file=sys.stderr)
-          print("       Past that the build dies with `Argument list too long`,", file=sys.stderr)
-          print("       naming neither the file nor the variable nor the size.", file=sys.stderr)
-          print("", file=sys.stderr)
-          print("       Half that script is comments. A scene's reasons belong", file=sys.stderr)
-          print("       beside its id in nix/shots-scenes.nix, which is Nix and", file=sys.stderr)
-          print("       never reaches the kernel; move them there.", file=sys.stderr)
-          raise SystemExit(1)
-
-      print(f"OK: {size} bytes of script, {WALL - size} under one kernel argument")
-      END
-    '';
-
   timedate-polkit-is-narrow =
     let
       rules = self.nixosConfigurations.vm.config.security.polkit.extraConfig;
@@ -22723,116 +22657,6 @@ let
         END
       '';
 
-  shots-scenes-are-total = mkCheck "shots-scenes-are-total" [ pkgs.python3 ] ''
-    python3 - <<'END'
-    import pathlib, re, sys
-    exec(open("${pyPrelude}").read())
-
-    # WHAT THE BATTERY PHOTOGRAPHS, read from both sides.
-    #
-    # `nix/shots-scenes.nix` is the list and the flake makes one package of
-    # each; `nix/shots.nix` guards every subtest with one of the ids. A scene
-    # declared and never used is a package that photographs nothing — it would
-    # boot a VM, run no subtest and pass. A subtest with no guard is a picture
-    # nobody can ask for on its own, which is the whole of what the list is
-    # for.
-    root = pathlib.Path("${self}")
-    # FILE-WIDE: a list of scenes against a script of subtests, neither of
-    # which has a function to narrow to. The `if wanted(...)` line and the
-    # indentation below it are the narrowing.
-    #
-    # `hashless` on the list: a scene commented out is a scene that is not
-    # declared, and it used to read as declared.
-    listed = hashless((root / "nix/shots-scenes.nix").read_text())
-    floor(len(listed), 500, "characters of nix/shots-scenes.nix")
-    declared = re.findall(r"id = \"([a-z0-9-]+)\";", listed)
-    # WHICH SCENES SAY THEY CANNOT STAND ALONE.
-    needy = set(
-        re.findall(r"id = \"([a-z0-9-]+)\";\s*\n\s*needs = \[", listed)
-    )
-    # AND WHICH ONE OPENS NOTHING ON PURPOSE, which is a different claim: it
-    # photographs the screen with nothing on it.
-    alone = set(
-        re.findall(r"id = \"([a-z0-9-]+)\";\s*\n\s*alone = true;", listed)
-    )
-    script = (root / "nix/shots.nix").read_text().splitlines()
-    bad = []
-
-    if len(declared) != len(set(declared)):
-        bad.append("nix/shots-scenes.nix names the same scene twice")
-    floor(len(declared), 10, "scenes declared")
-
-    used = []
-    for n, line in enumerate(script):
-        if not line.lstrip().startswith("with subtest("):
-            continue
-        # THE GUARD IS THE LINE ABOVE, and it has to be: an `if` further up
-        # would be guarding something else, and the subtest would run inside
-        # somebody else's scene.
-        above = script[n - 1].strip() if n else ""
-        found = re.fullmatch(r'if wanted\("([a-z0-9-]+)"\):', above)
-        if found is None:
-            bad.append(
-                f"nix/shots.nix:{n + 1} — a subtest with no scene above it: {line.strip()[:60]}"
-            )
-            continue
-        used.append(found.group(1))
-
-    for scene in used:
-        if scene not in declared:
-            bad.append(f"nix/shots.nix guards a subtest with `{scene}`, which no scene declares")
-    for scene in declared:
-        if scene not in used:
-            bad.append(
-                f"nix/shots-scenes.nix declares `{scene}` and no subtest uses it — "
-                f"`nix build .#shots-{scene}` would boot a VM, photograph nothing and pass"
-            )
-
-    # --- AND A SCENE EITHER OPENS A DOOR OR SAYS WHOSE IT USES ------------
-    #
-    # MEASURED, and it is why this clause exists: `nix build .#shots-document`
-    # photographed an EMPTY DESKTOP and passed. That subtest opens nothing —
-    # it walks the directory the manager's window scene left it in — and its
-    # measurement asked whether `text.primary` covered twenty pixels, which the
-    # white mouse pointer answered. A scene that photographs nothing and says
-    # it worked is what this whole battery exists to prevent.
-    #
-    # The rule is mechanical: a subtest that never calls `control(` is a
-    # subtest that did not open its own view, and it has to name what it rides
-    # on. What is excused is what raises its own state ANOTHER way — a
-    # notification (`notify(`), a unit (`systemctl`) — and the excuse is
-    # re-measured here rather than written as a name.
-    for n, line in enumerate(script):
-        found = re.fullmatch(r'if wanted\("([a-z0-9-]+)"\):', line.strip())
-        if found is None:
-            continue
-        scene = found.group(1)
-        end = len(script)
-        for m in range(n + 1, len(script)):
-            if script[m].strip() and len(script[m]) - len(script[m].lstrip()) <= 4:
-                end = m
-                break
-        body = "\n".join(script[n:end])
-        opens = any(
-            w in body for w in ("control(", "notify(", "systemctl", "systemd-run")
-        )
-        if not opens and scene not in needy and scene not in alone:
-            bad.append(
-                f"`{scene}` opens no view of its own, declares no `needs` and is not "
-                f"marked `alone` — run by itself it would photograph whatever the "
-                f"scene before it left on the screen"
-            )
-
-    if bad:
-        print("ERROR: the shots and the scenes do not agree.", file=sys.stderr)
-        print("", file=sys.stderr)
-        for b in bad:
-            print("       " + b, file=sys.stderr)
-        raise SystemExit(1)
-    print(f"OK: {len(declared)} scenes, every one of them a subtest and every subtest one of them")
-    END
-  '';
-
   # -------------------------------------------------------------------
   # The test tiers, and the guards that keep them total
   # -------------------------------------------------------------------
@@ -23032,7 +22856,6 @@ let
       files-keys-are-not-the-compositors
       playlist-formats-are-total
       document-formats-are-total
-      shots-scenes-are-total
       the-explanation-has-its-own-register
       # The preview's player: the size it never guesses, and the child it never
       # leaves behind.
@@ -23053,7 +22876,6 @@ let
       a-mark-at-the-edge-is-drawn-at-the-edge
       a-glance-stripe-has-equal-air
       a-note-is-wrapped-and-not-cut
-      the-shots-script-fits-in-an-argument
       every-window-repeats
       every-door-hears-every-seat
       every-door-hears-every-keyboard
@@ -23133,7 +22955,6 @@ let
       files-keys-are-not-the-compositors
       playlist-formats-are-total
       document-formats-are-total
-      shots-scenes-are-total
       the-explanation-has-its-own-register
       motion-never-guesses-a-frame
       motion-never-leaks-a-child
@@ -23144,7 +22965,6 @@ let
       a-mark-at-the-edge-is-drawn-at-the-edge
       a-glance-stripe-has-equal-air
       a-note-is-wrapped-and-not-cut
-      the-shots-script-fits-in-an-argument
       every-window-repeats
       every-door-hears-every-seat
       every-door-hears-every-keyboard

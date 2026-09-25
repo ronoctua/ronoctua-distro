@@ -161,8 +161,8 @@ Um buffer vira PNG em 0,2 s, sem VM. Dentro do `nix develop`, cada componente te
 tema, idioma, e teclas e cliques para andar até a tela que se quer.
 
 ```
-nix build .#shots-<cena>           fotografa UMA cena (e o que ela precisa) numa VM
-nix build .#shots                  todas
+nix run .#shot -- <cena.py>        fotografa a feature do momento numa VM, pela cena escrita para ela
+                                   (fora do repo); as fotos vão para ~/.cache/ronoctua-distro/shot
 ```
 
 Teste verde não vê espaço em branco, sobreposição nem uma faixa no lugar errado. A foto vê.

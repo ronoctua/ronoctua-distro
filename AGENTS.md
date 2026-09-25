@@ -68,7 +68,8 @@ Ao bater num invariante: **pare e reporte.** Não contorne, não peça exceção
 nix develop           entra no ambiente (direnv é atalho opcional, e do HOST)
 nix run .#dev         compositor aninhado + rodapé; leader = Ctrl+Alt+Espaço, não Super
 nix run .#png         um buffer vira PNG em 0,2 s, sem VM: a tela antes do "pronto"
-nix build .#shots-<cena>  fotografa UMA cena e o que ela precisa; .#shots são as 19
+nix run .#shot -- <cena.py>  fotografa a feature do momento; a cena mora FORA do repo, as fotos em
+                      ~/.cache/ronoctua-distro/shot, apagadas a cada rodada
 nix run .#quick       DEZ escolhidos (tests/quick.nix), ~1 min; subconjunto, não categoria
 nix run .#gate        TUDO; dimensiona pela RAM e o earlyoom. Só ele fecha o inv. 7; .#most é a bateria de todo dia, sem instalação
 nix run .#vm  VM completa; .#iso o ISO; .#bench falha se estourar; .#diagnostics só lê
@@ -2441,9 +2442,9 @@ isso moram aqui, no único arquivo que chega sozinho ao contexto.
   mover o ponteiro entre duas cenas mudou qual porta recebia as teclas, quebrando o miniplayer três
   cenas adiante. O conserto é a asserção ser de FORA da tela (`pgrep` na porta que a cena usa), que
   é o que um cursor não tem como responder.
-- **O rodapé da bateria de fotos NÃO herda o ambiente do módulo.** Os leitores externos
+- **O rodapé da foto NÃO herda o ambiente do módulo.** Os leitores externos
   (`RONOCTUA_EXIFTOOL` e os cinco irmãos) vêm do `nix/modules/media.nix`, que os põe na unidade
-  `ronoctua-footer` e nas variáveis de sessão; o `shots.nix` sobe o rodapé com `systemd-run
+  `ronoctua-footer` e nas variáveis de sessão; o `nix/shot.nix` sobe o rodapé com `systemd-run
   --unit=footer` e recebe NENHUMA das duas coisas. O sintoma é uma ficha de fotografia sem uma única
   tag: `Refusal::Missing` não desenha nada, e lê-se como arquivo sem metadado. Quem fotografa um
   caminho que chama programa externo acrescenta o `--setenv` ali.
@@ -2454,11 +2455,15 @@ isso moram aqui, no único arquivo que chega sozinho ao contexto.
   que a torna inrespondível por texto. O irmão dessa armadilha é o RECORTE: `surface.atlas.ocean` é
   violeta escuro e `surface.selection` também, então a pergunta tem de ser feita na coluna em que a
   figura está, nunca na tela toda.
-- **Cena de foto ou abre a própria porta, ou declara de quem ela usa** (`needs`/`alone` em
-  `nix/shots-scenes.nix`): o `document` e o `miniplayer` andam na janela que o `manager-window`
-  abriu, e sozinhos fotografavam a mesa. Pedir uma cena traz o fecho transitivo dela, na ordem
-  declarada; e o `shots-scenes-are-total` recusa cena que não chama `control(`/`notify(`/`systemd*`
-  e não diz de que depende.
+- **A FOTO É DA FEATURE DO MOMENTO, e nenhuma cena fica** (regra do dono, 2026-09-25): quais
+  regiões fotografar se decide AO construir a feature, e a foto de uma feature feita antes não é
+  guardada, repetida nem acumulada. `nix/shot.nix` é o PALCO — a VM, o compositor, o rodapé e os
+  ajudantes (`control`, `notify`, `shot`, `crop`, `changed`, `has_colour`…, a lista está no topo do
+  arquivo) — e a CENA é um `.py` escrito para a feature, fora do repositório (o scratch de quem
+  trabalha), rodado com `nix run .#shot -- <cena.py>`, lido e jogado fora. As fotos vão para
+  `~/.cache/ronoctua-distro/shot`, apagada no começo de toda rodada. Substituiu uma bateria de 42
+  cenas permanentes que refotografava o sistema inteiro a cada mudança, cresceu até o roteiro não
+  caber num argumento do kernel e precisava de dois checks só para manter a própria contabilidade.
 - **`nix run .#png` ANTES DA PALAVRA "PRONTO".** Verde não é prova, e desde que olhar custa 0,2 s não
   há desculpa. Teste que compara ESTADO não vê espaço em branco, sobreposição nem faixa de seleção.
   **E TODO buffer é fotografável — se um não for, a ferramenta é que está incompleta.** Eu relatei

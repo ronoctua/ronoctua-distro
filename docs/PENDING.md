@@ -646,7 +646,7 @@ As fotos provam o player inteiro — o filme anda (seis amostras nomeiam qual qu
 seria uma faixa de ~16:1) e os controles chegam com o ponteiro (0 pixel de glifo sem ele, 29 com).
 
 O que elas NÃO provam é a linha do tempo, e por um motivo de projeto e não de descuido: elas usam um
-**GIF**, que o crate `image` decodifica em processo — a `shots` não tem grupo de mídia nenhum. E um
+**GIF**, que o crate `image` decodifica em processo — o palco das fotos não tem grupo de mídia nenhum. E um
 GIF não tem duração, então não ganha linha do tempo (buscar num GIF é compor desde o primeiro
 quadro: 707 ms no arquivo do dono).
 
@@ -654,7 +654,7 @@ Provar a linha do tempo pede um **vídeo**, que pede `ffmpeg-full` DENTRO da VM 
 duas variáveis que o `nix/modules/media.nix` põe na sessão. Isso é decisão de closure numa VM de
 teste, não decisão de teste — por isso não foi tomada.
 
-- acabou quando: a `shots` arrasta o cursor da linha do tempo e mede que ele andou, ou o dono decide
+- acabou quando: uma cena do `.#shot` arrasta o cursor da linha do tempo e mede que ele andou, ou o dono decide
   que o custo de closure não vale
 
 

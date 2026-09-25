@@ -586,6 +586,39 @@
       # sway's derivation and where wlroots is.
       scroll = pkgs.callPackage ./nix/scroll.nix { scrollSrc = inputs.scroll-src; };
 
+      # THE STAGE'S DRIVER, and the app that hands it a scene.
+      shotDriver =
+        (pkgs.callPackage ./nix/shot.nix {
+          inherit
+            scroll
+            fonts
+            themed
+            defaultTheme
+            ;
+          ronoctua-shell = rust.shell;
+          ronoctua-brain = rust.brain;
+          ronoctua-transfers = rust.transfers;
+          ronoctua-player = rust.player;
+        }).driver;
+      shotApp = pkgs.writeShellApplication {
+        name = "ronoctua-shot";
+        runtimeInputs = [ pkgs.coreutils ];
+        text = ''
+          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+            echo "usage: nix run .#shot -- <scene.py>" >&2
+            exit 2
+          fi
+          scene=$(realpath "$1")
+          out="''${XDG_CACHE_HOME:-$HOME/.cache}/ronoctua-distro/shot"
+          # EMPTIED EVERY RUN: a picture of what was built before is not kept.
+          rm -rf "$out"
+          mkdir -p "$out"
+          echo "shot: $scene -> $out"
+          RONOCTUA_SHOT_SCENE="$scene" ${shotDriver}/bin/nixos-test-driver -o "$out"
+          ls -1 "$out"
+        '';
+      };
+
       devApp = pkgs.callPackage ./nix/dev.nix {
         inherit
           atlasData
@@ -991,61 +1024,7 @@
         # The shell: the two-line footer.
         ronoctua-shell = rust.shell;
 
-        # THE SCREENSHOTS, on a real compositor. `nix build .#shots` leaves the
-        # PNGs in the store — see `nix/shots.nix` for why it is a VM and not a
-        # script on somebody's machine.
-        shots = pkgs.callPackage ./nix/shots.nix {
-          inherit
-            scroll
-            fonts
-            themed
-            themes
-            defaultTheme
-            ;
-          ronoctua-shell = rust.shell;
-          # The daemon, so the brain's line can be photographed. It is the only
-          # region of the footer that no buffer draws, so `nix run .#png`
-          # cannot reach it and a real compositor is the only vehicle.
-          ronoctua-brain = rust.brain;
-          # AND THE QUEUE, because a drop ends in it. `files::queued` hands the
-          # work to `ronoctua-transfers` over its socket, so a scene that drags
-          # a file onto a folder and then asks whether the file MOVED is asking
-          # a question only the daemon can answer.
-          ronoctua-transfers = rust.transfers;
-          # AND THE PLAYER, so it is photographed playing and not waiting.
-          ronoctua-player = rust.player;
-        };
-
-        # AND ONE PACKAGE PER SCENE, so a delivery can photograph the screen it
-        # changed instead of the whole system.
-        #
-        # The owner read the cost off the deliveries — *"os mesmos screenshots
-        # dos mesmos locais estão sendo gerados toda vez que você testa algo
-        # novo"* — and he is right about the arithmetic: a full run is four
-        # minutes and thirty-five pictures, of which a delivery changes one or
-        # two. `nix build .#shots-manager` is the file manager and nothing
-        # else. `.#shots` above is still every scene, and is still what proves
-        # the whole screen.
       }
-      // lib.listToAttrs (
-        map (scene: {
-          name = "shots-${scene}";
-          value = pkgs.callPackage ./nix/shots.nix {
-            inherit
-              scroll
-              fonts
-              themed
-              themes
-              defaultTheme
-              ;
-            only = [ scene ];
-            ronoctua-shell = rust.shell;
-            ronoctua-brain = rust.brain;
-            ronoctua-transfers = rust.transfers;
-            ronoctua-player = rust.player;
-          };
-        }) (map (s: s.id) (import ./nix/shots-scenes.nix))
-      )
       // {
 
         iso = self.nixosConfigurations.installer.config.system.build.isoImage;
@@ -1276,6 +1255,20 @@
           program = "${devApp}/bin/ronoctua-dev";
           meta = {
             description = "the nested compositor + footer, for the UI working loop";
+            platforms = [ system ];
+          };
+        };
+
+        # ONE FEATURE'S PHOTOGRAPHS: `nix run .#shot -- <scene.py>`, the scene
+        # written for the feature being built and kept OUTSIDE this repository.
+        # The stage is `nix/shot.nix`; the pictures land in
+        # `$XDG_CACHE_HOME/ronoctua-distro/shot`, emptied every run — nothing
+        # of a feature built before is photographed again.
+        shot = {
+          type = "app";
+          program = "${shotApp}/bin/ronoctua-shot";
+          meta = {
+            description = "photographs one feature on a real compositor, from a scene written for it";
             platforms = [ system ];
           };
         };
