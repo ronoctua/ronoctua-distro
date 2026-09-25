@@ -13,6 +13,10 @@ linhas. Scroll como compositor, camada de shell própria em Rust. O porquê de c
    CONTRATO**: `ronoctua-compositor` são os tipos e o `trait`, `ronoctua-scroll` é o ÚNICO crate
    da árvore que sabe qual compositor é, e nenhum outro o nomeia. Um WM é externo; o que
    desenvolvemos não pode depender de externo nenhum.
+   **Exceções aprovadas pelo dono, uma a uma** — protocolos Wayland PADRÃO, nunca patch:
+   `wl_data_device` (arrastar), `ext-image-copy-capture-v1` (a captura do estúdio) e
+   `zwp_virtual_keyboard_v1` (o teclado na tela, 2026-09-25; só o `virtual_keys.rs` o nomeia,
+   cobra o `one-virtual-keyboard`).
 4. **O shell nunca reimplementa layout de janelas.** Um `xdg_toplevel` por buffer nativo.
 5. **Sem lógica Nix reimplementada em Rust.**
 6. **Nada imperativo.** Se não está no flake, não existe.
@@ -132,6 +136,24 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   nosso que leva número chegava ao compositor SEM ele**: o braço de `run_with` que traduz
   `workspace-go` para o feito passava `None`, então `LEADER TAB 3` pedia `workspace number` e era
   recusado.
+- **`LEADER m k` é o TECLADO NA TELA** (`osk.rs` + `virtual_keys.rs`), e ele é o RODAPÉ
+  crescendo (inv. 14): a última coisa da superfície, ABAIXO da região e da linha do brain, contada
+  da borda de baixo — `keyboard_rows` entra na altura e no teto da expansão, e o `metric` desconta
+  os pixels dele, então toda barra e painel que lê `Frame::bottom` para onde a região para. Nunca é
+  termo do `first_of_expansion` (`the-footer-does-not-ask-itself`). **A legenda sai do xkb, não de
+  uma tabela**: a tecla é um código do kernel e o que ela diz é o que o layout escolhido digita —
+  `ç` no `AC10` do `br`, o `AB11` só onde um layout o tem, a acentuação morta desenhada como o
+  acento e composta pela janela que a recebe. O mapa de teclas é NOSSO (enviado pelo teclado
+  virtual), então o idioma independe do teclado da máquina. **Modificador vai como TECLA**, e é o
+  estado do compositor que calcula a máscara (AltGr é o nível 3 num layout e Alt no outro); um
+  toque TRAVA para a próxima tecla, dois toques PRENDEM, e segurado com outro dedo é segurado
+  (`osk::Mods`). **Não há relógio de repetição**: a tecla fica abaixada até o dedo subir e quem
+  repete é a janela, no ritmo do compositor. **E o rodapé ouve o TOQUE** (`TouchHandler`, um dedo
+  por tecla — Shift num, letra noutro): ligar o `wl_touch` DESLIGA a emulação de ponteiro do
+  compositor para a superfície, então um dedo fora do teclado vira o clique do rodapé
+  (`Footer::as_the_finger`, com um `PerSeat` só dele). Tudo se ajusta NO PRÓPRIO teclado — idiomas
+  oferecidos, altura (1/2/3 linhas) e largura — e vai para o `osk.json`; a tecla da leader abre a
+  leader no processo, porque tecla virtual não passa pelo keyd.
 - **As marcas de aparelho Bluetooth têm COR própria** (`modeline.device`, família `device` em toda
   semente): um azul desbotado no degrau do `text.secondary` das outras marcas — matiz é outro TIPO
   de coisa, não outra importância. Nos dois temas cujos cinzas já são azuis (`frost`, `flashbang`)

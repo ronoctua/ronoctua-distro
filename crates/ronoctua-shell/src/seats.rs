@@ -32,7 +32,9 @@
 
 use smithay_client_toolkit::reexports::client::Proxy;
 use smithay_client_toolkit::reexports::client::backend::ObjectId;
-use smithay_client_toolkit::reexports::client::protocol::{wl_keyboard, wl_pointer, wl_seat};
+use smithay_client_toolkit::reexports::client::protocol::{
+    wl_keyboard, wl_pointer, wl_seat, wl_touch,
+};
 
 use ronoctua_tokens::Color;
 
@@ -51,6 +53,12 @@ impl Device for wl_pointer::WlPointer {
 }
 
 impl Device for wl_keyboard::WlKeyboard {
+    fn let_go(&self) {
+        self.release();
+    }
+}
+
+impl Device for wl_touch::WlTouch {
     fn let_go(&self) {
         self.release();
     }
@@ -187,6 +195,17 @@ impl<T: Default, D: Device> Seats<T, D> {
         self.held
             .iter()
             .find(|h| self.here.as_ref() == Some(&h.pointer.id()))
+            .map(|h| &h.seat)
+    }
+
+    /// The seat `device` was offered on — a touch point says which screen
+    /// it is, and not which seat, and the on-screen keyboard types into the
+    /// seat whose finger pressed.
+    #[must_use]
+    pub fn seat_of(&self, device: &D) -> Option<&wl_seat::WlSeat> {
+        self.held
+            .iter()
+            .find(|h| h.pointer.id() == device.id())
             .map(|h| &h.seat)
     }
 }

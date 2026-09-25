@@ -11407,6 +11407,41 @@ let
   # keyboard and makes its twin. A second place that read `/dev/input` would
   # be a keylogger nobody audited; one that wrote `/dev/uinput` could type as
   # anybody.
+  # THE VIRTUAL KEYBOARD HAS ONE DOOR. `zwp_virtual_keyboard_v1` is the
+  # owner's approved exception to invariant 3 (2026-09-25), and an exception
+  # is only one while it stays where it was approved: the on-screen keyboard's
+  # `virtual_keys.rs`. A second file making keys appear in other people's
+  # windows is a second thing nobody reviewed.
+  one-virtual-keyboard = mkCheck "one-virtual-keyboard" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: whether ANY other file names the protocol, anywhere in it.
+    # `code_of` because the needle is a path in CODE; the prose around the
+    # exception (AGENTS.md, a comment) is allowed to say its name.
+    crates = pathlib.Path("${../crates}")
+    wrong, looked = [], 0
+    for path in sorted(crates.rglob("*.rs")):
+        looked += 1
+        if path.name == "virtual_keys.rs" and "ronoctua-shell" in path.parts:
+            continue
+        if "zwp_virtual_keyboard" in code_of(path.read_text()):
+            wrong.append(str(path.relative_to(crates)))
+    floor(looked, 300, "Rust files read")
+    door = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/virtual_keys.rs").read_text())
+    if "create_virtual_keyboard" not in door:
+        print("ERROR: virtual_keys.rs no longer makes the keyboard where this looks", file=sys.stderr)
+        sys.exit(1)
+    if wrong:
+        print("ERROR: a file other than ronoctua-shell/src/virtual_keys.rs names the virtual keyboard:", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        sys.exit(1)
+    print("OK: only virtual_keys.rs types into other windows")
+    END
+  '';
+
   one-input-device-boundary = mkCheck "one-input-device-boundary" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
@@ -22984,6 +23019,7 @@ let
       every-door-hears-every-keyboard
       keys-polkit-is-narrow
       one-input-device-boundary
+      one-virtual-keyboard
       keys-rules-carry-the-leader
       every-window-knows-its-scale
       every-list-window-has-a-bar
@@ -23073,6 +23109,7 @@ let
       every-door-hears-every-keyboard
       keys-polkit-is-narrow
       one-input-device-boundary
+      one-virtual-keyboard
       keys-rules-carry-the-leader
       every-window-knows-its-scale
       every-list-window-has-a-bar

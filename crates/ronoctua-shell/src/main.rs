@@ -98,6 +98,7 @@ mod network_window;
 mod network_words;
 mod notifications;
 mod notifications_window;
+mod osk;
 mod paint;
 mod player;
 mod player_browse;
@@ -132,6 +133,7 @@ mod world;
 // `LEADER s u`, the animated mark on the modeline, and the window that watches
 // a run happen. It knows no step: the sequence is `assets/updates.nix`.
 mod update_window;
+mod virtual_keys;
 
 /// The layer-shell surface's namespace.
 ///

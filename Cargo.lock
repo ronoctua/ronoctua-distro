@@ -3197,6 +3197,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wayland-client",
+ "wayland-protocols-misc",
  "wayland-protocols-wlr",
  "wgpu",
  "xkbcommon",

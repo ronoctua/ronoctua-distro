@@ -1060,6 +1060,12 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "camera-open",
             label: key::CMD_CAMERA_OPEN,
         },
+        // THE ON-SCREEN KEYBOARD, out and away — `m k`. It is drawn at the
+        // bottom of the footer and every setting it has is on it (`crate::osk`).
+        Command {
+            id: "onscreen-keyboard",
+            label: key::CMD_ONSCREEN_KEYBOARD,
+        },
         Command {
             id: "camera-settings-open",
             label: key::CMD_CAMERA_SETTINGS_OPEN,
@@ -2512,6 +2518,9 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("p s", "player-stop", None),
         ("m s", "screen-capture", None),
         ("m c", "camera-open", None),
+        // `k` for KEYBOARD — the one on the screen, for a finger. `s k` is
+        // the physical keyboards' settings, which are another thing.
+        ("m k", "onscreen-keyboard", None),
         // `i` for ICONS, and not `g` for glyphs: the Nerd Fonts browser is the
         // first collection, and others are going to come in — the group is born with the
         // name of what it is going to hold, and not with the first item's.
@@ -3722,6 +3731,7 @@ mod tests {
             "pointers-open",
             "pointers-window",
             "camera-open",
+            "onscreen-keyboard",
             "camera-settings-open",
             "camera-settings-window",
             "camera-settings-up",

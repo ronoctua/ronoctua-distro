@@ -900,6 +900,30 @@
     pipAir = 16;
   };
 
+  # THE ON-SCREEN KEYBOARD (`LEADER m k`), in cells and lines — and `gap` in
+  # LOGICAL PIXELS, the room left around each key's ground so two keys never
+  # read as one.
+  #
+  # `keyLines` is how tall a key is when nobody has chosen: TWO lines, which
+  # is about 50 px at the body size — the width of a fingertip, and the
+  # smallest a key gets before a thumb starts pressing its neighbour. The ring
+  # on the keyboard itself offers 1, 2 and 3.
+  #
+  # `cellsSmall` and `cellsMedium` are the keyboard's width in the two narrow
+  # steps of its ring; the third is the whole screen. Capped because a full
+  # width keyboard on a wide monitor has keys three times wider than tall, and
+  # a key that shape is aimed at with the arm instead of the finger.
+  #
+  # `label` is the width of the words that name a row of the keyboard's own
+  # settings, before the keys that answer them.
+  osk = {
+    keyLines = 2;
+    cellsSmall = 84;
+    cellsMedium = 120;
+    gap = 2;
+    label = 18;
+  };
+
   # THE BROWSER EXTENSION'S POPUP, and this is the THIRD block in this file
   # measured in PIXELS rather than in cells.
   #

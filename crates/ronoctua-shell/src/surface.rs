@@ -53,6 +53,7 @@ use smithay_client_toolkit::{
         Capability, SeatHandler, SeatState,
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        touch::TouchHandler,
     },
     shell::{
         WaylandSurface as _,
@@ -67,6 +68,7 @@ use wayland_client::{
     globals::registry_queue_init,
     protocol::{
         wl_data_device_manager::DndAction, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
+        wl_touch,
     },
 };
 
@@ -410,6 +412,31 @@ struct Footer {
     /// What the brain line's control under the pointer says, for the message
     /// line.
     brain_hint: Option<String>,
+    /// THE ON-SCREEN KEYBOARD (`LEADER m k`), while it is out. `None` is put
+    /// away, and then it costs nothing and takes no line. See `crate::osk`.
+    osk: Option<crate::osk::Board>,
+    /// The virtual keyboard its keys go out through — `None` where the
+    /// compositor offers none. See `crate::virtual_keys`.
+    osk_keys: Option<crate::virtual_keys::Keys>,
+    /// The keys as the LAST FRAME placed them, per screen, with the pixel the
+    /// keyboard starts at — for the pointer and the finger, for the reason
+    /// `brain_placed` is: what is touched has to be what was DRAWN.
+    osk_placed: Vec<(Vec<crate::osk::Cap>, f32)>,
+    /// The key under the pointer, which is lit.
+    osk_hover: Option<crate::osk::Key>,
+    /// What that key does, for the message line — the keys that are not a
+    /// character say it there, never in a tooltip (invariant 14).
+    osk_hint: Option<String>,
+    /// Whether "these keys reach no window" has been said this session.
+    osk_said_nothing: bool,
+    /// EVERY SEAT'S TOUCH SCREEN, and where each finger on it went down:
+    /// on a key of the keyboard, or elsewhere on the footer — which is then a
+    /// click, see `Footer::as_the_finger`.
+    touches: crate::seats::Seats<(), wl_touch::WlTouch>,
+    fingers: Vec<(i32, Option<wl_surface::WlSurface>)>,
+    /// The pointer state a finger that is not on the keyboard clicks with —
+    /// its own, so a finger never moves a mouse's hover or drag.
+    touch_here: PerSeat,
     /// THE HINT LINE, as the LAST FRAME laid it out — for the pointer.
     ///
     /// Remembered and not recomputed, for the reason `band_placed` is: what
@@ -2347,6 +2374,15 @@ pub fn run() -> Result<()> {
         brain: None,
         brain_placed: None,
         brain_hint: None,
+        osk: None,
+        osk_keys: crate::virtual_keys::Keys::bind(&globals, &qh),
+        osk_placed: Vec::new(),
+        osk_hover: None,
+        osk_hint: None,
+        osk_said_nothing: false,
+        touches: crate::seats::Seats::default(),
+        fingers: Vec::new(),
+        touch_here: PerSeat::default(),
         region_can_spare_a_row: std::cell::Cell::new(false),
         hint_placed: Vec::new(),
         hint_said: None,
@@ -4971,6 +5007,21 @@ impl SeatHandler for Footer {
                 c.took_a_seat(qh, &seat);
             }
         }
+        // THE TOUCH SCREEN, for the on-screen keyboard above all: two fingers
+        // are two keys, which is Shift held under one and a letter under the
+        // other. Binding it turns the compositor's pointer EMULATION off for
+        // this surface — so a finger anywhere else on the footer is turned
+        // into a click here instead (`Footer::as_the_finger`), or the rest of
+        // the footer would stop answering a finger at all.
+        if cap == Capability::Touch {
+            match self.seats.get_touch(qh, &seat) {
+                Ok(t) => {
+                    let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.touches.took(&seat, t, name.as_deref());
+                }
+                Err(e) => tracing::warn!(error = %e, "no touch; a finger is a pointer here"),
+            }
+        }
     }
 
     fn remove_capability(
@@ -4985,6 +5036,10 @@ impl SeatHandler for Footer {
         }
         if cap == Capability::Pointer {
             self.pointers.lost(&seat, &mut self.here);
+        }
+        if cap == Capability::Touch {
+            let mut nothing = ();
+            self.touches.lost(&seat, &mut nothing);
         }
     }
 
@@ -5456,7 +5511,179 @@ impl PointerHandler for Footer {
         events: &[PointerEvent],
     ) {
         self.pointers.switch_to(pointer, &mut self.here);
-        self.pointer_frame_here(conn, qh, events);
+        // THE KEYBOARD FIRST: a press on a key is the key's, and never reaches
+        // the rows above it.
+        let rest = self.keyboard_takes(qh, pointer, events);
+        if !rest.is_empty() {
+            self.pointer_frame_here(conn, qh, &rest);
+        }
+    }
+}
+
+impl TouchHandler for Footer {
+    /// A FINGER ON A KEY PRESSES IT, and a finger anywhere else is a click.
+    /// Each touch point is its own finger, which is what lets one hold Shift
+    /// while another types.
+    fn down(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        touch: &wl_touch::WlTouch,
+        serial: u32,
+        time: u32,
+        surface: wl_surface::WlSurface,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        let seat = self.touches.seat_of(touch).cloned();
+        if let Some(cap) = self.osk_at(&surface, position.0, position.1) {
+            self.fingers.push((id, None));
+            let finger = crate::osk::Finger::Touch(id);
+            let outs = self
+                .osk
+                .as_mut()
+                .map(|b| b.press(finger, cap.key))
+                .unwrap_or_default();
+            self.keyboard_did(qh, seat, outs);
+            return;
+        }
+        if self.on_the_keyboard(&surface, position.1) {
+            // The gap between two keys, or a settings row's words: nothing.
+            self.fingers.push((id, None));
+            return;
+        }
+        self.fingers.push((id, Some(surface.clone())));
+        let events = [
+            PointerEvent {
+                surface: surface.clone(),
+                position,
+                kind: PointerEventKind::Motion { time },
+            },
+            PointerEvent {
+                surface,
+                position,
+                kind: PointerEventKind::Press {
+                    time,
+                    button: LEFT_BUTTON,
+                    serial,
+                },
+            },
+        ];
+        self.as_the_finger(conn, qh, &events);
+    }
+
+    fn up(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        touch: &wl_touch::WlTouch,
+        serial: u32,
+        time: u32,
+        id: i32,
+    ) {
+        let Some(at) = self.fingers.iter().position(|(f, _)| *f == id) else {
+            return;
+        };
+        let (_, elsewhere) = self.fingers.remove(at);
+        let finger = crate::osk::Finger::Touch(id);
+        if self.osk.as_ref().is_some_and(|b| b.is_pressed_by(finger)) {
+            let seat = self.touches.seat_of(touch).cloned();
+            let outs = self
+                .osk
+                .as_mut()
+                .map(|b| b.release(finger))
+                .unwrap_or_default();
+            self.keyboard_did(qh, seat, outs);
+            return;
+        }
+        if let Some(surface) = elsewhere {
+            // AND THE HAND LEAVES WITH THE FINGER: a touch screen has no
+            // pointer resting anywhere, so nothing is left lit after it.
+            let events = [
+                PointerEvent {
+                    surface: surface.clone(),
+                    position: (0.0, 0.0),
+                    kind: PointerEventKind::Release {
+                        time,
+                        button: LEFT_BUTTON,
+                        serial,
+                    },
+                },
+                PointerEvent {
+                    surface,
+                    position: (0.0, 0.0),
+                    kind: PointerEventKind::Leave { serial },
+                },
+            ];
+            self.as_the_finger(conn, qh, &events);
+        }
+    }
+
+    fn motion(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        time: u32,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        // A FINGER THAT IS A CLICK CAN DRAG, the way a held button does —
+        // a bar, a list. A finger on a key stays on its key: keys do not
+        // follow a finger that slides, which is how a key is not typed twice.
+        let Some(surface) = self
+            .fingers
+            .iter()
+            .find(|(f, _)| *f == id)
+            .and_then(|(_, s)| s.clone())
+        else {
+            return;
+        };
+        let events = [PointerEvent {
+            surface,
+            position,
+            kind: PointerEventKind::Motion { time },
+        }];
+        self.as_the_finger(conn, qh, &events);
+    }
+
+    fn shape(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: i32,
+        _: f64,
+        _: f64,
+    ) {
+    }
+
+    fn orientation(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: i32,
+        _: f64,
+    ) {
+    }
+
+    /// THE COMPOSITOR TOOK THE FINGERS BACK (a gesture of its own): every key
+    /// they held comes up, or it would repeat in a window for ever.
+    fn cancel(&mut self, _: &Connection, qh: &QueueHandle<Self>, touch: &wl_touch::WlTouch) {
+        let seat = self.touches.seat_of(touch).cloned();
+        for (id, _) in std::mem::take(&mut self.fingers) {
+            let finger = crate::osk::Finger::Touch(id);
+            let outs = self
+                .osk
+                .as_mut()
+                .map(|b| b.release(finger))
+                .unwrap_or_default();
+            if !outs.is_empty() {
+                self.keyboard_did(qh, seat.clone(), outs);
+            }
+        }
+        self.touch_here = PerSeat::default();
     }
 }
 
@@ -6855,6 +7082,7 @@ impl Footer {
                 }
             }
             // THE COLUMN TOGGLES: one that is up is closed, else one is raised.
+            "onscreen-keyboard" => self.toggle_the_keyboard(),
             "player-column" => {
                 if !crate::player_window::end_the_column() {
                     self.raise_the_column();
@@ -11810,6 +12038,399 @@ impl Footer {
         crate::brain::rows(self.announced(), self.noticed())
     }
 
+    /// How many lines the on-screen keyboard takes: none while it is away.
+    ///
+    /// # AT THE VERY BOTTOM, AND COUNTED FROM THERE
+    ///
+    /// Below the region, below the brain's line: the owner's placement, and
+    /// the one a finger expects. It is NOT a term of `first_of_expansion` —
+    /// everything above it keeps its line — and it is a function of the
+    /// keyboard's own settings only, never of what the region holds, which is
+    /// what `the-footer-does-not-ask-itself` exists to keep true of every
+    /// term under `metric`.
+    fn keyboard_rows(&self) -> u16 {
+        self.osk.as_ref().map_or(0, crate::osk::Board::lines)
+    }
+
+    /// The same, in pixels: what comes off the bottom of the surface before
+    /// the region's floor.
+    fn keyboard_px(&self) -> f32 {
+        tokens::metrics::line_height(tokens::text::size()) * f32::from(self.keyboard_rows())
+    }
+
+    /// The keyboard as this screen draws it: the grounds of its keys and
+    /// their legends. What was placed is remembered in `osk_placed`, which is
+    /// what the pointer and the finger ask — one layout, read twice.
+    fn keyboard_drawn(
+        &mut self,
+        index: usize,
+        width: u32,
+        height: u32,
+    ) -> (Vec<ronoctua_render::quad::Quad>, Vec<ronoctua_render::Span>) {
+        use crate::osk::{Legend, Tone};
+        let (mut grounds, mut legends) = (Vec::new(), Vec::new());
+        let Some(board) = self.osk.as_mut() else {
+            self.osk_placed.clear();
+            return (grounds, legends);
+        };
+        let size = tokens::text::size();
+        let (cell, line) = (
+            tokens::metrics::cell_width(size),
+            tokens::metrics::line_height(size),
+        );
+        #[allow(clippy::cast_precision_loss)]
+        let (width_px, height_px) = (width as f32, height as f32);
+        let columns = tokens::metrics::columns(width_px, size);
+        let top = (height_px - line * f32::from(board.lines())).max(0.0);
+        // THE GRID LINE THE KEYBOARD STARTS ON, for the legends: the surface
+        // is a whole number of lines tall (`wanted_height` rounds up), so this
+        // is the line whose top is the keyboard's top, to under a pixel.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let first = (top / line).round() as u16;
+        let gap = f32::from(tokens::space::OSK_GAP);
+        let caps = board.plan(columns);
+        for cap in &caps {
+            let tone = board.tone(cap.key);
+            let lit = self.osk_hover == Some(cap.key);
+            let ground = match tone {
+                Tone::Bare => None,
+                Tone::On => Some(tokens::color::SURFACE_KEY_ON),
+                Tone::Locked => Some(tokens::color::SURFACE_KEY_LOCKED),
+                _ if lit => Some(tokens::color::SURFACE_KEY_HOVER),
+                Tone::Cap => Some(tokens::color::SURFACE_KEY_CAP),
+                Tone::Action => Some(tokens::color::SURFACE_KEY_ACTION),
+            };
+            if let Some(color) = ground {
+                grounds.push(ronoctua_render::quad::Quad {
+                    x: f32::from(cap.column).mul_add(cell, gap),
+                    y: f32::from(cap.line).mul_add(line, top) + gap,
+                    width: f32::from(cap.cells).mul_add(cell, -2.0 * gap).max(0.0),
+                    height: f32::from(cap.lines).mul_add(line, -2.0 * gap).max(0.0),
+                    color,
+                });
+            }
+            let (legend, small) = board.legend(cap.key);
+            let text = match legend {
+                Legend::Text(t) => t,
+                Legend::Glyph(g) => g.to_string(),
+                Legend::Words(k) => self.texts.t(k),
+                Legend::GlyphAnd(g, code) => format!("{g} {code}"),
+                Legend::Function(n) => self.texts.t_with(
+                    ronoctua_i18n::key::OSK_KEY_FUNCTION,
+                    &[("number", &n.to_string())],
+                ),
+            };
+            if tone == Tone::Bare {
+                // A SETTINGS ROW'S WORDS, from the row's own margin, in the
+                // quiet tone a label takes everywhere else.
+                let room = cap.cells.saturating_sub(1);
+                legends.extend(glyph_and_text(
+                    &layout::elide_end(&text, room),
+                    cap.column + 1,
+                    first + cap.line + cap.lines / 2,
+                    tokens::color::TEXT_SECONDARY,
+                    false,
+                ));
+                continue;
+            }
+            // THE LEGEND IN THE MIDDLE OF THE KEY, across and — on a key two
+            // or three lines tall — on the lower of the middle lines, with the
+            // second, smaller legend in the top-left corner above it, where a
+            // printed keycap has it.
+            let text = layout::elide_end(&text, cap.cells.saturating_sub(1).max(1));
+            let wide = layout::width(&text);
+            let column = cap.column + cap.cells.saturating_sub(wide) / 2;
+            legends.extend(glyph_and_text(
+                &text,
+                column,
+                first + cap.line + cap.lines / 2,
+                tokens::color::TEXT_PRIMARY,
+                false,
+            ));
+            if cap.lines > 1
+                && let Some(small) = small
+            {
+                let room = cap.cells.saturating_sub(2);
+                if room > 0 {
+                    legends.push(ronoctua_render::Span {
+                        text: layout::elide_end(&small, room),
+                        column: cap.column + 1,
+                        line: first + cap.line,
+                        color: tokens::color::TEXT_DIM,
+                        size: ronoctua_render::Size::Grid,
+                        edge: false,
+                        foot: false,
+                    });
+                }
+            }
+        }
+        if self.osk_placed.len() <= index {
+            self.osk_placed.resize(index + 1, (Vec::new(), 0.0));
+        }
+        self.osk_placed[index] = (caps, top);
+        (grounds, legends)
+    }
+
+    /// The key at `(x, y)` on the screen whose surface is `surface`, when
+    /// the keyboard is out and the point is on one.
+    fn osk_at(&self, surface: &wl_surface::WlSurface, x: f64, y: f64) -> Option<crate::osk::Cap> {
+        self.osk.as_ref()?;
+        let index = self
+            .screens
+            .iter()
+            .position(|t| t.layer.wl_surface() == surface)?;
+        let (caps, top) = self.osk_placed.get(index)?;
+        #[allow(clippy::cast_possible_truncation)]
+        let (x, y) = (x as f32, y as f32);
+        if y < *top {
+            return None;
+        }
+        let size = tokens::text::size();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let (column, line) = (
+            (x / tokens::metrics::cell_width(size)) as u16,
+            ((y - top) / tokens::metrics::line_height(size)) as u16,
+        );
+        caps.iter()
+            .find(|c| c.key.is_a_key() && c.covers(column, line))
+            .copied()
+    }
+
+    /// Whether `(x, y)` is on the keyboard at all — keys, gaps and labels.
+    fn on_the_keyboard(&self, surface: &wl_surface::WlSurface, y: f64) -> bool {
+        let Some(index) = self
+            .screens
+            .iter()
+            .position(|t| t.layer.wl_surface() == surface)
+        else {
+            return false;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let y = y as f32;
+        self.osk.is_some() && self.osk_placed.get(index).is_some_and(|(_, top)| y >= *top)
+    }
+
+    /// Puts the keyboard out, or away.
+    fn toggle_the_keyboard(&mut self) {
+        if self.osk.is_some() {
+            self.put_the_keyboard_away();
+            return;
+        }
+        let machine = ronoctua_pointers::keyboards::Machine::from_env();
+        // THE MACHINE'S FIRST LAYOUT, when it declares several: a keyboard of
+        // our own cycles its own list.
+        let layout = machine
+            .layout
+            .split(',')
+            .next()
+            .unwrap_or("us")
+            .trim()
+            .to_owned();
+        let variant = machine
+            .variant
+            .split(',')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        let layout = if layout.is_empty() {
+            "us".to_owned()
+        } else {
+            layout
+        };
+        self.osk = Some(crate::osk::Board::new(
+            crate::osk::store().read(),
+            crate::osk::Language { layout, variant },
+        ));
+        if self.osk_keys.is_none() && !self.osk_said_nothing {
+            self.osk_said_nothing = true;
+            let m = self.texts.t(ronoctua_i18n::key::ECHO_OSK_TYPES_NOTHING);
+            self.echo_message(m);
+        }
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// Puts the keyboard away, letting go of every key it holds first — a
+    /// key left down in a window is a key that repeats for ever.
+    fn put_the_keyboard_away(&mut self) {
+        if let Some(board) = self.osk.as_mut() {
+            let outs = board.let_go();
+            for o in outs {
+                if let crate::osk::Out::Key(code, down) = o
+                    && let Some(k) = self.osk_keys.as_mut()
+                {
+                    k.key(code, down);
+                }
+            }
+        }
+        if let Some(k) = self.osk_keys.as_mut() {
+            k.let_everything_go();
+        }
+        self.osk = None;
+        self.osk_hover = None;
+        self.osk_hint = None;
+        self.osk_placed.clear();
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// Does what a press or a release on the keyboard answered.
+    fn keyboard_did(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        seat: Option<wl_seat::WlSeat>,
+        outs: Vec<crate::osk::Out>,
+    ) {
+        use crate::osk::Out;
+        let mut keep = false;
+        let mut hide = false;
+        let mut leader = false;
+        for o in outs {
+            match o {
+                Out::Key(code, down) => {
+                    let keymap = self.osk.as_mut().and_then(crate::osk::Board::keymap_text);
+                    let seat = seat.clone().or_else(|| self.seats.seats().next());
+                    if let (Some(k), Some(keymap), Some(seat)) =
+                        (self.osk_keys.as_mut(), keymap, seat)
+                    {
+                        k.ready(qh, &seat, &keymap);
+                        k.key(code, down);
+                    }
+                }
+                Out::Leader => leader = true,
+                Out::Hide => hide = true,
+                Out::Keep => keep = true,
+                Out::Say(key) => {
+                    let m = self.texts.t(key);
+                    self.echo_message(m);
+                }
+            }
+        }
+        if keep && let Some(board) = self.osk.as_ref() {
+            let store = crate::osk::store();
+            if store.path().is_some() && store.parsed().is_none() {
+                tracing::warn!(
+                    "{} will not parse; the keyboard's settings were not written",
+                    crate::osk::FILE
+                );
+            } else if let Err(e) = store.write(&board.prefs) {
+                tracing::warn!(error = %e, "the keyboard's settings could not be written");
+            }
+        }
+        if hide {
+            self.put_the_keyboard_away();
+            return;
+        }
+        // A SETTING CHANGED, SO THE HEIGHT MAY HAVE: asked again every time,
+        // and never by comparing with a height taken here. The board has
+        // ALREADY changed by the time its answer arrives — `Board::release`
+        // sets the new key height before this runs — so a "before" measured
+        // here is the new number, the comparison said nothing changed, and
+        // the surface kept its old height until something else asked. Asking
+        // with the same height is a no-op the compositor does not even answer.
+        if keep {
+            self.apply_geometry(self.interactivity());
+        }
+        if leader {
+            self.activate_leader();
+        }
+        self.draw_and_paint();
+    }
+
+    /// The keyboard's part of a pointer's frame: the presses and releases it
+    /// takes, and the hover. Answers what is left for the rest of the footer.
+    fn keyboard_takes(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) -> Vec<PointerEvent> {
+        if self.osk.is_none() {
+            return events.to_vec();
+        }
+        let finger = crate::osk::Finger::Pointer(pointer.id().protocol_id());
+        let seat = self.pointers.seat_of(pointer).cloned();
+        let hover_before = self.osk_hover;
+        let mut rest = Vec::with_capacity(events.len());
+        for e in events {
+            let (x, y) = e.position;
+            match e.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    let key = self.osk_at(&e.surface, x, y).map(|c| c.key);
+                    self.osk_hover = key;
+                    rest.push(e.clone());
+                }
+                PointerEventKind::Leave { .. } => {
+                    self.osk_hover = None;
+                    if self.osk.as_ref().is_some_and(|b| b.is_pressed_by(finger)) {
+                        let outs = self
+                            .osk
+                            .as_mut()
+                            .map(|b| b.release(finger))
+                            .unwrap_or_default();
+                        self.keyboard_did(qh, seat.clone(), outs);
+                    }
+                    rest.push(e.clone());
+                }
+                PointerEventKind::Press { button, .. } if self.on_the_keyboard(&e.surface, y) => {
+                    if button == LEFT_BUTTON
+                        && let Some(cap) = self.osk_at(&e.surface, x, y)
+                    {
+                        let outs = self
+                            .osk
+                            .as_mut()
+                            .map(|b| b.press(finger, cap.key))
+                            .unwrap_or_default();
+                        self.keyboard_did(qh, seat.clone(), outs);
+                    }
+                }
+                PointerEventKind::Release { button, .. }
+                    if button == LEFT_BUTTON
+                        && self.osk.as_ref().is_some_and(|b| b.is_pressed_by(finger)) =>
+                {
+                    let outs = self
+                        .osk
+                        .as_mut()
+                        .map(|b| b.release(finger))
+                        .unwrap_or_default();
+                    self.keyboard_did(qh, seat.clone(), outs);
+                }
+                PointerEventKind::Axis { .. } if self.on_the_keyboard(&e.surface, y) => {}
+                _ => rest.push(e.clone()),
+            }
+        }
+        if self.osk_hover != hover_before {
+            self.osk_hint = self
+                .osk_hover
+                .and_then(|k| self.osk.as_ref()?.about(k))
+                .map(|(key, args)| {
+                    let args: Vec<(&str, &str)> =
+                        args.iter().map(|(n, v)| (*n, v.as_str())).collect();
+                    self.texts.t_with(key, &args)
+                });
+            self.draw_and_paint();
+        }
+        rest
+    }
+
+    /// A finger that is NOT on the keyboard, as the footer's own click.
+    ///
+    /// Binding `wl_touch` switches the compositor's pointer emulation off for
+    /// this surface, so without this a finger on the modeline or on a list
+    /// would do nothing at all. The finger clicks with a pointer state of its
+    /// own (`touch_here`), so it never moves a mouse's hover or drag.
+    fn as_the_finger(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        events: &[PointerEvent],
+    ) {
+        std::mem::swap(&mut self.here, &mut self.touch_here);
+        self.pointer_frame_here(conn, qh, events);
+        std::mem::swap(&mut self.here, &mut self.touch_here);
+    }
+
     /// What the brain wants said, when it wants anything said.
     fn noticed(&self) -> Option<&ronoctua_brain::Notice> {
         self.brain.as_ref()?.notice.as_ref()
@@ -11969,7 +12590,8 @@ impl Footer {
                 + self.above_rows()
                 + self.fold_rows()
                 + self.explain_rows()
-                + self.brain_rows(),
+                + self.brain_rows()
+                + self.keyboard_rows(),
         ) + region;
         (tokens::metrics::line_height(tokens::text::size()) * lines as f32).ceil() as u32
     }
@@ -12022,7 +12644,9 @@ impl Footer {
         // budget without either being blamed.
         expansion_ceiling(
             smaller,
-            usize::from(FOOTER_LINES + self.fold_rows() + self.brain_rows()),
+            // AND THE KEYBOARD, which is fixed for as long as it is out: an
+            // open view has to fit ABOVE it, or the two would share lines.
+            usize::from(FOOTER_LINES + self.fold_rows() + self.brain_rows() + self.keyboard_rows()),
         )
     }
 
@@ -12090,9 +12714,12 @@ impl Footer {
     #[allow(clippy::cast_precision_loss)]
     fn metric(&self) -> Option<crate::chrome::Frame> {
         let screen = self.screens.iter().find(|t| t.configured && t.width > 0)?;
+        // THE REGION'S FLOOR, which is the surface's bottom less the keyboard
+        // under it: every bar, track and panel that reads `Frame::bottom`
+        // stops where the region stops, and the keyboard is not the region.
         Some(crate::chrome::Frame::of(
             screen.width as f32,
-            screen.height as f32,
+            (screen.height as f32 - self.keyboard_px()).max(0.0),
             self.first_of_expansion(),
         ))
     }
@@ -13623,7 +14250,8 @@ impl Footer {
         self.screens
             .iter()
             .find(|t| t.configured && t.width > 0)
-            .map(|t| (t.width as f32, t.height as f32))
+            // THE REGION'S HEIGHT: the keyboard below it has no bar.
+            .map(|t| (t.width as f32, t.height as f32 - self.keyboard_px()))
     }
 
     /// Is the pointer on the scrollbar's track?
@@ -13870,7 +14498,7 @@ impl Footer {
                 .screens
                 .iter()
                 .find(|t| t.configured && t.height > 0)
-                .map_or(0.0, |t| t.height as f32);
+                .map_or(0.0, |t| t.height as f32 - self.keyboard_px());
             f64::from(bar.track(top as f32, bottom, line_height as f32)).max(1.0)
         };
         if let Some(v) = self.files.as_mut()
@@ -15659,6 +16287,14 @@ impl Footer {
         // request is asynchronous: this frame goes out with the glyphs, and the
         // next one with whatever has arrived.
         self.request_visible_icons();
+        // THE KEYBOARD OF EVERY SCREEN, laid out before the loop's borrows: it
+        // remembers what it placed (`osk_placed`), which is a write to `self`.
+        let mut keyboards: Vec<_> = (0..self.screens.len())
+            .map(|i| {
+                let (width, height) = (self.screens[i].width, self.screens[i].height);
+                self.keyboard_drawn(i, width, height)
+            })
+            .collect();
         // Everything that READS `self` comes out here before the loop's mutable
         // borrows — `segments_now` reads `self`, and the two things together
         // do not pass the borrow checker.
@@ -16013,6 +16649,13 @@ impl Footer {
                     .clone()
                     .map(|t| vec![crate::chrome::Piece::said(t)])
             })
+            // AND THE KEYBOARD'S, at the bottom of the screen and of this
+            // chain: a key that is not a character says what it does here.
+            .or_else(|| {
+                self.osk_hint
+                    .clone()
+                    .map(|t| vec![crate::chrome::Piece::said(t)])
+            })
             // AND WHAT THE MANAGER'S FOCUSED ROW HAS TO ADD — today, the reason
             // a switch does nothing. It used to be drawn as a third column on
             // the row and the owner asked for it gone; the honesty had to stay,
@@ -16287,8 +16930,10 @@ impl Footer {
             // `lines * line_height` stops short — the line height is
             // fractional — and that is the gap the owner photographed under
             // the panels' rule.
+            // LESS THE KEYBOARD, when it is out: this is the REGION's bottom,
+            // and the keyboard is drawn below it — see `keyboard_rows`.
             #[allow(clippy::cast_precision_loss)]
-            let bottom = self.screens[index].height as f32;
+            let bottom = (self.screens[index].height as f32 - self.keyboard_px()).max(0.0);
             // PER SCREEN: a narrow monitor elides what the wide one shows.
             let columns = tokens::metrics::columns(width as f32, tokens::text::size());
             let placed = layout::resolve(columns, &segments);
@@ -17445,6 +18090,15 @@ impl Footer {
                     height: line_height,
                     color: tokens::color::BRAIN_BACKGROUND,
                 });
+            }
+
+            // AND THE KEYBOARD, the last thing down the surface: its keys'
+            // grounds here, with the other backgrounds, and its legends with
+            // the text. Laid out once, for this screen's width, and kept for
+            // the finger — see `keyboard_drawn`.
+            if let Some((key_grounds, key_legends)) = keyboards.get_mut(index) {
+                backgrounds.append(key_grounds);
+                spans.append(key_legends);
             }
 
             // THE LINE UNDER THE POINTER.

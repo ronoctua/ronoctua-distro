@@ -81,8 +81,9 @@ publish = false
 
 [workspace.dependencies]
 # --- Wayland -----------------------------------------------------------
-# Integration with the compositor is EXCLUSIVELY through IPC and wlr-layer-shell
-# (invariant 3). Nothing here talks to the compositor any other way.
+# Integration with the compositor is through IPC and wlr-layer-shell (invariant
+# 3), plus the standard protocols the owner approved one by one: the data
+# device, screen capture, and the virtual keyboard below.
 # The `system` feature swaps the pure-Rust backend for the libwayland one (FFI).
 # It is NOT optional: only it exposes `display_ptr` and `as_ptr`, the C pointers
 # wgpu needs to create the Surface. With the default backend those
@@ -90,6 +91,10 @@ publish = false
 smithay-client-toolkit = { version = "0.21", features = [ "system" ] }
 wayland-client = { version = "0.31", features = [ "system" ] }
 wayland-protocols-wlr = "0.3"
+# THE VIRTUAL KEYBOARD, and nothing else from this crate: the on-screen
+# keyboard's one door (`ronoctua-shell/src/virtual_keys.rs`). Already in the
+# lock through the toolkit; named here so the shell can bind the manager.
+wayland-protocols-misc = { version = "0.3", features = [ "client" ] }
 raw-window-handle = "0.6"
 
 # --- renderer (section 7.7: wgpu + cosmic-text + glyphon, NO vello) -----

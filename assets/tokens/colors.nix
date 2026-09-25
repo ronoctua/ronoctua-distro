@@ -194,6 +194,28 @@
       alpha = 0.34;
     };
 
+    # THE ON-SCREEN KEYBOARD'S KEYS (`LEADER m k`), grounds under a legend.
+    #
+    # A key has to read as a KEY with nothing but its ground — no border, no
+    # radius, no shadow (invariant 15) — so the keys that type are one rung
+    # above the chrome and the keys that do something else (a modifier, Tab,
+    # the language) one rung below that: the letters are what the eye hunts
+    # for, and they are the ones that stand out.
+    #
+    # `hover` is the rung ABOVE the keys, not the list's `surface.hover`: that
+    # one sits between the chrome and a key, and a key the pointer is on would
+    # go darker. `on` is a key held down or a modifier waiting for the next key
+    # — the accent's ground, because the accent is what means "this is in
+    # effect"; `locked` is the same modifier kept on until it is pressed again,
+    # one rung brighter so the two can be told apart at a glance.
+    key = {
+      cap = "neutral.chrome-raised";
+      action = "neutral.window";
+      hover = "neutral.chrome-band";
+      on = "accent.element";
+      locked = "alternate.element";
+    };
+
     # THE MATERIAL A SHAPE IS DRAWN IN — `.stl` and `.3mf`.
     #
     # One colour and not a palette: the file carries no colours (neither

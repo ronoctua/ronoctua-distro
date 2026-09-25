@@ -350,6 +350,18 @@
   add = "cod-add";
   remove = "cod-remove";
   close = "cod-close";
+
+  # THE ON-SCREEN KEYBOARD'S KEYS THAT HAVE NO CHARACTER (`LEADER m k`). The
+  # rest of its legends are not tokens at all: they are what the chosen
+  # layout types, read from xkb (`crate::osk`).
+  osk-backspace = "md-backspace_outline";
+  osk-return = "md-keyboard_return";
+  osk-shift = "md-apple_keyboard_shift";
+  osk-caps = "md-apple_keyboard_caps";
+  osk-tab = "md-keyboard_tab";
+  osk-settings = "md-keyboard_settings";
+  osk-hide = "md-keyboard_close";
+  osk-language = "cod-globe";
   window = "cod-window";
 
   # ===================================================================

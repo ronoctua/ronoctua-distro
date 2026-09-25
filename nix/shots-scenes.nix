@@ -675,6 +675,19 @@
   # which `get_scroller` answers — and a third puts it back. The pictures in
   # between show the line under the modeline saying the way back.
   { id = "workspaces"; }
+  # THE ON-SCREEN KEYBOARD (`LEADER m k`), under everything. `wev` is the
+  # window in front, and it is the WITNESS: it prints every keysym it is
+  # given, so what the keyboard typed is read from its journal and never from
+  # a picture. The keys are aimed with the keyboard's own arithmetic
+  # (`osk::place`: rows of 62 quarters, the medium width, centred), so a key
+  # that moved is a key this scene misses. The strip's language key goes from
+  # the machine's `gb` to `br`, then `a`, `ç`, the dead tilde, `a`, `o` — the
+  # tilde is DEAD, and composing it is the receiving window's work, so the
+  # proof is the keysym sequence — then Ctrl tapped (a latch) and `c`, which
+  # has to arrive after a `Control_L`. The settings face is photographed, the
+  # second tap on its key goes back, and the last key puts the keyboard away:
+  # the screen is then the picture from before it opened.
+  { id = "keyboard"; }
   # THE LINE THAT OUTLIVES THE FOOTER, and the keyboard reaching its options.
   #
   # `Esc` and not `x`: the owner read the photograph and asked for the key that

@@ -146,10 +146,13 @@ ronoctua-memory = { path = "../ronoctua-memory" }
 # two answers to it — the same arrangement as the transfer queue one line up.
 ronoctua-brain = { path = "../ronoctua-brain" }
 
-# Integration with the compositor ONLY through wlr-layer-shell and IPC (invariant 3).
+# Integration with the compositor through wlr-layer-shell and IPC (invariant 3),
+# and the virtual keyboard the owner approved as its exception — see
+# `src/virtual_keys.rs`, the only file that names it.
 smithay-client-toolkit.workspace = true
 wayland-client.workspace = true
 wayland-protocols-wlr.workspace = true
+wayland-protocols-misc.workspace = true
 raw-window-handle.workspace = true
 
 wgpu.workspace = true

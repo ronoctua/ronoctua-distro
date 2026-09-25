@@ -288,6 +288,7 @@ let
   # (`size.base x cellWidthEm`), which is what makes a number measured here
   # land on the cell the shell drew (invariant 9, reaching a screenshot).
   cellPx = typography.size.base * typography.cellWidthEm;
+  osk = (import ../assets/tokens/space.nix).osk;
 
   # THE TOKENS' VALUES, AS THE GENERATOR SOLVED THEM.
   #
@@ -535,6 +536,14 @@ pkgs.testers.runNixOSTest {
         machine.succeed(
             f"magick /tmp/screen.xwd -crop {box} +repage {into}"
         )
+
+
+    def changed(a, b):
+        """The share of the screen that differs between two pictures."""
+        return float(machine.succeed(
+            f"magick /tmp/{a}.png /tmp/{b}.png -compose difference "
+            "-composite -threshold 0 -format '%[fx:mean]' info:"
+        ))
 
 
     def pixels_of(path, hex_value, match=True):
@@ -2787,12 +2796,6 @@ pkgs.testers.runNixOSTest {
             # WHY: `nix/shots-scenes.nix`, beside the id.
             ask = f"SCROLLSOCK={sock} SWAYSOCK={sock} ${scroll}/bin/scrollmsg "
 
-            def changed(a, b):
-                return float(machine.succeed(
-                    f"magick /tmp/{a}.png /tmp/{b}.png -compose difference "
-                    "-composite -threshold 0 -format '%[fx:mean]' info:"
-                ))
-
             def leader_then(key):
                 machine.succeed(
                     "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
@@ -2863,6 +2866,66 @@ pkgs.testers.runNixOSTest {
             leader_then(None)
             shot("57-the-leader")
             machine.succeed("DISPLAY=:99 xdotool key Escape")
+
+    if wanted("keyboard"):
+        with subtest("the on-screen keyboard types into the window in front"):
+            # WHY: `nix/shots-scenes.nix`, beside the id.
+            for _ in range(8):
+                machine.succeed("DISPLAY=:99 xdotool key Escape")
+            machine.succeed(
+                "systemd-run --unit=wev ${xvfb.env} --setenv=WAYLAND_DISPLAY=wayland-1 "
+                "--setenv=XDG_RUNTIME_DIR=/run/user/0 ${pkgs.wev}/bin/wev"
+            )
+            machine.sleep(3)
+            shot("60-no-keyboard")
+            machine.succeed(
+                "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+                "${ronoctua-shell}/bin/ronoctua-shell leader"
+            )
+            machine.sleep(1)
+            machine.succeed("DISPLAY=:99 xdotool key m k")
+            machine.sleep(2)
+            shot("61-the-keyboard")
+            w, h, x, y = compositor_geometry()
+            wide = min(${toString osk.cellsMedium}, int(w // CELL))
+            left = (int(w // CELL) - wide) // 2
+            top = y + h - (1 + 5 * ${toString osk.keyLines}) * LINE_EXACT
+
+            def key(row, before, quarters):
+                a, b = wide * before // 62, wide * (before + quarters) // 62
+                gx = x + (left + (a + b) / 2) * CELL
+                gy = top + (1 + row * ${toString osk.keyLines}) * LINE_EXACT + LINE_EXACT
+                machine.succeed(f"DISPLAY=:99 xdotool mousemove {int(gx)} {int(gy)} click 1")
+                machine.sleep(1)
+
+            def strip(from_left, cells):
+                gx = x + (left + from_left + cells / 2) * CELL
+                machine.succeed(f"DISPLAY=:99 xdotool mousemove {int(gx)} {int(top + LINE_EXACT / 2)} click 1")
+                machine.sleep(1)
+            caps = pixels_of("/tmp/61-the-keyboard.png", "#" + token_hex("surface.key.cap"))
+            print(f"key pixels: {len(caps)}")
+            assert len(caps) > 1000, "no key was drawn"
+            assert min(y_ for _, y_ in caps) > h // 2, "the keys are not at the bottom"
+            strip(0, wide * 10 // 62)
+            shot("62-in-portuguese")
+            for row, before in ((2, 7), (2, 43), (2, 47), (2, 7), (1, 38)):
+                key(row, before, 4)
+            key(4, 5, 5)
+            key(3, 17, 4)
+            said = machine.succeed("journalctl -u wev --no-pager -o cat")
+            syms = [l.split("sym: ")[1].split()[0] for l in said.splitlines() if "sym: " in l]
+            print(f"wev read: {syms}")
+            typed = [s_ for s_ in syms if s_ in ("a", "ccedilla", "dead_tilde", "o", "c")]
+            assert typed[:5] == ["a", "ccedilla", "dead_tilde", "a", "o"], typed
+            assert "Control_L" in syms and typed[-1] == "c", syms
+            small = wide * 6 // 62
+            strip(wide - 2 * small, small)
+            shot("63-its-settings")
+            strip(wide - 2 * small, small)
+            strip(wide - small, small)
+            shot("64-put-away")
+            assert changed("60-no-keyboard", "64-put-away") < 0.05, "the keyboard did not go away"
+            machine.succeed("systemctl stop wev")
 
     if wanted("lifeline"):
         with subtest("the line that outlives the footer"):

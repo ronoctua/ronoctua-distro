@@ -837,6 +837,11 @@ RAISED_GROUNDS = ("surface.container", "surface.header")
 #: (text key, ground keys, Fail below, Warn below). Lc = |APCA|.
 CONTRAST_GATES = (
     ("text.primary", (*SIX_GROUNDS, "surface.selection", *RAISED_GROUNDS), 75, 82),
+    # THE ON-SCREEN KEYBOARD: every key's legend is `text.primary`, whatever
+    # ground the key is on at that moment, and the small second legend (the
+    # shifted and the AltGr character) is `text.dim` on the two resting grounds.
+    ("text.primary", ("surface.key.cap", "surface.key.action", "surface.key.hover", "surface.key.on", "surface.key.locked"), 60, 70),
+    ("text.dim", ("surface.key.cap", "surface.key.action"), 15, 20),
     ("text.secondary", (*SIX_GROUNDS, *RAISED_GROUNDS), 43, 45),
     ("text.secondary", ("surface.selection",), 40, 45),
     ("text.dim", (*SIX_GROUNDS[:5], *RAISED_GROUNDS), 15, 20),
@@ -1040,6 +1045,14 @@ DISTANCE_GATES = (
     ("surface.chrome", "modeline.background", 0.03, 0.04),
     ("modeline.background", "notification.background", 0.02, 0.024),
     ("surface.chrome", "surface.hover", 0.05, 0.06),
+    # THE KEYBOARD'S KEYS stand apart from the footer they are drawn on, the
+    # two kinds of key from each other, the key under the pointer from the key
+    # it is, and a latched modifier from a locked one.
+    ("surface.key.cap", "surface.chrome", 0.02, 0.03),
+    ("surface.key.action", "surface.key.cap", 0.015, 0.02),
+    ("surface.key.hover", "surface.key.cap", 0.02, 0.03),
+    ("surface.key.on", "surface.key.cap", 0.05, 0.06),
+    ("surface.key.on", "surface.key.locked", 0.03, 0.04),
     # THE TWO BANDS ON ONE PAGE. A buffer's header is a band across the top and
     # the hover is a band on a row, and until this line nothing compared them:
     # the grounds climb in one chain and the signals in another, and the ladder
