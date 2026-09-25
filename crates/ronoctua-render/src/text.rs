@@ -161,6 +161,18 @@ pub enum Size {
     /// It works in both directions: a block LARGER than the grid is pushed
     /// down by the same expression, which is the only honest way to write it.
     Stacked(f32, u16),
+    /// The grid's size, drawn `by` px BELOW the line it names — and, with a
+    /// size beside it, centred on its cell like [`Size::OnTheCell`].
+    ///
+    /// # Why a line needs to leave the grid downwards
+    ///
+    /// For something whose height is not a whole number of lines: the
+    /// on-screen keyboard's tallest keys are two and a half lines, so every
+    /// other row of keys starts half a line into a line of the grid, and a
+    /// legend that could only sit ON a line would sit a quarter of a key off
+    /// the middle of it. The run still names the line it would have
+    /// occupied; `by` is the rest, which is always less than one line.
+    Lowered(f32, Option<f32>),
 }
 
 impl Size {
@@ -170,6 +182,7 @@ impl Size {
         match self {
             Self::Grid => None,
             Self::Px(v) | Self::OnTheCell(v) | Self::Stacked(v, _) => Some(v),
+            Self::Lowered(_, glyph) => glyph,
         }
     }
 
@@ -186,6 +199,7 @@ impl Size {
             Self::Px(v) => Self::Px(v * scale),
             Self::OnTheCell(v) => Self::OnTheCell(v * scale),
             Self::Stacked(v, n) => Self::Stacked(v * scale, n),
+            Self::Lowered(by, glyph) => Self::Lowered(by * scale, glyph.map(|v| v * scale)),
         }
     }
 
@@ -201,6 +215,7 @@ impl Size {
     pub fn stacked(self, grid: f32) -> f32 {
         match self {
             Self::Stacked(v, n) => f32::from(n) * v.mul_add(tokens::font::LINE_HEIGHT, -grid),
+            Self::Lowered(by, _) => by,
             _ => 0.0,
         }
     }
@@ -213,7 +228,7 @@ impl Size {
     #[must_use]
     pub fn nudge(self, grid: f32) -> f32 {
         match self {
-            Self::OnTheCell(v) => {
+            Self::OnTheCell(v) | Self::Lowered(_, Some(v)) => {
                 (tokens::metrics::cell_width(grid) - tokens::metrics::cell_width(v)) / 2.0
             }
             _ => 0.0,
@@ -378,7 +393,7 @@ pub struct Span {
 #[must_use]
 pub fn line_box(size: Size, grid: f32) -> f32 {
     match size {
-        Size::Grid | Size::OnTheCell(_) => grid,
+        Size::Grid | Size::OnTheCell(_) | Size::Lowered(..) => grid,
         Size::Px(px) | Size::Stacked(px, _) => px * tokens::font::LINE_HEIGHT,
     }
 }
@@ -910,7 +925,10 @@ impl Text {
             // [`line_box`], which is the same rule and the only place it is
             // written. Two expressions of it are how the box and the metric
             // come to disagree, and the disagreement moves a whole line.
-            Size::OnTheCell(px) => glyphon::Metrics::new(px, line_box(t.size.times(scale), lh)),
+            Size::OnTheCell(px) | Size::Lowered(_, Some(px)) => {
+                glyphon::Metrics::new(px, line_box(t.size.times(scale), lh))
+            }
+            Size::Lowered(_, None) => metric,
         };
 
         // In cosmic-text 0.19, `set_size` and `set_text` no longer take the

@@ -9577,6 +9577,13 @@ let
         # A command can run a command: the clipboard's errand goes back through
         # the registry, which is the one door every command enters by.
         ("clipboard_errand", "run_command", "run_with"),
+        # A view's row can name a command, and the view CLOSES before running
+        # it (`player_view`, `camera_view`, `pointer_view` set to `None`), while
+        # `run_with` only presses back into a view that is open — so the ring
+        # turns once and stops, which is the clipboard's shape above.
+        ("camera_settings_press", "run_with"),
+        ("player_press", "run_with"),
+        ("pointers_press", "run_with"),
     }
 
     WHITE, GREY, BLACK = 0, 1, 2

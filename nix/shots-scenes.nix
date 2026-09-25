@@ -679,8 +679,9 @@
   # window in front, and it is the WITNESS: it prints every keysym it is
   # given, so what the keyboard typed is read from its journal and never from
   # a picture. The keys are aimed with the keyboard's own arithmetic
-  # (`osk::place`: rows of 62 quarters, the medium width, centred), so a key
-  # that moved is a key this scene misses. The strip's language key goes from
+  # (`osk::place`: a column of the keyboard's own keys, 62 quarters of
+  # letters, a keypad of digits, 88 across at the medium width, centred), so a key
+  # that moved is a key this scene misses. The column's language key goes from
   # the machine's `gb` to `br`, then `a`, `ç`, the dead tilde, `a`, `o` — the
   # tilde is DEAD, and composing it is the receiving window's work, so the
   # proof is the keysym sequence — then Ctrl tapped (a latch) and `c`, which

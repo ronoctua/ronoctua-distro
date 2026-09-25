@@ -900,26 +900,32 @@
     pipAir = 16;
   };
 
-  # THE ON-SCREEN KEYBOARD (`LEADER m k`), in cells and lines — and `gap` in
-  # LOGICAL PIXELS, the room left around each key's ground so two keys never
-  # read as one.
+  # THE ON-SCREEN KEYBOARD (`LEADER m k`), in cells and quarter-lines — and
+  # `gap` in LOGICAL PIXELS, the room left around each key's ground so two
+  # keys never read as one.
   #
-  # `keyLines` is how tall a key is when nobody has chosen: TWO lines, which
-  # is about 50 px at the body size — the width of a fingertip, and the
-  # smallest a key gets before a thumb starts pressing its neighbour. The ring
-  # on the keyboard itself offers 1, 2 and 3.
+  # `*Quarters` are the three key heights of the ring on the keyboard, in
+  # QUARTERS OF A LINE: one line, two — about 50 px at the body size, the
+  # width of a fingertip — and two and a half. The tallest was three whole
+  # lines, and with a strip and a row of digits above the letters that was a
+  # third of a laptop's screen; the owner asked for it a little shorter. Four
+  # rows of keys come to a whole number of lines at every step.
   #
   # `cellsSmall` and `cellsMedium` are the keyboard's width in the two narrow
   # steps of its ring; the third is the whole screen. Capped because a full
   # width keyboard on a wide monitor has keys three times wider than tall, and
-  # a key that shape is aimed at with the arm instead of the finger.
+  # a key that shape is aimed at with the arm instead of the finger. They are
+  # wider than a row of letters because the digits sit BESIDE the letters and
+  # the keyboard's own keys in a column beside those.
   #
   # `label` is the width of the words that name a row of the keyboard's own
   # settings, before the keys that answer them.
   osk = {
-    keyLines = 2;
-    cellsSmall = 84;
-    cellsMedium = 120;
+    lowQuarters = 4;
+    mediumQuarters = 8;
+    tallQuarters = 10;
+    cellsSmall = 116;
+    cellsMedium = 160;
     gap = 2;
     label = 18;
   };

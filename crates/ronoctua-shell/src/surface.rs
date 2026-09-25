@@ -493,6 +493,10 @@ struct Footer {
     /// Remembered and not recomputed, for the reason `band_placed` is: what
     /// the pointer clicks has to be what was DRAWN.
     fold_control: Option<u16>,
+    /// Where the PAGE COUNTER was drawn (`RCtrl ←→  2/3`), as its first cell
+    /// and its width on the minibuffer's line — it is a control: a click turns
+    /// the page. Remembered for the reason `fold_control` is.
+    page_control: Option<(u16, u16)>,
     /// The opened band's scroll, as it was last DRAWN.
     ///
     /// Kept for the same reason `fold_control` is: the bar the pointer grabs
@@ -2388,6 +2392,7 @@ pub fn run() -> Result<()> {
         hint_said: None,
         fold: crate::fold::Fold::default(),
         fold_control: None,
+        page_control: None,
         fold_wrapped: 0,
         fold_scroll: ronoctua_design::Scroll {
             total: 0,
@@ -5750,6 +5755,7 @@ impl Footer {
         // row what it is.
         let mut brain_hit = None;
         let mut fold_toggle = false;
+        let mut page_click: Option<bool> = None;
         // AND WHETHER THE PRESS LANDED ON AN EMPTY MINIBUFFER, which opens the
         // shortcut list — see `on_the_empty_minibuffer`.
         let mut leader_click = false;
@@ -5979,6 +5985,11 @@ impl Footer {
                         segment_prev = Some(id);
                         continue;
                     }
+                    // AND THE PAGE COUNTER GOES BACK a page.
+                    if self.page_control_at(e.position.0, e.position.1) {
+                        page_click = Some(false);
+                        continue;
+                    }
                     // AND THAT IS ALL THE PRESS DECIDES. What it is over is
                     // `files_target()`'s answer, asked once at dispatch — the
                     // same question the left button asks.
@@ -6044,6 +6055,11 @@ impl Footer {
                     // two. No two of these can be under the pointer at once —
                     // each is a different `y` — so the order here is the
                     // screen's and not a precedence.
+                    // THE PAGE COUNTER, on the same line and at its right end.
+                    if self.page_control_at(e.position.0, e.position.1) {
+                        page_click = Some(true);
+                        continue;
+                    }
                     if self.fold_at(e.position.0, e.position.1) {
                         fold_toggle = true;
                         continue;
@@ -6245,6 +6261,10 @@ impl Footer {
         // be true for one press.
         if let Some(hit) = band_hit {
             self.band_clicked(hit);
+            return;
+        }
+        if let Some(forward) = page_click {
+            self.page_clicked(forward);
             return;
         }
 
@@ -12082,12 +12102,29 @@ impl Footer {
         let (width_px, height_px) = (width as f32, height as f32);
         let columns = tokens::metrics::columns(width_px, size);
         let top = (height_px - line * f32::from(board.lines())).max(0.0);
-        // THE GRID LINE THE KEYBOARD STARTS ON, for the legends: the surface
-        // is a whole number of lines tall (`wanted_height` rounds up), so this
-        // is the line whose top is the keyboard's top, to under a pixel.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let first = (top / line).round() as u16;
         let gap = f32::from(tokens::space::OSK_GAP);
+        let quarter = line / 4.0;
+        // A RUN WHOSE TOP IS `y` PIXELS DOWN THE SURFACE: the grid line it is
+        // on, and the rest as `Size::Lowered` — a key two and a half lines tall
+        // starts half a line into a line of the grid on every other row.
+        let lowered = |spans: Vec<ronoctua_render::Span>, y: f32| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let on = (y / line).floor().max(0.0) as u16;
+            let by = y - f32::from(on) * line;
+            spans
+                .into_iter()
+                .map(|mut s| {
+                    s.line = on;
+                    s.size = match s.size {
+                        ronoctua_render::Size::OnTheCell(v) => {
+                            ronoctua_render::Size::Lowered(by, Some(v))
+                        }
+                        _ => ronoctua_render::Size::Lowered(by, None),
+                    };
+                    s
+                })
+                .collect::<Vec<_>>()
+        };
         let caps = board.plan(columns);
         for cap in &caps {
             let tone = board.tone(cap.key);
@@ -12100,12 +12137,16 @@ impl Footer {
                 Tone::Cap => Some(tokens::color::SURFACE_KEY_CAP),
                 Tone::Action => Some(tokens::color::SURFACE_KEY_ACTION),
             };
+            let (y, tall) = (
+                f32::from(cap.top).mul_add(quarter, top),
+                f32::from(cap.tall) * quarter,
+            );
             if let Some(color) = ground {
                 grounds.push(ronoctua_render::quad::Quad {
                     x: f32::from(cap.column).mul_add(cell, gap),
-                    y: f32::from(cap.line).mul_add(line, top) + gap,
+                    y: y + gap,
                     width: f32::from(cap.cells).mul_add(cell, -2.0 * gap).max(0.0),
-                    height: f32::from(cap.lines).mul_add(line, -2.0 * gap).max(0.0),
+                    height: 2.0f32.mul_add(-gap, tall).max(0.0),
                     color,
                 });
             }
@@ -12120,47 +12161,54 @@ impl Footer {
                     &[("number", &n.to_string())],
                 ),
             };
+            // THE LEGEND IN THE MIDDLE OF THE KEY, both ways. A key tall
+            // enough for two lines carries the second, smaller legend (what
+            // Shift and AltGr type there) in the line above it, the pair
+            // centred together — where a printed keycap has it.
+            let pair = small.is_some() && tall >= 2.0 * line;
+            let middle = if pair {
+                (tall - 2.0 * line).mul_add(0.5, y) + line
+            } else {
+                (tall - line).mul_add(0.5, y)
+            };
             if tone == Tone::Bare {
                 // A SETTINGS ROW'S WORDS, from the row's own margin, in the
                 // quiet tone a label takes everywhere else.
                 let room = cap.cells.saturating_sub(1);
-                legends.extend(glyph_and_text(
-                    &layout::elide_end(&text, room),
-                    cap.column + 1,
-                    first + cap.line + cap.lines / 2,
-                    tokens::color::TEXT_SECONDARY,
-                    false,
+                legends.extend(lowered(
+                    glyph_and_text(
+                        &layout::elide_end(&text, room),
+                        cap.column + 1,
+                        0,
+                        tokens::color::TEXT_SECONDARY,
+                        false,
+                    ),
+                    middle,
                 ));
                 continue;
             }
-            // THE LEGEND IN THE MIDDLE OF THE KEY, across and — on a key two
-            // or three lines tall — on the lower of the middle lines, with the
-            // second, smaller legend in the top-left corner above it, where a
-            // printed keycap has it.
             let text = layout::elide_end(&text, cap.cells.saturating_sub(1).max(1));
             let wide = layout::width(&text);
             let column = cap.column + cap.cells.saturating_sub(wide) / 2;
-            legends.extend(glyph_and_text(
-                &text,
-                column,
-                first + cap.line + cap.lines / 2,
-                tokens::color::TEXT_PRIMARY,
-                false,
+            legends.extend(lowered(
+                glyph_and_text(&text, column, 0, tokens::color::TEXT_PRIMARY, false),
+                middle,
             ));
-            if cap.lines > 1
-                && let Some(small) = small
-            {
+            if pair && let Some(small) = small {
                 let room = cap.cells.saturating_sub(2);
                 if room > 0 {
-                    legends.push(ronoctua_render::Span {
-                        text: layout::elide_end(&small, room),
-                        column: cap.column + 1,
-                        line: first + cap.line,
-                        color: tokens::color::TEXT_DIM,
-                        size: ronoctua_render::Size::Grid,
-                        edge: false,
-                        foot: false,
-                    });
+                    legends.extend(lowered(
+                        vec![ronoctua_render::Span {
+                            text: layout::elide_end(&small, room),
+                            column: cap.column + 1,
+                            line: 0,
+                            color: tokens::color::TEXT_DIM,
+                            size: ronoctua_render::Size::Grid,
+                            edge: false,
+                            foot: false,
+                        }],
+                        middle - line,
+                    ));
                 }
             }
         }
@@ -12186,13 +12234,14 @@ impl Footer {
             return None;
         }
         let size = tokens::text::size();
+        // IN QUARTERS OF A LINE, the unit `osk::Cap` is placed in.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let (column, line) = (
+        let (column, quarter) = (
             (x / tokens::metrics::cell_width(size)) as u16,
-            ((y - top) / tokens::metrics::line_height(size)) as u16,
+            ((y - top) * 4.0 / tokens::metrics::line_height(size)) as u16,
         );
         caps.iter()
-            .find(|c| c.key.is_a_key() && c.covers(column, line))
+            .find(|c| c.key.is_a_key() && c.covers(column, quarter))
             .copied()
     }
 
@@ -12881,8 +12930,7 @@ impl Footer {
         // The LAST offset goes by PAGE when it paginates: with a grid of three
         // columns, stopping at `per_page` from the end would leave two empty
         // columns on the last turn.
-        let per_page = self.grid().per_page();
-        let last = last_offset(self.expansion_len(), per_page);
+        let last = self.last_start();
         let step = self.scroll_step().max(1);
         (self.offset - self.offset % step).min(last)
     }
@@ -15911,11 +15959,61 @@ impl Footer {
     /// frame to paint the same thing. It does not wrap around on purpose:
     /// going back to the start after the end makes the eye lose its place.
     fn scroll_by(&mut self, lines: i32) -> bool {
-        let last = last_offset(self.expansion_len(), self.grid().per_page());
+        let last = self.last_start();
         let current = self.current_offset();
         let fresh = scrolling(current, last, lines);
         self.scroll_offset_to(fresh);
         fresh != current
+    }
+
+    /// The furthest the region's first row may go.
+    ///
+    /// # ON A PAGINATED LIST IT IS THE LAST PAGE'S FIRST ROW
+    ///
+    /// Not `total − per_page`, which is what a SCROLLING list stops at. With
+    /// ten entries four to a page that is six, which the offset then rounds
+    /// down to a page boundary — four, page two — so the third page could not
+    /// be reached at all: the owner found it with the keyboard out, a region
+    /// of one line and `2/3` as far as `RCtrl →` would go.
+    fn last_start(&self) -> usize {
+        let per_page = self.grid().per_page();
+        match self.navigation() {
+            Navigation::Page => last_page_start(self.expansion_len(), per_page),
+            Navigation::Scroll => last_offset(self.expansion_len(), per_page),
+        }
+    }
+
+    /// Turns the page from a CLICK on the counter, and goes round.
+    ///
+    /// The keys stop at the ends on purpose (`scrolling`), because a key held
+    /// down past the last page must not jump back to the first. A click is one
+    /// deliberate gesture per page and has no key for the other direction
+    /// beside it, so at the last page the next one is the first — and the
+    /// right button goes back.
+    fn page_clicked(&mut self, forward: bool) {
+        let moved = self.page_by(if forward { 1 } else { -1 });
+        if !moved {
+            let to = if forward { 0 } else { self.last_start() };
+            self.scroll_offset_to(to);
+        }
+        self.draw_and_paint();
+    }
+
+    /// Whether `(x, y)` is on the page counter, counted from the border the
+    /// counter is drawn against (`chrome::at_the_edge`).
+    fn page_control_at(&self, x: f64, y: f64) -> bool {
+        let Some((at, wide)) = self.page_control else {
+            return false;
+        };
+        let Some(f) = self.metric() else {
+            return false;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        if f.line_at(y as f32) != Some(self.minibuffer_line()) {
+            return false;
+        }
+        crate::chrome::at_the_edge(x, f64::from(f.width), f.columns())
+            .is_some_and(|c| c >= at && c < at + wide)
     }
 
     /// Scrolls a whole PAGE.
@@ -17442,9 +17540,11 @@ impl Footer {
             // against the border, or one cell left of the control when there is
             // one (`indicator_at`). There is no bar and no box: it is text on the line that already
             // exists (invariants 14 and 15).
+            self.page_control = None;
             if let (Some(ind), Some(at)) = (&indicator, indicator_at) {
                 let indicator_width = layout::width(ind);
                 if indicator_width < columns {
+                    self.page_control = Some((at, indicator_width));
                     spans.push(ronoctua_render::Span {
                         size: ronoctua_render::Size::Grid,
                         text: ind.clone(),
@@ -18792,6 +18892,15 @@ fn expansion_ceiling(screen_height: Option<u32>, fixed: usize) -> usize {
 /// read that as "the content is over", which is something else.
 const fn last_offset(total: usize, ceiling: usize) -> usize {
     total.saturating_sub(ceiling)
+}
+
+/// The first entry of the last page, when `total` entries go `per_page` to a
+/// page — the stop of a paginated list. See `Footer::last_start`.
+const fn last_page_start(total: usize, per_page: usize) -> usize {
+    if total == 0 || per_page == 0 {
+        return 0;
+    }
+    (total - 1) / per_page * per_page
 }
 
 /// The new offset after scrolling `step` lines.
@@ -22592,8 +22701,8 @@ mod tests {
     use super::{
         BAND_CEILING, FOOTER_LINES, Footer, Grid, Inheritance, LINES_PER_DETENT, Measure,
         axis_detents, axis_lines, expansion_ceiling, grid_for, item_at, last_offset,
-        navigation_step, page_length, row_at_height, runs_of, screen_difference, scrolling, tokens,
-        usable_actions, wheel_arrived, wheel_lines,
+        last_page_start, navigation_step, page_length, row_at_height, runs_of, screen_difference,
+        scrolling, tokens, usable_actions, wheel_arrived, wheel_lines,
     };
 
     /// One axis event, as the compositor sends a CONTINUOUS gesture: pixels,
@@ -23010,6 +23119,12 @@ mod tests {
         // With everything visible there is nothing to scroll, and the bar does not
         // show up. A bar of full height says nothing.
         assert_eq!(last_offset(5, 12), 0);
+        // TEN ENTRIES FOUR TO A PAGE are three pages, and the third starts at
+        // eight — not at six, which rounds back down to page two.
+        assert_eq!(last_page_start(10, 4), 8);
+        assert_eq!(last_page_start(8, 4), 4);
+        assert_eq!(last_page_start(0, 4), 0);
+        assert_eq!(last_page_start(3, 4), 0);
         assert_eq!(scrolling(0, last_offset(5, 12), 1), 0);
     }
 

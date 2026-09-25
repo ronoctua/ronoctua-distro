@@ -204,8 +204,51 @@ impl Width {
     }
 }
 
-/// The key heights the settings face offers, in lines.
-pub const HEIGHTS: [u16; 3] = [1, 2, 3];
+/// How tall a key is — a ring on the settings face.
+///
+/// In QUARTERS OF A LINE, from `space.osk`, because the tallest step is two
+/// lines and a half: three whole lines made the keyboard take a third of a
+/// laptop's screen, and the owner asked for it a little shorter. Four rows of
+/// keys always come to a whole number of lines (`4 × q / 4 = q`), so the
+/// footer's height stays on the grid; it is only the rows inside it that may
+/// start half a line in, and their legends are drawn there
+/// (`ronoctua_render::Size::Lowered`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeyHeight {
+    /// One line.
+    Low,
+    /// Two lines — about a fingertip at the body size.
+    #[default]
+    Medium,
+    /// Two and a half.
+    Tall,
+}
+
+impl KeyHeight {
+    /// Every step, in the order the face draws them.
+    pub const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::Tall];
+
+    /// How tall, in quarters of a line.
+    #[must_use]
+    pub const fn quarters(self) -> u16 {
+        match self {
+            Self::Low => tokens::space::OSK_LOWQUARTERS,
+            Self::Medium => tokens::space::OSK_MEDIUMQUARTERS,
+            Self::Tall => tokens::space::OSK_TALLQUARTERS,
+        }
+    }
+
+    /// The words on its key.
+    #[must_use]
+    pub const fn words(self) -> &'static str {
+        match self {
+            Self::Low => ronoctua_i18n::key::OSK_HEIGHT_LOW,
+            Self::Medium => ronoctua_i18n::key::OSK_HEIGHT_MEDIUM,
+            Self::Tall => ronoctua_i18n::key::OSK_HEIGHT_TALL,
+        }
+    }
+}
 
 /// What a place on the keyboard is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,7 +272,7 @@ pub enum Key {
     /// Settings face: offer the `n`th language of [`Board::offered`], or stop.
     Offer(usize),
     /// Settings face: the key height.
-    Height(u16),
+    Height(KeyHeight),
     /// Settings face: the width.
     Width(Width),
     /// Settings face: the words that name a row. Drawn, and not a key.
@@ -272,45 +315,25 @@ const fn m(modifier: Modifier, quarters: u16) -> Def {
     }
 }
 
-// THE ROWS, each 62 quarters (15½ standard keys), so a letter sits under the
-// same letter-width on every row. A key a layout gives no symbol is dropped
+const fn f(n: u8) -> Def {
+    Def {
+        key: Key::Named(Named::F(n)),
+        quarters: 4,
+    }
+}
+
+// THE THREE BLOCKS, side by side and each four rows tall: the keyboard's own
+// controls in a column on the left, the letters in the middle, the digits on
+// the right in the shape of a keypad. The owner's arrangement — a strip of
+// controls on top and a row of digits under it made the keyboard two rows
+// taller than the four the letters need.
+//
+// The letter rows are 62 quarters each (15½ standard keys), so a letter sits
+// under the same width on every row. A key a layout gives no symbol is dropped
 // and its width goes to the modifier beside it — see `absorbed`.
 
-const NUMBERS: &[Def] = &[
-    n(Named::Esc, 4),
-    t(41),
-    t(2),
-    t(3),
-    t(4),
-    t(5),
-    t(6),
-    t(7),
-    t(8),
-    t(9),
-    t(10),
-    t(11),
-    t(12),
-    t(13),
-    n(Named::Backspace, 6),
-];
-
-const FUNCTIONS: &[Def] = &[
-    n(Named::Esc, 4),
-    n(Named::F(1), 4),
-    n(Named::F(2), 4),
-    n(Named::F(3), 4),
-    n(Named::F(4), 4),
-    n(Named::F(5), 4),
-    n(Named::F(6), 4),
-    n(Named::F(7), 4),
-    n(Named::F(8), 4),
-    n(Named::F(9), 4),
-    n(Named::F(10), 4),
-    n(Named::F(11), 4),
-    n(Named::F(12), 4),
-    n(Named::Insert, 4),
-    n(Named::Delete, 6),
-];
+/// The column of the keyboard's own keys, top to bottom.
+const CONTROLS: [Key; 4] = [Key::Hide, Key::Settings, Key::Language, Key::Leader];
 
 const UPPER: &[Def] = &[
     n(Named::Tab, 6),
@@ -326,10 +349,7 @@ const UPPER: &[Def] = &[
     t(25),
     t(26),
     t(27),
-    Def {
-        key: Key::Types(43),
-        quarters: 8,
-    },
+    n(Named::Backspace, 8),
 ];
 
 const MIDDLE: &[Def] = &[
@@ -350,7 +370,7 @@ const MIDDLE: &[Def] = &[
 
 const LOWER: &[Def] = &[
     m(Modifier::Shift, 5),
-    // `LSGT`, the ISO key left of Z: `\|` in gb, `\|` in br, absent in us.
+    // `LSGT`, the ISO key left of Z: `\|` in gb and in br, absent in us.
     t(86),
     t(44),
     t(45),
@@ -368,19 +388,46 @@ const LOWER: &[Def] = &[
 ];
 
 const BOTTOM: &[Def] = &[
+    n(Named::Esc, 4),
     Def {
         key: Key::Function,
-        quarters: 5,
+        quarters: 4,
     },
     m(Modifier::Ctrl, 5),
-    m(Modifier::Super, 5),
-    m(Modifier::Alt, 5),
+    m(Modifier::Super, 4),
+    m(Modifier::Alt, 4),
     n(Named::Space, 21),
-    m(Modifier::AltGr, 5),
+    m(Modifier::AltGr, 4),
     n(Named::Left, 4),
     n(Named::Down, 4),
     n(Named::Up, 4),
     n(Named::Right, 4),
+];
+
+// THE DIGITS, as a keypad: 7 8 9 on top and 0 wide at the bottom, with the
+// four keys the number row carried beside them (` - = \). Kernel codes: `1` is
+// 2 and `0` is 11 — the number row's own keys, so each types what the layout
+// puts there, `!` and `@` on Shift included.
+const DIGITS: [&[Def]; 4] = [
+    &[t(41), t(8), t(9), t(10)],
+    &[t(12), t(5), t(6), t(7)],
+    &[t(13), t(2), t(3), t(4)],
+    &[
+        t(43),
+        Def {
+            key: Key::Types(11),
+            quarters: 12,
+        },
+    ],
+];
+
+// AND THE SAME BLOCK ON THE FUNCTION LAYER: the twelve F-keys, Insert and
+// Delete.
+const FUNCTIONS: [&[Def]; 4] = [
+    &[f(1), f(2), f(3), f(4)],
+    &[f(5), f(6), f(7), f(8)],
+    &[f(9), f(10), f(11), f(12)],
+    &[n(Named::Insert, 4), n(Named::Delete, 12)],
 ];
 
 /// What the arrows become on the function layer.
@@ -394,8 +441,17 @@ const fn on_the_function_layer(named: Named) -> Named {
     }
 }
 
-/// The quarters a row adds up to — one standard key is four.
-const ROW_QUARTERS: u16 = 62;
+/// The widths of the blocks across, in quarters: the controls, air, the
+/// letters, air, the digits.
+const CONTROLS_QUARTERS: u16 = 6;
+const AIR_QUARTERS: u16 = 2;
+const LETTERS_QUARTERS: u16 = 62;
+const DIGITS_QUARTERS: u16 = 16;
+const ACROSS_QUARTERS: u16 =
+    CONTROLS_QUARTERS + AIR_QUARTERS + LETTERS_QUARTERS + AIR_QUARTERS + DIGITS_QUARTERS;
+
+/// How many rows of keys, in every block and on both faces.
+pub const ROWS: u16 = 4;
 
 /// Which face the keys area shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -416,29 +472,29 @@ pub struct Cap {
     pub column: u16,
     /// How many columns wide.
     pub cells: u16,
-    /// Its first line, counted from the KEYBOARD's top — line 0 is the strip.
-    pub line: u16,
-    /// How many lines tall.
-    pub lines: u16,
+    /// Its top, in QUARTERS OF A LINE from the keyboard's top.
+    pub top: u16,
+    /// How tall, in quarters of a line.
+    pub tall: u16,
 }
 
 impl Cap {
-    /// Whether the cell `(column, line)` — the line counted from the
-    /// keyboard's top — is on this key.
+    /// Whether the cell `column`, at `quarter` quarters of a line below the
+    /// keyboard's top, is on this key.
     #[must_use]
-    pub const fn covers(&self, column: u16, line: u16) -> bool {
+    pub const fn covers(&self, column: u16, quarter: u16) -> bool {
         column >= self.column
             && column < self.column + self.cells
-            && line >= self.line
-            && line < self.line + self.lines
+            && quarter >= self.top
+            && quarter < self.top + self.tall
     }
 }
 
-/// How many lines the keyboard takes with keys `key_lines` tall: the strip,
-/// and five rows.
+/// How many lines the keyboard takes with keys `height` tall: four rows of
+/// them, which is a whole number of lines by construction.
 #[must_use]
-pub const fn lines_of(key_lines: u16) -> u16 {
-    1 + 5 * key_lines
+pub const fn lines_of(height: KeyHeight) -> u16 {
+    ROWS * height.quarters() / 4
 }
 
 /// Lays one row out across `width` cells from `left`, in proportion.
@@ -446,7 +502,7 @@ pub const fn lines_of(key_lines: u16) -> u16 {
 /// THE SAME FLOOR ON BOTH EDGES of every key — `left + width·sum/total` —
 /// so the keys tile the row exactly, with nothing left over and nothing
 /// overlapping, whatever the width.
-fn lay_row(caps: &mut Vec<Cap>, row: &[(Key, u16)], left: u16, width: u16, line: u16, lines: u16) {
+fn lay_row(caps: &mut Vec<Cap>, row: &[(Key, u16)], left: u16, width: u16, top: u16, tall: u16) {
     let total: u32 = row.iter().map(|(_, q)| u32::from(*q)).sum();
     if total == 0 {
         return;
@@ -464,8 +520,8 @@ fn lay_row(caps: &mut Vec<Cap>, row: &[(Key, u16)], left: u16, width: u16, line:
             key: *key,
             column: left + u16::try_from(from).unwrap_or(0),
             cells,
-            line,
-            lines,
+            top,
+            tall,
         });
     }
 }
@@ -502,7 +558,7 @@ fn absorbed(defs: &[Def], shows: &dyn Fn(Key) -> bool) -> Vec<(Key, u16)> {
 pub fn place(
     columns: u16,
     width: Width,
-    key_lines: u16,
+    height: KeyHeight,
     face: Face,
     function: bool,
     offered: usize,
@@ -510,44 +566,33 @@ pub fn place(
 ) -> Vec<Cap> {
     let width_cells = width.cells(columns);
     let left = (columns - width_cells) / 2;
-    let mut caps = Vec::new();
-    // THE STRIP, one line: the language on the left, and on the right the
-    // leader, the settings and the key that puts the keyboard away. Their
-    // widths are the keys' own unit — a quarter of `width / 15.5` — so a
-    // strip key is as easy to hit across as a letter.
-    let unit = |q: u16| {
-        u16::try_from(u32::from(width_cells) * u32::from(q) / u32::from(ROW_QUARTERS)).unwrap_or(0)
+    let tall = height.quarters();
+    // WHERE EACH BLOCK STARTS AND ENDS, by the same floor the keys use.
+    let edge = |q: u16| {
+        left + u16::try_from(u32::from(width_cells) * u32::from(q) / u32::from(ACROSS_QUARTERS))
+            .unwrap_or(0)
     };
-    let language = unit(10);
-    let small = unit(6);
-    let leader = unit(10);
-    caps.push(Cap {
-        key: Key::Language,
-        column: left,
-        cells: language,
-        line: 0,
-        lines: 1,
-    });
-    let right = left + width_cells;
-    for (key, cells, from_right) in [
-        (Key::Hide, small, small),
-        (Key::Settings, small, 2 * small),
-        (Key::Leader, leader, 2 * small + leader),
-    ] {
-        if from_right <= width_cells.saturating_sub(language) {
-            caps.push(Cap {
-                key,
-                column: right - from_right,
-                cells,
-                line: 0,
-                lines: 1,
-            });
-        }
+    let controls = (edge(0), edge(CONTROLS_QUARTERS));
+    let letters = (
+        edge(CONTROLS_QUARTERS + AIR_QUARTERS),
+        edge(CONTROLS_QUARTERS + AIR_QUARTERS + LETTERS_QUARTERS),
+    );
+    let digits = (
+        edge(ACROSS_QUARTERS - DIGITS_QUARTERS),
+        edge(ACROSS_QUARTERS),
+    );
+    let mut caps = Vec::new();
+    for (r, key) in (0_u16..).zip(CONTROLS) {
+        caps.push(Cap {
+            key,
+            column: controls.0,
+            cells: controls.1 - controls.0,
+            top: r * tall,
+            tall,
+        });
     }
-    let row_line = |r: u16| 1 + r * key_lines;
     match face {
         Face::Keys => {
-            let first = if function { FUNCTIONS } else { NUMBERS };
             let bottom: Vec<Def> = BOTTOM
                 .iter()
                 .map(|d| match d.key {
@@ -558,23 +603,35 @@ pub fn place(
                     _ => *d,
                 })
                 .collect();
-            for (r, defs) in [first, UPPER, MIDDLE, LOWER, bottom.as_slice()]
-                .into_iter()
-                .enumerate()
-            {
-                let r = u16::try_from(r).unwrap_or(0);
+            for (r, defs) in (0_u16..).zip([UPPER, MIDDLE, LOWER, bottom.as_slice()]) {
                 lay_row(
                     &mut caps,
                     &absorbed(defs, shows),
-                    left,
-                    width_cells,
-                    row_line(r),
-                    key_lines,
+                    letters.0,
+                    letters.1 - letters.0,
+                    r * tall,
+                    tall,
+                );
+            }
+            let block = if function { FUNCTIONS } else { DIGITS };
+            for (r, defs) in (0_u16..).zip(block) {
+                lay_row(
+                    &mut caps,
+                    &absorbed(defs, shows),
+                    digits.0,
+                    digits.1 - digits.0,
+                    r * tall,
+                    tall,
                 );
             }
         }
         Face::Settings => {
-            let label = tokens::space::OSK_LABEL.min(width_cells / 4);
+            // THE SETTINGS TAKE THE LETTERS' AND THE DIGITS' ROOM, and the
+            // column of controls stays where it is — its settings key, lit, is
+            // the way back.
+            let from = letters.0;
+            let across = digits.1 - letters.0;
+            let label = tokens::space::OSK_LABEL.min(across / 4);
             let rows: [(&'static str, Vec<Key>); 3] = [
                 (
                     ronoctua_i18n::key::OSK_SETTING_LANGUAGES,
@@ -582,30 +639,29 @@ pub fn place(
                 ),
                 (
                     ronoctua_i18n::key::OSK_SETTING_HEIGHT,
-                    HEIGHTS.iter().map(|h| Key::Height(*h)).collect(),
+                    KeyHeight::ALL.iter().map(|h| Key::Height(*h)).collect(),
                 ),
                 (
                     ronoctua_i18n::key::OSK_SETTING_WIDTH,
                     Width::ALL.iter().map(|w| Key::Width(*w)).collect(),
                 ),
             ];
-            for (r, (words, keys)) in rows.into_iter().enumerate() {
-                let r = u16::try_from(r).unwrap_or(0);
+            for (r, (words, keys)) in (0_u16..).zip(rows) {
                 caps.push(Cap {
                     key: Key::Label(words),
-                    column: left,
+                    column: from,
                     cells: label,
-                    line: row_line(r),
-                    lines: key_lines,
+                    top: r * tall,
+                    tall,
                 });
                 let row: Vec<(Key, u16)> = keys.into_iter().map(|k| (k, 4)).collect();
                 lay_row(
                     &mut caps,
                     &row,
-                    left + label,
-                    width_cells - label,
-                    row_line(r),
-                    key_lines,
+                    from + label,
+                    across - label,
+                    r * tall,
+                    tall,
                 );
             }
         }
@@ -722,20 +778,10 @@ pub struct Prefs {
     pub languages: Option<Vec<String>>,
     /// The one in use.
     pub language: Option<String>,
-    /// How tall a key is, in lines; `None` is `space.osk.keyLines`.
-    pub key_lines: Option<u16>,
+    /// How tall a key is.
+    pub height: KeyHeight,
     /// How wide the keyboard is.
     pub width: Width,
-}
-
-impl Prefs {
-    /// How tall a key is, in lines — one of [`HEIGHTS`].
-    #[must_use]
-    pub fn key_lines(&self) -> u16 {
-        self.key_lines
-            .filter(|l| HEIGHTS.contains(l))
-            .unwrap_or(tokens::space::OSK_KEYLINES)
-    }
 }
 
 /// Where the settings file is.
@@ -964,7 +1010,7 @@ impl Board {
     /// How many lines the keyboard takes.
     #[must_use]
     pub fn lines(&self) -> u16 {
-        lines_of(self.prefs.key_lines())
+        lines_of(self.prefs.height)
     }
 
     fn compiled(&mut self) -> Option<&Compiled> {
@@ -1002,9 +1048,9 @@ impl Board {
     /// The caps on a screen `columns` wide.
     pub fn plan(&mut self, columns: u16) -> Vec<Cap> {
         let offered = self.offered().len();
-        let (width, lines, face, function) = (
+        let (width, height, face, function) = (
             self.prefs.width,
-            self.prefs.key_lines(),
+            self.prefs.height,
             self.face,
             self.function,
         );
@@ -1017,7 +1063,7 @@ impl Board {
             }),
             _ => true,
         };
-        place(columns, width, lines, face, function, offered, &shows)
+        place(columns, width, height, face, function, offered, &shows)
     }
 
     /// The legend of `key`, and the smaller second one a tall key carries
@@ -1077,7 +1123,7 @@ impl Board {
                 ),
                 None,
             ),
-            Key::Height(h) => (Legend::Text(h.to_string()), None),
+            Key::Height(h) => (Legend::Words(h.words()), None),
             Key::Width(w) => (Legend::Words(w.words()), None),
             Key::Label(words) => (Legend::Words(words), None),
         }
@@ -1144,7 +1190,7 @@ impl Board {
                     Tone::Cap
                 }
             }
-            Key::Height(h) if self.prefs.key_lines() == h => Tone::On,
+            Key::Height(h) if self.prefs.height == h => Tone::On,
             Key::Width(w) if self.prefs.width == w => Tone::On,
             _ if pressed => Tone::On,
             Key::Types(_) | Key::Named(Named::Space) => Tone::Cap,
@@ -1182,7 +1228,7 @@ impl Board {
                     self.offered().get(i).map(Language::id).unwrap_or_default(),
                 )],
             ),
-            Key::Height(h) => (k::ABOUT_OSK_HEIGHT, vec![("lines", h.to_string())]),
+            Key::Height(_) => (k::ABOUT_OSK_HEIGHT, vec![]),
             Key::Width(_) => (k::ABOUT_OSK_WIDTH, vec![]),
             _ => return None,
         })
@@ -1278,7 +1324,7 @@ impl Board {
                 }
             }
             Key::Height(h) => {
-                self.prefs.key_lines = Some(h);
+                self.prefs.height = h;
                 out.push(Out::Keep);
             }
             Key::Width(w) => {
@@ -1361,17 +1407,36 @@ mod tests {
         Board::new(Prefs::default(), Language::parse(machine))
     }
 
+    const M: KeyHeight = KeyHeight::Medium;
+
     #[test]
-    fn a_row_tiles_its_width_with_nothing_left_and_nothing_overlapping() {
-        for width in [40_u16, 84, 120, 211] {
-            let caps = place(width, Width::Whole, 2, Face::Keys, false, 0, &|_| true);
-            for line in (1..lines_of(2)).step_by(2) {
-                let mut row: Vec<&Cap> = caps.iter().filter(|c| c.line == line).collect();
+    fn every_row_of_every_block_tiles_its_block() {
+        for width in [60_u16, 116, 160, 211] {
+            let caps = place(width, Width::Whole, M, Face::Keys, false, 0, &|_| true);
+            for r in 0..ROWS {
+                let mut row: Vec<&Cap> =
+                    caps.iter().filter(|c| c.top == r * M.quarters()).collect();
                 row.sort_by_key(|c| c.column);
-                assert_eq!(row.first().map(|c| c.column), Some(0));
-                for w in row.windows(2) {
-                    assert_eq!(w[0].column + w[0].cells, w[1].column, "a gap or an overlap");
-                }
+                // WITHIN a block the keys touch; BETWEEN blocks there is air.
+                let touching = row
+                    .windows(2)
+                    .filter(|w| w[0].column + w[0].cells == w[1].column)
+                    .count();
+                let apart = row
+                    .windows(2)
+                    .filter(|w| w[0].column + w[0].cells < w[1].column)
+                    .count();
+                assert!(
+                    row.windows(2)
+                        .all(|w| w[0].column + w[0].cells <= w[1].column),
+                    "an overlap"
+                );
+                assert_eq!(
+                    apart, 2,
+                    "three blocks, two gaps between them, width {width} row {r}"
+                );
+                assert_eq!(touching + apart + 1, row.len());
+                assert_eq!(row.first().unwrap().column, 0);
                 let last = row.last().unwrap();
                 assert_eq!(last.column + last.cells, width);
             }
@@ -1379,8 +1444,36 @@ mod tests {
     }
 
     #[test]
+    fn four_rows_and_a_whole_number_of_lines() {
+        for h in KeyHeight::ALL {
+            let caps = place(160, Width::Whole, h, Face::Keys, false, 0, &|_| true);
+            let bottom = caps.iter().map(|c| c.top + c.tall).max().unwrap();
+            assert_eq!(bottom, ROWS * h.quarters());
+            assert_eq!(bottom % 4, 0, "{h:?} is not a whole number of lines");
+            assert_eq!(lines_of(h), bottom / 4);
+        }
+        assert!(
+            lines_of(KeyHeight::Tall) < 11,
+            "the tallest is shorter than before"
+        );
+    }
+
+    #[test]
+    fn the_controls_are_a_column_and_the_digits_a_block_beside() {
+        let caps = place(160, Width::Whole, M, Face::Keys, false, 0, &|_| true);
+        let at = |k: Key| caps.iter().find(|c| c.key == k).copied().unwrap();
+        let (hide, leader) = (at(Key::Hide), at(Key::Leader));
+        assert_eq!(hide.column, leader.column);
+        assert!(leader.top > hide.top);
+        let (q, seven, zero) = (at(Key::Types(16)), at(Key::Types(8)), at(Key::Types(11)));
+        assert!(hide.column < q.column && q.column < seven.column);
+        assert_eq!(seven.top, 0);
+        assert_eq!(zero.top, 3 * M.quarters());
+    }
+
+    #[test]
     fn the_keyboard_is_centred_and_capped() {
-        let caps = place(300, Width::Medium, 2, Face::Keys, false, 0, &|_| true);
+        let caps = place(300, Width::Medium, M, Face::Keys, false, 0, &|_| true);
         let left = caps.iter().map(|c| c.column).min().unwrap();
         let right = caps.iter().map(|c| c.column + c.cells).max().unwrap();
         assert_eq!(right - left, tokens::space::OSK_CELLSMEDIUM);
@@ -1389,18 +1482,26 @@ mod tests {
 
     #[test]
     fn a_point_is_on_at_most_one_key() {
-        let caps = place(120, Width::Whole, 2, Face::Keys, false, 0, &|_| true);
-        for line in 0..lines_of(2) {
-            for column in 0..120 {
-                assert!(caps.iter().filter(|c| c.covers(column, line)).count() <= 1);
+        let caps = place(
+            160,
+            Width::Whole,
+            KeyHeight::Tall,
+            Face::Keys,
+            false,
+            0,
+            &|_| true,
+        );
+        for quarter in 0..ROWS * KeyHeight::Tall.quarters() {
+            for column in 0..160 {
+                assert!(caps.iter().filter(|c| c.covers(column, quarter)).count() <= 1);
             }
         }
     }
 
     #[test]
     fn a_missing_key_gives_its_width_to_the_shift_beside_it() {
-        let all = place(124, Width::Whole, 1, Face::Keys, false, 0, &|_| true);
-        let without = place(124, Width::Whole, 1, Face::Keys, false, 0, &|k| {
+        let all = place(160, Width::Whole, M, Face::Keys, false, 0, &|_| true);
+        let without = place(160, Width::Whole, M, Face::Keys, false, 0, &|k| {
             k != Key::Types(86)
         });
         let shift = |caps: &[Cap]| {
@@ -1561,12 +1662,13 @@ mod tests {
     }
 
     #[test]
-    fn the_settings_face_keeps_the_height() {
-        let keys = place(120, Width::Whole, 2, Face::Keys, false, 9, &|_| true);
-        let settings = place(120, Width::Whole, 2, Face::Settings, false, 9, &|_| true);
-        let bottom = |c: &[Cap]| c.iter().map(|c| c.line + c.lines).max().unwrap();
+    fn the_settings_face_keeps_the_height_and_the_controls() {
+        let keys = place(160, Width::Whole, M, Face::Keys, false, 9, &|_| true);
+        let settings = place(160, Width::Whole, M, Face::Settings, false, 9, &|_| true);
+        let bottom = |c: &[Cap]| c.iter().map(|c| c.top + c.tall).max().unwrap();
         assert!(bottom(&settings) <= bottom(&keys));
-        assert_eq!(bottom(&keys), lines_of(2));
+        let hide = |c: &[Cap]| c.iter().find(|c| c.key == Key::Hide).copied();
+        assert_eq!(hide(&keys), hide(&settings));
     }
 
     #[test]

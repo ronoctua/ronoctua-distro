@@ -2889,40 +2889,38 @@ pkgs.testers.runNixOSTest {
             w, h, x, y = compositor_geometry()
             wide = min(${toString osk.cellsMedium}, int(w // CELL))
             left = (int(w // CELL) - wide) // 2
-            top = y + h - (1 + 5 * ${toString osk.keyLines}) * LINE_EXACT
+            tall = ${toString osk.mediumQuarters} / 4 * LINE_EXACT
+            top = y + h - 4 * tall
 
-            def key(row, before, quarters):
-                a, b = wide * before // 62, wide * (before + quarters) // 62
-                gx = x + (left + (a + b) / 2) * CELL
-                gy = top + (1 + row * ${toString osk.keyLines}) * LINE_EXACT + LINE_EXACT
-                machine.succeed(f"DISPLAY=:99 xdotool mousemove {int(gx)} {int(gy)} click 1")
+            def key(row, before, quarters, block=(8, 70, 62)):
+                b0, b1 = left + wide * block[0] // 88, left + wide * block[1] // 88
+                a, b = (b1 - b0) * before // block[2], (b1 - b0) * (before + quarters) // block[2]
+                gx = x + (b0 + (a + b) / 2) * CELL
+                machine.succeed(f"DISPLAY=:99 xdotool mousemove {int(gx)} {int(top + (row + 0.5) * tall)} click 1")
                 machine.sleep(1)
 
-            def strip(from_left, cells):
-                gx = x + (left + from_left + cells / 2) * CELL
-                machine.succeed(f"DISPLAY=:99 xdotool mousemove {int(gx)} {int(top + LINE_EXACT / 2)} click 1")
-                machine.sleep(1)
+            def side(row):
+                key(row, 0, 1, (0, 6, 1))
             caps = pixels_of("/tmp/61-the-keyboard.png", "#" + token_hex("surface.key.cap"))
             print(f"key pixels: {len(caps)}")
             assert len(caps) > 1000, "no key was drawn"
             assert min(y_ for _, y_ in caps) > h // 2, "the keys are not at the bottom"
-            strip(0, wide * 10 // 62)
+            side(2)
             shot("62-in-portuguese")
-            for row, before in ((2, 7), (2, 43), (2, 47), (2, 7), (1, 38)):
+            for row, before in ((1, 7), (1, 43), (1, 47), (1, 7), (0, 38)):
                 key(row, before, 4)
-            key(4, 5, 5)
-            key(3, 17, 4)
+            key(3, 8, 5)
+            key(2, 17, 4)
             said = machine.succeed("journalctl -u wev --no-pager -o cat")
             syms = [l.split("sym: ")[1].split()[0] for l in said.splitlines() if "sym: " in l]
             print(f"wev read: {syms}")
             typed = [s_ for s_ in syms if s_ in ("a", "ccedilla", "dead_tilde", "o", "c")]
             assert typed[:5] == ["a", "ccedilla", "dead_tilde", "a", "o"], typed
             assert "Control_L" in syms and typed[-1] == "c", syms
-            small = wide * 6 // 62
-            strip(wide - 2 * small, small)
+            side(1)
             shot("63-its-settings")
-            strip(wide - 2 * small, small)
-            strip(wide - small, small)
+            side(1)
+            side(0)
             shot("64-put-away")
             assert changed("60-no-keyboard", "64-put-away") < 0.05, "the keyboard did not go away"
             machine.succeed("systemctl stop wev")

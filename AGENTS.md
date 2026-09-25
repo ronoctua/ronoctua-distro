@@ -152,8 +152,18 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   por tecla — Shift num, letra noutro): ligar o `wl_touch` DESLIGA a emulação de ponteiro do
   compositor para a superfície, então um dedo fora do teclado vira o clique do rodapé
   (`Footer::as_the_finger`, com um `PerSeat` só dele). Tudo se ajusta NO PRÓPRIO teclado — idiomas
-  oferecidos, altura (1/2/3 linhas) e largura — e vai para o `osk.json`; a tecla da leader abre a
-  leader no processo, porque tecla virtual não passa pelo keyd.
+  oferecidos, altura e largura — e vai para o `osk.json`; a tecla da leader abre a leader no
+  processo, porque tecla virtual não passa pelo keyd. **São QUATRO fileiras e três blocos lado a
+  lado** (a pedido do dono): as teclas do próprio teclado numa COLUNA à esquerda, as letras, e os
+  dígitos num TECLADO NUMÉRICO à direita — a faixa de cima e a fileira de números faziam o teclado
+  duas fileiras mais alto. A altura é em QUARTOS de linha (1, 2 e 2½): quatro fileiras dão sempre
+  linhas inteiras, e a legenda de uma fileira que começa no meio de uma linha vai no meio da tecla
+  por `Size::Lowered`, o deslocamento em pixels que o renderizador passou a aceitar.
+- **O contador de página da leader é um CONTROLE** (`page_control`, lido da borda como foi
+  desenhado): o clique esquerdo avança, o direito volta, e os dois dão a volta — a tecla para nas
+  pontas. E a paginação para no INÍCIO da última página (`last_page_start`): parava em
+  `total − por_página`, que arredondava para a página anterior, e a última nunca era alcançada
+  (dez itens, quatro por página, `2/3` para sempre).
 - **As marcas de aparelho Bluetooth têm COR própria** (`modeline.device`, família `device` em toda
   semente): um azul desbotado no degrau do `text.secondary` das outras marcas — matiz é outro TIPO
   de coisa, não outra importância. Nos dois temas cujos cinzas já são azuis (`frost`, `flashbang`)
