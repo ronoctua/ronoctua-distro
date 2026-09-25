@@ -44,34 +44,17 @@ use std::collections::HashMap;
 use std::io::BufRead as _;
 use std::path::PathBuf;
 
-use anyhow::{Context as _, Result};
+use crate::door::{Canvas, Content, Door, Hand, LEFT_BUTTON, Ui};
+use anyhow::Result;
 use ronoctua_brain::tasks::update as declared;
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
-    output::{OutputHandler, OutputState},
-    reexports::calloop::{self, EventLoop, channel, timer},
-    reexports::calloop_wayland_source::WaylandSource,
-    registry::{ProvidesRegistryState, RegistryState},
-    registry_handlers,
+    reexports::calloop::{channel, timer},
     seat::{
-        Capability, SeatHandler, SeatState,
-        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
-        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        keyboard::{KeyEvent, Keysym, Modifiers},
+        pointer::{PointerEvent, PointerEventKind},
     },
-    shell::{
-        WaylandSurface as _,
-        xdg::{
-            XdgShell,
-            window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
-        },
-    },
-};
-use wayland_client::{
-    Connection, Proxy as _, QueueHandle,
-    globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
 };
 
 // ---------------------------------------------------------------------------
@@ -792,9 +775,6 @@ pub fn cursor_explains(
 /// the key `daemon::mode_label` looks up for it.
 pub const APP_ID: &str = "br.ronoctua.update";
 
-/// `BTN_LEFT`, from `linux/input-event-codes.h`.
-const LEFT_BUTTON: u32 = 0x110;
-
 /// The first row of the step table. Above it: the heading, and the line that
 /// explains what the cursor is on.
 ///
@@ -825,223 +805,56 @@ const BEAT: std::time::Duration = std::time::Duration::from_secs(1);
 /// When there is no Wayland compositor, or the compositor offers no
 /// `xdg_shell`.
 pub fn host_it() -> Result<()> {
-    let conn = Connection::connect_to_env()
-        .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
-    let (globals, queue) = registry_queue_init(&conn).context("Wayland's registry")?;
-    let qh: QueueHandle<UpdateWindow> = queue.handle();
+    crate::door::run(|w| {
+        // THE TWO JOURNALS, each on a thread of its own.
+        //
+        // The root half runs first and the person's half BLOCKS on it —
+        // `systemctl start` on a `Type=oneshot` returns when the work is done —
+        // so the two are never producing at the same time except at the
+        // hand-over. Arrival order is the sequence's order, and nothing here
+        // claims more than that.
+        let (sender, said) = channel::channel::<String>();
+        let mut children = Vec::new();
+        children.extend(follow(SYSTEM_UNIT, false, &sender));
+        children.extend(follow(declared::UNIT, true, &sender));
+        w.handle
+            .insert_source(said, |event, (), door: &mut Door<UpdateWindow>| {
+                if let channel::Event::Msg(line) = event {
+                    // NOTHING IS PAINTED HERE. Every line that has arrived
+                    // lands in the scrollback, and the frame is owed once the
+                    // queue is empty — see `Scrollback` for what a redraw per
+                    // line costs, and `each_turn` for where the debt is paid.
+                    door.content.scrollback.push(line);
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the journal: {e}"))?;
 
-    let compositor = CompositorState::bind(&globals, &qh).context("no wl_compositor")?;
-    let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
-    let texts = crate::language::texts();
+        w.handle
+            .insert_source(
+                timer::Timer::from_duration(BEAT),
+                |_, (), door: &mut Door<UpdateWindow>| {
+                    door.content.reread_if_moved(&mut door.ui);
+                    timer::TimeoutAction::ToDuration(BEAT)
+                },
+            )
+            .map_err(|e| anyhow::anyhow!("could not hang the clock: {e}"))?;
 
-    let surface_of = compositor.create_surface(&qh);
-    // `RequestServer`: decoration belongs to the COMPOSITOR (invariant 4).
-    let window = xdg.create_window(surface_of, WindowDecorations::RequestServer, &qh);
-    // `*name*` is Emacs's convention for a buffer that is not a file, and the
-    // name is the command's own label — one sentence, two doors.
-    window.set_title(format!(
-        "*{}*",
-        texts.t(ronoctua_i18n::key::CMD_SYSTEM_UPDATE)
-    ));
-    window.set_app_id(APP_ID);
-    window.commit();
-
-    let mut cycle: EventLoop<UpdateWindow> = EventLoop::try_new().context("calloop")?;
-    let handle = cycle.handle();
-
-    // THE TWO JOURNALS, each on a thread of its own.
-    //
-    // The root half runs first and the person's half BLOCKS on it — `systemctl
-    // start` on a `Type=oneshot` returns when the work is done — so the two are
-    // never producing at the same time except at the hand-over. Arrival order
-    // is the sequence's order, and nothing here claims more than that.
-    let (sender, said) = channel::channel::<String>();
-    let mut children = Vec::new();
-    children.extend(follow(SYSTEM_UNIT, false, &sender));
-    children.extend(follow(declared::UNIT, true, &sender));
-    handle
-        .insert_source(said, |event, (), state: &mut UpdateWindow| {
-            if let channel::Event::Msg(line) = event {
-                // NOTHING IS PAINTED HERE. Every line that has arrived lands in the
-                // scrollback, and the frame is owed once the queue is empty — see
-                // `Scrollback` for what a redraw per line costs.
-                state.scrollback.push(line);
-            }
+        Ok(UpdateWindow {
+            steps: declared::steps(),
+            verdicts: Verdicts::read(),
+            stamp: report_stamp(),
+            scrollback: Scrollback::default(),
+            cursor: 0,
+            step_offset: 0,
+            output_up: 0,
+            lines: 24,
+            children,
         })
-        .map_err(|e| anyhow::anyhow!("could not hang the journal: {e}"))?;
-
-    handle
-        .insert_source(
-            timer::Timer::from_duration(BEAT),
-            |_, (), state: &mut UpdateWindow| {
-                state.reread_if_moved();
-                timer::TimeoutAction::ToDuration(BEAT)
-            },
-        )
-        .map_err(|e| anyhow::anyhow!("could not hang the clock: {e}"))?;
-
-    // THE THEME'S FILE, watched, for the same reason as every other door.
-    let (theme_sender, theme_changed) = channel::channel::<()>();
-    let _theme_watch = crate::theme::watch(move || theme_sender.send(()).is_ok());
-    handle
-        .insert_source(theme_changed, |event, (), state: &mut UpdateWindow| {
-            if let channel::Event::Msg(()) = event
-                && crate::theme::reload()
-            {
-                state.ask_paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
-
-    // AND THE SIZE OF THE TEXT, watched for the same reason and by the same
-    // means. A size chosen anywhere moves this window without it being
-    // reopened — and without it this door would sit beside the footer at a
-    // different size, which is the photograph that made this system have one
-    // size at all.
-    let (size_sender, size_changed) = channel::channel::<()>();
-    let _size_watch = crate::toolkits::watch(move || size_sender.send(()).is_ok());
-    handle
-        .insert_source(size_changed, |event, (), state: &mut UpdateWindow| {
-            if let channel::Event::Msg(()) = event
-                && crate::toolkits::reload()
-            {
-                state.text_size_changed();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the text size channel: {e}"))?;
-
-    let mut state = UpdateWindow {
-        conn: conn.clone(),
-        handle: handle.clone(),
-        _theme_watch,
-        registry: RegistryState::new(&globals),
-        outputs: OutputState::new(&globals, &qh),
-        seats: SeatState::new(&globals, &qh),
-        _compositor: compositor,
-        keyboards: crate::seats::Seats::default(),
-        pointers: crate::seats::Seats::default(),
-        here: PerSeat::default(),
-        mods: Modifiers::default(),
-        window,
-        width: 0,
-        height: 0,
-        asked: (0, 0),
-        // ONE TO ONE UNTIL A SCREEN SAYS OTHERWISE: the surface exists before
-        // the compositor has said which output it is on, and
-        // `scale_factor_changed` is what says so.
-        scale: 1,
-        scale_told: 1,
-        columns: 80,
-        lines: 24,
-        quit: false,
-        owed: false,
-        gpu: None,
-        text: None,
-        quads: None,
-        texts,
-        steps: declared::steps(),
-        verdicts: Verdicts::read(),
-        stamp: report_stamp(),
-        scrollback: Scrollback::default(),
-        cursor: 0,
-        step_offset: 0,
-        output_up: 0,
-        children,
-    };
-
-    WaylandSource::new(conn, queue)
-        .insert(cycle.handle())
-        .map_err(|e| anyhow::anyhow!("could not hang Wayland: {e}"))?;
-
-    let signal = cycle.get_signal();
-    cycle
-        .run(None, &mut state, |state| {
-            // THE FRAME OWED, once the queue is empty. A thousand lines of a
-            // rebuild arriving in one burst are one paint, not a thousand —
-            // and so is a held key, which is what `settle` added.
-            state.settle();
-            if state.quit {
-                signal.stop();
-            }
-        })
-        .context("event loop")?;
-    // WHAT I STARTED, I STOP. `journalctl -f` never ends on its own.
-    for mut child in state.children.drain(..) {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    Ok(())
+    })
 }
 
 /// The window.
 struct UpdateWindow {
-    conn: Connection,
-    /// The loop, for the ONE thing that needs it here: a keyboard that
-    /// REPEATS. SCTK only generates repeat events for a keyboard made with
-    /// `get_keyboard_with_repeat`, and that wants a `LoopHandle` — so this is
-    /// carried rather than reached for. Without it `repeat_key` below is dead
-    /// code and holding an arrow moves exactly one row, which is the trap
-    /// AGENTS.md records and which nine windows inherited.
-    handle: calloop::LoopHandle<'static, Self>,
-    /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
-    _theme_watch: Option<ronoctua_files::notice::Notice>,
-    registry: RegistryState,
-    outputs: OutputState,
-    seats: SeatState,
-    _compositor: CompositorState,
-    keyboards: crate::seats::Seats<Modifiers, wl_keyboard::WlKeyboard>,
-    /// Every pointer this window was offered — one per cursor — with the
-    /// state of each while another is `here`. See `crate::seats`.
-    pointers: crate::seats::Seats<PerSeat>,
-    /// The state of the pointer whose events are being handled now.
-    here: PerSeat,
-    mods: Modifiers,
-    window: Window,
-    /// The window's size in LOGICAL pixels — what the compositor configured
-    /// it to, what the columns are counted from, what the pointer arrives in.
-    width: u32,
-    /// See the field above.
-    height: u32,
-    /// The logical size the COMPOSITOR configured, before any clamp.
-    ///
-    /// `width`/`height` are what the BUFFER can show — which is what the
-    /// columns, the bars and the hit tests are laid out against; this is what
-    /// the GPU is asked for. They are the same pair on every machine anybody
-    /// has, and they come apart exactly at the GPU's texture ceiling. Keeping
-    /// only one of them is a ratchet: a window clamped once at scale 3 would
-    /// ask for the size it was cut down to and could never grow back. See
-    /// [`crate::hidpi`].
-    asked: (u32, u32),
-    /// How many physical pixels one logical pixel is on the screen this
-    /// window is on — see [`crate::hidpi`], where the rule and its
-    /// measurement live.
-    scale: i32,
-    /// What the SURFACE has been told, which lags `scale` by one frame.
-    ///
-    /// `set_buffer_scale` has to travel in the commit that carries a buffer of
-    /// the matching size, and the only such commit is the present inside
-    /// `Gpu::frame` — see [`crate::hidpi::told_before_present`].
-    scale_told: i32,
-    columns: u16,
-    lines: u16,
-    quit: bool,
-    /// Whether a frame is owed.
-    ///
-    /// # Why nothing here paints straight away
-    ///
-    /// The scrollback already had this shape for the lines a rebuild pours in
-    /// — a thousand of them in one burst are one paint. The HANDLERS did not:
-    /// a key and a click painted where they stood, and presentation blocks on
-    /// the vertical blank, so a held key waited for the monitor once per
-    /// repeat.
-    ///
-    /// Now there is one debt for both, drained in the one place that knows the
-    /// batch is finished. Same shape as `files_window` and `Footer`.
-    owed: bool,
-    gpu: Option<ronoctua_render::gpu::Gpu>,
-    text: Option<ronoctua_render::Text>,
-    quads: Option<ronoctua_render::quad::Quads>,
-    texts: ronoctua_i18n::Texts,
     /// The declared sequence, from the one table there is.
     steps: &'static [ronoctua_brain::Step],
     /// What the two halves reported, merged.
@@ -1056,27 +869,24 @@ struct UpdateWindow {
     step_offset: usize,
     /// How many lines above the tail the output is showing. Zero follows.
     output_up: usize,
+    /// The window's lines, as the door last counted them — kept here so the
+    /// arithmetic of the two halves can be asked from a key, which does not
+    /// carry the door's count with it.
+    lines: u16,
     /// The two `journalctl -f`, so they can be killed.
     children: Vec<std::process::Child>,
 }
 
-/// What this window keeps for ONE pointer — see `crate::seats`.
-#[derive(Debug, Default)]
-struct PerSeat {
-    /// Is the pointer dragging the output's bar?
-    ///
-    /// Held, because a drag is three events: the press that grabs it, every
-    /// motion until the release, and the release.
-    dragging: bool,
-    /// How many LINES the wheel and the touchpad have asked for and not yet
-    /// been paid.
-    ///
-    /// LINES, and the unit is in the name: the footer's accumulator holds
-    /// DETENTS. See `surface::wheel_arrived` — spending only the whole part and
-    /// keeping the rest is what makes a slow gesture move at the speed of the
-    /// finger instead of standing still and then jumping.
-    lines_owed: f64,
-    row_under_pointer: Option<usize>,
+impl Drop for UpdateWindow {
+    /// WHAT I STARTED, I STOP. `journalctl -f` never ends on its own, and a
+    /// door that leaves two of them behind every time it is closed is a door
+    /// that leaks processes.
+    fn drop(&mut self) {
+        for mut child in self.children.drain(..) {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 impl UpdateWindow {
@@ -1125,57 +935,25 @@ impl UpdateWindow {
     }
 
     /// Re-reads the reports when a file moved, and only then.
-    fn reread_if_moved(&mut self) {
+    fn reread_if_moved(&mut self, ui: &mut Ui) {
         let now = report_stamp();
         if now == self.stamp {
             return;
         }
         self.stamp = now;
         self.verdicts = Verdicts::read();
-        self.ask_paint();
+        ui.ask_paint();
     }
 
-    /// The size of the text changed under this door.
+    /// The output's bar, as a scroll from the TOP.
     ///
-    /// THE SHAPER HAS TO HEAR IT TOO. It was built with a size and keeps it;
-    /// moving everything around it — the columns, the cell, every hit test —
-    /// and leaving the letters gives a grid at one size with text at another,
-    /// which reads as a broken font rather than as a setting that took.
-    fn text_size_changed(&mut self) {
-        if let Some(t) = self.text.as_mut() {
-            t.draw_at(ronoctua_tokens::text::size());
-        }
-        self.recount();
-        self.ask_paint();
-    }
-
-    /// Columns and rows from the size in pixels.
-    ///
-    /// Integer arithmetic, without measuring text: the cell is exactly 0.600 ×
-    /// the font size, including in the Nerd Fonts.
-    fn recount(&mut self) {
-        let cell = tokens::text::size() * tokens::font::CELL_WIDTH_EM;
-        let line = tokens::metrics::line_height(tokens::text::size());
-        #[allow(clippy::cast_precision_loss)]
-        let width = self.width as f32 - 2.0 * cell * f32::from(CONTENT_MARGIN);
-        #[allow(clippy::cast_precision_loss)]
-        let height = self.height as f32;
-        self.columns = if cell > 0.0 {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let n = (width / cell).floor().max(1.0) as u16;
-            n
-        } else {
-            1
-        };
-        self.lines = if line > 0.0 {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let n = (height / line).floor().max(1.0) as u16;
-            n
-        } else {
-            1
-        };
-        self.follow_the_cursor();
-        self.follow_the_tail();
+    /// This window scrolls from the TAIL — `output_up` is how many lines above
+    /// the end the band sits — so the offset from the top is what is left
+    /// over. One arithmetic, read by the drawing and by the pointer.
+    fn output_scroll(&self) -> ronoctua_design::Scroll {
+        let room = self.output_room();
+        let total = self.scrollback.amount();
+        crate::chrome::list_scroll(total, room, total.saturating_sub(self.output_up + room))
     }
 
     /// Which step row a pointer position lands on, if any.
@@ -1194,12 +972,12 @@ impl UpdateWindow {
     }
 
     /// A key, through the one place this window decides anything.
-    fn press(&mut self, key: &ronoctua_keymap::Key) {
+    fn press(&mut self, ui: &mut Ui, key: &ronoctua_keymap::Key) {
         use ronoctua_keymap::Sym;
         let page = self.output_room().max(1);
         match key.sym {
-            Sym::Esc => self.quit = true,
-            Sym::Char('q') => self.quit = true,
+            Sym::Esc => ui.quit = true,
+            Sym::Char('q') => ui.quit = true,
             // THE STEP CURSOR. What moves with it is the second register, which
             // is the reason the cursor exists at all.
             Sym::Down | Sym::Char('j') if !key.mods.ctrl => {
@@ -1235,329 +1013,7 @@ impl UpdateWindow {
             Sym::Char('G') => self.output_up = 0,
             _ => return,
         }
-        self.ask_paint();
-    }
-
-    fn assemble_gpu(&mut self) {
-        use raw_window_handle::{
-            RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
-        };
-        let (Some(disp), Some(surf)) = (
-            std::ptr::NonNull::new(self.conn.backend().display_ptr().cast::<std::ffi::c_void>()),
-            std::ptr::NonNull::new(
-                self.window
-                    .wl_surface()
-                    .id()
-                    .as_ptr()
-                    .cast::<std::ffi::c_void>(),
-            ),
-        ) else {
-            tracing::error!("null Wayland pointers");
-            return;
-        };
-        // SAFETY: `conn` and `window` are fields of `self`, like the `Gpu` — the
-        // handles do not outlive what produced them.
-        // ONE CALL, not the same one twice: two calls to a pure
-        // function are two places the arguments can be edited apart.
-        let first = crate::hidpi::physical(self.asked, self.scale);
-        #[allow(unsafe_code)]
-        let gpu = unsafe {
-            ronoctua_render::gpu::Gpu::new(
-                RawDisplayHandle::Wayland(WaylandDisplayHandle::new(disp)),
-                RawWindowHandle::Wayland(WaylandWindowHandle::new(surf)),
-                first.0,
-                first.1,
-            )
-        };
-        let Ok(mut g) = gpu else {
-            tracing::error!("no usable GPU; the window will not draw");
-            return;
-        };
-        // AND THE FIRST BUFFER IS DIVISIBLE TOO. `Gpu::new` clamps at the
-        // GPU's ceiling like `resize` does, and the first frame sends the
-        // scale — see `crate::hidpi::resized`.
-        let (shown_w, shown_h) = crate::hidpi::resized(&mut g, self.asked, self.scale);
-        self.width = shown_w;
-        self.height = shown_h;
-        // AND THE COLUMNS ARE COUNTED AGAIN. `configure` counts them before the
-        // GPU exists, against the size the compositor gave; if the buffer came
-        // back smaller than that, the count that is on file is for a picture
-        // wider than the one this door draws into.
-        self.recount();
-        // THE SYSTEM'S ONE SIZE — see `ronoctua_tokens::text::size`. It used to be
-        // `SIZE_LARGE`, on the argument that the footer is peripheral
-        // reference and this is what one reads.
-        match ronoctua_render::Text::new(
-            &g.device,
-            &g.queue,
-            g.config.format,
-            self.scale,
-            tokens::text::size(),
-        ) {
-            Ok(t) => self.text = Some(t),
-            Err(e) => tracing::error!(error = %e, "assembling the text failed"),
-        }
-        match ronoctua_render::quad::Quads::new(&g.device, g.config.format) {
-            Ok(q) => self.quads = Some(q),
-            Err(e) => tracing::error!(error = %e, "the quad pipeline failed"),
-        }
-        self.gpu = Some(g);
-    }
-
-    /// One key, from a press or from a REPEAT.
-    ///
-    /// Both doors of every view take this path: SCTK delivers a repeat
-    /// through the callback given to `get_keyboard_with_repeat`, which has no
-    /// `Connection` and no `QueueHandle` to hand on — so the work cannot live
-    /// in `press_key`, and while it did, `repeat_key` was dead code and
-    /// holding an arrow moved exactly one row.
-    fn typed(&mut self, event: KeyEvent) {
-        if let Some(k) = key_of(&event, self.mods) {
-            self.press(&k);
-        }
-    }
-
-    /// Asks for a frame. It is drawn when the event queue empties.
-    const fn ask_paint(&mut self) {
-        self.owed = true;
-    }
-
-    /// Draws the owed frame, if one is owed — the scrollback's debt included.
-    fn settle(&mut self) {
-        if self.scrollback.owes_a_frame() {
-            self.follow_the_tail();
-            self.owed = true;
-        }
-        if std::mem::take(&mut self.owed) {
-            self.paint();
-        }
-    }
-
-    fn paint(&mut self) {
-        if self.width == 0 {
-            return;
-        }
-        if self.gpu.is_none() {
-            self.assemble_gpu();
-        }
-        let size = tokens::text::size();
-        let line_px = tokens::metrics::line_height(size);
-        let margin = CONTENT_MARGIN;
-        let mut spans: Vec<ronoctua_render::Span> = Vec::new();
-        let mut quads: Vec<ronoctua_render::quad::Quad> = Vec::new();
-
-        // LINE 0: whose window this is. A glyph and the sequence's own name —
-        // no rule under it, which is the heading this project has (`chrome`).
-        spans.push(ronoctua_render::Span {
-            size: ronoctua_render::Size::Px(size),
-            text: tokens::icon::SYNC.to_string(),
-            column: margin + GUTTER,
-            line: 0,
-            color: tokens::color::TEXT_SECONDARY,
-            edge: false,
-            foot: false,
-        });
-        spans.push(ronoctua_render::Span {
-            size: ronoctua_render::Size::Px(size),
-            text: layout::elide_end(
-                &self.texts.t(ronoctua_i18n::key::CMD_SYSTEM_UPDATE),
-                self.columns
-                    .saturating_sub(GUTTER + COLUMN_GAP + EDGE_RIGHT),
-            ),
-            column: margin + GUTTER + COLUMN_GAP,
-            line: 0,
-            color: tokens::color::TEXT_PRIMARY,
-            edge: false,
-            foot: false,
-        });
-
-        // LINE 1: the second register — what the step under the cursor really
-        // is, and with no steps to explain, how this window is driven.
-        let second = self.steps.get(self.cursor).map_or_else(
-            || self.texts.t(ronoctua_i18n::key::UPDATE_HINT),
-            |step| {
-                let (verdict, _) = self.verdicts.of_step(step.id);
-                cursor_explains(step, &verdict, &self.texts)
-            },
-        );
-        spans.push(ronoctua_render::Span {
-            size: ronoctua_render::Size::Px(size),
-            text: layout::elide_end(&second, self.columns),
-            column: margin,
-            line: 1,
-            color: tokens::color::TEXT_SECONDARY,
-            edge: false,
-            foot: false,
-        });
-
-        // THE STEPS, only the ones that fit.
-        let room = self.steps_room();
-        for (n, step) in self
-            .steps
-            .iter()
-            .skip(self.step_offset)
-            .take(room)
-            .enumerate()
-        {
-            let row = self.step_offset + n;
-            #[allow(clippy::cast_possible_truncation)]
-            let y = FIRST_OF_STEPS + n as u16;
-            // THE CURSOR AND THE POINTER GET DIFFERENT BANDS, and each is a
-            // flat quad with no border and no radius — invariant 15.
-            //
-            // They shared one colour, so a pointer resting away from the cursor
-            // lit two rows identically and neither said "this is the one the
-            // `Enter` runs". The file manager was reported for exactly that and
-            // the split is the owner's: the focus keeps `surface.selection` and
-            // the pointer takes the weaker `surface.hover`.
-            // EVERY CURSOR'S HOVER in its own colour (`crate::seats`); the
-            // first pointer to rest on a row gives it its colour.
-            let band = if row == self.cursor {
-                Some(tokens::color::SURFACE_SELECTION)
-            } else {
-                self.pointers
-                    .lit(&self.here)
-                    .find(|(_, s)| s.row_under_pointer == Some(row))
-                    .map(|(color, _)| color)
-            };
-            if let Some(color) = band {
-                quads.push(ronoctua_render::quad::Quad {
-                    x: 0.0,
-                    y: f32::from(y) * line_px,
-                    #[allow(clippy::cast_precision_loss)]
-                    width: self.width as f32,
-                    height: line_px,
-                    color,
-                });
-            }
-            let (verdict, seconds) = self.verdicts.of_step(step.id);
-            for piece in step_row(step, &verdict, seconds, self.columns, &self.texts) {
-                spans.push(ronoctua_render::Span {
-                    size: ronoctua_render::Size::Px(size),
-                    text: piece.text,
-                    column: margin + piece.at,
-                    line: y,
-                    color: piece.color,
-                    edge: false,
-                    foot: false,
-                });
-            }
-        }
-
-        // THE LINE THAT SAYS WHERE THE TABLE ENDS. A rule and nothing else —
-        // no panel, no border, no shadow (invariant 15) — and it rides the top
-        // edge of the output's first row rather than costing a row of its own.
-        let top = self.output_top();
-        #[allow(clippy::cast_precision_loss)]
-        quads.push(crate::chrome::rule(
-            self.width as f32,
-            f32::from(top) * line_px,
-        ));
-
-        // THE OUTPUT. Machine text, drawn as it came — sanitised for the grid
-        // and never translated: a build log is not interface.
-        if self.scrollback.is_empty() {
-            spans.push(ronoctua_render::Span {
-                size: ronoctua_render::Size::Px(size),
-                text: layout::elide_end(
-                    &self.texts.t(ronoctua_i18n::key::UPDATE_NO_OUTPUT),
-                    self.columns,
-                ),
-                column: margin + GUTTER,
-                line: top,
-                color: tokens::color::TEXT_DIM,
-                edge: false,
-                foot: false,
-            });
-        } else {
-            let room = self.output_room();
-            for (n, said) in self
-                .scrollback
-                .window(self.output_up, room)
-                .iter()
-                .enumerate()
-            {
-                #[allow(clippy::cast_possible_truncation)]
-                let y = top + n as u16;
-                spans.push(ronoctua_render::Span {
-                    size: ronoctua_render::Size::Px(size),
-                    text: layout::elide_end(said, self.columns.saturating_sub(EDGE_RIGHT)),
-                    column: margin,
-                    line: y,
-                    color: tokens::color::TEXT_SECONDARY,
-                    edge: false,
-                    foot: false,
-                });
-            }
-        }
-
-        // THE OUTPUT'S BAR. This window scrolls from the TAIL — `output_up` is
-        // how many lines above the end the band sits — so the offset from the
-        // top is what is left over. One arithmetic, `chrome::list_bar`, the
-        // same one the other four windows and the footer's region use.
-        {
-            let room = self.output_room();
-            let total = self.scrollback.amount();
-            let scroll = crate::chrome::list_scroll(
-                total,
-                room,
-                total.saturating_sub(self.output_up + room),
-            );
-            #[allow(clippy::cast_precision_loss)]
-            if let Some(q) = crate::chrome::list_bar(
-                scroll,
-                self.output_top(),
-                self.width as f32,
-                self.height as f32,
-            ) {
-                quads.push(q);
-            }
-        }
-        // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
-        // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes,
-        // and nothing else in this function may borrow `self` by then. See
-        // `crate::hidpi::told_before_present`.
-        let surface = self.window.wl_surface().clone();
-        let scale = self.scale;
-        let told = &mut self.scale_told;
-        let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
-            return;
-        };
-        // THE WINDOW'S OWN PIXELS — `resized` already made them what the
-        // buffer can show, so there is one number and this is it.
-        let (logical_w, logical_h) = (self.width, self.height);
-        if let Err(e) = text.prepare(
-            &gpu.device,
-            &gpu.queue,
-            gpu.config.width,
-            gpu.config.height,
-            ronoctua_render::Atlas::Pinned,
-            &spans,
-        ) {
-            tracing::error!(error = %e, "preparing the text failed");
-            return;
-        }
-        if let Some(q) = self.quads.as_mut() {
-            q.prepare(&gpu.device, &gpu.queue, logical_w, logical_h, &quads);
-        }
-        let quads_ref = self.quads.as_ref();
-        // QUADS AND THEN TEXT. There is no depth test: whoever draws later ends
-        // up on top, and the text has to stay legible over the band.
-        if let Err(e) = gpu.frame(
-            || crate::hidpi::told_before_present(scale, told, &surface),
-            |pass| {
-                if let Some(q) = quads_ref {
-                    q.draw(pass);
-                }
-                text.draw(ronoctua_render::Atlas::Pinned, pass)
-            },
-        ) {
-            tracing::error!(error = %e, "drawing the frame failed");
-            return;
-        }
-        if let Err(e) = self.conn.flush() {
-            tracing::warn!(error = %e, "the flush failed");
-        }
+        ui.ask_paint();
     }
 }
 
@@ -1594,275 +1050,253 @@ fn key_of(event: &KeyEvent, mods: Modifiers) -> Option<ronoctua_keymap::Key> {
     })
 }
 
-impl WindowHandler for UpdateWindow {
-    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {
-        self.quit = true;
+impl Content for UpdateWindow {
+    type Hand = ();
+
+    fn app_id(&self) -> &'static str {
+        APP_ID
     }
 
-    fn configure(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &Window,
-        cfg: WindowConfigure,
-        _: u32,
-    ) {
-        // WHAT THE COMPOSITOR SAID IS KEPT SEPARATELY, because what the
-        // buffer can show is what comes back below — see `asked`. It is
-        // taken from the CONFIGURE and from nothing else: built out of
-        // the door's own fields it would be the size `resized` last
-        // answered, which can only ever shrink.
-        self.asked = (
-            cfg.new_size.0.map_or(900, std::num::NonZeroU32::get),
-            cfg.new_size.1.map_or(600, std::num::NonZeroU32::get),
-        );
-        self.width = self.asked.0;
-        self.height = self.asked.1;
-        let asked = self.asked;
-        let scale = self.scale;
-        if let Some(g) = self.gpu.as_mut() {
-            // AND THE WINDOW KEEPS WHAT THE BUFFER CAN SHOW. Below the GPU's
-            // ceiling that is exactly what the compositor configured; above
-            // it, laying out against the bigger number would put the columns
-            // and the bars in a space the buffer does not have.
-            let (shown_w, shown_h) = crate::hidpi::resized(g, asked, scale);
-            self.width = shown_w;
-            self.height = shown_h;
+    /// `*name*` is Emacs's convention for a buffer that is not a file, and the
+    /// name is the command's own label — one sentence, two doors.
+    fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
+        format!("*{}*", texts.t(ronoctua_i18n::key::CMD_SYSTEM_UPDATE))
+    }
+
+    /// One key, from a press or from a REPEAT — holding an arrow walks the
+    /// table, which is what a list wants.
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+        if let Some(k) = key_of(event, mods) {
+            self.press(ui, &k);
         }
-        self.recount();
-        self.ask_paint();
     }
-}
 
-impl SeatHandler for UpdateWindow {
-    fn seat_state(&mut self) -> &mut SeatState {
-        &mut self.seats
+    /// Where content begins, in cells from the window's edge.
+    fn margin(&self) -> u16 {
+        CONTENT_MARGIN
     }
-    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
 
-    fn new_capability(
-        &mut self,
-        _: &Connection,
-        qh: &QueueHandle<Self>,
-        seat: wl_seat::WlSeat,
-        cap: Capability,
-    ) {
-        if cap == Capability::Keyboard {
-            // A KEYBOARD THAT REPEATS — see the `handle` field. The rate and
-            // the delay are the COMPOSITOR's, arriving as `RepeatInfo`;
-            // nothing here invents either.
-            match self.seats.get_keyboard_with_repeat(
-                qh,
-                &seat,
-                None,
-                self.handle.clone(),
-                Box::new(|state: &mut Self, kb, event| {
-                    state.keyboards.switch_to(kb, &mut state.mods);
-                    state.typed(event);
-                }),
-            ) {
-                Ok(k) => {
-                    // EVERY KEYBOARD, and not only the first: one per seat, and in
-                    // Independent mode one per cursor.
-                    let name = self.seats.info(&seat).and_then(|i| i.name);
-                    self.keyboards.took(&seat, k, name.as_deref());
-                }
-                Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
+    /// THIS WINDOW DRAWS NO HEADER OF SHORTCUTS — line 0 is its name and line
+    /// 1 the second register — so there is no drawer for the right `Ctrl` to
+    /// walk, and `Esc` is this window's own: it closes it.
+    fn header_keys(&self) -> bool {
+        false
+    }
+
+    fn resized(&mut self, ui: &mut Ui) {
+        self.lines = ui.lines;
+        self.follow_the_cursor();
+        self.follow_the_tail();
+    }
+
+    /// THE SCROLLBACK'S DEBT, paid once the queue is empty. A thousand lines of
+    /// a rebuild arriving in one burst are one paint, not a thousand.
+    fn each_turn(&mut self, ui: &mut Ui) {
+        if self.scrollback.owes_a_frame() {
+            self.follow_the_tail();
+            ui.ask_paint();
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
+        self.lines = ui.lines;
+        let size = tokens::text::size();
+        let line_px = tokens::metrics::line_height(size);
+        let margin = ui.margin;
+        let columns = ui.columns;
+        let texts = ui.texts.clone();
+        #[allow(clippy::cast_precision_loss)]
+        let (width, height) = (ui.width as f32, ui.height as f32);
+        let span =
+            |text: String, column: u16, line: u16, color: tokens::Color| ronoctua_render::Span {
+                size: ronoctua_render::Size::Px(size),
+                text,
+                column,
+                line,
+                color,
+                edge: false,
+                foot: false,
+            };
+
+        // LINE 0: whose window this is. A glyph and the sequence's own name —
+        // no rule under it, which is the heading this project has (`chrome`).
+        canvas.spans.push(span(
+            tokens::icon::SYNC.to_string(),
+            margin + GUTTER,
+            0,
+            tokens::color::TEXT_SECONDARY,
+        ));
+        canvas.spans.push(span(
+            layout::elide_end(
+                &texts.t(ronoctua_i18n::key::CMD_SYSTEM_UPDATE),
+                columns.saturating_sub(GUTTER + COLUMN_GAP + EDGE_RIGHT),
+            ),
+            margin + GUTTER + COLUMN_GAP,
+            0,
+            tokens::color::TEXT_PRIMARY,
+        ));
+
+        // LINE 1: the second register — what the step under the cursor really
+        // is, and with no steps to explain, how this window is driven. What the
+        // last order said takes it when there is one.
+        let second = ui.message.clone().unwrap_or_else(|| {
+            self.steps.get(self.cursor).map_or_else(
+                || texts.t(ronoctua_i18n::key::UPDATE_HINT),
+                |step| {
+                    let (verdict, _) = self.verdicts.of_step(step.id);
+                    cursor_explains(step, &verdict, &texts)
+                },
+            )
+        });
+        canvas.spans.push(span(
+            layout::elide_end(&second, columns),
+            margin,
+            1,
+            tokens::color::TEXT_SECONDARY,
+        ));
+
+        // THE STEPS, only the ones that fit.
+        let room = self.steps_room();
+        for (n, step) in self
+            .steps
+            .iter()
+            .skip(self.step_offset)
+            .take(room)
+            .enumerate()
+        {
+            let row = self.step_offset + n;
+            let y = FIRST_OF_STEPS + u16::try_from(n).unwrap_or(0);
+            // THE CURSOR AND THE POINTER GET DIFFERENT BANDS, and each is a
+            // flat quad with no border and no radius — invariant 15.
+            //
+            // They shared one colour, so a pointer resting away from the cursor
+            // lit two rows identically and neither said "this is the one the
+            // `Enter` runs". The file manager was reported for exactly that and
+            // the split is the owner's: the focus keeps `surface.selection` and
+            // the pointer takes the weaker `surface.hover`.
+            // EVERY CURSOR'S HOVER in its own colour (`crate::seats`); the
+            // first pointer to rest on a row gives it its colour.
+            //
+            // AND THE BAND IS THE WHOLE WIDTH: the only bar this window draws
+            // is the output's, below the table, so no column of these rows is
+            // a bar's.
+            let band = if row == self.cursor {
+                Some(tokens::color::SURFACE_SELECTION)
+            } else {
+                canvas
+                    .lit
+                    .iter()
+                    .find(|(_, under)| *under == Some(row))
+                    .map(|(color, _)| *color)
+            };
+            if let Some(color) = band {
+                canvas.under.push(ronoctua_render::quad::Quad {
+                    x: 0.0,
+                    y: f32::from(y) * line_px,
+                    width,
+                    height: line_px,
+                    color,
+                });
+            }
+            let (verdict, seconds) = self.verdicts.of_step(step.id);
+            for piece in step_row(step, &verdict, seconds, columns, &texts) {
+                canvas
+                    .spans
+                    .push(span(piece.text, margin + piece.at, y, piece.color));
             }
         }
-        if cap == Capability::Pointer {
-            match self.seats.get_pointer(qh, &seat) {
-                Ok(p) => {
-                    // EVERY POINTER, and not only the first: one per cursor.
-                    let name = self.seats.info(&seat).and_then(|i| i.name);
-                    self.pointers.took(&seat, p, name.as_deref());
-                }
-                Err(e) => tracing::warn!(error = %e, "no pointer; keyboard only"),
+
+        // THE LINE THAT SAYS WHERE THE TABLE ENDS. A rule and nothing else —
+        // no panel, no border, no shadow (invariant 15) — and it rides the top
+        // edge of the output's first row rather than costing a row of its own.
+        let top = self.output_top();
+        canvas
+            .under
+            .push(crate::chrome::rule(width, f32::from(top) * line_px));
+
+        // THE OUTPUT. Machine text, drawn as it came — sanitised for the grid
+        // and never translated: a build log is not interface.
+        if self.scrollback.is_empty() {
+            canvas.spans.push(span(
+                layout::elide_end(&texts.t(ronoctua_i18n::key::UPDATE_NO_OUTPUT), columns),
+                margin + GUTTER,
+                top,
+                tokens::color::TEXT_DIM,
+            ));
+        } else {
+            let room = self.output_room();
+            for (n, said) in self
+                .scrollback
+                .window(self.output_up, room)
+                .iter()
+                .enumerate()
+            {
+                let y = top + u16::try_from(n).unwrap_or(0);
+                canvas.spans.push(span(
+                    layout::elide_end(said, columns.saturating_sub(EDGE_RIGHT)),
+                    margin,
+                    y,
+                    tokens::color::TEXT_SECONDARY,
+                ));
             }
         }
+
+        // THE OUTPUT'S BAR — `chrome::list_bar`, the same arithmetic the other
+        // windows and the footer's region use — written down in `ui.room` as
+        // it is drawn, so the bar's column is its own while it is there.
+        let scroll = self.output_scroll();
+        ui.room = crate::chrome::Room::of(scroll, width, height);
+        canvas
+            .under
+            .extend(crate::chrome::list_bar(scroll, top, width, height));
+        canvas.bar(crate::chrome::list_track(scroll, top, width, height));
     }
 
-    fn remove_capability(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        seat: wl_seat::WlSeat,
-        cap: Capability,
-    ) {
-        if cap == Capability::Keyboard {
-            self.keyboards.lost(&seat, &mut self.mods);
-        }
-        if cap == Capability::Pointer {
-            self.pointers.lost(&seat, &mut self.here);
-        }
-    }
-
-    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
-}
-
-impl KeyboardHandler for UpdateWindow {
-    fn enter(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
-        _: u32,
-        _: &[u32],
-        _: &[Keysym],
-    ) {
-        self.keyboards.switch_to(kb, &mut self.mods);
-    }
-
-    fn leave(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
-        _: u32,
-    ) {
-        self.keyboards.switch_to(kb, &mut self.mods);
-        // The modifiers whole: a state that only updates with focus cannot keep
-        // holding without it, and a stuck `ctrl` would send every arrow to the
-        // output instead of the cursor.
-        self.mods = Modifiers::default();
-    }
-
-    fn press_key(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: u32,
-        event: KeyEvent,
-    ) {
-        self.keyboards.switch_to(kb, &mut self.mods);
-        self.typed(event);
-    }
-
-    fn repeat_key(
-        &mut self,
-        conn: &Connection,
-        qh: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        serial: u32,
-        event: KeyEvent,
-    ) {
-        // Holding an arrow walks the table, which is what a list wants.
-        self.press_key(conn, qh, kb, serial, event);
-    }
-
-    fn release_key(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: u32,
-        _: KeyEvent,
-    ) {
-        self.keyboards.switch_to(kb, &mut self.mods);
-    }
-
-    fn update_modifiers(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: u32,
-        mods: Modifiers,
-        _: RawModifiers,
-        _: u32,
-    ) {
-        self.keyboards.switch_to(kb, &mut self.mods);
-        self.mods = mods;
-    }
-}
-
-impl PointerHandler for UpdateWindow {
-    /// EVERY CURSOR HAS ITS OWN STATE: the pointer that spoke is made `here`
-    /// first, so a drag, a hover or a wheel's leftover never crosses from
-    /// one cursor to another. See `crate::seats`.
-    fn pointer_frame(
-        &mut self,
-        conn: &Connection,
-        qh: &QueueHandle<Self>,
-        pointer: &wl_pointer::WlPointer,
-        events: &[PointerEvent],
-    ) {
-        self.pointers.switch_to(pointer, &mut self.here);
-        self.pointer_frame_here(conn, qh, events);
-    }
-}
-
-impl UpdateWindow {
-    /// One pointer's frame, with its state already `here`.
-    fn pointer_frame_here(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        events: &[PointerEvent],
-    ) {
-        let before = (self.here.row_under_pointer, self.cursor, self.output_up);
+    fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<()>, events: &[PointerEvent]) {
+        let before = (hand.row_under_pointer, self.cursor, self.output_up);
         let mut turned = false;
         let mut over_the_steps = false;
         // THE OUTPUT'S BAR IS A CONTROL. This window counts from the TAIL, so
         // an offset from the top has to be turned back into `output_up` — see
-        // the drawing, which does the same conversion the other way round.
+        // `output_scroll`, which does the same conversion the other way round.
         let room = self.output_room();
         let total = self.scrollback.amount();
-        let scroll =
-            crate::chrome::list_scroll(total, room, total.saturating_sub(self.output_up + room));
+        let scroll = self.output_scroll();
+        let top = self.output_top();
         #[allow(clippy::cast_precision_loss)]
-        let (bar_w, bar_h) = (self.width as f32, self.height as f32);
+        let (bar_w, bar_h) = (ui.width as f32, ui.height as f32);
         let mut dragged: Option<usize> = None;
         for e in events {
             #[allow(clippy::cast_possible_truncation)]
             let (px, py) = (e.position.0 as f32, e.position.1 as f32);
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    if self.here.dragging {
-                        dragged = Some(crate::chrome::list_offset_at(
-                            scroll,
-                            self.output_top(),
-                            bar_w,
-                            bar_h,
-                            py,
-                        ));
+                    if hand.dragging {
+                        dragged =
+                            Some(crate::chrome::list_offset_at(scroll, top, bar_w, bar_h, py));
                     } else {
-                        self.here.row_under_pointer = self.at(e.position.0, e.position.1);
+                        hand.row_under_pointer = self.at(e.position.0, e.position.1);
                     }
                 }
                 PointerEventKind::Leave { .. } => {
                     // AND THE DRAG ENDS WITH THE POINTER — see the same arm
-                    // in the four list windows.
-                    self.here.dragging = false;
-                    self.here.row_under_pointer = None;
+                    // in the list windows.
+                    hand.dragging = false;
+                    hand.row_under_pointer = None;
                 }
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
-                    self.here.dragging = false;
+                    hand.dragging = false;
                 }
                 // A CLICK MOVES THE CURSOR, which is what an arrow does. There
                 // is nothing else on this window to do to a step: switching one
                 // on and off belongs to the brain's screen, where the person's
                 // choice is written down.
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
-                    if crate::chrome::on_the_list_bar(
-                        scroll,
-                        self.output_top(),
-                        bar_w,
-                        bar_h,
-                        px,
-                        py,
-                    ) {
-                        self.here.dragging = true;
-                        dragged = Some(crate::chrome::list_offset_at(
-                            scroll,
-                            self.output_top(),
-                            bar_w,
-                            bar_h,
-                            py,
-                        ));
+                    if crate::chrome::on_the_list_bar(scroll, top, bar_w, bar_h, px, py) {
+                        hand.dragging = true;
+                        dragged =
+                            Some(crate::chrome::list_offset_at(scroll, top, bar_w, bar_h, py));
                     } else if let Some(row) = self.at(e.position.0, e.position.1) {
                         self.cursor = row;
                         self.follow_the_cursor();
@@ -1875,11 +1309,7 @@ impl UpdateWindow {
                 } => {
                     over_the_steps = self.at(e.position.0, e.position.1).is_some();
                     // THE ARITHMETIC IS SHARED — see `surface::wheel_arrived`.
-                    crate::surface::wheel_arrived(
-                        &mut self.here.lines_owed,
-                        &vertical,
-                        &horizontal,
-                    );
+                    crate::surface::wheel_arrived(&mut hand.lines_owed, &vertical, &horizontal);
                     turned = true;
                 }
                 _ => {}
@@ -1888,16 +1318,16 @@ impl UpdateWindow {
         if let Some(offset) = dragged {
             // BACK TO THE TAIL'S OWN COUNT. And nothing else this frame: a
             // wheel tick arriving during a drag would move the list twice,
-            // which the other four windows avoid by returning here.
+            // which the list windows avoid by returning here.
             self.output_up = total.saturating_sub(offset + room);
             self.follow_the_tail();
-            if before != (self.here.row_under_pointer, self.cursor, self.output_up) {
-                self.ask_paint();
+            if before != (hand.row_under_pointer, self.cursor, self.output_up) {
+                ui.ask_paint();
             }
             return;
         }
         let by = if turned {
-            crate::surface::wheel_lines(&mut self.here.lines_owed)
+            crate::surface::wheel_lines(&mut hand.lines_owed)
         } else {
             0
         };
@@ -1930,91 +1360,11 @@ impl UpdateWindow {
         // Only redraws if something CHANGED: a `Motion` arrives on every pixel
         // of movement, and painting per pixel would spend the GPU drawing the
         // same thing.
-        if before != (self.here.row_under_pointer, self.cursor, self.output_up) {
-            self.ask_paint();
+        if before != (hand.row_under_pointer, self.cursor, self.output_up) {
+            ui.ask_paint();
         }
     }
 }
-
-impl CompositorHandler for UpdateWindow {
-    /// The window moved to a screen of another scale — or was told its first.
-    ///
-    /// It was EMPTY here and in eight other doors, which is what made every
-    /// one of them blurry on a HiDPI screen. The rule and the measurement are
-    /// in [`crate::hidpi`].
-    fn scale_factor_changed(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        // THE SURFACE IS NEEDED to ask its VERSION, not to tell it anything:
-        // it is told its scale inside the frame, which is the only commit that
-        // carries a matching buffer — see `crate::hidpi::told_before_present`.
-        surface: &wl_surface::WlSurface,
-        factor: i32,
-    ) {
-        if let Some((w, h)) = crate::hidpi::followed(
-            &mut self.scale,
-            factor,
-            surface,
-            self.gpu.as_mut(),
-            self.text.as_mut(),
-            self.asked,
-        ) {
-            // AND THE DOOR KEEPS WHAT THE BUFFER CAN SHOW. Below the
-            // GPU's ceiling this is what the compositor configured;
-            // above it, going on with the old number lays the picture
-            // out in a space the buffer does not have.
-            self.width = w;
-            self.height = h;
-            self.recount();
-            self.ask_paint();
-        }
-    }
-    fn transform_changed(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: wl_output::Transform,
-    ) {
-    }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
-    fn surface_enter(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
-    ) {
-    }
-    fn surface_leave(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
-    ) {
-    }
-}
-
-impl OutputHandler for UpdateWindow {
-    fn output_state(&mut self) -> &mut OutputState {
-        &mut self.outputs
-    }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-}
-
-impl ProvidesRegistryState for UpdateWindow {
-    fn registry(&mut self) -> &mut RegistryState {
-        &mut self.registry
-    }
-    registry_handlers![OutputState, SeatState];
-}
-
-smithay_client_toolkit::delegate_registry!(UpdateWindow);
-smithay_client_toolkit::delegate_dispatch2!(UpdateWindow);
 
 #[cfg(test)]
 mod tests {

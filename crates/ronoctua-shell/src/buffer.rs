@@ -25,37 +25,19 @@
 //! The component sees no token, no language and no Wayland (invariant 11).
 //! What resolves all three is this file.
 
+use crate::door::{Canvas, Content, Door, Hand, Ui};
 use anyhow::{Context as _, Result};
 use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
-    output::{OutputHandler, OutputState},
-    reexports::calloop::EventLoop,
     reexports::calloop::channel as calloop_channel,
     // The clock, for the buffer that samples the system. It reaches here
     // through the toolkit's re-export, like everything else from calloop —
     // depending on the crate directly would risk two versions of it.
     reexports::calloop::timer,
-    reexports::calloop_wayland_source::WaylandSource,
-    registry::{ProvidesRegistryState, RegistryState},
-    registry_handlers,
     seat::{
-        Capability, SeatHandler, SeatState,
-        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
-        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        keyboard::{KeyEvent, Keysym, Modifiers},
+        pointer::{PointerEvent, PointerEventKind},
     },
-    shell::{
-        WaylandSurface as _,
-        xdg::{
-            XdgShell,
-            window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
-        },
-    },
-};
-use wayland_client::{
-    Connection, Proxy as _, QueueHandle,
-    globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
 };
 
 // THE BRIDGE MOVED OUT, and this is the only copy: see `paint`. The
@@ -180,59 +162,27 @@ type DraggedBar = crate::paint::Grab;
 
 /// The state of the window hosting a buffer.
 struct Host {
-    conn: Connection,
-    /// The loop, for the one thing that needs it here: a keyboard that
-    /// REPEATS. SCTK only sends repeat events for a keyboard made with
-    /// `get_keyboard_with_repeat`, and that wants a `LoopHandle` — without it
-    /// the `repeat_key` below is dead code, and holding the arrow in a buffer
-    /// moved exactly one row while the comment beside it said otherwise.
-    handle: smithay_client_toolkit::reexports::calloop::LoopHandle<'static, Self>,
-    /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
-    /// The component is told nothing: it never had a value (invariant 11).
-    _theme_watch: Option<ronoctua_files::notice::Notice>,
-    /// `display.json`, for the size of the text.
-    _size_watch: Option<ronoctua_files::notice::Notice>,
-    registry: RegistryState,
-    outputs: OutputState,
-    seats: SeatState,
-    _compositor: CompositorState,
-    key_devices: crate::seats::Seats<Modifiers, wl_keyboard::WlKeyboard>,
     /// The seat the buffer was last told the keys are from — so
     /// `keyboard-seat` is sent when it CHANGES, and not before every key.
     typing_seat: Option<u16>,
-    /// The pointer, so the click reaches the buffer's items.
-    /// Every pointer this window was offered — one per cursor — with the
-    /// state of each while another is `here`. See `crate::seats`.
-    pointers: crate::seats::Seats<PerSeat>,
-    /// The state of the pointer whose events are being handled now.
-    here: PerSeat,
+    /// Whose keyboard the key being handled came from — the door says so on
+    /// every key (`Ui::keyboard_seat`).
+    key_seat: u16,
+    /// The window's title and `app_id`, from the descriptor — see `host_it`.
+    title: String,
+    app_id: &'static str,
+    /// The theme the rasterised drawings were made in: a theme chosen since
+    /// drops the old theme's CPU copies (the key already tells them apart).
+    theme_seen: usize,
+    /// Whether more than one cursor was on this window at the last frame.
+    many_pointers: bool,
+    /// The modifiers held with the key being handled.
     mods: Modifiers,
-    window: Window,
     /// The window's size in LOGICAL pixels — what the compositor configured
     /// it to, what the columns are counted from, what the pointer arrives in.
     width: u32,
     /// See the field above.
     height: u32,
-    /// The logical size the COMPOSITOR configured, before any clamp.
-    ///
-    /// `width`/`height` are what the BUFFER can show — which is what the
-    /// columns, the bars and the hit tests are laid out against; this is what
-    /// the GPU is asked for. They are the same pair on every machine anybody
-    /// has, and they come apart exactly at the GPU's texture ceiling. Keeping
-    /// only one of them is a ratchet: a window clamped once at scale 3 would
-    /// ask for the size it was cut down to and could never grow back. See
-    /// [`crate::hidpi`].
-    asked: (u32, u32),
-    /// How many physical pixels one logical pixel is on the screen this
-    /// window is on — see [`crate::hidpi`], where the rule and its
-    /// measurement live.
-    scale: i32,
-    /// What the SURFACE has been told, which lags `scale` by one frame.
-    ///
-    /// `set_buffer_scale` has to travel in the commit that carries a buffer of
-    /// the matching size, and the only such commit is the present inside
-    /// `Gpu::frame` — see [`crate::hidpi::told_before_present`].
-    scale_told: i32,
     /// A frame is owed, and it is drawn once the queue is empty.
     ///
     /// # Why the pointer does not draw where it is handled
@@ -263,21 +213,6 @@ struct Host {
     /// `Effect::Copy`, where the buffer hands text over and the host decides
     /// where it goes.
     file: Option<std::path::PathBuf>,
-    gpu: Option<ronoctua_render::gpu::Gpu>,
-    text: Option<ronoctua_render::Text>,
-    /// The image pipeline, for [`ronoctua_protocol::Command::Svg`].
-    ///
-    /// The buffer window only knew how to draw text. It is born along with
-    /// `text`, in the same `assemble_gpu`, and stays `None` while there is no GPU —
-    /// for the same reason as it.
-    images: Option<ronoctua_render::image::Images>,
-    /// The flat-rectangle pipeline, for `Command::Selection`.
-    ///
-    /// It had been missing since the primitive existed: the host answered
-    /// `Vec::new()` for it, in silence. A buffer that used it drew nothing and
-    /// never found out — which is worse than a primitive that does not exist,
-    /// because the WIT says it does.
-    quads: Option<ronoctua_render::quad::Quads>,
     list: ronoctua_protocol::DisplayList,
     /// The already-rasterised vector drawings, by [`svg_key`].
     ///
@@ -312,7 +247,7 @@ struct Host {
     keymap: Vec<ronoctua_protocol::Binding>,
     /// The sequence typed so far, waiting to complete a binding.
     pending: Vec<char>,
-    texts: ronoctua_i18n::Texts,
+    texts: std::rc::Rc<ronoctua_i18n::Texts>,
     /// The LIVE component.
     ///
     /// The host used to call `render` once and stop: no key reached
@@ -949,501 +884,402 @@ fn paste_text() -> Result<String> {
 ///
 /// There is no compositor, the component does not load, or the `render` fails.
 pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result<()> {
-    let conn = Connection::connect_to_env()
-        .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
-    let (globals, events) = registry_queue_init(&conn).context("Wayland's registry")?;
-    let qh: QueueHandle<Host> = events.handle();
+    // THE SOCKET THE KEYMAP IS PUBLISHED ON, removed when the window closes:
+    // a stale one in `XDG_RUNTIME_DIR` would make the footer connect to a
+    // buffer that is not there and wait.
+    let published: std::cell::RefCell<Option<std::path::PathBuf>> = std::cell::RefCell::new(None);
+    let ran = crate::door::run(|w| {
+        // THE INSTANCE LIVES. Loaded once, it keeps the component's
+        // state between keys — search, cursor, scroll.
+        let wasm =
+            std::fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
+        let runtime = ronoctua_runtime::Runtime::fresh()?;
+        let cwasm = runtime.precompile(&wasm)?;
+        let component = runtime.load(&cwasm)?;
+        let mut instance = runtime.open(&component)?;
 
-    let compositor = CompositorState::bind(&globals, &qh).context("no wl_compositor")?;
-    let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
+        // The descriptor BEFORE any render: it is what declares the keymap and
+        // the capabilities, and §7.9 wants the refusal at load, not afterwards.
+        let d = instance.init()?;
+        if let Err(e) = d.validate() {
+            anyhow::bail!("the buffer's descriptor does not pass the section 7.9 guard: {e}");
+        }
+        tracing::info!(name = d.name, mode = d.mode, "component loaded");
 
-    // THE INSTANCE LIVES. Loaded once, it keeps the component's
-    // state between keys — search, cursor, scroll.
-    let wasm = std::fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
-    let runtime = ronoctua_runtime::Runtime::fresh()?;
-    let cwasm = runtime.precompile(&wasm)?;
-    let component = runtime.load(&cwasm)?;
-    let mut instance = runtime.open(&component)?;
+        // THE TITLE AND THE `app_id` COME FROM THE DESCRIPTOR.
+        //
+        // They used to be a fixed `ronoctua: buffer` and `br.ronoctua.buffer`, and the modeline —
+        // which reads the title and app id from the compositor — showed `ronoctua: buffer
+        // buffer` for any component. It said the same thing twice and did not
+        // say WHICH buffer.
+        //
+        // `*name*` is Emacs's convention for a buffer that is not a file, the same one
+        // as the `*scratch*` the modeline already uses in the empty state.
+        // THE ID IS ENGLISH AND THE LABEL COMES FROM THE i18n, and the two used to be
+        // the same string. That is how `glifos` reached an English screen: the
+        // descriptor's `name` WAS the label, drawn raw, so a Portuguese id was a
+        // Portuguese window title in every language (invariant 18 and invariant 8 at
+        // the same time). Now the buffer publishes `glyphs` and this is what turns
+        // it into what the person reads.
+        //
+        // The `app_id` is NOT translated, and that is deliberate: the compositor's window
+        // rules match on it, and a rule that only fires in one language is a rule
+        // that fails on the machine of whoever changed `LANG`.
+        let texts = crate::language::texts();
+        let title = texts.t(&format!("buffer-{}", d.name));
 
-    // The descriptor BEFORE any render: it is what declares the keymap and
-    // the capabilities, and §7.9 wants the refusal at load, not afterwards.
-    let d = instance.init()?;
-    if let Err(e) = d.validate() {
-        anyhow::bail!("the buffer's descriptor does not pass the section 7.9 guard: {e}");
-    }
-    tracing::info!(name = d.name, mode = d.mode, "component loaded");
-
-    // THE TITLE AND THE `app_id` COME FROM THE DESCRIPTOR.
-    //
-    // They used to be a fixed `ronoctua: buffer` and `br.ronoctua.buffer`, and the modeline —
-    // which reads the title and app id from the compositor — showed `ronoctua: buffer
-    // buffer` for any component. It said the same thing twice and did not
-    // say WHICH buffer.
-    //
-    // `*name*` is Emacs's convention for a buffer that is not a file, the same one
-    // as the `*scratch*` the modeline already uses in the empty state.
-    // THE ID IS ENGLISH AND THE LABEL COMES FROM THE i18n, and the two used to be
-    // the same string. That is how `glifos` reached an English screen: the
-    // descriptor's `name` WAS the label, drawn raw, so a Portuguese id was a
-    // Portuguese window title in every language (invariant 18 and invariant 8 at
-    // the same time). Now the buffer publishes `glyphs` and this is what turns
-    // it into what the person reads.
-    //
-    // The `app_id` is NOT translated, and that is deliberate: the compositor's window
-    // rules match on it, and a rule that only fires in one language is a rule
-    // that fails on the machine of whoever changed `LANG`.
-    let texts = crate::language::texts();
-    let title = texts.t(&format!("buffer-{}", d.name));
-
-    // THE PHRASES, BEFORE THE FIRST FRAME.
-    //
-    // A key a buffer only SHOWS is resolved when this host draws it, and the
-    // buffer never holds what came out. This is the other case: text the buffer
-    // holds, parses or writes back — its search field — which as data opened
-    // `familia:emoji` in an en-GB session and as a key could not have been read
-    // back by whoever drew it. See `ronoctua_protocol::Phrase`.
-    //
-    // HERE, and not after the `Host` is built, because the render below is what
-    // `list.validate` reads: seeding afterwards would check a frame nobody sees
-    // and leave the one they do see un-seeded.
-    //
-    // Once, and never again: the language is read from the environment at
-    // start-up and nothing in this system changes it while a session runs
-    // (`surface.rs`, `texts`). A buffer that had to be told twice would need to
-    // know it had been told once.
-    if !d.phrases.is_empty() {
-        let said = d
-            .phrases
-            .iter()
-            .map(|k| ronoctua_protocol::Phrase {
-                key: k.clone(),
-                // THE RESERVED KEY IS ANSWERED WITH THE TAG, not with a
-                // translation. `Texts::t` would give back `[-language]` — it
-                // is not a message and by construction cannot be one, because
-                // Fluent reserves the leading `-` for terms and the generator
-                // refuses them as keys. See `Phrases::LANGUAGE`.
-                text: if k == ronoctua_design::Phrases::LANGUAGE {
-                    texts.language().to_owned()
-                } else {
-                    texts.t(k)
-                },
-            })
-            .collect();
-        instance.event(&ronoctua_protocol::Input::Phrases(said))?;
-        tracing::info!(phrases = d.phrases.len(), "phrases handed over");
-    }
-
-    let surface_of = compositor.create_surface(&qh);
-    // `RequestServer`: decoration belongs to the COMPOSITOR, never to us. Drawing a
-    // border or a title bar here would be reimplementing window layout, and
-    // invariant 4 forbids it. The compositor draws no titlebar, so in
-    // practice there is no decoration at all — which is what section 3 wants.
-    let window = xdg.create_window(surface_of, WindowDecorations::RequestServer, &qh);
-    window.set_title(format!("*{title}*"));
-    window.set_app_id(format!("br.ronoctua.{}", d.mode));
-    window.commit();
-
-    // The initial columns and rows are a guess; the `configure` brings the actual
-    // size and the `render` runs again with it.
-    let list = instance.render(80, 24, Host::heights())?;
-    tracing::info!(
-        commands = list.commands.len(),
-        height = list.height(crate::paint::heights()),
-        "component rendered"
-    );
-
-    // THE CAPABILITY GATE, enforced HERE.
-    //
-    // The WIT has always promised that "the host refuses whoever uses without having asked",
-    // and until now it was only a promise: `validate_it` checked the keymap's prefix and
-    // nothing else. The first `render` happens BEFORE the window exists, so
-    // a buffer that draws a gated primitive without having asked for it dies at
-    // startup — which is where §7.9 wants the refusal.
-    if let Err(e) = list.validate(&d.capabilities) {
-        anyhow::bail!(
-            "the buffer `{}` uses a primitive with no capability: {e}",
-            d.name
-        );
-    }
-
-    // THE SYSTEM HALF EXISTS ONLY FOR WHOEVER ASKED FOR IT.
-    //
-    // Not a runtime check inside the tick, but the absence of the tick: a
-    // buffer without the capability has no clock, no thread and no `systemctl`
-    // — the cost of this surface is paid only by the buffer that uses it.
-    let system = d
-        .capabilities
-        .contains(&ronoctua_protocol::Capability::System)
-        .then(System::fresh);
-    // And the same for the queue: no capability, no thread and no socket.
-    let queue = d
-        .capabilities
-        .contains(&ronoctua_protocol::Capability::Transfers)
-        .then(Queue::fresh);
-    // And the same for the disks: no capability, no udisks thread and no bus
-    // connection. THE HEAVIEST OF THE THREE, and the one whose absence is worth
-    // the most: a buffer that never asked has no way to reach a disk at all,
-    // rather than a check it might get past.
-    let disks = d
-        .capabilities
-        .contains(&ronoctua_protocol::Capability::Disks)
-        .then(Disks::fresh);
-    // And the same for the brain: no capability, no thread, no socket and no
-    // `systemctl`. The one that reaches furthest of the four — it ends with the
-    // machine rebuilding its own operating system — and the buffer that never
-    // asked has no way to reach it at all, rather than a check it might get
-    // past.
-    let brain = d
-        .capabilities
-        .contains(&ronoctua_protocol::Capability::Brain)
-        .then(Brain::fresh);
-    // And the same for the keyboards: no capability, no reading of the kernel
-    // and no writing of the daemon's file. It reaches further than it looks —
-    // what it writes sits between the keyboard and everything else — and a
-    // buffer that never asked cannot get near it.
-    let keyboards = d
-        .capabilities
-        .contains(&ronoctua_protocol::Capability::Keyboard)
-        .then(Keyboards::fresh);
-
-    let current = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    // THE LOOP FIRST, because the state carries its handle: a keyboard that
-    // REPEATS is made with `get_keyboard_with_repeat`, and that wants one.
-    let mut cycle: EventLoop<Host> = EventLoop::try_new().context("calloop")?;
-    let mut state = Host {
-        handle: cycle.handle(),
-        owed: false,
-        system,
-        queue,
-        disks,
-        brain,
-        keyboards,
-        states: d.states.clone(),
-        current: std::sync::Arc::clone(&current),
-        escape: Escape::default(),
-        keymap: d.keymap.clone(),
-        pending: Vec::new(),
-        file: file.map(std::path::Path::to_path_buf),
-        conn: conn.clone(),
-        registry: RegistryState::new(&globals),
-        outputs: OutputState::new(&globals, &qh),
-        seats: SeatState::new(&globals, &qh),
-        _compositor: compositor,
-        key_devices: crate::seats::Seats::default(),
-        typing_seat: None,
-        pointers: crate::seats::Seats::default(),
-        here: PerSeat::default(),
-        mods: Modifiers::default(),
-        window,
-        width: 0,
-        height: 0,
-        asked: (0, 0),
-        // ONE TO ONE UNTIL A SCREEN SAYS OTHERWISE — see `crate::hidpi`.
-        scale: 1,
-        scale_told: 1,
-        quit: false,
-        gpu: None,
-        text: None,
-        images: None,
-        quads: None,
-        list,
-        rasterized: std::collections::HashMap::new(),
-        _theme_watch: None,
-        _size_watch: None,
-        capabilities: d.capabilities,
-        // THE SAME BUNDLE that resolved the title and the phrases above. It
-        // used to be a second `from_env()` in the same process — two readings
-        // of one environment, which is the shape a divergence hides in.
-        texts,
-        instance,
-        _runtime: runtime,
-    };
-
-    WaylandSource::new(conn, events)
-        .insert(cycle.handle())
-        .map_err(|e| anyhow::anyhow!("could not hang Wayland: {e}"))?;
-
-    // THE THEME'S FILE, watched. The component keeps drawing NAMES; what this
-    // host must forget is the rasterised SVGs, whose `currentColor` was the
-    // old theme's value.
-    let (theme_sender, theme_changed) = calloop_channel::channel::<()>();
-    state._theme_watch = crate::theme::watch(move || theme_sender.send(()).is_ok());
-    cycle
-        .handle()
-        .insert_source(theme_changed, |event, (), state: &mut Host| {
-            if let calloop_channel::Event::Msg(()) = event
-                && crate::theme::reload()
-            {
-                // The new theme is a new key (`svg_key`), so the next paint
-                // rasterises and uploads afresh; clearing only drops the old
-                // theme's CPU copies.
-                state.rasterized.clear();
-                state.paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
-
-    // AND THE SIZE OF THE TEXT, on the same footing. A buffer's body is what
-    // a person reads; a host that kept the old size would put the content at
-    // one size inside a footer at another.
-    let (size_sender, size_changed) = calloop_channel::channel::<()>();
-    state._size_watch = crate::toolkits::watch(move || size_sender.send(()).is_ok());
-    cycle
-        .handle()
-        .insert_source(size_changed, |event, (), state: &mut Host| {
-            if let calloop_channel::Event::Msg(()) = event
-                && crate::toolkits::reload()
-            {
-                if let Some(t) = state.text.as_mut() {
-                    t.draw_at(ronoctua_tokens::text::size());
-                }
-                // THE COMPONENT HAS TO BE ASKED AGAIN — and `paint` does
-                // not ask it, it draws the list it already has. `settle` is
-                // what asks, once the queue is empty, and `ask_paint` is what
-                // tells it there is something to ask about.
-                //
-                // It matters most HERE, of all ten doors: this is the one
-                // whose content comes from another process. It is told how
-                // many cells it has, and 100% to 200% on a 1280 px window
-                // takes that from 118 columns to 59 — so its elisions, its
-                // column positions and the cells it reserved by scale are all
-                // for a grid that no longer exists. Invariant 11 is what
-                // makes it invisible from this side.
-                state.ask_paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the text size channel: {e}"))?;
-
-    // THE KEYMAP AND THE STATES GO OUT, AND ORDERS COME BACK IN.
-    //
-    // The socket thread cannot touch the component: the state lives in the
-    // `Instance` and it is not `Send`. So it puts the order on a calloop channel
-    // and the LOOP acts on it, on the same thread as every other input — which
-    // is the arrangement the footer already uses for its control socket.
-    let (orders, channel) = calloop_channel::channel::<FromSocket>();
-    let published = publish_keymap(d.keymap, d.states, current, orders);
-    if cycle
-        .handle()
-        .insert_source(channel, |event, (), state| {
-            if let calloop_channel::Event::Msg(order) = event {
-                match order {
-                    FromSocket::Command(id) => {
-                        state.deliver(&ronoctua_protocol::Input::Command(id));
-                    }
-                    FromSocket::Named(id) => match state.index_of(&id) {
-                        Some(n) => state.enter_state(n),
-                        // The footer only ever sends back an id it was just
-                        // told, so this is a bug on the other side rather than
-                        // a person's mistake — and guessing at the nearest
-                        // state would hide it.
-                        None => tracing::warn!(state = %id, "a state this buffer does not declare"),
+        // THE PHRASES, BEFORE THE FIRST FRAME.
+        //
+        // A key a buffer only SHOWS is resolved when this host draws it, and the
+        // buffer never holds what came out. This is the other case: text the buffer
+        // holds, parses or writes back — its search field — which as data opened
+        // `familia:emoji` in an en-GB session and as a key could not have been read
+        // back by whoever drew it. See `ronoctua_protocol::Phrase`.
+        //
+        // HERE, and not after the `Host` is built, because the render below is what
+        // `list.validate` reads: seeding afterwards would check a frame nobody sees
+        // and leave the one they do see un-seeded.
+        //
+        // Once, and never again: the language is read from the environment at
+        // start-up and nothing in this system changes it while a session runs
+        // (`surface.rs`, `texts`). A buffer that had to be told twice would need to
+        // know it had been told once.
+        if !d.phrases.is_empty() {
+            let said = d
+                .phrases
+                .iter()
+                .map(|k| ronoctua_protocol::Phrase {
+                    key: k.clone(),
+                    // THE RESERVED KEY IS ANSWERED WITH THE TAG, not with a
+                    // translation. `Texts::t` would give back `[-language]` — it
+                    // is not a message and by construction cannot be one, because
+                    // Fluent reserves the leading `-` for terms and the generator
+                    // refuses them as keys. See `Phrases::LANGUAGE`.
+                    text: if k == ronoctua_design::Phrases::LANGUAGE {
+                        texts.language().to_owned()
+                    } else {
+                        texts.t(k)
                     },
-                    FromSocket::Next => state.rotate_state(true),
-                    FromSocket::Previous => state.rotate_state(false),
-                }
-            }
-        })
-        .is_err()
-    {
-        tracing::warn!("could not hang the keymap's channel");
-    }
-
-    // AND THE FOOTER IS TOLD WHERE THIS BUFFER STARTS.
-    //
-    // Without this the modeline shows the state only from the first change on:
-    // a window that opens and is not touched would have a mode and no state,
-    // which reads as "this buffer has none" rather than "nobody asked yet".
-    state.tell_the_footer();
-
-    // THE CLOCK, and the thread that answers a scan — only for the buffer that
-    // declared the capability.
-    if state.system.is_some() {
-        // The scan's channel FIRST: the tick may start one, and a report with
-        // nowhere to arrive would be a scan that runs and never shows.
-        let (reports, arrivals) = calloop_channel::channel::<Scanned>();
-        if cycle
-            .handle()
-            .insert_source(arrivals, |event, (), state: &mut Host| {
-                if let calloop_channel::Event::Msg(m) = event {
-                    state.scanned(m);
-                }
-            })
-            .is_ok()
-        {
-            if let Some(s) = state.system.as_mut() {
-                s.reports = Some(reports);
-            }
-        } else {
-            tracing::warn!("could not hang the scan's channel");
+                })
+                .collect();
+            instance.event(&ronoctua_protocol::Input::Phrases(said))?;
+            tracing::info!(phrases = d.phrases.len(), "phrases handed over");
         }
 
-        // ONE SECOND, and the survey it carries is only pseudo-file reads —
-        // microseconds. What costs (systemd, the journal, a walk of the disk)
-        // is deliberately NOT here: the tick is the cheap half by construction,
-        // which is what lets it run inside the loop that also draws.
-        let tick = timer::Timer::from_duration(std::time::Duration::from_secs(1));
-        if cycle
-            .handle()
-            .insert_source(tick, |_, (), state: &mut Host| {
-                state.sample();
-                timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
+        // The initial columns and rows are a guess; the `configure` brings the actual
+        // size and the `render` runs again with it.
+        let list = instance.render(80, 24, Host::heights())?;
+        tracing::info!(
+            commands = list.commands.len(),
+            height = list.height(crate::paint::heights()),
+            "component rendered"
+        );
+
+        // THE CAPABILITY GATE, enforced HERE.
+        //
+        // The WIT has always promised that "the host refuses whoever uses without having asked",
+        // and until now it was only a promise: `validate_it` checked the keymap's prefix and
+        // nothing else. The first `render` happens BEFORE the window exists, so
+        // a buffer that draws a gated primitive without having asked for it dies at
+        // startup — which is where §7.9 wants the refusal.
+        if let Err(e) = list.validate(&d.capabilities) {
+            anyhow::bail!(
+                "the buffer `{}` uses a primitive with no capability: {e}",
+                d.name
+            );
+        }
+
+        // THE SYSTEM HALF EXISTS ONLY FOR WHOEVER ASKED FOR IT.
+        //
+        // Not a runtime check inside the tick, but the absence of the tick: a
+        // buffer without the capability has no clock, no thread and no `systemctl`
+        // — the cost of this surface is paid only by the buffer that uses it.
+        let system = d
+            .capabilities
+            .contains(&ronoctua_protocol::Capability::System)
+            .then(System::fresh);
+        // And the same for the queue: no capability, no thread and no socket.
+        let queue = d
+            .capabilities
+            .contains(&ronoctua_protocol::Capability::Transfers)
+            .then(Queue::fresh);
+        // And the same for the disks: no capability, no udisks thread and no bus
+        // connection. THE HEAVIEST OF THE THREE, and the one whose absence is worth
+        // the most: a buffer that never asked has no way to reach a disk at all,
+        // rather than a check it might get past.
+        let disks = d
+            .capabilities
+            .contains(&ronoctua_protocol::Capability::Disks)
+            .then(Disks::fresh);
+        // And the same for the brain: no capability, no thread, no socket and no
+        // `systemctl`. The one that reaches furthest of the four — it ends with the
+        // machine rebuilding its own operating system — and the buffer that never
+        // asked has no way to reach it at all, rather than a check it might get
+        // past.
+        let brain = d
+            .capabilities
+            .contains(&ronoctua_protocol::Capability::Brain)
+            .then(Brain::fresh);
+        // And the same for the keyboards: no capability, no reading of the kernel
+        // and no writing of the daemon's file. It reaches further than it looks —
+        // what it writes sits between the keyboard and everything else — and a
+        // buffer that never asked cannot get near it.
+        let keyboards = d
+            .capabilities
+            .contains(&ronoctua_protocol::Capability::Keyboard)
+            .then(Keyboards::fresh);
+
+        let current = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut host = Host {
+            owed: false,
+            system,
+            queue,
+            disks,
+            brain,
+            keyboards,
+            states: d.states.clone(),
+            current: std::sync::Arc::clone(&current),
+            escape: Escape::default(),
+            keymap: d.keymap.clone(),
+            pending: Vec::new(),
+            file: file.map(std::path::Path::to_path_buf),
+            typing_seat: None,
+            key_seat: 0,
+            title: format!("*{title}*"),
+            // ONE STRING FOR THE LIFE OF THE PROCESS, leaked on purpose: the
+            // `app_id` is the descriptor's and a door names its `app_id` as a
+            // `&'static str`. The process hosts one buffer and exits with it.
+            app_id: Box::leak(format!("br.ronoctua.{}", d.mode).into_boxed_str()),
+            theme_seen: tokens::theme::current().position(),
+            many_pointers: false,
+            mods: Modifiers::default(),
+            width: 0,
+            height: 0,
+            quit: false,
+            list,
+            rasterized: std::collections::HashMap::new(),
+            capabilities: d.capabilities.clone(),
+            // THE SAME BUNDLE that resolved the title and the phrases above.
+            texts: std::rc::Rc::new(texts),
+            instance,
+            _runtime: runtime,
+        };
+
+        // THE KEYMAP AND THE STATES GO OUT, AND ORDERS COME BACK IN.
+        //
+        // The socket thread cannot touch the component: the state lives in the
+        // `Instance` and it is not `Send`. So it puts the order on a calloop channel
+        // and the LOOP acts on it, on the same thread as every other input — which
+        // is the arrangement the footer already uses for its control socket.
+        let (orders, channel) = calloop_channel::channel::<FromSocket>();
+        *published.borrow_mut() = publish_keymap(d.keymap.clone(), d.states, current, orders);
+        if w.handle
+            .insert_source(channel, |event, (), door: &mut Door<Host>| {
+                if let calloop_channel::Event::Msg(order) = event {
+                    match order {
+                        FromSocket::Command(id) => {
+                            door.content.deliver(&ronoctua_protocol::Input::Command(id));
+                        }
+                        FromSocket::Named(id) => match door.content.index_of(&id) {
+                            Some(n) => door.content.enter_state(n),
+                            // The footer only ever sends back an id it was just
+                            // told, so this is a bug on the other side rather than
+                            // a person's mistake — and guessing at the nearest
+                            // state would hide it.
+                            None => {
+                                tracing::warn!(state = %id, "a state this buffer does not declare")
+                            }
+                        },
+                        FromSocket::Next => door.content.rotate_state(true),
+                        FromSocket::Previous => door.content.rotate_state(false),
+                    }
+                }
             })
             .is_err()
         {
-            tracing::warn!("could not hang the sampling clock");
+            tracing::warn!("could not hang the keymap's channel");
         }
-        // The first survey does not wait a second: the screen opens with
-        // numbers, and not with a blank that fills in later.
+
+        // AND THE FOOTER IS TOLD WHERE THIS BUFFER STARTS.
         //
-        // SAMPLE FIRST, AND THE ORDER IS NOT STYLE: the guard's ceiling comes
-        // back from systemd in bytes and is shown as a fraction of RAM, so
-        // reading it before anything knows how much RAM there is prints `0.0%`
-        // — a wrong number on the first screen, which is the one screen
-        // everybody sees.
-        state.sample();
-        state.refresh_guard();
-        state.sample();
-    }
+        // Without this the modeline shows the state only from the first change
+        // on: a window that opens and is not touched would have a mode and no
+        // state, which reads as "this buffer has none" rather than "nobody
+        // asked yet".
+        host.tell_the_footer();
 
-    // THE QUEUE'S SUBSCRIPTION, and it is NOT a clock.
-    //
-    // A socket round trip has no business inside a one-second timer: the unit
-    // already knows when something changed, and `client::watch` blocks on the
-    // socket until it does. So it is a thread that blocks and a channel that
-    // wakes the loop — the same shape the scan uses, and the same one the
-    // footer already uses for this very list.
-    if state.queue.is_some() {
-        let (send, arrivals) = calloop_channel::channel::<Vec<ronoctua_transfers::Job>>();
-        if cycle
-            .handle()
-            .insert_source(arrivals, |event, (), state: &mut Host| {
-                if let calloop_channel::Event::Msg(jobs) = event {
-                    state.queue_arrived(&jobs);
+        // THE CLOCK, and the thread that answers a scan — only for the buffer that
+        // declared the capability.
+        if host.system.is_some() {
+            // The scan's channel FIRST: the tick may start one, and a report with
+            // nowhere to arrive would be a scan that runs and never shows.
+            let (reports, arrivals) = calloop_channel::channel::<Scanned>();
+            if w.handle
+                .insert_source(arrivals, |event, (), door: &mut Door<Host>| {
+                    if let calloop_channel::Event::Msg(m) = event {
+                        door.content.scanned(m);
+                    }
+                })
+                .is_ok()
+            {
+                if let Some(s) = host.system.as_mut() {
+                    s.reports = Some(reports);
                 }
-            })
-            .is_ok()
-        {
-            // `listen` starts the unit if it is not up, so an empty screen here
-            // means an empty queue and never a queue nobody asked.
-            if !crate::transfers::listen(send) {
-                tracing::warn!("no transfer queue; the buffer opens empty");
+            } else {
+                tracing::warn!("could not hang the scan's channel");
             }
-        } else {
-            tracing::warn!("could not hang the queue's channel");
-        }
-    }
 
-    // THE DISKS' SUBSCRIPTION, and it is not a clock either.
-    //
-    // udisks says when something moved — a stick in, a partition mounted, a
-    // filesystem written. Polling it on a timer would ask a bus twenty times a
-    // second for an answer that changes twice an hour, and would still be late
-    // the one time it mattered.
-    if state.disks.is_some() {
-        let (send, readings) = calloop_channel::channel::<ronoctua_disks::Rack>();
-        if cycle
-            .handle()
-            .insert_source(readings, |event, (), state: &mut Host| {
-                if let calloop_channel::Event::Msg(rack) = event {
-                    state.rack_arrived(rack);
-                }
-            })
-            .is_ok()
-        {
-            if let Err(e) = ronoctua_disks::watch(move |rack| {
-                let _ = send.send(rack);
-            }) {
-                // NOT FATAL, and said out loud. The screen opens empty and
-                // stays empty, which is wrong — but a buffer that refused to
-                // start would say even less about why.
-                tracing::error!(error = %e, "no udisks2; the buffer opens with no disks");
+            // ONE SECOND, and the survey it carries is only pseudo-file reads —
+            // microseconds. What costs (systemd, the journal, a walk of the disk)
+            // is deliberately NOT here: the tick is the cheap half by construction,
+            // which is what lets it run inside the loop that also draws.
+            let tick = timer::Timer::from_duration(std::time::Duration::from_secs(1));
+            if w.handle
+                .insert_source(tick, |_, (), door: &mut Door<Host>| {
+                    door.content.sample();
+                    timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
+                })
+                .is_err()
+            {
+                tracing::warn!("could not hang the sampling clock");
             }
-        } else {
-            tracing::warn!("could not hang the disks' channel");
+            // The first survey does not wait a second: the screen opens with
+            // numbers, and not with a blank that fills in later.
+            //
+            // SAMPLE FIRST, AND THE ORDER IS NOT STYLE: the guard's ceiling comes
+            // back from systemd in bytes and is shown as a fraction of RAM, so
+            // reading it before anything knows how much RAM there is prints `0.0%`
+            // — a wrong number on the first screen, which is the one screen
+            // everybody sees.
+            host.sample();
+            host.refresh_guard();
+            host.sample();
         }
 
-        // AND THE WAY BACK, which is a second channel and not the same one.
+        // THE QUEUE'S SUBSCRIPTION, and it is NOT a clock.
         //
-        // What comes down this one is the VERDICT on a format: a fresh reading
-        // says the disk changed, and says nothing at all when udisks refused.
-        // Without it a refusal is a log line, and on screen the buffer would go
-        // on showing the question it already asked.
-        let (said, verdicts) = calloop_channel::channel::<Verdict>();
-        if cycle
-            .handle()
-            .insert_source(verdicts, |event, (), state: &mut Host| {
-                if let calloop_channel::Event::Msg(verdict) = event {
-                    state.format_said(&verdict);
+        // A socket round trip has no business inside a one-second timer: the unit
+        // already knows when something changed, and `client::watch` blocks on the
+        // socket until it does. So it is a thread that blocks and a channel that
+        // wakes the loop — the same shape the scan uses, and the same one the
+        // footer already uses for this very list.
+        if host.queue.is_some() {
+            let (send, arrivals) = calloop_channel::channel::<Vec<ronoctua_transfers::Job>>();
+            if w.handle
+                .insert_source(arrivals, |event, (), door: &mut Door<Host>| {
+                    if let calloop_channel::Event::Msg(jobs) = event {
+                        door.content.queue_arrived(&jobs);
+                    }
+                })
+                .is_ok()
+            {
+                // `listen` starts the unit if it is not up, so an empty screen here
+                // means an empty queue and never a queue nobody asked.
+                if !crate::transfers::listen(send) {
+                    tracing::warn!("no transfer queue; the buffer opens empty");
                 }
-            })
-            .is_ok()
-        {
-            if let Some(d) = state.disks.as_mut() {
-                d.said = Some(said);
+            } else {
+                tracing::warn!("could not hang the queue's channel");
             }
-        } else {
-            tracing::warn!("could not hang the format verdict's channel");
         }
-    }
 
-    // THE BRAIN'S SUBSCRIPTION, and it is not a clock either.
-    //
-    // The daemon knows when something changed — a moment came, a run ended, a
-    // countdown started — and `client::watch` blocks on the socket until it
-    // does. A one-second timer asking for the schedule would be a socket round
-    // trip inside the loop that draws, for an answer that changes twice a week.
-    //
-    // It is the SLOW half of that crate's two connects on purpose: it starts
-    // the daemon when nobody is home and reconnects when it goes away, which is
-    // a sleep and a retry — and a sleep in this loop is a frozen window.
-    if state.brain.is_some() {
-        let (send, minds) = calloop_channel::channel::<ronoctua_brain::Mind>();
-        if cycle
-            .handle()
-            .insert_source(minds, |event, (), state: &mut Host| {
-                if let calloop_channel::Event::Msg(mind) = event {
-                    state.mind_arrived(&mind);
+        // THE DISKS' SUBSCRIPTION, and it is not a clock either.
+        //
+        // udisks says when something moved — a stick in, a partition mounted, a
+        // filesystem written. Polling it on a timer would ask a bus twenty times a
+        // second for an answer that changes twice an hour, and would still be late
+        // the one time it mattered.
+        if host.disks.is_some() {
+            let (send, readings) = calloop_channel::channel::<ronoctua_disks::Rack>();
+            if w.handle
+                .insert_source(readings, |event, (), door: &mut Door<Host>| {
+                    if let calloop_channel::Event::Msg(rack) = event {
+                        door.content.rack_arrived(rack);
+                    }
+                })
+                .is_ok()
+            {
+                if let Err(e) = ronoctua_disks::watch(move |rack| {
+                    let _ = send.send(rack);
+                }) {
+                    // NOT FATAL, and said out loud. The screen opens empty and
+                    // stays empty, which is wrong — but a buffer that refused to
+                    // start would say even less about why.
+                    tracing::error!(error = %e, "no udisks2; the buffer opens with no disks");
                 }
-            })
-            .is_ok()
-        {
-            if !crate::brain::listen(send) {
-                tracing::warn!("no brain; the buffer opens empty");
+            } else {
+                tracing::warn!("could not hang the disks' channel");
             }
-        } else {
-            tracing::warn!("could not hang the brain's channel");
+
+            // AND THE WAY BACK, which is a second channel and not the same one.
+            //
+            // What comes down this one is the VERDICT on a format: a fresh reading
+            // says the disk changed, and says nothing at all when udisks refused.
+            // Without it a refusal is a log line, and on screen the buffer would go
+            // on showing the question it already asked.
+            let (said, verdicts) = calloop_channel::channel::<Verdict>();
+            if w.handle
+                .insert_source(verdicts, |event, (), door: &mut Door<Host>| {
+                    if let calloop_channel::Event::Msg(verdict) = event {
+                        door.content.format_said(&verdict);
+                    }
+                })
+                .is_ok()
+            {
+                if let Some(d) = host.disks.as_mut() {
+                    d.said = Some(said);
+                }
+            } else {
+                tracing::warn!("could not hang the format verdict's channel");
+            }
         }
-    }
 
-    // THE KEYBOARDS ARRIVE ONCE, AND AGAIN AFTER EVERY CHANGE.
-    //
-    // No thread and no clock: `/proc/bus/input/devices` is three kilobytes
-    // read at the moment somebody opens the window, and a keyboard plugged in
-    // while it is open is a case that costs a `udev` socket and a thread to
-    // catch. The buffer is re-sent the whole picture after every remap — which
-    // is when the numbers on screen actually change — and the header of
-    // `keyboards_arrived` says so.
-    if state.keyboards.is_some() {
-        state.keyboards_arrived();
-    }
-
-    let signal = cycle.get_signal();
-    cycle
-        .run(None, &mut state, |e| {
-            // THE ONE PLACE THAT KNOWS THE BATCH IS OVER. Everything else
-            // marks a frame owed; here it is drawn, once. See `Host::owed`.
-            e.settle();
-            if e.quit {
-                signal.stop();
+        // THE BRAIN'S SUBSCRIPTION, and it is not a clock either.
+        //
+        // The daemon knows when something changed — a moment came, a run ended, a
+        // countdown started — and `client::watch` blocks on the socket until it
+        // does. A one-second timer asking for the schedule would be a socket round
+        // trip inside the loop that draws, for an answer that changes twice a week.
+        //
+        // It is the SLOW half of that crate's two connects on purpose: it starts
+        // the daemon when nobody is home and reconnects when it goes away, which is
+        // a sleep and a retry — and a sleep in this loop is a frozen window.
+        if host.brain.is_some() {
+            let (send, minds) = calloop_channel::channel::<ronoctua_brain::Mind>();
+            if w.handle
+                .insert_source(minds, |event, (), door: &mut Door<Host>| {
+                    if let calloop_channel::Event::Msg(mind) = event {
+                        door.content.mind_arrived(&mind);
+                    }
+                })
+                .is_ok()
+            {
+                if !crate::brain::listen(send) {
+                    tracing::warn!("no brain; the buffer opens empty");
+                }
+            } else {
+                tracing::warn!("could not hang the brain's channel");
             }
-        })
-        .context("event loop")?;
-    // The socket outlives nothing: a stale one in `XDG_RUNTIME_DIR` would make
-    // the footer connect to a buffer that is not there and wait.
-    if let Some(path) = published {
+        }
+
+        // THE KEYBOARDS ARRIVE ONCE, AND AGAIN AFTER EVERY CHANGE.
+        //
+        // No thread and no clock: `/proc/bus/input/devices` is three kilobytes
+        // read at the moment somebody opens the window, and a keyboard plugged in
+        // while it is open is a case that costs a `udev` socket and a thread to
+        // catch. The buffer is re-sent the whole picture after every remap — which
+        // is when the numbers on screen actually change — and the header of
+        // `keyboards_arrived` says so.
+        if host.keyboards.is_some() {
+            host.keyboards_arrived();
+        }
+
+        Ok(host)
+    });
+    if let Some(path) = published.borrow_mut().take() {
         let _ = std::fs::remove_file(path);
     }
-    Ok(())
+    ran
 }
 
 /// The work itself, off the loop that draws.
@@ -1773,169 +1609,58 @@ impl Host {
         out
     }
 
-    fn paint(&mut self) {
-        if self.width == 0 {
-            return;
+    /// One frame: asks the component, then lays what it said onto the canvas.
+    ///
+    /// # Why the component is asked HERE
+    ///
+    /// Because a frame is drawn once the queue is empty, and a hundred motion
+    /// events in one batch come out as one frame asked of the component once,
+    /// from the LAST of them — see `Host::owed`. Asking per event and drawing
+    /// once would still cross the wall N times to produce one frame.
+    fn draw(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
+        self.width = ui.width;
+        self.height = ui.height;
+        // A THEME CHOSEN SINCE drops the old theme's CPU copies. The key
+        // already tells the two apart (`svg_key`), so this is memory and not
+        // correctness.
+        let theme = tokens::theme::current().position();
+        if theme != self.theme_seen {
+            self.theme_seen = theme;
+            self.rasterized.clear();
         }
-        if self.gpu.is_none() {
-            self.assemble_gpu();
-        }
+        self.re_render();
         let (columns, lines) = self.context_of();
-        let spans = spans_of(&self.list, &self.texts, columns, lines);
-        let vector_ones = self.vector_ones();
-        let selections = self.selections();
-        // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
-        // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes,
-        // and nothing else in this function may borrow `self` by then. See
-        // `crate::hidpi::told_before_present`.
-        let surface = self.window.wl_surface().clone();
-        let scale = self.scale;
-        let told = &mut self.scale_told;
-        let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
-            return;
-        };
-        // THE WINDOW'S OWN PIXELS — `resized` already made them what the
-        // buffer can show, so there is one number and this is it.
-        let (logical_w, logical_h) = (self.width, self.height);
-        if let Err(e) = text.prepare(
-            &gpu.device,
-            &gpu.queue,
-            gpu.config.width,
-            gpu.config.height,
-            ronoctua_render::Atlas::Pinned,
-            &spans,
-        ) {
-            tracing::error!(error = %e, "preparing the text failed");
-            return;
-        }
-        if let Some(im) = self.images.as_mut() {
-            let batch: Vec<(String, ronoctua_render::image::Area)> = vector_ones
-                .into_iter()
-                .map(|v| {
-                    if im.missing(&v.key)
-                        && let Some(r) = self.rasterized.get(&v.key)
-                    {
-                        im.upload_it(&gpu.device, &gpu.queue, &v.key, r);
-                    }
-                    (v.key, v.area)
-                })
-                .collect();
-            im.prepare(&gpu.queue, logical_w, logical_h, &batch);
-        }
-        if let Some(q) = self.quads.as_mut() {
-            q.prepare(&gpu.device, &gpu.queue, logical_w, logical_h, &selections);
-        }
-        let images = self.images.as_ref();
-        let quads = self.quads.as_ref();
-        if let Err(e) = gpu.frame(
-            || crate::hidpi::told_before_present(scale, told, &surface),
-            |pass| {
-                // THE SELECTION FIRST OF ALL: it is a background, and anything drawn
-                // after it stays on top. Drawing it last would hide the very text it
-                // exists to highlight.
-                if let Some(q) = quads {
-                    q.draw(pass);
-                }
-                // THE DRAWING BELOW THE TEXT, as in the footer: what is written
-                // over it has to stay legible.
-                if let Some(im) = images {
-                    im.draw(pass);
-                }
-                text.draw(ronoctua_render::Atlas::Pinned, pass)
-            },
-        ) {
-            tracing::error!(error = %e, "drawing the frame failed");
-            return;
-        }
-        tracing::info!(spans = spans.len(), "buffer drawn on the xdg_toplevel");
-        if let Err(e) = self.conn.flush() {
-            tracing::warn!(error = %e, "the flush failed");
-        }
-    }
-
-    fn assemble_gpu(&mut self) {
-        use raw_window_handle::{
-            RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
-        };
-        let (Some(disp), Some(surf)) = (
-            std::ptr::NonNull::new(self.conn.backend().display_ptr().cast::<std::ffi::c_void>()),
-            std::ptr::NonNull::new(
-                self.window
-                    .wl_surface()
-                    .id()
-                    .as_ptr()
-                    .cast::<std::ffi::c_void>(),
-            ),
-        ) else {
-            tracing::error!("null Wayland pointers");
-            return;
-        };
-        // SAFETY: `conn` and `window` are fields of `self`, like the `Gpu` — the
-        // handles do not outlive what produced them.
-        // ONE CALL, not the same one twice: two calls to a pure
-        // function are two places the arguments can be edited apart.
-        let first = crate::hidpi::physical(self.asked, self.scale);
-        #[allow(unsafe_code)]
-        let gpu = unsafe {
-            ronoctua_render::gpu::Gpu::new(
-                RawDisplayHandle::Wayland(WaylandDisplayHandle::new(disp)),
-                RawWindowHandle::Wayland(WaylandWindowHandle::new(surf)),
-                first.0,
-                first.1,
-            )
-        };
-        match gpu {
-            Ok(mut g) => {
-                // AND THE FIRST BUFFER IS DIVISIBLE TOO. `Gpu::new` clamps at
-                // the GPU's ceiling like `resize` does, and the first frame
-                // sends the scale — see `crate::hidpi::resized`.
-                let (shown_w, shown_h) = crate::hidpi::resized(&mut g, self.asked, self.scale);
-                self.width = shown_w;
-                self.height = shown_h;
-                // AND THE COMPONENT IS ASKED AGAIN IF THE FIRST BUFFER CAME
-                // BACK SMALLER. `configure` rendered against the size the
-                // compositor gave, before there was a GPU to clamp anything —
-                // see `scale_factor_changed` for the whole of why a repaint is
-                // not enough here.
-                if (shown_w, shown_h) != self.asked {
-                    self.re_render();
-                }
-                match ronoctua_render::Text::new(
-                    &g.device,
-                    &g.queue,
-                    g.config.format,
-                    self.scale,
-                    // THE SYSTEM'S ONE SIZE. This used to be `SIZE_LARGE`, on the
-                    // argument that "the footer is peripheral reference, the
-                    // buffer is what one reads". The owner asked for one measure
-                    // instead, from a photograph of the file manager's two doors:
-                    // see `font.size.base` and `ronoctua_tokens::text::size`.
-                    tokens::text::size(),
-                ) {
-                    Ok(t) => {
-                        // THE IMAGE PIPELINE is born along with the text one, and its
-                        // failure does NOT take the buffer down: without it what is lost
-                        // is the vector preview, and the text goes on drawing.
-                        match ronoctua_render::image::Images::new(&g.device, g.config.format) {
-                            Ok(im) => self.images = Some(im),
-                            Err(e) => tracing::error!(error = %e, "the image pipeline failed"),
-                        }
-                        // THE QUAD PIPELINE, for `Command::Selection`. Same rule as
-                        // the image one: its failure costs the highlight, not the
-                        // buffer.
-                        match ronoctua_render::quad::Quads::new(&g.device, g.config.format) {
-                            Ok(q) => self.quads = Some(q),
-                            Err(e) => tracing::error!(error = %e, "the quad pipeline failed"),
-                        }
-                        self.text = Some(t);
-                        self.gpu = Some(g);
-                        tracing::info!("the buffer's graphics context is ready");
-                    }
-                    Err(e) => tracing::error!(error = %e, "the renderer failed"),
-                }
+        canvas
+            .spans
+            .extend(spans_of(&self.list, &self.texts, columns, lines));
+        // THE SELECTION FIRST OF ALL: it is a background, and anything drawn
+        // after it stays on top. THE DRAWING BELOW THE TEXT, as in the footer:
+        // what is written over it has to stay legible. The canvas draws in
+        // that order by construction.
+        canvas.under.extend(self.selections());
+        // EVERY BAR THE COMPONENT ASKED FOR IS RECORDED, by the track the
+        // host drew it in: its column is the bar's (`crate::bars`), and the
+        // door then tells the component the pointer on it is on no row.
+        #[allow(clippy::cast_precision_loss)]
+        let rows = crate::paint::Rows::of(&self.list.commands, self.height as f32);
+        for c in &self.list.commands {
+            #[allow(clippy::cast_precision_loss)]
+            if let Some(g) =
+                crate::paint::bar_box(c, &rows, self.width as f32, &self.texts, columns)
+            {
+                canvas.bar(Some(crate::bars::Track::of((g.x, g.y, g.width, g.height))));
             }
-            Err(e) => tracing::error!(error = %e, "no graphics context"),
         }
+        for v in self.vector_ones() {
+            let rasterized = &self.rasterized;
+            if canvas.upload(&v.key, || rasterized.get(&v.key).cloned()) {
+                canvas.pictures.push((v.key, v.area));
+            }
+        }
+        tracing::info!(
+            spans = canvas.spans.len(),
+            "buffer drawn on the xdg_toplevel"
+        );
     }
 }
 
@@ -1973,7 +1698,7 @@ impl Host {
         // many cursors this window has; the host does, and spends colour only
         // where it tells two hands apart — the rule of every other window
         // (`crate::seats::band_colour`).
-        if !self.pointers.many() {
+        if !self.many_pointers {
             for q in &mut quads {
                 if crate::seats::is_a_cursor_hover(q.color) {
                     q.color = tokens::color::SURFACE_HOVER;
@@ -2090,23 +1815,8 @@ impl Host {
         self.owed = true;
     }
 
-    /// Draws the owed frame, if one is owed.
-    ///
-    /// Called from the event loop's callback — the one place that knows the
-    /// batch is finished. A hundred motion events in one batch come out as one
-    /// frame, asked of the component once, from the LAST of them.
-    fn settle(&mut self) {
-        if std::mem::take(&mut self.owed) {
-            self.re_render();
-            self.paint();
-        }
-    }
-
     /// Asks the component for a new frame and keeps it, without drawing.
     ///
-    /// SPLIT OUT FOR `assemble_gpu`, which runs INSIDE `paint`: asking there
-    /// and then painting would paint twice on the first frame, and the first
-    /// frame is what the 200 ms budget is measured over.
     fn re_render(&mut self) {
         let (columns, lines) = self.context_of();
         match self.instance.render(columns, lines, Self::heights()) {
@@ -2793,7 +2503,7 @@ impl Host {
     /// cursor-colour number of the seat whose keyboard spoke, as a hover's.
     /// It is what lets a buffer keep one selection per keyboard.
     fn say_whose_keys(&mut self) {
-        let seat = self.key_devices.colour_number_here();
+        let seat = self.key_seat;
         if self.typing_seat != Some(seat) {
             self.typing_seat = Some(seat);
             self.deliver(&ronoctua_protocol::Input::KeyboardSeat { seat });
@@ -3415,74 +3125,6 @@ enum Scan {
     Disk,
 }
 
-impl SeatHandler for Host {
-    fn seat_state(&mut self) -> &mut SeatState {
-        &mut self.seats
-    }
-    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
-
-    fn new_capability(
-        &mut self,
-        _: &Connection,
-        qh: &QueueHandle<Self>,
-        seat: wl_seat::WlSeat,
-        cap: Capability,
-    ) {
-        if cap == Capability::Keyboard {
-            // A KEYBOARD THAT REPEATS: holding a key here is meant to work,
-            // and SCTK only repeats for one made this way.
-            match self.seats.get_keyboard_with_repeat(
-                qh,
-                &seat,
-                None,
-                self.handle.clone(),
-                Box::new(|state: &mut Self, kb, event| {
-                    state.key_devices.switch_to(kb, &mut state.mods);
-                    state.say_whose_keys();
-                    state.typed(event);
-                }),
-            ) {
-                Ok(k) => {
-                    // EVERY KEYBOARD, and not only the first: one per seat, and in
-                    // Independent mode one per cursor.
-                    let name = self.seats.info(&seat).and_then(|i| i.name);
-                    self.key_devices.took(&seat, k, name.as_deref());
-                }
-                Err(e) => tracing::warn!(error = %e, "no keyboard; the buffer takes no input"),
-            }
-        }
-        if cap == Capability::Pointer {
-            match self.seats.get_pointer(qh, &seat) {
-                Ok(p) => {
-                    // EVERY POINTER, and not only the first: one per cursor.
-                    let name = self.seats.info(&seat).and_then(|i| i.name);
-                    self.pointers.took(&seat, p, name.as_deref());
-                }
-                // With no pointer the buffer works entirely through the keyboard: the
-                // click is a shortcut, not the only path.
-                Err(e) => tracing::warn!(error = %e, "no pointer; the click will not work"),
-            }
-        }
-    }
-
-    fn remove_capability(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        seat: wl_seat::WlSeat,
-        cap: Capability,
-    ) {
-        if cap == Capability::Keyboard {
-            self.key_devices.lost(&seat, &mut self.mods);
-        }
-        if cap == Capability::Pointer {
-            self.pointers.lost(&seat, &mut self.here);
-        }
-    }
-
-    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
-}
-
 impl Host {
     /// One key, from a press or from a REPEAT.
     ///
@@ -3491,7 +3133,7 @@ impl Host {
     /// `QueueHandle` to hand on — so the work cannot live in `press_key`, and
     /// while it did, `repeat_key` was dead code and holding a key did it
     /// once. The comment beside `repeat_key` said the opposite for a year.
-    fn typed(&mut self, event: KeyEvent) {
+    fn typed(&mut self, event: &KeyEvent) {
         // `Esc` IS A KEY AND A MODIFIER, and which of the two is decided by what
         // happens before it comes back up. See [`Escape`].
         //
@@ -3517,7 +3159,10 @@ impl Host {
         // What reads the clipboard is the HOST. The buffer does not read the
         // clipboard, as it does not read a file (invariant 11): it receives the text
         // already resolved.
-        if self.mods.ctrl && event.keysym == Keysym::v {
+        //
+        // UNLESS THE BUFFER BINDS `C-v` ITSELF — a local key `, v` is `C-v` in
+        // this window (see below), and the buffer that declared it chose it.
+        if self.mods.ctrl && event.keysym == Keysym::v && !binds_the_chord(&self.keymap, 'v') {
             match paste_text() {
                 Ok(t) if !t.is_empty() => self.deliver(&ronoctua_protocol::Input::Paste(t)),
                 Ok(_) => tracing::debug!("the clipboard is empty"),
@@ -3539,11 +3184,21 @@ impl Host {
             //
             // A chord is not text and a letter is, and that is the whole line.
             // `Ctrl` and not `Logo`: the compositor takes `Super` for itself.
+            //
+            // AND THE BUFFER'S GROUP IS NOT TYPED HERE. A buffer declares its
+            // keys under `LOCAL_PREFIX` (`, r`), which is the group behind the
+            // leader from the footer (`LEADER , r`); inside the buffer's own
+            // window `C-r` IS `, r` — the host puts the group in front. It was
+            // `C-,` and then `r`, a comma nobody should have to type, and
+            // plain letters stay text, so a buffer may grow a field that is
+            // typed into without a key of its own being in the way.
             if opens_sequence(self.mods.ctrl, self.mods.logo, self.pending.is_empty())
                 && let Some(c) = event.keysym.key_char()
-                && let Some(input) = self.local_key(c)
             {
-                self.deliver(&input);
+                self.pending = ronoctua_protocol::LOCAL_PREFIX.chars().collect();
+                if let Some(input) = self.local_key(c) {
+                    self.deliver(&input);
+                }
             }
             return;
         }
@@ -3562,275 +3217,6 @@ impl Host {
             return;
         };
         self.deliver(&e);
-    }
-}
-
-impl KeyboardHandler for Host {
-    /// Focus arrives — and whatever was held before it belongs to the OTHER
-    /// window.
-    ///
-    /// `AGENTS.md` records this as a trap with a name: a modifier held across a
-    /// focus change kills the keymap, and the fix is to discount what was
-    /// already down both on gaining focus and on starting a sequence. Here it is
-    /// `Esc`: alt-tabbing into a buffer while it is down would leave this window
-    /// believing it is choosing a state, and every key would vanish.
-    fn enter(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
-        _: u32,
-        _: &[u32],
-        _: &[Keysym],
-    ) {
-        self.key_devices.switch_to(kb, &mut self.mods);
-        self.escape = Escape::default();
-    }
-
-    /// Focus leaves, and so does the release this window will never see.
-    fn leave(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
-        _: u32,
-    ) {
-        self.key_devices.switch_to(kb, &mut self.mods);
-        self.escape = Escape::default();
-        // THAT SEAT'S KEYBOARD LEFT, and the buffer is told which: another
-        // keyboard still typing here keeps its field.
-        let seat = self.key_devices.colour_number_here();
-        if self.typing_seat == Some(seat) {
-            self.typing_seat = None;
-        }
-        self.deliver(&ronoctua_protocol::Input::KeyboardLeft { seat });
-    }
-
-    fn press_key(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: u32,
-        event: KeyEvent,
-    ) {
-        self.key_devices.switch_to(kb, &mut self.mods);
-        self.say_whose_keys();
-        self.typed(event);
-    }
-
-    fn repeat_key(
-        &mut self,
-        conn: &Connection,
-        qh: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        serial: u32,
-        event: KeyEvent,
-    ) {
-        // Repeating IS right here: holding the arrow scrolls the list, holding
-        // backspace erases the search.
-        //
-        // EXCEPT WHILE `Esc` IS DOWN, and that covers both halves of the
-        // gesture. `Esc` repeating would re-enter the press above on a key that
-        // is already down; the arrow repeating would spin the states at the
-        // keyboard's repeat rate, which is a rotation nobody can stop on the one
-        // they wanted.
-        if event.keysym == Keysym::Escape || self.escape.down {
-            return;
-        }
-        self.press_key(conn, qh, kb, serial, event);
-    }
-
-    fn release_key(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: u32,
-        event: KeyEvent,
-    ) {
-        self.key_devices.switch_to(kb, &mut self.mods);
-        if self.escape.release(event.keysym) == EscapeAct::Tap {
-            // `Cancel` ALONE, and the state follows from it.
-            //
-            // The first version sent the buffer to the base state and THEN
-            // delivered `Cancel`, on the reasoning that "`Esc` returns to
-            // normal" should be guaranteed by the host rather than trusted to
-            // six components. It cost a real regression: every one of those
-            // components already walks back ONE LAYER per `Esc` — the sheet to
-            // the grid, then the grid clearing the search — and jumping to the
-            // base did both at once, so leaving a sheet also threw away the
-            // filter the person had typed to find it.
-            //
-            // One layer per press is what Doom does and what the six already
-            // did. The modeline stays truthful because the walk back reports
-            // itself through `effect::state-changed`, which is the same path
-            // every other change uses.
-            self.deliver(&ronoctua_protocol::Input::Cancel);
-        }
-    }
-
-    fn update_modifiers(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: u32,
-        mods: Modifiers,
-        _: RawModifiers,
-        _: u32,
-    ) {
-        self.key_devices.switch_to(kb, &mut self.mods);
-        self.mods = mods;
-    }
-}
-
-impl WindowHandler for Host {
-    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {
-        self.quit = true;
-    }
-
-    fn configure(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &Window,
-        cfg: WindowConfigure,
-        _: u32,
-    ) {
-        // A `None` size = "you choose". 640x400 is a reasonable guess for
-        // a buffer that does not know its content yet.
-        // WHAT THE COMPOSITOR SAID IS KEPT SEPARATELY, because what the
-        // buffer can show is what comes back below — see `asked`. It is
-        // taken from the CONFIGURE and from nothing else: built out of
-        // the door's own fields it would be the size `resized` last
-        // answered, which can only ever shrink.
-        self.asked = (
-            cfg.new_size.0.map_or(640, std::num::NonZeroU32::get),
-            cfg.new_size.1.map_or(400, std::num::NonZeroU32::get),
-        );
-        self.width = self.asked.0;
-        self.height = self.asked.1;
-        let asked = self.asked;
-        let scale = self.scale;
-        if let Some(g) = self.gpu.as_mut() {
-            // AND THE WINDOW KEEPS WHAT THE BUFFER CAN SHOW. Below the GPU's
-            // ceiling that is exactly what the compositor configured; above
-            // it, laying out against the bigger number would put the columns
-            // and the bars in a space the buffer does not have.
-            let (shown_w, shown_h) = crate::hidpi::resized(g, asked, scale);
-            self.width = shown_w;
-            self.height = shown_h;
-        }
-        // IT RE-RENDERS with the actual size. The first `render` used a
-        // guessed 80x24; without this the component would draw for a window
-        // that is not its own — few lines on a large screen, exactly
-        // what was seen in the glyph browser.
-        self.ask_paint();
-    }
-}
-
-impl CompositorHandler for Host {
-    /// The window moved to a screen of another scale — or was told its first.
-    ///
-    /// It was EMPTY here and in eight other doors, which is what made every
-    /// one of them blurry on a HiDPI screen. The rule and the measurement are
-    /// in [`crate::hidpi`].
-    fn scale_factor_changed(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        // THE SURFACE IS NEEDED to ask its VERSION, not to tell it anything:
-        // it is told its scale inside the frame, which is the only commit that
-        // carries a matching buffer — see `crate::hidpi::told_before_present`.
-        surface: &wl_surface::WlSurface,
-        factor: i32,
-    ) {
-        if let Some((w, h)) = crate::hidpi::followed(
-            &mut self.scale,
-            factor,
-            surface,
-            self.gpu.as_mut(),
-            self.text.as_mut(),
-            self.asked,
-        ) {
-            // AND THE DOOR KEEPS WHAT THE BUFFER CAN SHOW. Below the
-            // GPU's ceiling this is what the compositor configured;
-            // above it, going on with the old number lays the picture
-            // out in a space the buffer does not have.
-            self.width = w;
-            self.height = h;
-            // AND THE COMPONENT IS ASKED AGAIN, not merely repainted. `paint`
-            // draws the list it already has, and that list was rendered
-            // against the previous grid — which the scale moves whenever the
-            // buffer comes back clamped, because what this door keeps is what
-            // the buffer can SHOW. The eight doors with a `recount` do that; this is the
-            // one whose content comes from another process, and the argument
-            // is already written beside `text_size_changed`.
-            self.ask_paint();
-        }
-    }
-    fn transform_changed(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: wl_output::Transform,
-    ) {
-    }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
-    fn surface_enter(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
-    ) {
-    }
-    fn surface_leave(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
-    ) {
-    }
-}
-
-impl OutputHandler for Host {
-    fn output_state(&mut self) -> &mut OutputState {
-        &mut self.outputs
-    }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-}
-
-impl ProvidesRegistryState for Host {
-    fn registry(&mut self) -> &mut RegistryState {
-        &mut self.registry
-    }
-    registry_handlers![OutputState, SeatState];
-}
-
-/// The left button from `linux/input-event-codes.h` (`BTN_LEFT`).
-const LEFT_BUTTON: u32 = 0x110;
-
-impl PointerHandler for Host {
-    /// EVERY CURSOR HAS ITS OWN STATE: the pointer that spoke is made `here`
-    /// first, so a drag, a hover or a wheel's leftover never crosses from
-    /// one cursor to another. See `crate::seats`.
-    fn pointer_frame(
-        &mut self,
-        conn: &Connection,
-        qh: &QueueHandle<Self>,
-        pointer: &wl_pointer::WlPointer,
-        events: &[PointerEvent],
-    ) {
-        self.pointers.switch_to(pointer, &mut self.here);
-        self.pointer_frame_here(conn, qh, events);
     }
 }
 
@@ -3865,19 +3251,15 @@ impl Host {
     /// different questions.
     ///
     /// One pointer's frame, with its state already `here`.
-    fn pointer_frame_here(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        events: &[PointerEvent],
-    ) {
+    fn pointer_here(&mut self, ui: &mut Ui, hand: &mut Hand<PerSeat>, events: &[PointerEvent]) {
+        self.many_pointers = ui.many_pointers;
         for e in events {
             // THE POINTER AT REST. `Leave` puts the highlight out; `Enter` and
             // `Motion` move it, and only across a cell boundary.
             match e.kind {
                 PointerEventKind::Leave { .. } => {
-                    if self.here.cell_under_pointer.take().is_some() {
-                        let seat = self.pointers.colour_number_here();
+                    if hand.extra.cell_under_pointer.take().is_some() {
+                        let seat = ui.pointer_seat;
                         self.deliver(&ronoctua_protocol::Input::Unhover { seat });
                     }
                     // AND THE DRAG ENDS WITH THE POINTER. Wayland's implicit
@@ -3886,7 +3268,7 @@ impl Host {
                     // ENTER, with no button held, throw the list to wherever
                     // the pointer came in. The five list windows all carry
                     // this line; see `audio_window.rs`.
-                    self.here.dragging = None;
+                    hand.extra.dragging = None;
                     continue;
                 }
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
@@ -3894,7 +3276,7 @@ impl Host {
                     // not: the pointer is on the control, not on a row, and a
                     // highlight following it down the track would light every
                     // row the drag passed over.
-                    if let Some(bar) = self.here.dragging {
+                    if let Some(bar) = hand.extra.dragging {
                         let first = self.row_dragged_to(bar, e.position.1);
                         self.deliver(&ronoctua_protocol::Input::Scrolled {
                             column: bar.column,
@@ -3903,11 +3285,13 @@ impl Host {
                         });
                         continue;
                     }
+                    // A POINTER ON A DRAWN BAR NEVER REACHES HERE: the door
+                    // hands it over as leaving the rows (`crate::bars`).
                     let now = self.cell_at(e.position.0, e.position.1);
-                    if now != self.here.cell_under_pointer {
-                        self.here.cell_under_pointer = now;
+                    if now != hand.extra.cell_under_pointer {
+                        hand.extra.cell_under_pointer = now;
                         // WHICH CURSOR, so a buffer lights one row per hand.
-                        let seat = self.pointers.colour_number_here();
+                        let seat = ui.pointer_seat;
                         match now {
                             Some((column, line)) => self
                                 .deliver(&ronoctua_protocol::Input::Hover { column, line, seat }),
@@ -3939,8 +3323,8 @@ impl Host {
                 // move at all: five windows each wrote `(px / line) * 3`,
                 // threw the fraction away, and the owner read the result off
                 // the screen as a page that jumps.
-                crate::surface::wheel_arrived(&mut self.here.wheel_left, vertical, horizontal);
-                let lines = crate::surface::wheel_lines(&mut self.here.wheel_left);
+                crate::surface::wheel_arrived(&mut hand.extra.wheel_left, vertical, horizontal);
+                let lines = crate::surface::wheel_lines(&mut hand.extra.wheel_left);
                 if lines == 0 {
                     continue;
                 }
@@ -3982,15 +3366,15 @@ impl Host {
                 continue;
             }
             if let PointerEventKind::Release { button, .. } = e.kind
-                && button == LEFT_BUTTON
+                && button == crate::door::LEFT_BUTTON
             {
-                self.here.dragging = None;
+                hand.extra.dragging = None;
                 continue;
             }
             let PointerEventKind::Press { button, .. } = e.kind else {
                 continue;
             };
-            if button != LEFT_BUTTON {
+            if button != crate::door::LEFT_BUTTON {
                 continue;
             }
             // A PRESS ON A BAR IS A DRAG, and never a click on the row behind
@@ -4002,7 +3386,7 @@ impl Host {
             // cell is what loses a bar drawn in the right margin, which is
             // every bar in the last column. See `Host::bar_under`.
             if let Some(bar) = self.bar_under(e.position.0, e.position.1) {
-                self.here.dragging = Some(bar);
+                hand.extra.dragging = Some(bar);
                 let first = self.row_dragged_to(bar, e.position.1);
                 tracing::debug!(
                     column = bar.column,
@@ -4033,8 +3417,134 @@ impl Host {
     }
 }
 
-smithay_client_toolkit::delegate_registry!(Host);
-smithay_client_toolkit::delegate_dispatch2!(Host);
+impl Content for Host {
+    type Hand = PerSeat;
+
+    fn app_id(&self) -> &'static str {
+        self.app_id
+    }
+
+    // THE TITLE AND THE `app_id` COME FROM THE DESCRIPTOR — see `host_it`.
+    fn title(&self, _: &ronoctua_i18n::Texts) -> String {
+        self.title.clone()
+    }
+
+    /// No margin of the door's: a buffer counts from its own inset
+    /// (`space.content.inset`), and `context_of` is what knows it.
+    fn margin(&self) -> u16 {
+        0
+    }
+
+    /// `Esc` and the right `Ctrl` are the BUFFER's — it has no header line of
+    /// the door's, and `Esc` is its key and its modifier (see [`Escape`]).
+    fn header_keys(&self) -> bool {
+        false
+    }
+
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+        self.mods = mods;
+        self.key_seat = ui.keyboard_seat;
+        // REPEATING IS RIGHT HERE — holding the arrow scrolls the list, holding
+        // backspace erases the search — EXCEPT WHILE `Esc` IS DOWN, and that
+        // covers both halves of the gesture. `Esc` repeating would re-enter
+        // the press on a key that is already down; the arrow repeating would
+        // spin the states at the keyboard's repeat rate, which is a rotation
+        // nobody can stop on the one they wanted.
+        if ui.repeating && (event.keysym == Keysym::Escape || self.escape.down) {
+            return;
+        }
+        self.say_whose_keys();
+        self.typed(event);
+        self.hand_over(ui);
+    }
+
+    fn released(&mut self, ui: &mut Ui, event: &KeyEvent) {
+        self.key_seat = ui.keyboard_seat;
+        if self.escape.release(event.keysym) == EscapeAct::Tap {
+            // `Cancel` ALONE, and the state follows from it: every component
+            // walks back ONE LAYER per `Esc`, and jumping to the base would
+            // have thrown away the filter typed to find a sheet. The modeline
+            // stays truthful because the walk back reports itself through
+            // `effect::state-changed`.
+            self.deliver(&ronoctua_protocol::Input::Cancel);
+        }
+        self.hand_over(ui);
+    }
+
+    /// FOCUS ARRIVES — and whatever was held before it belongs to the OTHER
+    /// window. `AGENTS.md` records this as a trap with a name: here it is
+    /// `Esc`, and alt-tabbing in while it is down would leave this window
+    /// choosing a state with every key vanishing.
+    fn keyboard_entered(&mut self, _: &mut Ui) {
+        self.escape = Escape::default();
+    }
+
+    /// Focus leaves, and so does the release this window will never see.
+    fn keyboard_left(&mut self, ui: &mut Ui) {
+        self.escape = Escape::default();
+        // THAT SEAT'S KEYBOARD LEFT, and the buffer is told which: another
+        // keyboard still typing here keeps its field.
+        let seat = ui.keyboard_seat;
+        if self.typing_seat == Some(seat) {
+            self.typing_seat = None;
+        }
+        self.deliver(&ronoctua_protocol::Input::KeyboardLeft { seat });
+        self.hand_over(ui);
+    }
+
+    fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<PerSeat>, events: &[PointerEvent]) {
+        self.pointer_here(ui, hand, events);
+        self.hand_over(ui);
+    }
+
+    fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
+        self.draw(ui, canvas);
+    }
+
+    /// IT RE-RENDERS with the actual size. The first `render` used a guessed
+    /// 80x24; without this the component would draw for a window that is not
+    /// its own — few lines on a large screen, exactly what was seen in the
+    /// glyph browser. It matters most HERE, of all the doors: this is the one
+    /// whose content comes from another process, and it is told how many
+    /// cells it has.
+    fn resized(&mut self, ui: &mut Ui) {
+        self.width = ui.width;
+        self.height = ui.height;
+        ui.ask_paint();
+    }
+
+    fn language_changed(&mut self, ui: &mut Ui) {
+        self.texts = ui.texts.clone();
+    }
+
+    /// What the component asked for between frames — a redraw, a close —
+    /// reaches the door here, once per turn of the loop, from whatever
+    /// delivered it: a key, a daemon's answer, the clock.
+    fn each_turn(&mut self, ui: &mut Ui) {
+        self.hand_over(ui);
+    }
+}
+
+impl Host {
+    /// Hands the door what the component asked for: a frame, or the end.
+    fn hand_over(&mut self, ui: &mut Ui) {
+        if std::mem::take(&mut self.owed) {
+            ui.ask_paint();
+        }
+        if self.quit {
+            ui.quit = true;
+        }
+    }
+}
+
+/// Whether the buffer binds `C-<c>` — a local key whose first letter after
+/// the group is `c` (`, c`, or `, c x` that it opens).
+fn binds_the_chord(keymap: &[ronoctua_protocol::Binding], c: char) -> bool {
+    let first = c.to_string();
+    keymap
+        .iter()
+        .any(|b| b.keys.split_whitespace().nth(1) == Some(first.as_str()))
+}
 
 /// May a key OPEN a buffer sequence?
 ///
@@ -4352,6 +3862,23 @@ mod tests {
     use super::*;
 
     /// The keymap the editor declares.
+    /// A CHORD IN THE BUFFER'S WINDOW IS ITS LOCAL KEY: `C-r` is `, r` — the
+    /// group put in front by the host, and never typed.
+    #[test]
+    fn a_chord_is_the_local_key_with_its_group_in_front() {
+        let keymap = vec![ronoctua_protocol::Binding {
+            keys: ", r".into(),
+            command: "run".into(),
+        }];
+        let mut pending: Vec<char> = ronoctua_protocol::LOCAL_PREFIX.chars().collect();
+        assert_eq!(
+            advance_sequence(&keymap, &mut pending, 'r').as_deref(),
+            Some("run")
+        );
+        assert!(binds_the_chord(&keymap, 'r'));
+        assert!(!binds_the_chord(&keymap, 'v'), "`C-v` still pastes");
+    }
+
     fn buffer_keymap() -> Vec<ronoctua_protocol::Binding> {
         vec![ronoctua_protocol::Binding {
             keys: ", s".into(),

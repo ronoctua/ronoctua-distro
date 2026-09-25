@@ -2868,55 +2868,18 @@ impl Builder<'_> {
         // row is a door, in a hue no value wears. See `colors.nix`, `label`.
         let listed = self.shelf.is_some();
         let acts = target != Target::Nothing;
-        let (label_colour, value_colour) = match (focused, disabled) {
-            // AND UNDER THE CURSOR IT STILL SAYS SO. The accent took BOTH
-            // halves here, so a door and a fact became one row at the very
-            // moment the cursor was on them — which is the moment the question
-            // is being asked. Now the label carries "the keyboard is here"
-            // (neither window draws a band behind the cursor, so the accent on
-            // the text is the only thing that says it) and the value goes on
-            // saying whether the answer can be changed. See `colors.nix`,
-            // `text.here`.
-            (true, disabled) => (
-                tokens::color::STATE_ACCENT,
-                if acts && !disabled {
-                    tokens::color::TEXT_HERE_ACTS
-                } else {
-                    tokens::color::TEXT_HERE_READ
-                },
-            ),
-            (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
-            (false, false) => (
-                if acts {
-                    tokens::color::TEXT_LABEL_ACTS
-                } else {
-                    tokens::color::TEXT_LABEL_FACT
-                },
-                // AND THE VALUE SAYS THE SAME THING FROM THE OTHER SIDE.
-                //
-                // A row one cannot act on takes its value's colour out — grey
-                // at the weight it already had (`colors.nix`, `text.read`).
-                // Against the warm ramp everything else is drawn in, a neutral
-                // value reads as a step back without being any darker: what
-                // one came to read stays perfectly legible, it just stops
-                // being the loudest thing on the line.
-                match (acts, listed) {
-                    (true, false) => tokens::color::TEXT_ANSWER,
-                    (true, true) => tokens::color::TEXT_SECONDARY,
-                    (false, false) => tokens::color::TEXT_READ_STRONG,
-                    (false, true) => tokens::color::TEXT_READ_WEAK,
-                },
-            ),
+        let kind = match (disabled, acts, listed) {
+            (true, _, _) => crate::chrome::Kind::Disabled,
+            (false, true, false) => crate::chrome::Kind::Setting,
+            (false, true, true) => crate::chrome::Kind::ListedSetting,
+            (false, false, false) => crate::chrome::Kind::Fact,
+            (false, false, true) => crate::chrome::Kind::ListedFact,
         };
-        let value_colour = colour.filter(|_| !focused).unwrap_or(value_colour);
         self.out.push(Row {
-            fields: crate::chrome::field_pair(
-                self.left,
-                self.room,
-                &label,
-                &value,
-                label_colour,
-                value_colour,
+            fields: crate::chrome::tinted(
+                crate::chrome::field_pair(self.left, self.room, &label, &value, kind, focused),
+                colour,
+                focused,
             ),
             focused,
             heading: false,

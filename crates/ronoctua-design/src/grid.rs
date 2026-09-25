@@ -155,9 +155,100 @@ impl Grid {
     }
 }
 
+/// A GRID THAT SCROLLS, by whole ROWS — the bar, the wheel and the drag.
+///
+/// # Why a grid scrolls, and by the row
+///
+/// The three icon browsers paged — `C-,` turned the page — and drew no bar,
+/// so nothing on screen said how far into ten thousand icons one was, and the
+/// wheel did nothing. The owner asked for the bar every list of the system has.
+/// A grid moves by the ROW and never by the item: moving by one icon would slide
+/// every icon sideways at each step, and the place of an icon would change with
+/// nothing having changed. So the offset a grid keeps is an item index that is
+/// always a multiple of `across`, and these are the three ways it moves.
+impl Grid {
+    /// How many rows `items` make.
+    #[must_use]
+    pub const fn rows_of(&self, items: usize) -> usize {
+        let across = if self.across == 0 {
+            1
+        } else {
+            self.across as usize
+        };
+        items.div_ceil(across)
+    }
+
+    /// The bar's window, in ROWS, for `items` with the first shown at `top`.
+    #[must_use]
+    pub const fn scroll(&self, items: usize, top: usize) -> crate::Scroll {
+        let across = if self.across == 0 {
+            1
+        } else {
+            self.across as usize
+        };
+        crate::Scroll {
+            total: self.rows_of(items),
+            lines: self.rows as usize,
+            offset: top / across,
+            top: 0,
+        }
+    }
+
+    /// How many screen LINES the bar's track takes: the rows, each `down` tall.
+    #[must_use]
+    pub const fn track_lines(&self) -> u16 {
+        self.rows.saturating_mul(self.down)
+    }
+
+    /// The first item when row `row` is the first shown — clamped so the last
+    /// page is full, which is what a drag to the bottom of the track means.
+    #[must_use]
+    pub fn top_at_row(&self, row: usize, items: usize) -> usize {
+        let last = self.rows_of(items).saturating_sub(usize::from(self.rows));
+        row.min(last) * usize::from(self.across.max(1))
+    }
+
+    /// The first item after the wheel turned `lines` ROWS from `top` —
+    /// negative towards the start.
+    #[must_use]
+    pub fn wheeled(&self, top: usize, lines: i64, items: usize) -> usize {
+        let across = usize::from(self.across.max(1));
+        let row = i64::try_from(top / across).unwrap_or(i64::MAX);
+        let to = usize::try_from(row.saturating_add(lines).max(0)).unwrap_or(0);
+        self.top_at_row(to, items)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A GRID SCROLLS BY THE ROW, and never past its last full page.
+    #[test]
+    fn a_grid_scrolls_by_the_row() {
+        let g = Grid {
+            across: 4,
+            step: 3,
+            down: 2,
+            first: 1,
+            rows: 3,
+        };
+        // Ten rows' worth and a bit: 41 items are 11 rows.
+        assert_eq!(g.rows_of(41), 11);
+        let bar = g.scroll(41, 8);
+        assert_eq!((bar.total, bar.lines, bar.offset), (11, 3, 2));
+        assert!(bar.cut());
+        assert_eq!(g.track_lines(), 6);
+        // The wheel moves whole rows, and stops at the last full page.
+        assert_eq!(g.wheeled(0, 2, 41), 8);
+        assert_eq!(g.wheeled(8, -5, 41), 0);
+        assert_eq!(g.wheeled(0, 100, 41), 8 * 4);
+        // A drag to a row lands on that row's first item.
+        assert_eq!(g.top_at_row(5, 41), 20);
+        assert_eq!(g.top_at_row(99, 41), 32);
+        // A grid that fits has no bar.
+        assert!(!g.scroll(12, 0).cut());
+    }
 
     /// `lines_of` IS `at`, and it says so by being measured against it.
     ///

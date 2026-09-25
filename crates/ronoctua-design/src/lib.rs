@@ -383,6 +383,30 @@ pub enum Role {
     /// pointer rests on — `Register::Explain` on the host's side, the same
     /// cool grey.
     Explain,
+    /// A SHORTCUT UNDER THE POINTER, LIT: its key — `Register::KeyLit` on the
+    /// host's side, a small step from [`Role::Key`], so every header of the
+    /// system lights a shortcut the same way.
+    KeyLit,
+    /// The same, for its words — `Register::ProseLit`.
+    ProseLit,
+    /// A shortcut that a CLICK cannot press — `Register::Inert` on the host's
+    /// side. Every other rung of a header is a control; this one is only read,
+    /// and the owner asked for it to look slightly apart.
+    Inert,
+    /// THE TITLE OF A HEADER — `Register::Title` on the host's side
+    /// (`text.header-title`), apart from the content's headings.
+    Heading,
+    /// THE LABEL OF A ROW THAT INFORMS — `chrome::Kind::Fact` on the host's
+    /// side. A buffer drew every label in [`Role::Dim`], so a row one could
+    /// change and a row one could only read were the same colour; the owner
+    /// asked for one standard for each of the four halves.
+    LabelFact,
+    /// The label of a row whose value can be CHANGED.
+    LabelSetting,
+    /// The value of a row that informs.
+    ValueFact,
+    /// The value of a row that can be changed.
+    ValueSetting,
 }
 
 impl Role {
@@ -525,6 +549,16 @@ impl Palette for Tokens {
             Role::Prose => "text-subtle-default",
             Role::Faint => "text-subtle-faint",
             Role::Explain => "text-subtle-explain",
+            Role::Inert => "text-subtle-inert",
+            Role::KeyLit => "text-subtle-lit-key",
+            Role::ProseLit => "text-subtle-lit-prose",
+            Role::Heading => "text-header-title",
+            // THE FOUR HALVES OF A ROW, the same four `chrome::Kind::tones`
+            // gives on the host's side.
+            Role::LabelFact => "text-label-fact",
+            Role::LabelSetting => "text-label-acts",
+            Role::ValueFact => "text-read-strong",
+            Role::ValueSetting => "text-answer",
         })
     }
 

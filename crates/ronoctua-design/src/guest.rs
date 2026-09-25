@@ -69,6 +69,14 @@ impl Palette for Wit {
             Role::Prose => wit::Color::TextSubtleDefault,
             Role::Faint => wit::Color::TextSubtleFaint,
             Role::Explain => wit::Color::TextSubtleExplain,
+            Role::Inert => wit::Color::TextSubtleInert,
+            Role::KeyLit => wit::Color::TextSubtleLitKey,
+            Role::ProseLit => wit::Color::TextSubtleLitProse,
+            Role::Heading => wit::Color::TextHeaderTitle,
+            Role::LabelFact => wit::Color::TextLabelFact,
+            Role::LabelSetting => wit::Color::TextLabelActs,
+            Role::ValueFact => wit::Color::TextReadStrong,
+            Role::ValueSetting => wit::Color::TextAnswer,
         }
     }
 

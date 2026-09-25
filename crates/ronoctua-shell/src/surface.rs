@@ -443,7 +443,14 @@ struct Footer {
     /// on a key of the keyboard, or elsewhere on the footer — which is then a
     /// click, see `Footer::as_the_finger`.
     touches: crate::seats::Seats<(), wl_touch::WlTouch>,
-    fingers: Vec<(i32, Option<wl_surface::WlSurface>)>,
+    /// A finger elsewhere carries its surface and what it is so far — a tap,
+    /// a drag or a long press, see `crate::touch`.
+    fingers: Vec<(
+        i32,
+        Option<(wl_surface::WlSurface, crate::door::touch::Finger)>,
+    )>,
+    /// Landings counted, so a long press's timer knows its own finger.
+    landings: u64,
     /// The pointer state a finger that is not on the keyboard clicks with —
     /// its own, so a finger never moves a mouse's hover or drag.
     touch_here: PerSeat,
@@ -488,6 +495,11 @@ struct Footer {
     /// abaixo dos atalhos"* — and chose, when asked, that it be born with the
     /// hover and go with it rather than standing empty at rest.
     hint_said: Option<String>,
+    /// The shortcut of the hint line under the pointer, LIT when the line is
+    /// drawn — the rule of every header of the system (`chrome::lit`).
+    hint_lit: Option<&'static str>,
+    /// Whether the pointer rests on the minibuffer's chevron, which lights.
+    fold_lit: bool,
     /// Whether the minibuffer's line is OPEN, and how far it is scrolled.
     ///
     /// The line holds one line and cuts the rest; opened, it shows the rest
@@ -1347,6 +1359,9 @@ struct Screen {
     /// What this SURFACE has been told, which lags `scale` by one frame —
     /// see [`crate::hidpi::told_before_present`].
     scale_told: i32,
+    /// Every bar the last frame drew on this screen, by its track — its column
+    /// is the bar's, for the pointer and for every band (`crate::bars`).
+    bars: crate::bars::Drawn,
     configured: bool,
     /// Assembled on the first `configure`, when there is a size. They stay `None`
     /// if there is no usable GPU — the footer still resolves the layout and logs,
@@ -2420,10 +2435,13 @@ pub fn run() -> Result<()> {
         osk_said_nothing: false,
         touches: crate::seats::Seats::default(),
         fingers: Vec::new(),
+        landings: 0,
         touch_here: PerSeat::default(),
         region_can_spare_a_row: std::cell::Cell::new(false),
         hint_placed: Vec::new(),
         hint_said: None,
+        hint_lit: None,
+        fold_lit: false,
         fold: crate::fold::Fold::default(),
         fold_control: None,
         page_control: None,
@@ -4119,6 +4137,51 @@ impl Footer {
             .map(|m| m.id)
     }
 
+    /// Whether a point of `surface` is on a bar that screen's last frame drew.
+    fn on_a_drawn_bar(&self, surface: &wl_surface::WlSurface, x: f64, y: f64) -> bool {
+        self.screens
+            .iter()
+            .find(|s| s.layer.wl_surface() == surface)
+            .is_some_and(|s| s.bars.on(x, y))
+    }
+
+    /// WHAT A CLICK ON THE HINT LINE DOES, when it lands on a shortcut that is
+    /// a control (`chrome::Act`) — the same reading `hint_under` makes.
+    fn hint_act_under(&self, x: f64, y: f64) -> Option<crate::chrome::Act> {
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let cell_px = f64::from(crate::chrome::cell_width());
+        if line_height <= 0.0 || cell_px <= 0.0 || x < 0.0 || y < 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let line = (y / line_height) as u16;
+        let cell = u16::try_from((x / cell_px) as u64).ok()?;
+        self.hint_placed
+            .iter()
+            .find(|m| m.covers(line, cell))
+            .and_then(|m| m.press)
+    }
+
+    /// A shortcut of the hint line was clicked.
+    ///
+    /// A KEY is pressed through the SAME path the keyboard takes — `typed`,
+    /// with the modifiers the notation says — so the click does exactly what
+    /// the key does in the view that is open, and a COMMAND runs by its id.
+    /// The modifiers of the real keyboard are put back afterwards: a click
+    /// must not leave a Ctrl held that no hand is holding.
+    fn hint_clicked(&mut self, act: crate::chrome::Act) {
+        match act {
+            crate::chrome::Act::Key(key) => {
+                let (event, mods) = crate::door::keys::event_of(key);
+                let real = std::mem::replace(&mut self.mods, mods);
+                self.typed(event);
+                self.mods = real;
+            }
+            crate::chrome::Act::Run(id) => self.run_command(id),
+        }
+        self.draw_and_paint();
+    }
+
     /// A click on the band: the circle marks it read, an action runs.
     ///
     /// # The mouse reaches nothing the keyboard does not
@@ -5612,24 +5675,22 @@ impl TouchHandler for Footer {
             self.fingers.push((id, None));
             return;
         }
-        self.fingers.push((id, Some(surface.clone())));
-        let events = [
-            PointerEvent {
-                surface: surface.clone(),
-                position,
-                kind: PointerEventKind::Motion { time },
-            },
-            PointerEvent {
-                surface,
-                position,
-                kind: PointerEventKind::Press {
-                    time,
-                    button: LEFT_BUTTON,
-                    serial,
-                },
-            },
-        ];
-        self.as_the_finger(conn, qh, &events);
+        // PENDING, NOT PRESSED: a left button pressed on landing would have
+        // done its work before the finger could turn out to be a long press
+        // (`crate::touch`). The pointer goes there, so what is under it lights.
+        self.landings += 1;
+        let landing = self.landings;
+        let (finger, _) = crate::door::touch::Finger::down(position, landing);
+        self.fingers.push((id, Some((surface.clone(), finger))));
+        self.finger_did(
+            conn,
+            qh,
+            &surface,
+            &[crate::door::touch::Out::Motion(position)],
+            time,
+            serial,
+        );
+        self.arm_long_press(id, landing);
     }
 
     fn up(
@@ -5656,25 +5717,17 @@ impl TouchHandler for Footer {
             self.keyboard_did(qh, seat, outs);
             return;
         }
-        if let Some(surface) = elsewhere {
-            // AND THE HAND LEAVES WITH THE FINGER: a touch screen has no
+        if let Some((surface, finger)) = elsewhere {
+            // A TAP, THE END OF A DRAG, OR NOTHING after a long press — and
+            // then the hand leaves with the finger: a touch screen has no
             // pointer resting anywhere, so nothing is left lit after it.
-            let events = [
-                PointerEvent {
-                    surface: surface.clone(),
-                    position: (0.0, 0.0),
-                    kind: PointerEventKind::Release {
-                        time,
-                        button: LEFT_BUTTON,
-                        serial,
-                    },
-                },
-                PointerEvent {
-                    surface,
-                    position: (0.0, 0.0),
-                    kind: PointerEventKind::Leave { serial },
-                },
-            ];
+            let outs: Vec<crate::door::touch::Out> = finger.up().into_iter().flatten().collect();
+            self.finger_did(conn, qh, &surface, &outs, time, serial);
+            let events = [PointerEvent {
+                surface,
+                position: (0.0, 0.0),
+                kind: PointerEventKind::Leave { serial },
+            }];
             self.as_the_finger(conn, qh, &events);
         }
     }
@@ -5691,20 +5744,16 @@ impl TouchHandler for Footer {
         // A FINGER THAT IS A CLICK CAN DRAG, the way a held button does —
         // a bar, a list. A finger on a key stays on its key: keys do not
         // follow a finger that slides, which is how a key is not typed twice.
-        let Some(surface) = self
+        let Some((surface, outs)) = self
             .fingers
-            .iter()
+            .iter_mut()
             .find(|(f, _)| *f == id)
-            .and_then(|(_, s)| s.clone())
+            .and_then(|(_, s)| s.as_mut())
+            .map(|(surface, finger)| (surface.clone(), finger.motion(position)))
         else {
             return;
         };
-        let events = [PointerEvent {
-            surface,
-            position,
-            kind: PointerEventKind::Motion { time },
-        }];
-        self.as_the_finger(conn, qh, &events);
+        self.finger_did(conn, qh, &surface, &outs, time, 0);
     }
 
     fn shape(
@@ -5771,6 +5820,9 @@ impl Footer {
             // none of the three above would notice, and the line under them
             // would go on explaining the key one has just left.
             self.hint_said.clone(),
+            // AND THE SHORTCUT THAT IS LIT, for the same reason.
+            self.hint_lit,
+            self.fold_lit,
             // THROUGH `current_offset`, because with the manager open the
             // number is the view's — see `Footer::scroll_offset_to`. Reading
             // the field directly here would say "nothing changed" for every
@@ -5810,6 +5862,8 @@ impl Footer {
         // row what it is.
         let mut brain_hit = None;
         let mut fold_toggle = false;
+        // A SHORTCUT OF THE HINT LINE that was clicked: what its key would do.
+        let mut hint_act: Option<crate::chrome::Act> = None;
         let mut page_click: Option<bool> = None;
         // AND WHETHER THE PRESS LANDED ON AN EMPTY MINIBUFFER, which opens the
         // shortcut list — see `on_the_empty_minibuffer`.
@@ -5821,8 +5875,16 @@ impl Footer {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     self.here.under_pointer = true;
-                    self.here.row_under_pointer = self.row_at(e.position.0, e.position.1);
-                    self.here.cell_under_pointer = self.cell_at(e.position.0);
+                    // THE BAR'S COLUMN IS THE BAR'S — every bar this screen
+                    // drew, whoever drew it (`crate::bars`): a pointer resting
+                    // on a track is on no row and no cell.
+                    if self.on_a_drawn_bar(&e.surface, e.position.0, e.position.1) {
+                        self.here.row_under_pointer = None;
+                        self.here.cell_under_pointer = None;
+                    } else {
+                        self.here.row_under_pointer = self.row_at(e.position.0, e.position.1);
+                        self.here.cell_under_pointer = self.cell_at(e.position.0);
+                    }
                     // AND WHICH THUMBNAIL, so a film under the hand starts its
                     // tour. It opens no file — see `View::hover_thumb`.
                     self.hover_a_thumbnail();
@@ -5847,6 +5909,12 @@ impl Footer {
                     self.hint_said = self
                         .hint_under(e.position.0, e.position.1)
                         .and_then(|id| crate::chrome::hint_sentence(id, &self.texts));
+                    // AND IT LIGHTS, when a click on it would press it — and so
+                    // does the chevron beside it.
+                    self.hint_lit = self
+                        .hint_act_under(e.position.0, e.position.1)
+                        .and_then(|_| self.hint_under(e.position.0, e.position.1));
+                    self.fold_lit = self.fold_at(e.position.0, e.position.1);
                     // AND THE POINTER RESTING ON THE BAND STOPS ITS CLOCK.
                     //
                     // ANYWHERE on it, and not only on a piece: what is being
@@ -5999,6 +6067,8 @@ impl Footer {
                     // way out, so without this the explanation of a key nobody
                     // is pointing at would stay on screen for ever.
                     self.hint_said = None;
+                    self.hint_lit = None;
+                    self.fold_lit = false;
                     self.here.dragging = false;
                     self.here.dragging_shelf = None;
                     // AND A BAND ENDS WHERE THE HAND LEFT IT. What it took was
@@ -6113,6 +6183,14 @@ impl Footer {
                     // THE PAGE COUNTER, on the same line and at its right end.
                     if self.page_control_at(e.position.0, e.position.1) {
                         page_click = Some(true);
+                        continue;
+                    }
+                    // A SHORTCUT OF THE HINT LINE IS A CONTROL — the owner's
+                    // rule for every header of the system: a click does what
+                    // the key does. Read off `hint_placed`, which is what the
+                    // last frame DREW.
+                    if let Some(act) = self.hint_act_under(e.position.0, e.position.1) {
+                        hint_act = Some(act);
                         continue;
                     }
                     if self.fold_at(e.position.0, e.position.1) {
@@ -6336,6 +6414,10 @@ impl Footer {
         if fold_toggle {
             self.toggle_fold();
         }
+        if let Some(act) = hint_act {
+            self.hint_clicked(act);
+            return;
+        }
         if leader_click {
             // IN INDEPENDENT MODE THE REGION BELONGS TO A KEYBOARD, and a click
             // hands it to the one paired with the cursor that clicked.
@@ -6491,6 +6573,8 @@ impl Footer {
                     self.here.row_under_pointer,
                     self.here.cell_under_pointer,
                     self.hint_said.clone(),
+                    self.hint_lit,
+                    self.fold_lit,
                     self.current_offset(),
                 )
         {
@@ -6623,6 +6707,7 @@ impl Footer {
             // `crate::hidpi`.
             scale: 1,
             scale_told: 1,
+            bars: crate::bars::Drawn::default(),
             configured: false,
             gpu: None,
             text: None,
@@ -6716,9 +6801,12 @@ impl Footer {
                 crate::leader::EVERY_WORKSPACE_KEYS
             );
             return Some(vec![
-                Piece::key(keys, false).about("workspace-all"),
+                Piece::key(keys, false)
+                    .about("workspace-all")
+                    .running("workspace-all"),
                 Piece::prose(format!(" {}", texts.t(ronoctua_i18n::key::OVERVIEW_BACK)))
-                    .about("workspace-all"),
+                    .about("workspace-all")
+                    .running("workspace-all"),
                 Piece::separator(),
                 Piece::prose(texts.t(ronoctua_i18n::key::OVERVIEW_MOUSE)).about("workspace-all"),
             ]);
@@ -6729,8 +6817,12 @@ impl Footer {
             return None;
         };
         Some(vec![
-            Piece::key(format!("{} {keys}", crate::leader()), false).about(command),
-            Piece::prose(format!(" {}", texts.t(ronoctua_i18n::key::OVERVIEW_BACK))).about(command),
+            Piece::key(format!("{} {keys}", crate::leader()), false)
+                .about(command)
+                .running(command),
+            Piece::prose(format!(" {}", texts.t(ronoctua_i18n::key::OVERVIEW_BACK)))
+                .about(command)
+                .running(command),
         ])
     }
 
@@ -12477,17 +12569,11 @@ impl Footer {
                     key: name,
                     key_flush_right: false,
                     separator: false,
-                    key_color: if here {
-                        tokens::color::STATE_ACCENT
-                    } else {
-                        tokens::color::TEXT_LABEL_ACTS
-                    },
+                    // ONE ITEM OF A LIST OF DOORS: the name is what opens, and
+                    // the two tones are `chrome::Kind::ListedSetting`'s.
+                    key_color: crate::chrome::Kind::ListedSetting.tones(here).0,
                     text: about.clone(),
-                    text_color: if here {
-                        tokens::color::TEXT_HERE_ACTS
-                    } else {
-                        tokens::color::TEXT_DIM
-                    },
+                    text_color: crate::chrome::Kind::ListedSetting.tones(here).1,
                     description: Some(about),
                     click: Some(Click::Manual(i)),
                     ..ExpansionRow::empty_one()
@@ -12921,6 +13007,93 @@ impl Footer {
     /// this surface, so without this a finger on the modeline or on a list
     /// would do nothing at all. The finger clicks with a pointer state of its
     /// own (`touch_here`), so it never moves a mouse's hover or drag.
+    /// What a finger did, replayed as a mouse would have done it — see
+    /// `crate::touch`.
+    fn finger_did(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        outs: &[crate::door::touch::Out],
+        time: u32,
+        serial: u32,
+    ) {
+        use crate::door::touch::{Button, Out};
+        let button_of = |b: Button| match b {
+            Button::Left => LEFT_BUTTON,
+            Button::Right => RIGHT_BUTTON,
+        };
+        let events: Vec<PointerEvent> = outs
+            .iter()
+            .map(|o| match *o {
+                Out::Motion(position) => PointerEvent {
+                    surface: surface.clone(),
+                    position,
+                    kind: PointerEventKind::Motion { time },
+                },
+                Out::Press(b, position) => PointerEvent {
+                    surface: surface.clone(),
+                    position,
+                    kind: PointerEventKind::Press {
+                        time,
+                        button: button_of(b),
+                        serial,
+                    },
+                },
+                Out::Release(b, position) => PointerEvent {
+                    surface: surface.clone(),
+                    position,
+                    kind: PointerEventKind::Release {
+                        time,
+                        button: button_of(b),
+                        serial,
+                    },
+                },
+            })
+            .collect();
+        if !events.is_empty() {
+            self.as_the_finger(conn, qh, &events);
+        }
+    }
+
+    /// Arms the clock that turns finger `id`, landed as `landing`, into a
+    /// right click if it is still there and still still.
+    fn arm_long_press(&mut self, id: i32, landing: u64) {
+        let Some(handle) = self.repeat.clone() else {
+            return;
+        };
+        let armed = handle.insert_source(
+            calloop::timer::Timer::from_duration(crate::door::touch::LONG_PRESS),
+            move |_, (), state: &mut Self| {
+                state.long_press(id, landing);
+                calloop::timer::TimeoutAction::Drop
+            },
+        );
+        if let Err(e) = armed {
+            tracing::warn!(error = %e, "no long press: the clock could not be armed");
+        }
+    }
+
+    /// The long press's clock rang: a right click, if that finger never
+    /// moved or lifted.
+    fn long_press(&mut self, id: i32, landing: u64) {
+        let Some((surface, outs)) = self
+            .fingers
+            .iter_mut()
+            .find(|(f, _)| *f == id)
+            .and_then(|(_, s)| s.as_mut())
+            .map(|(surface, finger)| (surface.clone(), finger.held_long(landing)))
+        else {
+            return;
+        };
+        if outs.is_empty() {
+            return;
+        }
+        let (conn, qh) = (self.conn.clone(), self.queue.clone());
+        self.finger_did(&conn, &qh, &surface, &outs, 0, 0);
+        self.draw_and_paint();
+    }
+
     fn as_the_finger(
         &mut self,
         conn: &Connection,
@@ -14684,16 +14857,21 @@ impl Footer {
         wide: f32,
         cell: f32,
     ) -> (f32, f32) {
-        let inside = bands
+        let Some((_, seen, band)) = bands
             .iter()
-            .any(|(first, seen, _)| line >= *first && usize::from(line - *first) < *seen);
-        if !inside {
+            .find(|(first, seen, _)| line >= *first && usize::from(line - *first) < *seen)
+        else {
             return (at, wide);
-        }
+        };
         let left = f32::from(shelf.from) * cell;
-        // AND IT STOPS BEFORE THE CONTAINER'S OWN BAR: a band under the thumb
-        // would tint the one thing on that column that is not a row.
-        let right = f32::from(shelf.from + shelf.cells - crate::chrome::BAR_CELLS) * cell;
+        // AND IT STOPS BEFORE THE CONTAINER'S OWN BAR — WHILE ONE IS DRAWN: a
+        // band under the thumb would tint the one thing on that column that is
+        // not a row, and a band that stopped short with no bar there would be a
+        // band with a hole in it. The condition is the one the bar is drawn by
+        // (`shelf_bar_at`): the whole band on screen, and more than it holds.
+        let barred = *seen >= band.lines && band.total > band.lines;
+        let keep = if barred { crate::chrome::BAR_CELLS } else { 0 };
+        let right = f32::from(shelf.from + shelf.cells - keep) * cell;
         let from = at.max(left);
         ((from), (right - from).clamp(0.0, wide))
     }
@@ -17798,6 +17976,8 @@ impl Footer {
             } else {
                 vec![crate::chrome::Piece::said(mini_at_rest.clone())]
             };
+            // THE SHORTCUT UNDER THE POINTER, LIT — see `chrome::lit`.
+            let line_pieces = crate::chrome::lit(&line_pieces, self.hint_lit);
             let plain_room = columns
                 .saturating_sub(tokens::space::MODELINE_EDGELEFT)
                 .saturating_sub(taken);
@@ -17900,8 +18080,12 @@ impl Footer {
                     // that says where the next key goes everywhere else. It is
                     // one glyph, so there is no row to put a band on, and the
                     // colour is the whole of the focus.
+                    // AND UNDER THE POINTER, LIT — the small step every header's
+                    // controls take (`text.subtle.lit.key`).
                     color: if lit {
                         tokens::color::STATE_ACCENT
+                    } else if self.fold_lit {
+                        tokens::color::TEXT_SUBTLE_LIT_KEY
                     } else if held.open {
                         tokens::color::TEXT_SUBTLE_STRONG
                     } else {
@@ -18616,6 +18800,8 @@ impl Footer {
                     ));
                 }
             }
+            // EVERY BAR THIS SCREEN DRAWS, by its track — see `crate::bars`.
+            let mut bars_drawn = crate::bars::Drawn::default();
             let mut backgrounds = vec![ronoctua_render::quad::Quad {
                 x: 0.0,
                 y: f32::from(modeline_line) * line_height,
@@ -19055,6 +19241,7 @@ impl Footer {
                     if matches!(axis, crate::files::Axis::Time) {
                         continue;
                     }
+                    bars_drawn.record(crate::bars::Track::of(rect));
                     backgrounds.push(ronoctua_render::quad::Quad {
                         x: rect.0,
                         y: rect.1,
@@ -19091,6 +19278,10 @@ impl Footer {
                 // `offset_at`, which is this call's inverse. Nine views, one
                 // rectangle; what still differs is how many bands a view has.
                 #[allow(clippy::cast_precision_loss)]
+                bars_drawn.record_opt(
+                    self.region_track(width as f32, bottom)
+                        .map(crate::bars::Track::of),
+                );
                 if let Some((bx, by, bw, bh)) = self.region_bar(width as f32, bottom) {
                     backgrounds.push(ronoctua_render::quad::Quad {
                         x: bx,
@@ -19126,6 +19317,15 @@ impl Footer {
                 if let Some(q) =
                     crate::chrome::shelf_bar(scroll, shelf, *first, width as f32, bottom)
                 {
+                    // THE WHOLE TRACK: the box's last cell, over every line of
+                    // the shelf.
+                    let f = crate::chrome::Frame::of(width as f32, bottom, *first);
+                    bars_drawn.record(crate::bars::Track::of((
+                        q.x,
+                        f.y_of(*first),
+                        q.width,
+                        f.line() * f32::from(u16::try_from(band.lines).unwrap_or(u16::MAX)),
+                    )));
                     backgrounds.push(q);
                 }
             }
@@ -19138,6 +19338,15 @@ impl Footer {
             // each saying where its own is, and both ask `Scroll::bar` for the
             // rectangle.
             #[allow(clippy::cast_precision_loss)]
+            if self.fold.open && self.fold_scroll.cut() {
+                let f = crate::chrome::Frame::of(width as f32, bottom, self.fold_line_at());
+                bars_drawn.record(crate::bars::Track::of((
+                    f.width - f.cell(),
+                    f.y_of(self.fold_line_at()),
+                    f.cell(),
+                    f.line() * f32::from(self.fold_rows()),
+                )));
+            }
             if let Some((bx, by, bw, bh)) = self.fold_bar(width as f32, bottom) {
                 backgrounds.push(ronoctua_render::quad::Quad {
                     x: bx,
@@ -19148,9 +19357,12 @@ impl Footer {
                 });
             }
 
+            // AND NO BAND RUNS UNDER A BAR, whoever painted it.
+            bars_drawn.clip(&mut backgrounds);
             let Some(screen) = self.screens.get_mut(index) else {
                 continue;
             };
+            screen.bars = bars_drawn;
             // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
             // `set_buffer_scale` has to travel in the commit `Gpu::frame`
             // makes. See `crate::hidpi::told_before_present`.

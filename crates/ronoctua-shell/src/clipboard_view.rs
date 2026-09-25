@@ -434,8 +434,8 @@ impl View {
                     room,
                     label,
                     &value,
-                    tokens::color::TEXT_LABEL_FACT,
-                    tokens::color::TEXT_PRIMARY,
+                    crate::chrome::Kind::Fact,
+                    false,
                 ),
                 Target::Nothing,
             )
@@ -501,15 +501,21 @@ impl View {
         room: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<(Vec<Field>, Target)> {
-        let pair = |label: &str, value: &str, colour: tokens::Color, target: Target| {
+        // EVERY ROW HERE IS A SETTING, and a value that says a STATE (on,
+        // down, not set up) wears that state's colour — `chrome::tinted`.
+        let pair = |label: &str, value: &str, status: Option<tokens::Color>, target: Target| {
             (
-                crate::chrome::field_pair(
-                    at,
-                    room,
-                    &texts.t(label),
-                    value,
-                    tokens::color::TEXT_LABEL_ACTS,
-                    colour,
+                crate::chrome::tinted(
+                    crate::chrome::field_pair(
+                        at,
+                        room,
+                        &texts.t(label),
+                        value,
+                        crate::chrome::Kind::Setting,
+                        false,
+                    ),
+                    status,
+                    false,
                 ),
                 target,
             )
@@ -520,13 +526,13 @@ impl View {
                 pair(
                     ronoctua_i18n::key::CLIPBOARD_SYNC_SERVER,
                     &texts.t(ronoctua_i18n::key::CLIPBOARD_SYNC_UNSET),
-                    tokens::color::TEXT_DIM,
+                    Some(tokens::color::TEXT_DIM),
                     Target::Server,
                 ),
                 pair(
                     ronoctua_i18n::key::CLIPBOARD_SYNC_ACCOUNT,
                     &texts.t(ronoctua_i18n::key::CLIPBOARD_SYNC_UNSET),
-                    tokens::color::TEXT_DIM,
+                    Some(tokens::color::TEXT_DIM),
                     Target::Account,
                 ),
             ];
@@ -553,19 +559,19 @@ impl View {
             pair(
                 ronoctua_i18n::key::CLIPBOARD_SYNC_STATE,
                 &texts.t(said),
-                colour,
+                Some(colour),
                 Target::Sync(!sync.enabled),
             ),
             pair(
                 ronoctua_i18n::key::CLIPBOARD_SYNC_SERVER,
                 &sync.server,
-                tokens::color::TEXT_PRIMARY,
+                None,
                 Target::Server,
             ),
             pair(
                 ronoctua_i18n::key::CLIPBOARD_SYNC_ACCOUNT,
                 &sync.username,
-                tokens::color::TEXT_PRIMARY,
+                None,
                 Target::Account,
             ),
         ];
@@ -597,13 +603,13 @@ impl View {
         out.push(pair(
             ronoctua_i18n::key::CLIPBOARD_SYNC_IMAGES,
             &word(sync.images),
-            tokens::color::TEXT_ANSWER,
+            None,
             Target::Images,
         ));
         out.push(pair(
             ronoctua_i18n::key::CLIPBOARD_SYNC_NOTIFY,
             &word(sync.notify),
-            tokens::color::TEXT_ANSWER,
+            None,
             Target::Notify,
         ));
         // ZERO IS NOT A SIZE, it is "whatever the server carries" — and the
@@ -625,7 +631,7 @@ impl View {
         out.push(pair(
             ronoctua_i18n::key::CLIPBOARD_SYNC_CAP,
             &cap,
-            tokens::color::TEXT_ANSWER,
+            None,
             Target::Cap,
         ));
         // THE SALT AND THE ROUNDS ARE EVERY DEVICE'S, and they are drawn
@@ -640,13 +646,13 @@ impl View {
         out.push(pair(
             ronoctua_i18n::key::CLIPBOARD_SYNC_SALT,
             &salt,
-            tokens::color::TEXT_ANSWER,
+            None,
             Target::Salt,
         ));
         out.push(pair(
             ronoctua_i18n::key::CLIPBOARD_SYNC_ROUNDS,
             &sync.rounds.to_string(),
-            tokens::color::TEXT_ANSWER,
+            None,
             Target::Rounds,
         ));
         // OURS, AND THE ONLY ONE HERE THAT IS ABOUT THE SCREEN — the shape the
@@ -656,13 +662,13 @@ impl View {
         out.push(pair(
             ronoctua_i18n::key::CLIPBOARD_MARK,
             &texts.t(mark_key(sync.mark)),
-            tokens::color::TEXT_ANSWER,
+            None,
             Target::Mark,
         ));
         out.push(pair(
             ronoctua_i18n::key::CLIPBOARD_SYNC_FORGET,
             "",
-            tokens::color::TEXT_PRIMARY,
+            None,
             Target::Forget,
         ));
         out

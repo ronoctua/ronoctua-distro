@@ -1333,21 +1333,9 @@ impl Builder<'_> {
     fn pair(&mut self, label: String, value: String, target: Target, spot: &str) {
         let focused = self.cursor == self.out.len();
         let acts = target.turns();
-        let (label_colour, value_colour) = match (focused, acts) {
-            (true, true) => (tokens::color::STATE_ACCENT, tokens::color::TEXT_HERE_ACTS),
-            (true, false) => (tokens::color::STATE_ACCENT, tokens::color::TEXT_HERE_READ),
-            (false, true) => (tokens::color::TEXT_LABEL_ACTS, tokens::color::TEXT_ANSWER),
-            (false, false) => (tokens::color::TEXT_SECONDARY, tokens::color::TEXT_DIM),
-        };
+        let kind = crate::chrome::Kind::of(acts);
         self.out.push(Row {
-            fields: crate::chrome::field_pair(
-                self.left,
-                self.room,
-                &label,
-                &value,
-                label_colour,
-                value_colour,
-            ),
+            fields: crate::chrome::field_pair(self.left, self.room, &label, &value, kind, focused),
             focused,
             heading: false,
             target,

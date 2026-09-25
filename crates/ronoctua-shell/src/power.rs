@@ -1068,28 +1068,23 @@ impl Builder<'_> {
         // A FACT'S ANSWER IS NOT A DOOR, under the cursor either: the label
         // below takes the accent and says "here", and this half keeps saying
         // there is nothing to change. See `colors.nix`, `text.here`.
-        let value_colour = colour.unwrap_or(if focused {
-            tokens::color::TEXT_HERE_READ
-        } else {
-            tokens::color::TEXT_READ_STRONG
-        });
+
         // THE SAME COLUMN THE ROW BELOW IT USES. A fact used to be placed at a
         // third of the row and a `pair` at the surface's right edge, in this
         // same file — so two neighbouring lines of one section put their
         // values in two different places.
         self.out.push(Row {
-            fields: crate::chrome::field_pair(
-                self.left,
-                self.room,
-                &label,
-                &value,
-                if focused {
-                    tokens::color::STATE_ACCENT
-                } else {
-                    // A FACT, and the label says so — see `colors.nix`.
-                    tokens::color::TEXT_LABEL_FACT
-                },
-                value_colour,
+            fields: crate::chrome::tinted(
+                crate::chrome::field_pair(
+                    self.left,
+                    self.room,
+                    &label,
+                    &value,
+                    crate::chrome::Kind::Fact,
+                    focused,
+                ),
+                colour,
+                focused,
             ),
             focused,
             heading: false,
@@ -1106,52 +1101,16 @@ impl Builder<'_> {
         // see `colors.nix`, `label`. It replaced a mark in front of the row,
         // which the owner refused: a chevron is what a tree uses to open and
         // close, and this row does neither.
-        let (label_colour, value_colour) = match (focused, disabled) {
-            // AND UNDER THE CURSOR IT STILL SAYS SO. The accent took BOTH
-            // halves here, so a door and a fact became one row at the very
-            // moment the cursor was on them — which is the moment the question
-            // is being asked. Now the label carries "the keyboard is here"
-            // (neither window draws a band behind the cursor, so the accent on
-            // the text is the only thing that says it) and the value goes on
-            // saying whether the answer can be changed. See `colors.nix`,
-            // `text.here`.
-            (true, disabled) => (
-                tokens::color::STATE_ACCENT,
-                if disabled || target == Target::Nothing {
-                    tokens::color::TEXT_HERE_READ
-                } else {
-                    tokens::color::TEXT_HERE_ACTS
-                },
-            ),
-            (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
-            (false, false) => (
-                if target == Target::Nothing {
-                    tokens::color::TEXT_LABEL_FACT
-                } else {
-                    tokens::color::TEXT_LABEL_ACTS
-                },
-                // AND THE VALUE SAYS THE SAME FROM THE OTHER SIDE: a row one
-                // cannot act on takes the colour out of its value — see
-                // `colors.nix`, `text.read`.
-                if target == Target::Nothing {
-                    tokens::color::TEXT_READ_STRONG
-                } else {
-                    tokens::color::TEXT_ANSWER
-                },
-            ),
+        let kind = if disabled {
+            crate::chrome::Kind::Disabled
+        } else {
+            crate::chrome::Kind::of(target != Target::Nothing)
         };
         // ONE ARITHMETIC, and it is `chrome::field_pair` — see the comment on
         // `chrome::value_column` for the three answers this file and its two
         // neighbours used to give.
         self.out.push(Row {
-            fields: crate::chrome::field_pair(
-                self.left,
-                self.room,
-                &label,
-                &value,
-                label_colour,
-                value_colour,
-            ),
+            fields: crate::chrome::field_pair(self.left, self.room, &label, &value, kind, focused),
             focused,
             heading: false,
             target,

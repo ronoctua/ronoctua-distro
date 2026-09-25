@@ -880,10 +880,12 @@ impl State {
                 .resolve();
             let at = draw.screen.row();
             let mut row = draw.screen.row_of(at, &layout);
-            row.put(field::LABEL, Run::label(key::NAME).playing(Role::Body));
+            // A SETTING — the name is typed here — in the two tones every
+            // setting of the system wears (`chrome::Kind::Setting`).
+            row.put(field::LABEL, Run::label(key::NAME).names(true));
             row.put(
                 field::VALUE,
-                Run::datum(&format!("{}_", self.name)).playing(Role::Title),
+                Run::datum(&format!("{}_", self.name)).answers(true),
             );
             row.put(field::HINT, Run::label(key::NAME_LIMIT).quiet());
             let _ = row.done();

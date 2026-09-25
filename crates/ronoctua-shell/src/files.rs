@@ -21398,7 +21398,11 @@ mod tests {
                 }
                 crate::chrome::Register::Key
                 | crate::chrome::Register::Alternate
-                | crate::chrome::Register::Contextual => since += 1,
+                | crate::chrome::Register::Contextual
+                | crate::chrome::Register::Inert
+                | crate::chrome::Register::KeyLit
+                | crate::chrome::Register::AlternateLit
+                | crate::chrome::Register::ContextualLit => since += 1,
                 // `Explain` is not a piece of a hint line: the sentence is
                 // drawn on its own row, from `Hinted::said`. `Said` and
                 // `Pending` are not pieces of one either — they are the
@@ -21407,7 +21411,11 @@ mod tests {
                 crate::chrome::Register::Prose
                 | crate::chrome::Register::Explain
                 | crate::chrome::Register::Said
-                | crate::chrome::Register::Pending => {}
+                | crate::chrome::Register::Pending
+                | crate::chrome::Register::Glyph
+                | crate::chrome::Register::Label
+                | crate::chrome::Register::Title
+                | crate::chrome::Register::ProseLit => {}
             }
         }
         // AND NO COMMA IN ANY OF THE SENTENCES: on this line a comma reads as

@@ -30,6 +30,7 @@ um compromisso: nada aqui precisa se parecer com nenhum outro programa.
 | Buffers nativos | WASM Component Model, display list retida | pixels, ou plugins nativos |
 | i18n | Fluent | gettext |
 | Fontes | assets de um Release, quatro inputs fixados por hash | dentro do repositório |
+| Janelas | uma `Door<C>` genérica com padrões sobrescrevíveis | uma macro por janela; um trait de janela com toda a encanação |
 
 ---
 
@@ -2892,6 +2893,27 @@ dois dispositivos do mesmo aparelho, e é por esse par que o `plan::one_physical
 interfaces de um touchpad. Sem par, o teclado digita pelo cursor 1, que é onde todo teclado estava.
 
 ---
+
+### A porta — uma base para toda janela
+
+Toda janela do shell é um `door::Content` aberto por `door::run`, e a `Door<C>` é dona da
+encanação: os handlers do SCTK são escritos uma vez, genéricos (`impl<C: Content> … for Door<C>`,
+e `delegate_dispatch2!` aceita a forma genérica). A alternativa óbvia era uma MACRO que colasse os
+handlers em cada janela — descartada porque uma macro gera dezenove cópias iguais que o compilador
+não compara com nada, e o primeiro ajuste feito à mão numa delas é a deriva de volta. A segunda era
+um trait com a encanação dentro, que cada janela implementasse: é o que existia, escrito à mão
+dezenove vezes. Uma estrutura genérica tem UMA cópia e o compilador a instancia.
+
+**Por que padrões e não um formato fixo.** O dono pediu as duas coisas: estabilidade e UX
+consistente por construção, e liberdade para uma janela não seguir um padrão quando isso for
+decidido. Cada comportamento de `Content` tem um padrão que É o padrão do sistema; sobrescrever
+é explícito, um método por vez, e o `every-window-is-a-door` recusa a outra saída — um handler
+próprio ao lado da porta. O `Ui` é separado da `Door` para um conteúdo poder recebê-lo por `&mut`
+enquanto a porta segura a encanação: são dois empréstimos de coisas diferentes.
+
+**O toque veio de graça, e esse era o teste da base.** Um dedo é tocado pelo mesmo código de
+ponteiro de um mouse, com uma mão própria (`door::touch::Fingers`); nenhuma janela escreveu uma
+linha sobre toque, e toda janela futura o terá.
 
 ## 5. Buffers nativos e o protocolo
 

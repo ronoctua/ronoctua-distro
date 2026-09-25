@@ -294,14 +294,7 @@ impl View {
         };
         let fact = |label: &str, value: &str| {
             (
-                crate::chrome::field_pair(
-                    at,
-                    room,
-                    label,
-                    value,
-                    tokens::color::TEXT_LABEL_FACT,
-                    tokens::color::TEXT_PRIMARY,
-                ),
+                crate::chrome::field_pair(at, room, label, value, crate::chrome::Kind::Fact, false),
                 Target::Nothing,
             )
         };
@@ -312,8 +305,8 @@ impl View {
                     room,
                     label,
                     value,
-                    tokens::color::TEXT_LABEL_ACTS,
-                    tokens::color::TEXT_ANSWER,
+                    crate::chrome::Kind::Setting,
+                    false,
                 ),
                 target,
             )
@@ -496,8 +489,9 @@ impl View {
                     room,
                     &label,
                     &texts.t(ronoctua_i18n::key::ATUIN_FROM_FLAKE),
-                    tokens::color::TEXT_LABEL_ACTS,
-                    tokens::color::TEXT_DIM,
+                    // FIXED BY THE FLAKE: drawn, and refusing (invariant 6).
+                    crate::chrome::Kind::Disabled,
+                    false,
                 ),
                 Target::Setting(setting.id),
             );
@@ -540,8 +534,8 @@ impl View {
                 room,
                 &label,
                 &value,
-                tokens::color::TEXT_LABEL_ACTS,
-                tokens::color::TEXT_ANSWER,
+                crate::chrome::Kind::Setting,
+                false,
             ),
             Target::Setting(setting.id),
         )

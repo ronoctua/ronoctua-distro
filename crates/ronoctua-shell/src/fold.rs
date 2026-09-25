@@ -214,7 +214,11 @@ const CEILING: usize = 512;
 /// The register is its colour and the id is which shortcut it belongs to —
 /// both travel word by word through the wrap, because the wrap is what
 /// decides which ROW each word lands on and both answers are per-row.
-type Word = (String, crate::chrome::Register, Option<&'static str>);
+type Word = (
+    String,
+    crate::chrome::Register,
+    (Option<&'static str>, Option<crate::chrome::Act>),
+);
 
 /// One thing the wrapper may not break.
 enum Unit {
@@ -248,20 +252,13 @@ fn units_of(pieces: &[crate::chrome::Piece]) -> Vec<Unit> {
         // recognised as a shortcut — so `C-;` and its words went back to being
         // wrapped word by word, which is the exact defect this function was
         // rewritten to end, reappearing on the keys added last.
-        let keyed = group.iter().any(|p| {
-            matches!(
-                p.register,
-                crate::chrome::Register::Key
-                    | crate::chrome::Register::Alternate
-                    | crate::chrome::Register::Contextual
-            )
-        });
+        let keyed = group.iter().any(|p| p.is_a_key());
         let words: Vec<Word> = group
             .iter()
             .flat_map(|p| {
                 p.text
                     .split_whitespace()
-                    .map(move |w| (w.to_owned(), p.register, p.id))
+                    .map(move |w| (w.to_owned(), p.register, (p.id, p.press)))
             })
             .collect();
         if keyed {
@@ -438,7 +435,7 @@ fn rebuild(rows: Vec<Vec<Word>>) -> Vec<Vec<crate::chrome::Piece>> {
     rows.into_iter()
         .map(|words| {
             let mut row: Vec<crate::chrome::Piece> = Vec::new();
-            for (word, register, id) in words {
+            for (word, register, (id, press)) in words {
                 match row.last_mut() {
                     // THE ID JOINS THE REGISTER IN DECIDING WHAT MERGES.
                     // Two runs of prose from two different shortcuts are one
@@ -447,7 +444,9 @@ fn rebuild(rows: Vec<Vec<Word>>) -> Vec<Vec<crate::chrome::Piece>> {
                     // first. It cannot happen while a dot separates every
                     // entry — but the dot is dropped at the left margin, and
                     // "cannot happen today" is not a rule.
-                    Some(last) if last.register == register && last.id == id => {
+                    Some(last)
+                        if last.register == register && last.id == id && last.press == press =>
+                    {
                         last.text.push(' ');
                         last.text.push_str(&word);
                     }
@@ -457,12 +456,14 @@ fn rebuild(rows: Vec<Vec<Word>>) -> Vec<Vec<crate::chrome::Piece>> {
                             text: word,
                             register,
                             id,
+                            press,
                         });
                     }
                     None => row.push(crate::chrome::Piece {
                         text: word,
                         register,
                         id,
+                        press,
                     }),
                 }
             }

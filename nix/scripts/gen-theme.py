@@ -873,6 +873,23 @@ CONTRAST_GATES = (
     ("text.subtle.default", ("surface.chrome",), 18, 20),
     ("text.subtle.faint", ("surface.chrome",), 7, 8),
     ("text.subtle.alternate", ("surface.chrome",), 38, 42),
+    # THE KEY A CLICK CANNOT PRESS, and the key that is only a guest. The
+    # second had no contrast gate at all; both are drawn on every hint line.
+    # The guest sits on the muted rung by design (Lc 16,5-17,3 measured in
+    # every theme), so its floor is the prose's, one step under what it gets.
+    ("text.subtle.inert", ("surface.chrome", "surface.buffer"), 36, 38),
+    ("text.subtle.lit.key", ("surface.chrome", "surface.buffer"), 38, 40),
+    ("text.subtle.lit.prose", ("surface.chrome", "surface.buffer"), 15, 16),
+    ("text.subtle.contextual", ("surface.chrome", "surface.buffer"), 15, 16),
+    # AND ON THE TRANSPORT BAND, which is where the camera and the player draw
+    # their header over a picture. Only `text.primary` was measured there.
+    ("text.subtle.strong", ("surface.transport",), 38, 40),
+    ("text.subtle.default", ("surface.transport",), 15, 18),
+    ("text.subtle.faint", ("surface.transport",), 6, 7),
+    ("text.subtle.alternate", ("surface.transport",), 36, 38),
+    ("text.subtle.contextual", ("surface.transport",), 15, 16),
+    ("text.subtle.explain", ("surface.transport",), 26, 28),
+    ("text.subtle.inert", ("surface.transport",), 34, 36),
     # THE WINDOW'S HINT LINE draws the same register on the buffer's ground,
     # which is a hair lighter than the chrome by construction; the floors hold
     # and there is no warn band, because the hair is the ladder's own.
@@ -1130,6 +1147,18 @@ DISTANCE_GATES = (
     # things in one voice.
     ("text.subtle.contextual", "text.subtle.strong", 0.03, 0.04),
     ("text.subtle.contextual", "text.subtle.alternate", 0.03, 0.04),
+    # AND THE KEY A CLICK CANNOT PRESS, told from the one it can: slightly,
+    # which is what the owner asked for, and not so slightly it is the same.
+    ("text.subtle.inert", "text.subtle.strong", 0.03, 0.04),
+    ("text.subtle.inert", "text.subtle.default", 0.03, 0.04),
+    ("text.subtle.inert", "text.subtle.contextual", 0.03, 0.04),
+    # A LIT SHORTCUT IS ITS OWN TONE, a little lit: told apart from the resting
+    # one (the pointer is on it) by a small step, which is what the owner asked
+    # for — the floors are low on purpose, and the warn band says "barely".
+    ("text.subtle.lit.key", "text.subtle.strong", 0.012, 0.02),
+    ("text.subtle.lit.prose", "text.subtle.default", 0.012, 0.02),
+    ("text.subtle.lit.alternate", "text.subtle.alternate", 0.012, 0.02),
+    ("text.subtle.lit.contextual", "text.subtle.contextual", 0.012, 0.02),
     # THE SENTENCE UNDER THE HINT LINE, against everything it is drawn between.
     #
     # The owner asked for exactly this and named both sides: a tone told apart

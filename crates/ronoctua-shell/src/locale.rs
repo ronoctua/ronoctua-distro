@@ -1744,11 +1744,8 @@ impl Builder<'_> {
             fields: vec![Self::piece(
                 at,
                 label,
-                if focused {
-                    tokens::color::STATE_ACCENT
-                } else {
-                    tokens::color::TEXT_LABEL_ACTS
-                },
+                // A DOOR IS A SETTING'S LABEL with no value beside it.
+                crate::chrome::Kind::Setting.tones(focused).0,
                 room,
             )],
             focused,
@@ -1761,45 +1758,15 @@ impl Builder<'_> {
         let focused = self.cursor == self.nth;
         self.nth += 1;
         // THE LABEL SAYS WHETHER THE ROW IS A DOOR, in a hue no value wears.
-        let (label_colour, value_colour) = if focused {
-            // AND UNDER THE CURSOR IT STILL SAYS SO — the label carries "the
-            // keyboard is here" and the value keeps saying whether the answer
-            // can be changed. See `colors.nix`, `text.here`.
-            (
-                tokens::color::STATE_ACCENT,
-                if target == Target::Nothing {
-                    tokens::color::TEXT_HERE_READ
-                } else {
-                    tokens::color::TEXT_HERE_ACTS
-                },
-            )
-        } else {
-            (
-                if target == Target::Nothing {
-                    tokens::color::TEXT_LABEL_FACT
-                } else {
-                    tokens::color::TEXT_LABEL_ACTS
-                },
-                // AND THE VALUE SAYS THE SAME FROM THE OTHER SIDE, which this
-                // view alone was not doing: it drew every value in the body
-                // text's tone, so a fact and a door looked alike on the half
-                // of the line the eye goes to. Every other view of this shape
-                // already asked the question; this one now asks it too.
-                if target == Target::Nothing {
-                    tokens::color::TEXT_READ_STRONG
-                } else {
-                    tokens::color::TEXT_ANSWER
-                },
-            )
-        };
+        let kind = crate::chrome::Kind::of(target != Target::Nothing);
         self.out.push(Row {
             fields: crate::chrome::field_pair(
                 self.left + self.nest,
                 self.room.saturating_sub(self.nest),
                 &label,
                 &value,
-                label_colour,
-                value_colour,
+                kind,
+                focused,
             ),
             focused,
             heading: false,

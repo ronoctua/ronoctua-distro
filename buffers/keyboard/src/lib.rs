@@ -732,21 +732,29 @@ impl State {
                     let total = s.rows();
                     let shown = room.min(total.saturating_sub(from));
                     s.list_lines = u16::try_from(shown).unwrap_or(u16::MAX);
+                    // THE BAND STOPS AT THE BAR ONLY WHILE THERE IS ONE; zero
+                    // is "to the edge".
+                    let band = if total > shown { body } else { 0 };
                     for n in from..from + shown {
                         let here = n == s.cursor;
                         if here {
-                            screen.ground_in(line, 0, body, Role::Band);
+                            screen.ground_in(line, 0, band, Role::Band);
                         } else if let Some(seat) = s.hover_on(n) {
                             // THE ROW UNDER THE POINTER, in a tone of its own:
                             // the cursor is where the KEYBOARD is and the hover
                             // is where a click would land, and every window in
                             // the shell answers the two separately.
-                            screen.ground_in(line, 0, body, Role::hover_of(seat));
+                            screen.ground_in(line, 0, band, Role::hover_of(seat));
                         }
                         // ROW ZERO IS THE SWITCH: how the keyboards work
                         // together, and a ring of two.
                         if n == 0 {
-                            let label = Run::label(key::MODE).within(second.saturating_sub(1));
+                            // A SETTING, and a ring of two: the label and the
+                            // value in the tones every setting wears
+                            // (`chrome::Kind::Setting` on the host's side).
+                            let label = Run::label(key::MODE)
+                                .within(second.saturating_sub(1))
+                                .names(true);
                             screen.put(line, if here { label.accent() } else { label });
                             let value = if s.independent() {
                                 key::INDEPENDENT
@@ -757,7 +765,8 @@ impl State {
                                 line,
                                 Run::label(value)
                                     .at(second)
-                                    .within(body.saturating_sub(second)),
+                                    .within(body.saturating_sub(second))
+                                    .answers(true),
                             );
                             line += 1;
                             continue;
@@ -841,12 +850,15 @@ impl State {
                     let total = s.rows();
                     let shown = room.min(total.saturating_sub(from));
                     s.list_lines = u16::try_from(shown).unwrap_or(u16::MAX);
+                    // THE BAND STOPS AT THE BAR ONLY WHILE THERE IS ONE; zero
+                    // is "to the edge".
+                    let band = if total > shown { body } else { 0 };
                     for n in from..from + shown {
                         let here = n == s.cursor;
                         if here {
-                            screen.ground_in(line, 0, body, Role::Band);
+                            screen.ground_in(line, 0, band, Role::Band);
                         } else if let Some(seat) = s.hover_on(n) {
-                            screen.ground_in(line, 0, body, Role::hover_of(seat));
+                            screen.ground_in(line, 0, band, Role::hover_of(seat));
                         }
                         s.draw_setting_row(&mut screen, line, &unit, n, here, second, body);
                         line += 1;
@@ -897,12 +909,13 @@ impl State {
                     s.list_top = line;
                     let shown = room.min(b.keys.len().saturating_sub(from));
                     s.list_lines = u16::try_from(shown).unwrap_or(u16::MAX);
+                    let band = if b.keys.len() > shown { body } else { 0 };
                     for (n, word) in b.keys.iter().enumerate().skip(from).take(room) {
                         let here = n == s.cursor;
                         if here {
-                            screen.ground_in(line, 0, body, Role::Band);
+                            screen.ground_in(line, 0, band, Role::Band);
                         } else if let Some(seat) = s.hover_on(n) {
-                            screen.ground_in(line, 0, body, Role::hover_of(seat));
+                            screen.ground_in(line, 0, band, Role::hover_of(seat));
                         }
                         let label = Run::label(&word.text).within(second.saturating_sub(1));
                         screen.put(line, if here { label.accent() } else { label });

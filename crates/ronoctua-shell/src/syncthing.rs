@@ -538,12 +538,15 @@ impl View {
         let target = rows
             .get(self.cursor)
             .map_or(Target::Nothing, |r| r.target.clone());
-        let here: Vec<(&str, &str)> = OF_THE_VIEW
+        // A KEY THAT IS ONLY HERE BECAUSE OF THE ROW UNDER THE CURSOR reads as
+        // one (`Register::Contextual`): the owner asked for the passing guests to
+        // look apart from the keys that are always on the line.
+        let here: Vec<(&str, &str, bool)> = OF_THE_VIEW
             .iter()
             .filter(|(_, _, w)| w.shown(&target))
-            .map(|(k, id, _)| (*k, *id))
+            .map(|(k, id, w)| (*k, *id, !matches!(w, Where::Anywhere)))
             .collect();
-        crate::chrome::hint_of(&here, texts)
+        crate::chrome::hint_of_marked(&here, |_| None, texts)
     }
 
     /// Put the cursor on a row, if that row is one.
@@ -1736,46 +1739,13 @@ impl Builder<'_> {
         // It replaced a mark in front of the row, which the owner refused —
         // and the chevron they named is the drawer's.
         let acts = !matches!(target, Target::Nothing);
-        let (label_colour, value_colour) = match (focused, disabled) {
-            // AND UNDER THE CURSOR IT STILL SAYS SO. The accent took BOTH
-            // halves here, so a door and a fact became one row at the very
-            // moment the cursor was on them — which is the moment the question
-            // is being asked. Now the label carries "the keyboard is here"
-            // (neither window draws a band behind the cursor, so the accent on
-            // the text is the only thing that says it) and the value goes on
-            // saying whether the answer can be changed. See `colors.nix`,
-            // `text.here`.
-            (true, disabled) => (
-                tokens::color::STATE_ACCENT,
-                if acts && !disabled {
-                    tokens::color::TEXT_HERE_ACTS
-                } else {
-                    tokens::color::TEXT_HERE_READ
-                },
-            ),
-            (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
-            (false, false) => (
-                if acts {
-                    tokens::color::TEXT_LABEL_ACTS
-                } else {
-                    tokens::color::TEXT_LABEL_FACT
-                },
-                if acts {
-                    tokens::color::TEXT_ANSWER
-                } else {
-                    tokens::color::TEXT_READ_STRONG
-                },
-            ),
+        let kind = if disabled {
+            crate::chrome::Kind::Disabled
+        } else {
+            crate::chrome::Kind::of(acts)
         };
         self.out.push(Row {
-            fields: crate::chrome::field_pair(
-                self.left,
-                self.room,
-                &label,
-                &value,
-                label_colour,
-                value_colour,
-            ),
+            fields: crate::chrome::field_pair(self.left, self.room, &label, &value, kind, focused),
             focused,
             heading: false,
             target,

@@ -2949,6 +2949,7 @@ power-kind-bluetooth = dispositivo Bluetooth
 
 # O que as portas dizem quando um daemon recusou, e o que a janela não faz.
 power-answer-in-the-footer = A trava é do rodapé: { $awake }, ou { $lid }
+door-no-footer = Não foi possível chegar ao rodapé para rodar isto
 power-what-profile = o perfil
 power-what-lock = a trava
 power-what-thresholds = os limites

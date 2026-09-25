@@ -463,7 +463,13 @@ fn entry(screen: &mut Screen<Wit>, e: Entry) {
 /// length and it is what one came to read; a path cut at twenty cells with
 /// sixty empty ones beside it is the spacing complaint this whole change came
 /// from, seen from the other side.
-fn consumer(screen: &mut Screen<Wit>, c: &Consumer, focused: bool, under: Option<u16>) {
+fn consumer(
+    screen: &mut Screen<Wit>,
+    c: &Consumer,
+    focused: bool,
+    under: Option<u16>,
+    barred: bool,
+) {
     if !above_the_footer(screen) {
         return;
     }
@@ -471,14 +477,17 @@ fn consumer(screen: &mut Screen<Wit>, c: &Consumer, focused: bool, under: Option
     // A CELL IS KEPT FOR THE BAR: the band is full-bleed and the bar is drawn
     // after it, so without this the control sits on top of the selected row.
     let body = screen.columns().saturating_sub(1);
+    // AND ONLY WHILE THERE IS A BAR: a list that fits is banded to the edge,
+    // and zero is "to the edge" in `ground_in`.
+    let band = if barred { body } else { 0 };
     if focused {
         // THE SELECTION IS A LINE, not a box: there is no rectangle in this
         // protocol, and a box would be the card invariant 15 refuses.
-        screen.ground_in(at, 0, body, Role::Band);
+        screen.ground_in(at, 0, band, Role::Band);
     } else if let Some(seat) = under {
         // IN THAT CURSOR'S COLOUR — the host keeps it neutral while there
         // is only one.
-        screen.ground_in(at, 0, body, Role::hover_of(seat));
+        screen.ground_in(at, 0, band, Role::hover_of(seat));
     }
     // AND THE COLUMNS ARE MEASURED IN WHAT IS LEFT, not in the whole width:
     // the lane above is kept for the bar, and a row laid out against the full
@@ -622,7 +631,7 @@ impl State {
             line_of(screen, Run::label(waiting(s)).quiet());
         } else {
             for c in s.consumers.iter().take(BIGGEST) {
-                consumer(screen, c, false, None);
+                consumer(screen, c, false, None, false);
             }
         }
 
@@ -718,7 +727,8 @@ impl State {
                     // click would land, and every window in the shell answers
                     // the two separately.
                     let under = self.hover_on(i);
-                    consumer(screen, c, i == self.cursor, under);
+                    let barred = s.consumers.len() > shown;
+                    consumer(screen, c, i == self.cursor, under, barred);
                 }
                 // AND THE BAR, over the rows it belongs to. A list one cannot
                 // see the length of is a list with no end in sight, and one

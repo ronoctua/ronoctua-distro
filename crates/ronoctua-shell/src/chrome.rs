@@ -379,6 +379,39 @@ pub enum Register {
     /// this one — which is the pair the hint line already puts side by side,
     /// and which every theme therefore already keeps apart.
     Said,
+    /// THE GLYPH IN FRONT OF A HEADER'S TITLE — the one accent a header has,
+    /// saying what the window is at a glance.
+    Glyph,
+    /// A LABEL IN FRONT OF A TITLE, the way `MANUAL:` stands before the name
+    /// of the manual: what KIND of window this is, in the discreet cool grey
+    /// the owner chose for it, so the name after it is what reads.
+    Label,
+    /// THE TITLE OF A HEADER, in the header's own title ink
+    /// (`text.header-title`) — not the content's `text.heading`, which the
+    /// first section under it wears. Hierarchy is colour and air, never size.
+    Title,
+    /// A SHORTCUT UNDER THE POINTER, LIT — its key, in the lit tone of the
+    /// register it rests in. The owner asked for every header to light the
+    /// shortcut a click would press, and for the lit tones to be small
+    /// variations of the resting ones (`text.subtle.lit.*`). See [`lit`].
+    KeyLit,
+    /// The same, for a key whose meaning follows the focused section.
+    AlternateLit,
+    /// The same, for a key that exists only in its context.
+    ContextualLit,
+    /// The same, for the words beside the key.
+    ProseLit,
+    /// A KEY THAT A CLICK CANNOT PRESS.
+    ///
+    /// Every shortcut a header teaches is a CONTROL: a click presses the key
+    /// it names ([`Piece::press`]). A few notations are not one key — the
+    /// drawer's `RCtrl ↑↓`, a range, a modifier held while something else is
+    /// pressed — and the owner asked for those to read *"levemente
+    /// diferente"*, so the hand does not reach for a control that does
+    /// nothing. It is not chosen by anybody: [`laid`] gives it to every key
+    /// piece that arrives without a press, so a key cannot look clickable
+    /// and not be.
+    Inert,
     /// THE CHORD THAT IS WAITING for its next key.
     ///
     /// Blue is what says where the next key goes, and that is not a matter of
@@ -401,6 +434,14 @@ impl Register {
             Self::Explain => tokens::color::TEXT_SUBTLE_EXPLAIN,
             Self::Said => tokens::color::TEXT_SUBTLE_STRONG,
             Self::Pending => tokens::color::STATE_ACCENT,
+            Self::Inert => tokens::color::TEXT_SUBTLE_INERT,
+            Self::KeyLit => tokens::color::TEXT_SUBTLE_LIT_KEY,
+            Self::AlternateLit => tokens::color::TEXT_SUBTLE_LIT_ALTERNATE,
+            Self::ContextualLit => tokens::color::TEXT_SUBTLE_LIT_CONTEXTUAL,
+            Self::ProseLit => tokens::color::TEXT_SUBTLE_LIT_PROSE,
+            Self::Glyph => tokens::color::STATE_ACCENT,
+            Self::Label => tokens::color::TEXT_SUBTLE_EXPLAIN,
+            Self::Title => tokens::color::TEXT_HEADER_TITLE,
         }
     }
 }
@@ -429,6 +470,28 @@ pub struct Piece {
     /// (`crate::fold::wrap_pieces`), and a table of ranges measured before the
     /// wrap would name the wrong key on every row but the first.
     pub id: Option<&'static str>,
+    /// WHAT A CLICK ON THIS RUN DOES, when it does something.
+    ///
+    /// Carried by both halves of a shortcut — the notation and its words —
+    /// because both are what a hand points at. `None` on a key piece is a
+    /// key that cannot be pressed by a click, and [`laid`] draws it in
+    /// [`Register::Inert`].
+    pub press: Option<Act>,
+}
+
+/// What a click on a shortcut of a hint line does.
+///
+/// Two answers, because a line teaches two kinds of thing: a KEY of the
+/// view that has the keyboard, which a click presses through the same path
+/// the keyboard takes, and a COMMAND of the registry spelt as a sequence
+/// (`SUPER 0`, a compositor mode's key), which a click runs by its id —
+/// a sequence is several keys, and pressing only the first would do nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Act {
+    /// Press this key, as if it had been typed.
+    Key(ronoctua_keymap::Key),
+    /// Run this command of the registry.
+    Run(&'static str),
 }
 
 impl Piece {
@@ -439,6 +502,7 @@ impl Piece {
             text: text.into(),
             register: Register::Prose,
             id: None,
+            press: None,
         }
     }
 
@@ -449,6 +513,7 @@ impl Piece {
             text: text.into(),
             register: Register::Pending,
             id: None,
+            press: None,
         }
     }
 
@@ -463,6 +528,7 @@ impl Piece {
             text: text.into(),
             register: Register::Said,
             id: None,
+            press: None,
         }
     }
 
@@ -477,6 +543,7 @@ impl Piece {
                 Register::Key
             },
             id: None,
+            press: None,
         }
     }
 
@@ -492,6 +559,7 @@ impl Piece {
             text: text.into(),
             register,
             id: None,
+            press: None,
         }
     }
 
@@ -504,6 +572,35 @@ impl Piece {
     pub fn about(mut self, id: &'static str) -> Self {
         self.id = Some(id);
         self
+    }
+
+    /// The same run, saying which key a click on it presses.
+    #[must_use]
+    pub const fn pressing(mut self, key: ronoctua_keymap::Key) -> Self {
+        self.press = Some(Act::Key(key));
+        self
+    }
+
+    /// The same run, saying which command a click on it runs.
+    #[must_use]
+    pub const fn running(mut self, id: &'static str) -> Self {
+        self.press = Some(Act::Run(id));
+        self
+    }
+
+    /// Is this run a key notation — in any of the registers a key is drawn in?
+    #[must_use]
+    pub const fn is_a_key(&self) -> bool {
+        matches!(
+            self.register,
+            Register::Key
+                | Register::Alternate
+                | Register::Contextual
+                | Register::Inert
+                | Register::KeyLit
+                | Register::AlternateLit
+                | Register::ContextualLit
+        )
     }
 
     /// The mark between one shortcut and the next, with its air on both sides.
@@ -521,8 +618,97 @@ impl Piece {
             text: format!(" {} ", tokens::mark::SEPARATOR),
             register: Register::Separator,
             id: None,
+            press: None,
         }
     }
+}
+
+/// WHAT A HEADER SAYS BEFORE ITS SHORTCUTS: a glyph, a label and a title,
+/// each optional.
+///
+/// # Why a header has one shape
+///
+/// Because it had several. The brain's header carried a glyph and a name on a
+/// ground of its own, the manual's window a grey `MANUAL:` and the name, and
+/// every other window only its keys — each written by hand, each in its own
+/// colours, and the brain's on a ground the hint's tones were never measured
+/// against. The owner asked for the header to be ONE thing in layout and in
+/// behaviour, with a title, an icon before it or a label before it foreseen
+/// for any window that wants one. This is the one: the pieces go in front of
+/// the shortcuts, on the same line, through the same painter, in the three
+/// registers that say what each is.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Title<'a> {
+    /// A glyph from the icon font, before everything.
+    pub glyph: Option<&'static str>,
+    /// What kind of window this is — `MANUAL:`.
+    pub label: Option<&'a str>,
+    /// The window's own name.
+    pub name: Option<&'a str>,
+}
+
+impl Title<'_> {
+    /// These pieces, then a separator, then the shortcuts.
+    #[must_use]
+    pub fn before(self, shortcuts: Vec<Piece>) -> Vec<Piece> {
+        let mut out: Vec<Piece> = Vec::with_capacity(shortcuts.len() + 5);
+        let mut put = |text: String, register: Register| {
+            if !out.is_empty() {
+                // ONE CELL OF AIR between the parts, carried by the part that
+                // comes after — the rule `fold::wrap_pieces` keeps.
+                out.push(Piece::prose(" "));
+            }
+            out.push(Piece::key_in(text, register));
+        };
+        if let Some(g) = self.glyph {
+            put(g.to_owned(), Register::Glyph);
+        }
+        if let Some(l) = self.label {
+            put(l.to_owned(), Register::Label);
+        }
+        if let Some(n) = self.name {
+            put(n.to_owned(), Register::Title);
+        }
+        if !out.is_empty() && !shortcuts.is_empty() {
+            out.push(Piece::separator());
+        }
+        out.extend(shortcuts);
+        out
+    }
+}
+
+/// The line, with the shortcut `id` LIT — both halves of it, the key and its
+/// words — when it is one a click can press.
+///
+/// ONE function for every header of the system (the door's, the file
+/// manager's line 0, the footer's minibuffer), so a lit shortcut is lit the
+/// same way wherever a line of shortcuts is drawn. A shortcut that is only
+/// read (`Register::Inert`, no press) does not light: nothing would happen
+/// under the click the light promises.
+#[must_use]
+pub fn lit(pieces: &[Piece], id: Option<&str>) -> Vec<Piece> {
+    let Some(id) = id else {
+        return pieces.to_vec();
+    };
+    pieces
+        .iter()
+        .map(|p| {
+            if p.id != Some(id) || p.press.is_none() {
+                return p.clone();
+            }
+            let register = match p.register {
+                Register::Key => Register::KeyLit,
+                Register::Alternate => Register::AlternateLit,
+                Register::Contextual => Register::ContextualLit,
+                Register::Prose => Register::ProseLit,
+                other => other,
+            };
+            Piece {
+                register,
+                ..p.clone()
+            }
+        })
+        .collect()
 }
 
 /// A hint line GENERATED from a view's key table, in the table's order.
@@ -634,13 +820,19 @@ pub fn hint_of_marked(
                     Register::Key
                 },
             )
-            .about(about),
+            .about(about)
+            // A CLICK ON IT IS THE KEY — the notation parsed, so it is one.
+            .pressing(t),
         );
         // THE SPACE BETWEEN THE KEY AND ITS WORDS BELONGS TO THE WORDS, for
         // the reason `fold::wrap_pieces` gives about the other seam: a key
         // piece has to be exactly the notation, because that is what the
         // colour is about.
-        out.push(Piece::prose(format!(" {}", texts.t(says))).about(about));
+        out.push(
+            Piece::prose(format!(" {}", texts.t(says)))
+                .about(about)
+                .pressing(t),
+        );
     }
     out
 }
@@ -889,6 +1081,7 @@ pub fn sentence(e: &ronoctua_files::mode::Explanation, texts: &ronoctua_i18n::Te
             text: run.to_owned(),
             register,
             id: None,
+            press: None,
         });
     }
     out
@@ -1191,6 +1384,8 @@ pub struct Mark {
     pub cells: u16,
     /// The shortcut's id.
     pub id: &'static str,
+    /// What a click on it does — `None` for a key that is only read.
+    pub press: Option<Act>,
 }
 
 impl Mark {
@@ -1220,6 +1415,7 @@ pub fn hint_marks(pieces: &[Piece], column: u16, line: u16, room: u16) -> Vec<Ma
                 at: r.at,
                 cells: ronoctua_render::layout::width(&r.text),
                 id: r.id?,
+                press: r.press,
             })
         })
         .filter(|m| m.cells > 0)
@@ -1309,6 +1505,10 @@ pub struct Hinted {
     /// here whether it is open, because the sentence below follows whichever
     /// drawer the line has (see [`Hinted::rows`]).
     open_elsewhere: bool,
+    /// The shortcut under the pointer, LIT when it is drawn — see [`lit`].
+    lit: Option<&'static str>,
+    /// Whether the pointer rests on the chevron, which lights too.
+    chevron_lit: bool,
     /// Is the RIGHT `Ctrl` down?
     ///
     /// Tracked by its keysym, as the footer tracks it: xkb merges both Ctrls
@@ -1335,6 +1535,8 @@ impl Default for Hinted {
             wrapped: 0,
             dragging: false,
             open_elsewhere: false,
+            lit: None,
+            chevron_lit: false,
             right_ctrl: false,
         }
     }
@@ -1375,6 +1577,59 @@ impl Hinted {
             .iter()
             .find(|m| m.covers(line, cell))
             .map(|m| m.id)
+    }
+
+    /// What a click at that point does — the shortcut under it, when it is a
+    /// control. See [`Piece::press`].
+    #[must_use]
+    pub fn press_under(&self, x: f64, y: f64) -> Option<Act> {
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let cell_px = f64::from(cell_width());
+        if line_height <= 0.0 || cell_px <= 0.0 || x < 0.0 || y < 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let line = (y / line_height) as u16;
+        let cell = u16::try_from((x / cell_px) as u64).ok()?;
+        self.placed
+            .iter()
+            .find(|m| m.covers(line, cell))
+            .and_then(|m| m.press)
+    }
+
+    /// Lights the shortcut a click at that point would press — or none — and
+    /// says whether that changed anything. Only a CONTROL lights: a read-only
+    /// key under the pointer is not one.
+    pub fn light_at(&mut self, at: Option<(f64, f64)>) -> bool {
+        let now = at.and_then(|(x, y)| {
+            self.press_under(x, y)?;
+            self.under(x, y)
+        });
+        // AND THE CHEVRON, the header's other control: the cell it was DRAWN
+        // in, and the air beside it (`on_the_control`'s own rule).
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let cell_px = f64::from(cell_width());
+        let chevron = at.is_some_and(|(x, y)| {
+            line_height > 0.0
+                && cell_px > 0.0
+                && y >= 0.0
+                && y < line_height
+                && self.control.is_some_and(|c| {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let cell = (x / cell_px) as u16;
+                    cell + 1 >= c
+                })
+        });
+        let changed = now != self.lit || chevron != self.chevron_lit;
+        self.lit = now;
+        self.chevron_lit = chevron;
+        changed
+    }
+
+    /// The shortcut that is lit, for a door that draws its line itself.
+    #[must_use]
+    pub const fn lit(&self) -> Option<&'static str> {
+        self.lit
     }
 
     /// Puts the sentence on the line, and says whether that changed anything.
@@ -1457,7 +1712,8 @@ impl Hinted {
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<ronoctua_render::Span> {
         let size = tokens::text::size();
-        let mut line: Vec<Piece> = pieces.to_vec();
+        // THE SHORTCUT UNDER THE POINTER, LIT — see [`lit`].
+        let mut line: Vec<Piece> = lit(pieces, self.lit);
         // AND THE KEYS THAT OPEN AND WALK IT, open or shut — see
         // `fold::teaching`.
         if hinting {
@@ -1524,7 +1780,10 @@ impl Hinted {
                 text: chevron.to_string(),
                 column: at,
                 line: 0,
-                color: if self.fold.open {
+                // AND UNDER THE POINTER, LIT — the same small step.
+                color: if self.chevron_lit {
+                    tokens::color::TEXT_SUBTLE_LIT_KEY
+                } else if self.fold.open {
                     tokens::color::TEXT_SUBTLE_STRONG
                 } else {
                     tokens::color::TEXT_SUBTLE_DEFAULT
@@ -1573,6 +1832,19 @@ impl Hinted {
             height,
             color: tokens::color::RULE_STRONG,
         })
+    }
+
+    /// The opened drawer's bar TRACK, when the wrap ran past it — what
+    /// `crate::bars` records for the header, in every door.
+    #[must_use]
+    pub fn drawer_track(&self, f: Frame) -> Option<crate::bars::Track> {
+        let (top, tall) = self.track(f)?;
+        Some(crate::bars::Track::of((
+            f.width - f.cell(),
+            top,
+            f.cell(),
+            tall,
+        )))
     }
 
     /// Measures the opened drawer ONCE, after the frame that drew it.
@@ -1756,6 +2028,7 @@ struct Laid {
     text: String,
     register: Register,
     id: Option<&'static str>,
+    press: Option<Act>,
 }
 
 /// Places every run of the line, cutting the one that overruns.
@@ -1773,11 +2046,24 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
         // A KEY IS DRAWN IN TWO RUNS, so that no ligature can cross its
         // modifier — see `split_at_the_modifier`. Prose is one run: a sentence
         // is what the shaper is FOR.
-        let runs: Vec<&str> = match p.register {
-            Register::Key | Register::Alternate | Register::Contextual => {
-                split_at_the_modifier(&p.text)
-                    .map_or_else(|| vec![p.text.as_str()], |(a, b)| vec![a, b])
-            }
+        // A KEY NO CLICK CAN PRESS reads as one — see `Register::Inert`. The
+        // register is decided HERE, where every hint line of every door is
+        // laid, so no door can draw a key that looks like a control and is
+        // not.
+        let register = if p.is_a_key() && p.press.is_none() {
+            Register::Inert
+        } else {
+            p.register
+        };
+        let runs: Vec<&str> = match register {
+            Register::Key
+            | Register::Alternate
+            | Register::Contextual
+            | Register::Inert
+            | Register::KeyLit
+            | Register::AlternateLit
+            | Register::ContextualLit => split_at_the_modifier(&p.text)
+                .map_or_else(|| vec![p.text.as_str()], |(a, b)| vec![a, b]),
             // AND `Explain` NEVER REACHES HERE, because the sentence is not a
             // PIECE of a hint line: it is drawn on its own row, by each door,
             // from `Hinted::said`. It is named all the same — a `_` arm would
@@ -1790,7 +2076,11 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
             | Register::Separator
             | Register::Explain
             | Register::Said
-            | Register::Pending => vec![p.text.as_str()],
+            | Register::Pending
+            | Register::Glyph
+            | Register::Label
+            | Register::Title
+            | Register::ProseLit => vec![p.text.as_str()],
         };
         for run in runs {
             if left == 0 {
@@ -1813,8 +2103,9 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
             out.push(Laid {
                 at,
                 text,
-                register: p.register,
+                register,
                 id: p.id,
+                press: p.press,
             });
             at = at.saturating_add(drawn);
             left = left.saturating_sub(drawn);
@@ -1887,6 +2178,28 @@ pub fn hover_bands(
     out
 }
 
+/// That list's bar's TRACK — the whole column it is grabbed in — and `None`
+/// when the list fits. What `crate::bars` records, so the column is the bar's.
+#[must_use]
+pub fn list_track(
+    scroll: ronoctua_design::Scroll,
+    first_line: u16,
+    width: f32,
+    height: f32,
+) -> Option<crate::bars::Track> {
+    if !scroll.cut() {
+        return None;
+    }
+    let f = Frame::of(width, height, first_line);
+    let top = f.y_of(first_line);
+    Some(crate::bars::Track::of((
+        f.width - f.cell(),
+        top,
+        f.cell(),
+        f.bottom() - top,
+    )))
+}
+
 /// That list's bar, as a rectangle — `None` when the list fits.
 #[must_use]
 pub fn list_bar(
@@ -1909,6 +2222,57 @@ pub fn list_bar(
         height: h,
         color: tokens::color::RULE_STRONG,
     })
+}
+
+/// WHERE A LIST'S BAR WAS DRAWN — and so which cells are the BAR'S.
+///
+/// # Why the bar has a column of its own, and only while it is drawn
+///
+/// Because the owner asked for both halves. A row lights and takes a click
+/// across the whole width of the window — the band is what says which row a
+/// click would land on, and a band that stopped short of the edge for no
+/// reason would be a band with a hole in it. But once a bar is DRAWN, its
+/// cells are the bar's: the pointer resting on the bar was lighting the row
+/// beside it, and a click there was both a grab of the bar and, to the eye, a
+/// click on the row. So the band stops where the bar begins, and the row does
+/// not answer the bar's column — exactly while there is a bar, and not a
+/// frame before.
+///
+/// It is written by the PAINT and read by the POINTER, which is the rule
+/// every control of this shell keeps: taken where it was drawn.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Room {
+    /// The surface's width, in pixels.
+    pub width: f32,
+    /// Where the bar begins, in pixels — `None` while the list fits.
+    pub bar_from: Option<f32>,
+}
+
+impl Room {
+    /// The room of a list whose bar is `scroll`, drawn at the surface's
+    /// right edge — where [`list_bar`] draws it and [`on_the_list_bar`]
+    /// grabs it.
+    #[must_use]
+    pub fn of(scroll: ronoctua_design::Scroll, width: f32, height: f32) -> Self {
+        let f = Frame::of(width, height, 0);
+        Self {
+            width,
+            bar_from: scroll.cut().then(|| f.width - f.cell()),
+        }
+    }
+
+    /// Is `x` on the bar's column?
+    #[must_use]
+    pub fn on_the_bar(self, x: f32) -> bool {
+        self.bar_from.is_some_and(|from| x >= from)
+    }
+
+    /// How wide a band of the list is: to the bar while there is one, and to
+    /// the edge while there is not.
+    #[must_use]
+    pub fn band_width(self) -> f32 {
+        self.bar_from.unwrap_or(self.width)
+    }
 }
 
 /// The air inside a container, in cells — `space.shelf.pad`, and the reason
@@ -2435,7 +2799,100 @@ pub fn meter(percent: u8, cells: u16) -> String {
     out
 }
 
-/// The label and the value of one row, placed and cut.
+/// WHAT A ROW OF LABEL AND VALUE IS — and so the two colours it is drawn in.
+///
+/// # Why the colours are not the caller's any more
+///
+/// Because they were, in twenty places, and they said different things. The
+/// four tones existed — a label that only informs, a label whose value can be
+/// changed, and the two values — but every view picked its own pair: three
+/// drew a fact's label in the content's grey and its value dim, two drew a
+/// fact's value at full strength, one drew a setting with the fact's label.
+/// The owner asked for one standard for each of the four, applied everywhere;
+/// a type is how "everywhere" stays true, since a colour argument can be given
+/// any colour and a `Kind` can only be one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A row that INFORMS: nothing about it can be changed here.
+    Fact,
+    /// A row whose value can be CHANGED — a ring, a switch, a door.
+    Setting,
+    /// A row drawn REFUSING: reachable, so it can say why, and inert.
+    Disabled,
+    /// A fact that is one ITEM of a list: the thing's name is the strong half.
+    ListedFact,
+    /// A setting that is one item of a list.
+    ListedSetting,
+}
+
+impl Kind {
+    /// A fact, or a setting when the row `acts`.
+    #[must_use]
+    pub const fn of(acts: bool) -> Self {
+        if acts { Self::Setting } else { Self::Fact }
+    }
+
+    /// Does a row of this kind act?
+    #[must_use]
+    pub const fn acts(self) -> bool {
+        matches!(self, Self::Setting | Self::ListedSetting)
+    }
+
+    /// The label's colour and the value's, under the cursor or not.
+    ///
+    /// UNDER THE CURSOR the label takes the accent — it is what says "the
+    /// keyboard is here", since no window draws a band behind the cursor — and
+    /// the value keeps saying whether it can be changed (`text.here.*`).
+    #[must_use]
+    pub const fn tones(self, focused: bool) -> (tokens::Color, tokens::Color) {
+        if focused {
+            return (
+                tokens::color::STATE_ACCENT,
+                if self.acts() {
+                    tokens::color::TEXT_HERE_ACTS
+                } else {
+                    tokens::color::TEXT_HERE_READ
+                },
+            );
+        }
+        match self {
+            Self::Fact => (
+                tokens::color::TEXT_LABEL_FACT,
+                tokens::color::TEXT_READ_STRONG,
+            ),
+            Self::Setting => (tokens::color::TEXT_LABEL_ACTS, tokens::color::TEXT_ANSWER),
+            Self::Disabled => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
+            Self::ListedFact => (
+                tokens::color::TEXT_LABEL_FACT,
+                tokens::color::TEXT_READ_WEAK,
+            ),
+            Self::ListedSetting => (
+                tokens::color::TEXT_LABEL_ACTS,
+                tokens::color::TEXT_SECONDARY,
+            ),
+        }
+    }
+}
+
+/// The same row with its VALUE in a colour that says a STATE — a battery at
+/// its alarm, a link that is down — except under the cursor, where the value
+/// says what the cursor says.
+#[must_use]
+pub fn tinted(
+    mut fields: Vec<crate::files::Field>,
+    status: Option<tokens::Color>,
+    focused: bool,
+) -> Vec<crate::files::Field> {
+    if let Some(c) = status.filter(|_| !focused) {
+        for f in fields.iter_mut().skip(1) {
+            f.color = c;
+        }
+    }
+    fields
+}
+
+/// The label and the value of one row, placed and cut, in the colours of its
+/// [`Kind`].
 ///
 /// An EMPTY value gives the label the whole row, because a row with nothing on
 /// the right is not a definition — it is a sentence, and cutting it at the
@@ -2447,9 +2904,10 @@ pub fn field_pair(
     room: u16,
     label: &str,
     value: &str,
-    label_colour: tokens::Color,
-    value_colour: tokens::Color,
+    kind: Kind,
+    focused: bool,
 ) -> Vec<crate::files::Field> {
+    let (label_colour, value_colour) = kind.tones(focused);
     let piece = |at: u16, text: String, color: tokens::Color| crate::files::Field {
         at,
         text,
@@ -2629,20 +3087,65 @@ mod meter_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        BAR_CELLS, FIELDS_LEAD, Frame, INSET, Piece, Register, SHELF_PAD, SHELF_ROOM, at_the_edge,
-        cell_width, clock_exact, clock_text, content_left_px, date_long, field_pair, from_the_edge,
-        hint_marks, hint_of, hint_sentence, hint_spans, key_text, list_bar, list_offset_at,
-        list_scroll, on_the_band, on_the_list_bar, sentence, shelf_bar, shelf_box, shelf_ground,
-        split_at_the_modifier, value_column,
+        BAR_CELLS, FIELDS_LEAD, Frame, INSET, Kind, Piece, Register, SHELF_PAD, SHELF_ROOM,
+        at_the_edge, cell_width, clock_exact, clock_text, content_left_px, date_long, field_pair,
+        from_the_edge, hint_marks, hint_of, hint_sentence, hint_spans, key_text, list_bar,
+        list_offset_at, list_scroll, lit, on_the_band, on_the_list_bar, sentence, shelf_bar,
+        shelf_box, shelf_ground, split_at_the_modifier, value_column,
     };
     use ronoctua_tokens as tokens;
 
+    /// A key of a hint line — a CONTROL, as every key a table generates is
+    /// (`Piece::press`) — or its words.
     fn piece(text: &str, key: bool) -> Piece {
         if key {
-            Piece::key(text, false)
+            let press = ronoctua_keymap::Key::parse(text)
+                .unwrap_or_else(|_| ronoctua_keymap::Key::parse("RET").expect("RET parses"));
+            Piece::key(text, false).pressing(press)
         } else {
             Piece::prose(text)
         }
+    }
+
+    /// A KEY NO CLICK CAN PRESS reads as one, and nobody chose that: `laid`
+    /// gives the inert register to every key that arrives without a press.
+    #[test]
+    fn a_key_a_click_cannot_press_is_drawn_inert() {
+        let line = [Piece::key("RCtrl ↑↓", false)];
+        let spans = hint_spans(&line, ronoctua_render::Size::Grid, 0, 0, 80);
+        assert!(
+            spans
+                .iter()
+                .all(|s| s.color == tokens::color::TEXT_SUBTLE_INERT)
+        );
+        let marks = hint_marks(&[piece("C-m", true).about("x")], 0, 0, 80);
+        assert!(
+            marks.iter().all(|m| m.press.is_some()),
+            "a table key is a control"
+        );
+    }
+
+    /// THE SHORTCUT UNDER THE POINTER IS LIT — both halves, and only when a
+    /// click would press it.
+    #[test]
+    fn the_shortcut_under_the_pointer_is_lit() {
+        let line = [
+            piece("C-m", true).about("m"),
+            Piece::prose(" menu")
+                .about("m")
+                .pressing(ronoctua_keymap::Key::parse("C-m").expect("C-m")),
+            Piece::key("RCtrl ↑↓", false).about("walk"),
+        ];
+        let lit_m = lit(&line, Some("m"));
+        assert_eq!(lit_m[0].register, Register::KeyLit);
+        assert_eq!(lit_m[1].register, Register::ProseLit);
+        let lit_walk = lit(&line, Some("walk"));
+        assert_eq!(
+            lit_walk[2].register,
+            Register::Key,
+            "a read-only key does not light"
+        );
+        assert_eq!(lit(&line, None), line.to_vec());
     }
 
     /// EVERY CELL A SHORTCUT WAS DRAWN IN NAMES THAT SHORTCUT — the key and
@@ -3100,8 +3603,8 @@ mod tests {
                     room,
                     "a label of some length",
                     "a value",
-                    tokens::color::TEXT_SECONDARY,
-                    tokens::color::TEXT_PRIMARY,
+                    Kind::Fact,
+                    false,
                 );
                 for f in &fields {
                     let ends = f.at + ronoctua_render::layout::width(&f.text);
@@ -3120,14 +3623,7 @@ mod tests {
         // "share this connection" is a row with nothing on the right. Cutting
         // it at the value column would cut a sentence for no reason.
         let long = "share this connection with the machines around this one";
-        let fields = field_pair(
-            2,
-            60,
-            long,
-            "",
-            tokens::color::TEXT_SECONDARY,
-            tokens::color::TEXT_PRIMARY,
-        );
+        let fields = field_pair(2, 60, long, "", Kind::Fact, false);
         assert_eq!(fields.len(), 1);
         assert_eq!(
             fields[0].text, long,
@@ -3327,8 +3823,8 @@ mod tests {
             wide.room,
             "a network with a very long name indeed, quite a long one",
             "online · Linux · 100.64.12.34 · exit node",
-            tokens::color::TEXT_PRIMARY,
-            tokens::color::TEXT_SECONDARY,
+            Kind::Fact,
+            false,
         );
         for piece in &row {
             assert!(
@@ -3351,22 +3847,8 @@ mod tests {
         // the hue of their label. What this guards is both halves: that the
         // text did not move when the mark left, and that the label's colour is
         // never one of the value's.
-        let acts = field_pair(
-            2,
-            60,
-            "radio",
-            "on",
-            tokens::color::TEXT_LABEL_ACTS,
-            tokens::color::TEXT_PRIMARY,
-        );
-        let fact = field_pair(
-            2,
-            60,
-            "band",
-            "5 GHz",
-            tokens::color::TEXT_LABEL_FACT,
-            tokens::color::TEXT_PRIMARY,
-        );
+        let acts = field_pair(2, 60, "radio", "on", Kind::Setting, false);
+        let fact = field_pair(2, 60, "band", "5 GHz", Kind::Fact, false);
         assert_eq!(acts.len(), 2, "a row grew a piece it does not draw");
         assert_eq!(fact.len(), 2);
         assert_eq!(
@@ -3399,14 +3881,7 @@ mod tests {
         // 36 cells beside a two-letter value; cutting it to `keep awake: no
         // s…` is the defect the power view's own comment was written about.
         let long = "keep awake: no sleep, no idle action";
-        let fields = field_pair(
-            2,
-            80,
-            long,
-            "on",
-            tokens::color::TEXT_SECONDARY,
-            tokens::color::TEXT_PRIMARY,
-        );
+        let fields = field_pair(2, 80, long, "on", Kind::Fact, false);
         assert_eq!(fields[0].text, long, "the label was cut");
         assert!(
             fields[1].at > value_column(2, 80),
@@ -3418,14 +3893,7 @@ mod tests {
         );
 
         // AND A LABEL SO LONG THAT THE VALUE WOULD FALL OFF still yields.
-        let fields = field_pair(
-            2,
-            40,
-            &"x".repeat(200),
-            "on",
-            tokens::color::TEXT_SECONDARY,
-            tokens::color::TEXT_PRIMARY,
-        );
+        let fields = field_pair(2, 40, &"x".repeat(200), "on", Kind::Fact, false);
         for f in &fields {
             let ends = f.at + ronoctua_render::layout::width(&f.text);
             assert!(ends <= 2 + 40, "a field ran to {ends} in a row of 40");

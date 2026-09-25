@@ -8,10 +8,19 @@
 //! open a file manager to do.
 //!
 //! So this exists — and everything it knows lives in [`crate::files::View`],
-//! which the footer draws from too. What this module holds is a window, a GPU
-//! and the events of both; what it decides is nothing. A second implementation
-//! of "what does `d` do here" is how two doors come to disagree, and it is the
+//! which the footer draws from too. What this module holds is a window and the
+//! events of both; what it decides is nothing. A second implementation of
+//! "what does `d` do here" is how two doors come to disagree, and it is the
 //! shape the rescue console already refused once.
+//!
+//! # Why it keeps so much of its own on the shared base
+//!
+//! The plumbing — Wayland, the seats, the scale, the GPU, the three watches —
+//! is `crate::door`'s, as it is every window's. What this door keeps is what
+//! no other window has: a drawer of its OWN on line 0 (so `header_keys` is
+//! `false`), four sections side by side each with its own bar, pictures under
+//! and over the rows, and a drag that crosses to other programs. Those are the
+//! overrides of [`Content`], and each says why.
 //!
 //! # Why it is not a wasm buffer
 //!
@@ -22,34 +31,19 @@
 //! by value on every change. `ronoctua-shell terminal` is already a native
 //! window of exactly this shape, and that is the precedent this follows.
 
-use anyhow::{Context as _, Result};
+use crate::door::{Canvas, Content, Door, Hand, LEFT_BUTTON, RIGHT_BUTTON, Ui};
+use anyhow::Result;
 use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
-    output::{OutputHandler, OutputState},
-    reexports::calloop::{self, EventLoop, channel},
-    reexports::calloop_wayland_source::WaylandSource,
-    registry::{ProvidesRegistryState, RegistryState},
-    registry_handlers,
+    reexports::calloop::{self, channel},
     seat::{
-        Capability, SeatHandler, SeatState,
-        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
-        pointer::{PointerEvent, PointerEventKind, PointerHandler},
-    },
-    shell::{
-        WaylandSurface as _,
-        xdg::{
-            XdgShell,
-            window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
-        },
+        keyboard::{KeyEvent, Keysym, Modifiers},
+        pointer::{PointerEvent, PointerEventKind},
     },
 };
 use wayland_client::{
     Connection, Proxy as _, QueueHandle,
-    globals::registry_queue_init,
-    protocol::{
-        wl_data_device_manager::DndAction, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
-    },
+    protocol::{wl_data_device_manager::DndAction, wl_surface},
 };
 
 /// The window's `app_id`.
@@ -59,10 +53,6 @@ use wayland_client::{
 /// make two different things look like one in the compositor's IPC.
 pub const APP_ID: &str = "br.ronoctua.files";
 
-/// `BTN_LEFT` and `BTN_RIGHT`, from `linux/input-event-codes.h`.
-const LEFT_BUTTON: u32 = 0x110;
-const RIGHT_BUTTON: u32 = 0x111;
-
 /// The first line of the listing. Above it: the path, and the message line.
 ///
 /// The same arrangement as the footer — two lines glued, content below — and
@@ -70,20 +60,14 @@ const RIGHT_BUTTON: u32 = 0x111;
 /// shape for the same thing.
 const FIRST_OF_REGION: u16 = 1;
 
-impl FilesWindow {
-    /// The region's first line, WITH the opened line's band counted in.
-    ///
-    /// It used to be the constant above and nothing else. The minibuffer's
-    /// line can now be opened into several (see [`crate::fold`]), and every
-    /// one of them is a line the listing does not get — so the number moved
-    /// from a `const` to a question, and `chrome::Frame` carries the answer
-    /// for everything downstream of it.
-    /// AND THE SHORTCUT'S EXPLANATION, when the pointer is on one. It is the
-    /// same argument one line further: a line the listing does not get.
-    fn first_of_region(&self) -> u16 {
-        FIRST_OF_REGION + crate::fold::rows(self.fold) + self.hinted.rows()
-    }
-}
+/// How a pointer's LINE and CELL travel in the one number the door lights
+/// every hand with (`Hand::row_under_pointer`).
+///
+/// The door's hover is a ROW of one list; this window's is a line AND a cell,
+/// because which of four sections a band belongs to is decided by the cell
+/// (`files::View::band_row`). The line is multiplied by this and the cell
+/// added: a cell is a `u16`, so the two never overlap.
+const CELL_SPAN: usize = 1 << 16;
 
 /// Opens the manager in a window.
 ///
@@ -92,330 +76,224 @@ impl FilesWindow {
 /// When there is no Wayland compositor, or the compositor offers no
 /// `xdg_shell`.
 pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
-    let conn = Connection::connect_to_env()
-        .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
-    let (globals, queue) = registry_queue_init(&conn).context("Wayland's registry")?;
-    let qh: QueueHandle<FilesWindow> = queue.handle();
-
-    let compositor = CompositorState::bind(&globals, &qh).context("no wl_compositor")?;
-    let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
-
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let preferred = std::env::var("RONOCTUA_FILES_START").ok();
     let where_ = start.map_or_else(
         || ronoctua_files::listing::start_at(home.as_deref(), preferred.as_deref()),
         std::path::Path::to_path_buf,
     );
-
-    let surface_of = compositor.create_surface(&qh);
-    // `RequestServer`: decoration belongs to the COMPOSITOR (invariant 4).
-    let window = xdg.create_window(surface_of, WindowDecorations::RequestServer, &qh);
-    // `*name*` is Emacs's convention for a buffer that is not a file, the same
-    // one the modeline already uses for `*scratch*`.
-    window.set_title("*files*");
-    window.set_app_id(APP_ID);
-    window.commit();
-
-    // `'static` SPELLED OUT, because the handle is kept ON the state so the
-    // keyboard can be created with repeat — see `new_capability`.
-    let mut cycle: EventLoop<'static, FilesWindow> = EventLoop::try_new().context("calloop")?;
-    let handle = cycle.handle();
-    let (sender, reports) = channel::channel::<crate::files::Report>();
-    // THE QUEUE, AS REPORTS. This door has no modeline and no panel: what it
-    // needs from the transfer queue is "the thing you asked for is over, read
-    // the directory again". Without it, `Errand::Done` would refresh the
-    // listing at the instant the work was HANDED OVER — showing the directory
-    // as it was before the copy, and never again.
-    crate::transfers::listen_as_reports(sender.clone());
-    // AND THE DISKS, on the same channel. This process has its own `calloop`
-    // loop and no clock at all, so a signal is the only way a stick plugged in
-    // while the window is open can ever appear in it.
-    if let Err(e) = ronoctua_disks::watch({
-        let s = sender.clone();
-        move |rack| {
-            let _ = s.send(crate::files::Report::Racked(Box::new(rack)));
+    crate::door::run(move |w| {
+        let (sender, reports) = channel::channel::<crate::files::Report>();
+        // THE QUEUE, AS REPORTS. This door has no modeline and no panel: what it
+        // needs from the transfer queue is "the thing you asked for is over, read
+        // the directory again". Without it, `Errand::Done` would refresh the
+        // listing at the instant the work was HANDED OVER — showing the directory
+        // as it was before the copy, and never again.
+        crate::transfers::listen_as_reports(sender.clone());
+        // AND THE DISKS, on the same channel. This process has its own `calloop`
+        // loop and no clock at all, so a signal is the only way a stick plugged in
+        // while the window is open can ever appear in it.
+        if let Err(e) = ronoctua_disks::watch({
+            let s = sender.clone();
+            move |rack| {
+                let _ = s.send(crate::files::Report::Racked(Box::new(rack)));
+            }
+        }) {
+            tracing::warn!(error = %e, "no disk watcher");
         }
-    }) {
-        tracing::warn!(error = %e, "no disk watcher");
-    }
-    // WHERE THE SIDEBAR PERSISTS, read once and used twice: the watch below is
-    // told about it, and the sidebar itself is built with it.
-    let store = ronoctua_files::sidebar::store::config_dir();
-    // AND THE DIRECTORY ITSELF, on the same channel again.
-    //
-    // This is the door the owner reported: it has no clock, so until now a file
-    // put into the open folder by anything else — a download finishing, a copy
-    // from a terminal, Syncthing — appeared only if the person left the folder
-    // and came back. The footer had `View::stale` on its one-second tick and
-    // this process had nothing.
-    //
-    // A watch and not a clock of its own, and that is the whole point: with
-    // several of these windows open, a timer would be one wake-up per second per
-    // window for ever, while a watch that nobody touches costs nothing at all.
-    let notice = match ronoctua_files::notice::Notice::watching(store.as_deref(), {
-        let s = sender.clone();
-        move || s.send(crate::files::Report::Stirred).is_ok()
-    }) {
-        Ok(n) => Some(n),
-        // NOT SILENT, and not the reported bug coming back either. Out of
-        // inotify instances is the realistic failure, and a window that simply
-        // stopped refreshing with nothing said would be exactly the silent
-        // fallback this project refuses — so THIS is the one case that arms a
-        // clock, and it is the only one.
-        Err(e) => {
-            tracing::warn!(error = %e, "no directory watcher; falling back to a clock");
-            handle
-                .insert_source(
-                    calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
-                    |_, (), state: &mut FilesWindow| {
-                        if state.view.stale() {
-                            state.view.reread();
-                        }
-                        if state.view.sidebar_stale() {
-                            state.view.reread_sidebar();
-                        }
-                        state.ask_paint();
-                        calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
-                    },
-                )
-                .map_err(|e| anyhow::anyhow!("could not hang the fallback clock: {e}"))?;
-            None
-        }
-    };
-    handle
-        .insert_source(reports, |event, (), state: &mut FilesWindow| {
-            if let channel::Event::Msg(r) = event {
-                state.reported(r);
+        // WHERE THE SIDEBAR PERSISTS, read once and used twice: the watch below is
+        // told about it, and the sidebar itself is built with it.
+        let store = ronoctua_files::sidebar::store::config_dir();
+        // AND THE DIRECTORY ITSELF, on the same channel again.
+        //
+        // This is the door the owner reported: it has no clock, so until now a file
+        // put into the open folder by anything else — a download finishing, a copy
+        // from a terminal, Syncthing — appeared only if the person left the folder
+        // and came back. The footer had `View::stale` on its one-second tick and
+        // this process had nothing.
+        //
+        // A watch and not a clock of its own, and that is the whole point: with
+        // several of these windows open, a timer would be one wake-up per second per
+        // window for ever, while a watch that nobody touches costs nothing at all.
+        let notice = match ronoctua_files::notice::Notice::watching(store.as_deref(), {
+            let s = sender.clone();
+            move || s.send(crate::files::Report::Stirred).is_ok()
+        }) {
+            Ok(n) => Some(n),
+            // NOT SILENT, and not the reported bug coming back either. Out of
+            // inotify instances is the realistic failure, and a window that simply
+            // stopped refreshing with nothing said would be exactly the silent
+            // fallback this project refuses — so THIS is the one case that arms a
+            // clock, and it is the only one.
+            Err(e) => {
+                tracing::warn!(error = %e, "no directory watcher; falling back to a clock");
+                w.handle
+                    .insert_source(
+                        calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
+                        |_, (), door: &mut Door<Files>| {
+                            if door.content.view.stale() {
+                                door.content.view.reread();
+                            }
+                            if door.content.view.sidebar_stale() {
+                                door.content.view.reread_sidebar();
+                            }
+                            door.ui.ask_paint();
+                            calloop::timer::TimeoutAction::ToDuration(
+                                std::time::Duration::from_secs(1),
+                            )
+                        },
+                    )
+                    .map_err(|e| anyhow::anyhow!("could not hang the fallback clock: {e}"))?;
+                None
             }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the files channel: {e}"))?;
+        };
+        w.handle
+            .insert_source(reports, |event, (), door: &mut Door<Files>| {
+                if let channel::Event::Msg(r) = event {
+                    door.content.reported(&mut door.ui, r);
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the files channel: {e}"))?;
 
-    // THE THEME'S FILE, watched — this door has no clock, and a watch that
-    // nobody touches costs nothing (the same argument as the directory's).
-    let (theme_sender, theme_changed) = channel::channel::<()>();
-    let _theme_watch = crate::theme::watch(move || theme_sender.send(()).is_ok());
-    handle
-        .insert_source(theme_changed, |event, (), state: &mut FilesWindow| {
-            if let channel::Event::Msg(()) = event {
-                state.theme_changed();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
+        // THE FRAMES OF A MOVING FILE, on a channel of their own.
+        //
+        // Their own, and not the reports': a frame arrives ten times a second
+        // while a cursor rests on a video, and putting that through the channel
+        // that also carries "the directory changed" would make every one of those
+        // wake the parts of the door that read a directory.
+        //
+        // AND THE FRAME ARRIVING IS THE CLOCK. Neither door has a timer for this
+        // and neither gained one — the player sleeps for the frame's own delay and
+        // sends it, so when it stops, the wake-ups stop with it.
+        let (frames_sender, frames) = channel::channel::<crate::motion::Beat>();
+        w.handle
+            .insert_source(frames, |event, (), door: &mut Door<Files>| {
+                if let channel::Event::Msg(f) = event {
+                    door.content.view.played(f);
+                    door.ui.ask_paint();
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the motion channel: {e}"))?;
 
-    // THE LANGUAGE'S FILE, watched for the theme's reason and by the theme's
-    // means: a language chosen in the footer has to reach this window
-    // without it being reopened. A door that adopted it only at its next
-    // start is the incomplete preview the owner read off the screen when
-    // the theme did exactly that.
-    let (language_sender, language_changed) = channel::channel::<()>();
-    let _language_watch = crate::language::watch(move || language_sender.send(()).is_ok());
-    handle
-        .insert_source(language_changed, |event, (), state: &mut FilesWindow| {
-            if let channel::Event::Msg(()) = event {
-                state.texts = std::rc::Rc::new(crate::language::texts());
-                state.ask_paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the language channel: {e}"))?;
+        // AND THE VIEWS OF A SHAPE, on a channel of their own too, for the reason
+        // written just above about frames: a drag emits one every few tens of
+        // milliseconds and none of them is news about a directory.
+        let (turns_sender, turns) = channel::channel::<crate::stage::Beat>();
+        w.handle
+            .insert_source(turns, |event, (), door: &mut Door<Files>| {
+                if let channel::Event::Msg(b) = event {
+                    door.content.view.drew(b);
+                    door.ui.ask_paint();
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the stage channel: {e}"))?;
 
-    // AND THE SIZE OF THE TEXT, watched for the same reason and by the same
-    // means. A size chosen anywhere moves this window without it being
-    // reopened — and without it this door would sit beside the footer at a
-    // different size, which is the photograph that made this system have one
-    // size at all.
-    let (size_sender, size_changed) = channel::channel::<()>();
-    let _size_watch = crate::toolkits::watch(move || size_sender.send(()).is_ok());
-    handle
-        .insert_source(size_changed, |event, (), state: &mut FilesWindow| {
-            if let channel::Event::Msg(()) = event
-                && crate::toolkits::reload()
-            {
-                state.text_size_changed();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the text size channel: {e}"))?;
+        // AND THE GLOBE'S, on a third — for the same reason as the second: a drag
+        // across the world emits a picture every few tens of milliseconds, and none
+        // of them is news about a directory or about a shape.
+        let (globes_sender, globes) = channel::channel::<crate::globe::Beat>();
+        w.handle
+            .insert_source(globes, |event, (), door: &mut Door<Files>| {
+                if let channel::Event::Msg(b) = event
+                    && door.content.view.saw_globe(&b)
+                {
+                    door.ui.ask_paint();
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the globe channel: {e}"))?;
 
-    // THE FRAMES OF A MOVING FILE, on a channel of their own.
-    //
-    // Their own, and not the reports': a frame arrives ten times a second
-    // while a cursor rests on a video, and putting that through the channel
-    // that also carries "the directory changed" would make every one of those
-    // wake the parts of the door that read a directory.
-    //
-    // AND THE FRAME ARRIVING IS THE CLOCK. Neither door has a timer for this
-    // and neither gained one — the player sleeps for the frame's own delay and
-    // sends it, so when it stops, the wake-ups stop with it.
-    let (frames_sender, frames) = channel::channel::<crate::motion::Beat>();
-    handle
-        .insert_source(frames, |event, (), state: &mut FilesWindow| {
-            if let channel::Event::Msg(f) = event {
-                state.view.played(f);
-                state.ask_paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the motion channel: {e}"))?;
+        // AND THE POINTER'S FILM, on a fifth.
+        //
+        // Its own and not the preview player's, for the reason `View::tour` gives:
+        // the two answer different questions — what the keyboard is ON and what the
+        // hand is OVER — and a `Beat` that reached both would make one cell's frame
+        // drop the other's.
+        let (tours_sender, tours) = channel::channel::<crate::motion::Beat>();
+        w.handle
+            .insert_source(tours, |event, (), door: &mut Door<Files>| {
+                if let channel::Event::Msg(b) = event
+                    && door.content.view.played_tour(&b)
+                {
+                    door.ui.ask_paint();
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the tour channel: {e}"))?;
 
-    // AND THE VIEWS OF A SHAPE, on a channel of their own too, for the reason
-    // written just above about frames: a drag emits one every few tens of
-    // milliseconds and none of them is news about a directory.
-    let (turns_sender, turns) = channel::channel::<crate::stage::Beat>();
-    handle
-        .insert_source(turns, |event, (), state: &mut FilesWindow| {
-            if let channel::Event::Msg(b) = event {
-                state.view.drew(b);
-                state.ask_paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the stage channel: {e}"))?;
+        // AND THE THUMBNAILS', on a fourth. A folder opening answers dozens of
+        // times in a second, and none of them is news about a directory, a film or
+        // a shape.
+        let (thumbs_sender, thumbs) = channel::channel::<crate::thumbs::Made>();
+        w.handle
+            .insert_source(thumbs, |event, (), door: &mut Door<Files>| {
+                if let channel::Event::Msg(m) = event
+                    && door.content.view.thumbed(m)
+                {
+                    door.ui.ask_paint();
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the thumbnail channel: {e}"))?;
 
-    // AND THE GLOBE'S, on a third — for the same reason as the second: a drag
-    // across the world emits a picture every few tens of milliseconds, and none
-    // of them is news about a directory or about a shape.
-    let (globes_sender, globes) = channel::channel::<crate::globe::Beat>();
-    handle
-        .insert_source(globes, |event, (), state: &mut FilesWindow| {
-            if let channel::Event::Msg(b) = event
-                && state.view.saw_globe(&b)
-            {
-                state.ask_paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the globe channel: {e}"))?;
+        // The catalogue is swept HERE and not inherited: this is a process of its
+        // own, and `open with` needs to know who declares a type. 128 entries in
+        // 68 ms, measured — once, at startup, like the launcher's.
+        let catalogue = std::sync::Arc::new(ronoctua_apps::scan(&language()));
+        let data = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from);
+        let bin = ronoctua_files::trash::Bin::of_home(data.as_deref(), home.as_deref());
+        let side = crate::files::sidebar_of(home.as_deref(), bin.as_ref(), store);
+        let view = crate::files::View::at(
+            &where_,
+            ronoctua_files::who::Roster::read_from(&ronoctua_files::who::Files::default()),
+            ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
+            bin,
+            catalogue.clone(),
+            w.texts.clone(),
+            side,
+        );
 
-    // AND THE POINTER'S FILM, on a fifth.
-    //
-    // Its own and not the preview player's, for the reason `View::tour` gives:
-    // the two answer different questions — what the keyboard is ON and what the
-    // hand is OVER — and a `Beat` that reached both would make one cell's frame
-    // drop the other's.
-    let (tours_sender, tours) = channel::channel::<crate::motion::Beat>();
-    handle
-        .insert_source(tours, |event, (), state: &mut FilesWindow| {
-            if let channel::Event::Msg(b) = event
-                && state.view.played_tour(&b)
-            {
-                state.ask_paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the tour channel: {e}"))?;
-
-    // AND THE THUMBNAILS', on a fourth. A folder opening answers dozens of
-    // times in a second, and none of them is news about a directory, a film or
-    // a shape.
-    let (thumbs_sender, thumbs) = channel::channel::<crate::thumbs::Made>();
-    handle
-        .insert_source(thumbs, |event, (), state: &mut FilesWindow| {
-            if let channel::Event::Msg(m) = event
-                && state.view.thumbed(m)
-            {
-                state.ask_paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the thumbnail channel: {e}"))?;
-
-    let texts = std::rc::Rc::new(crate::language::texts());
-    // The catalogue is swept HERE and not inherited: this is a process of its
-    // own, and `open with` needs to know who declares a type. 128 entries in
-    // 68 ms, measured — once, at startup, like the launcher's.
-    let catalogue = std::sync::Arc::new(ronoctua_apps::scan(&language()));
-    let data = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from);
-    let bin = ronoctua_files::trash::Bin::of_home(data.as_deref(), home.as_deref());
-    let side = crate::files::sidebar_of(home.as_deref(), bin.as_ref(), store);
-    let view = crate::files::View::at(
-        &where_,
-        ronoctua_files::who::Roster::read_from(&ronoctua_files::who::Files::default()),
-        ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
-        bin,
-        catalogue.clone(),
-        texts.clone(),
-        side,
-    );
-
-    let mut state = FilesWindow {
-        conn: conn.clone(),
-        // THE DRAG-AND-DROP MACHINERY. `None` where the compositor has no
-        // `wl_data_device_manager` — absence is not an error, and everything
-        // else goes on working.
-        carrying: crate::carry::Carrying::bind(&globals, &qh),
-        registry: RegistryState::new(&globals),
-        outputs: OutputState::new(&globals, &qh),
-        seats: SeatState::new(&globals, &qh),
-        _compositor: compositor,
-        keyboards: crate::seats::Seats::default(),
-        pointers: crate::seats::Seats::default(),
-        here: PerSeat::default(),
-        mods: Modifiers::default(),
-        window,
-        width: 0,
-        height: 0,
-        asked: (0, 0),
-        // ONE TO ONE UNTIL A SCREEN SAYS OTHERWISE: the surface exists before
-        // the compositor has said which output it is on, and
-        // `scale_factor_changed` is what says so.
-        scale: 1,
-        scale_told: 1,
-        columns: 80,
-        lines: 24,
-        quit: false,
-        gpu: None,
-        text: None,
-        quads: None,
-        images: None,
-        view,
-        catalogue,
-        texts,
-        looking: crate::files::inspector(sender.clone()),
-        playing: crate::motion::player(frames_sender),
-        turning: crate::stage::stage(turns_sender),
-        spinning_globe: crate::globe::stage(globes_sender),
-        thumbing: crate::thumbs::pool(
-            thumbs_sender.clone(),
-            ronoctua_xdg::cache_dir(),
-            ronoctua_xdg::cache_root(),
-        ),
-        winding: crate::thumbs::animator(thumbs_sender),
-        touring: crate::motion::player(tours_sender),
-        wound: crate::thumbs::Wind(Vec::new()),
-        sender,
-        owed: false,
-        message: None,
-        said: 0,
-        fold: crate::fold::Fold::default(),
-        right_ctrl: false,
-        fold_control: None,
-        fold_scroll: ronoctua_design::Scroll {
-            total: 0,
-            lines: 0,
-            offset: 0,
-            top: 0,
-        },
-        fold_wrapped: 0,
-        hinted: crate::chrome::Hinted::default(),
-        handle: handle.clone(),
-        walk_armed: false,
-        notice,
-        _theme_watch,
-    };
-    // POINTED AT WHERE THE VIEW ALREADY IS. `View::at` has read the directory
-    // by now, so what this arms is the watch for everything that happens NEXT.
-    state.follow_the_place();
-
-    WaylandSource::new(conn, queue)
-        .insert(cycle.handle())
-        .map_err(|e| anyhow::anyhow!("could not hang Wayland: {e}"))?;
-
-    let signal = cycle.get_signal();
-    cycle
-        .run(None, &mut state, |e| {
-            // THE ONE PLACE THAT KNOWS THE BATCH IS OVER. Everything else
-            // marks a frame owed; here it is drawn, once.
-            e.settle();
-            if e.quit {
-                signal.stop();
-            }
-        })
-        .context("event loop")?;
-    Ok(())
+        let mut files = Files {
+            // THE DRAG-AND-DROP MACHINERY. `None` where the compositor has no
+            // `wl_data_device_manager` — absence is not an error, and everything
+            // else goes on working.
+            carrying: crate::carry::Carrying::bind(w.globals, w.qh),
+            qh: w.qh.clone(),
+            held: Modifiers::default(),
+            view,
+            catalogue,
+            looking: crate::files::inspector(sender.clone()),
+            playing: crate::motion::player(frames_sender),
+            turning: crate::stage::stage(turns_sender),
+            spinning_globe: crate::globe::stage(globes_sender),
+            thumbing: crate::thumbs::pool(
+                thumbs_sender.clone(),
+                ronoctua_xdg::cache_dir(),
+                ronoctua_xdg::cache_root(),
+            ),
+            winding: crate::thumbs::animator(thumbs_sender),
+            touring: crate::motion::player(tours_sender),
+            wound: crate::thumbs::Wind(Vec::new()),
+            sender,
+            said: 0,
+            fold: crate::fold::Fold::default(),
+            right_ctrl: false,
+            fold_control: None,
+            fold_lit: false,
+            fold_scroll: ronoctua_design::Scroll {
+                total: 0,
+                lines: 0,
+                offset: 0,
+                top: 0,
+            },
+            fold_wrapped: 0,
+            pointed: Pointed::default(),
+            handle: w.handle.clone(),
+            walk_armed: false,
+            notice,
+        };
+        // POINTED AT WHERE THE VIEW ALREADY IS. `View::at` has read the directory
+        // by now, so what this arms is the watch for everything that happens NEXT.
+        files.follow_the_place();
+        Ok(files)
+    })
 }
 
 /// The session's language, for the catalogue's localised names.
@@ -426,69 +304,19 @@ fn language() -> String {
         .unwrap_or_else(|| "en_GB".to_owned())
 }
 
-/// The window.
-struct FilesWindow {
-    conn: Connection,
-    registry: RegistryState,
-    outputs: OutputState,
-    seats: SeatState,
-    _compositor: CompositorState,
-    keyboards: crate::seats::Seats<Modifiers, wl_keyboard::WlKeyboard>,
-    /// Every pointer this window was offered — one per cursor — with the
-    /// state of each while another is `here`. See `crate::seats`.
-    pointers: crate::seats::Seats<PerSeat>,
-    /// The state of the pointer whose events are being handled now.
-    here: PerSeat,
-    mods: Modifiers,
+/// The window: the manager, and the threads that draw into its panels.
+struct Files {
     /// Entries carried out of the listing, and drops landing in it. See
     /// [`crate::carry`].
     carrying: Option<crate::carry::Carrying>,
-    window: Window,
-    /// The window's size in LOGICAL pixels — what the compositor configured
-    /// it to, what the columns are counted from, what the pointer arrives in.
-    width: u32,
-    /// See the field above.
-    height: u32,
-    /// The logical size the COMPOSITOR configured, before any clamp.
-    ///
-    /// `width`/`height` are what the BUFFER can show — which is what the
-    /// columns, the bars and the hit tests are laid out against; this is what
-    /// the GPU is asked for. They are the same pair on every machine anybody
-    /// has, and they come apart exactly at the GPU's texture ceiling. Keeping
-    /// only one of them is a ratchet: a window clamped once at scale 3 would
-    /// ask for the size it was cut down to and could never grow back. See
-    /// [`crate::hidpi`].
-    asked: (u32, u32),
-    /// How many physical pixels one logical pixel is on the screen this
-    /// window is on — see [`crate::hidpi`], where the rule and its
-    /// measurement live.
-    scale: i32,
-    /// What the SURFACE has been told, which lags `scale` by one frame.
-    ///
-    /// `set_buffer_scale` has to travel in the commit that carries a buffer of
-    /// the matching size, and the only such commit is the present inside
-    /// `Gpu::frame` — see [`crate::hidpi::told_before_present`].
-    scale_told: i32,
-    columns: u16,
-    lines: u16,
-    quit: bool,
-    gpu: Option<ronoctua_render::gpu::Gpu>,
-    text: Option<ronoctua_render::Text>,
-    quads: Option<ronoctua_render::quad::Quads>,
-    /// The image pipeline, for the preview panel's picture.
-    ///
-    /// # Why this door needed one and the footer already had it
-    ///
-    /// Because the footer draws the clipboard's captures and the launcher's
-    /// pixmaps, and this one drew glyphs and rectangles and nothing else. A
-    /// preview that worked in one door and not the other is exactly the
-    /// divergence the two-door arrangement exists to prevent — and it would
-    /// have been reported as "the preview does not work in the window", one of
-    /// the three causes with the same screen.
-    images: Option<ronoctua_render::image::Images>,
+    /// The queue, for the drag this window starts from inside the pointer.
+    qh: QueueHandle<Door<Self>>,
+    /// The modifiers a CLICK carries (`Ctrl` marks, `Shift` takes a run) —
+    /// the keyboard's on the pointer's own seat, which the door says on every
+    /// pointer frame (`Ui::pointer_mods`).
+    held: Modifiers,
     view: crate::files::View,
     catalogue: crate::apps::Catalogue,
-    texts: std::rc::Rc<ronoctua_i18n::Texts>,
     sender: channel::Sender<crate::files::Report>,
     /// Where an ask for a preview and its facts is posted.
     ///
@@ -517,23 +345,6 @@ struct FilesWindow {
     /// the layout every frame, and sending it every frame would wake a thread
     /// sixty times a second to be told nothing had changed.
     wound: crate::thumbs::Wind,
-    /// A frame is OWED, and will be drawn when the event queue empties.
-    ///
-    /// # Why not paint where the change happens
-    ///
-    /// Because presenting blocks. Every handler here used to call `paint()`
-    /// itself, and a drag on a scrollbar sends a `Motion` per pixel of pointer
-    /// travel: a hundred events, a hundred presents, each waiting for the next
-    /// vblank. The owner described the consequence exactly — dragging the
-    /// thumb to the bottom did not jump there, the listing *walked* through
-    /// every item and arrived seconds later.
-    ///
-    /// The arithmetic was never slow. What was slow was doing it a hundred
-    /// times and showing all hundred results. One flag, drained once where
-    /// `calloop` finishes a batch, and the drag lands on the frame after the
-    /// last event — which is what every other program does.
-    owed: bool,
-    message: Option<String>,
     /// Which message is on screen, counted.
     ///
     /// A one-shot timer is armed for each one and fires three seconds later;
@@ -553,6 +364,9 @@ struct FilesWindow {
     right_ctrl: bool,
     /// Where the control that opens it was drawn, in cells of line 0.
     fold_control: Option<u16>,
+    /// Whether the pointer rests on that chevron — it lights, as every
+    /// header's controls do.
+    fold_lit: bool,
     /// The opened band's scroll, as it was last DRAWN.
     fold_scroll: ronoctua_design::Scroll,
     /// How many rows line 0's text came to at the width it was DRAWN at.
@@ -560,21 +374,16 @@ struct FilesWindow {
     /// The height is measured ONCE, when the band opens, and the content is
     /// only known where the line is laid out — but `first_of_region` is asked
     /// BEFORE the frame. So the drawing writes this down, `fold::settle` reads
-    /// it and answers once, and `draw` goes round one more time. After that
+    /// it and answers once, and `paint` goes round one more time. After that
     /// nothing reopens the question: see `fold::Fold::held`.
     fold_wrapped: usize,
-    /// The hint line, and the shortcut the pointer is resting on it.
-    hinted: crate::chrome::Hinted,
-    /// The loop, for the two things that need one.
-    ///
-    /// A keyboard that REPEATS: SCTK only generates repeat events for one made
-    /// with `get_keyboard_with_repeat`, and that wants a `LoopHandle` — which
-    /// is why this is carried rather than reached for (see `new_capability`).
-    ///
-    /// And the message line's expiry: see [`FilesWindow::say`]. And the clock
-    /// that walks a name too long for its column: see
-    /// [`FilesWindow::arm_the_walk`].
-    handle: calloop::LoopHandle<'static, Self>,
+    /// What the pointer that spoke LAST is on — the door's `here`, as the
+    /// frame reads it. See [`Pointed`].
+    pointed: Pointed,
+    /// The loop, for the two clocks this window hangs of its own: the message
+    /// line's expiry (see [`Files::say`]) and the clock that walks a name too
+    /// long for its column (see [`Files::arm_the_walk`]).
+    handle: calloop::LoopHandle<'static, Door<Self>>,
     /// Whether the walking name's clock is up.
     ///
     /// One at a time: armed when a name starts walking, dropped by its own
@@ -591,8 +400,19 @@ struct FilesWindow {
     /// `None` means the watch could not be armed and the fallback clock above
     /// is doing the work instead.
     notice: Option<ronoctua_files::notice::Notice>,
-    /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
-    _theme_watch: Option<ronoctua_files::notice::Notice>,
+}
+
+/// What the pointer that spoke last is resting on, copied out of its hand.
+///
+/// A frame is drawn with no hand in reach — the door keeps the hands — and
+/// the field that lights, the sentence on line 0 and the thumbnail's second
+/// line are all about the pointer `here`. So every pointer frame ends by
+/// writing down what that pointer is on, and the frame reads this.
+#[derive(Debug, Default)]
+struct Pointed {
+    line: Option<usize>,
+    cell: Option<u16>,
+    target: Option<crate::files::Target>,
 }
 
 /// What this window keeps for ONE pointer — see `crate::seats`.
@@ -604,6 +424,13 @@ struct PerSeat {
     /// wants a shallower answer than the target is: see `files::View::band_row`.
     line_under_pointer: Option<usize>,
     cell_under_pointer: Option<u16>,
+    /// Which section's DRAWN scrollbar the pointer is resting on, if any.
+    ///
+    /// THE BAR'S CELLS ARE THE BAR'S ALONE, the owner's rule for every list:
+    /// a pointer on a drawn bar is on the bar and not on the row beside it, so
+    /// no row lights and no field is explained. The pane is kept because the
+    /// WHEEL still belongs to the section whose bar it is.
+    on_bar: Option<crate::files::Pane>,
     /// What is left over of a touchpad gesture, in lines.
     ///
     /// A wheel sends whole detents; a touchpad sends fractions of one, and this
@@ -648,12 +475,22 @@ struct PerSeat {
     /// three chances to resolve a point against a list it was not over. See
     /// `files::View::hit` for the four defects that came of asking otherwise.
     under_pointer: Option<crate::files::Target>,
-    /// Whether this pointer is dragging the header's drawer bar — the
-    /// per-pointer half of `chrome::Hinted`, swapped in around every frame.
-    hint_drag: bool,
 }
 
-impl FilesWindow {
+impl Files {
+    /// The region's first line, WITH the opened line's band counted in.
+    ///
+    /// It used to be the constant above and nothing else. The minibuffer's
+    /// line can now be opened into several (see [`crate::fold`]), and every
+    /// one of them is a line the listing does not get — so the number moved
+    /// from a `const` to a question, and `chrome::Frame` carries the answer
+    /// for everything downstream of it.
+    /// AND THE SHORTCUT'S EXPLANATION, when the pointer is on one. It is the
+    /// same argument one line further: a line the listing does not get.
+    fn first_of_region(&self, ui: &Ui) -> u16 {
+        FIRST_OF_REGION + crate::fold::rows(self.fold) + ui.hinted.rows()
+    }
+
     // EVERY ONE OF THESE IS `Geometry`'S ANSWER, and none of them is a second
     // one.
     //
@@ -664,13 +501,13 @@ impl FilesWindow {
     // cannot come back different.
 
     /// The two rooms this door gives, for whatever asks about a bar.
-    fn rooms(&self) -> crate::files::Room {
-        self.geometry().rooms()
+    fn rooms(&self, ui: &Ui) -> crate::files::Room {
+        self.geometry(ui).rooms()
     }
 
     /// How many lines the PANELS are given — what the facts scroll inside.
-    fn panel_room(&self) -> usize {
-        self.geometry().panel_room()
+    fn panel_room(&self, ui: &Ui) -> usize {
+        self.geometry(ui).panel_room()
     }
 
     /// How many rows of listing fit.
@@ -678,8 +515,8 @@ impl FilesWindow {
     /// One less than the region, because the header takes a line and it is
     /// drawn from the same arithmetic the hit test uses — a room that counted
     /// the header would put the last row under the window's edge.
-    fn list_room(&self) -> usize {
-        self.geometry().list_room()
+    fn list_room(&self, ui: &Ui) -> usize {
+        self.geometry(ui).list_room()
     }
 
     /// How many lines the listing's chrome takes — two, or none at all when a
@@ -693,27 +530,16 @@ impl FilesWindow {
     /// AND THE STRIP COMES OFF THE BOTTOM. It is pinned under the listing and
     /// does not scroll, so the rows it takes are rows the listing does not
     /// have; counting them would put the last entry underneath the preview.
-    fn room(&self) -> usize {
-        self.geometry().room()
+    fn room(&self, ui: &Ui) -> usize {
+        self.geometry(ui).room()
     }
 
     /// What the manager should be asked about the file under the cursor.
     ///
-    /// The theme's file changed: the roles resolve anew on the next paint, and
-    /// what a child painted with a value — the waveform, the shape — is asked
-    /// for again, because the theme is part of the preview's key.
-    fn theme_changed(&mut self) {
-        if !crate::theme::reload() {
-            return;
-        }
-        self.look_again();
-        self.ask_paint();
-    }
-
     /// Called after anything that could have moved the cursor. `wants_look`
     /// answers `None` when the answer is already in hand, so this is a cheap
     /// call and not a decision made here.
-    fn look_again(&mut self) {
+    fn look_again(&mut self, ui: &Ui) {
         if let Some(queue) = self.looking.as_ref()
             && let Some(ask) = self
                 .view
@@ -721,7 +547,7 @@ impl FilesWindow {
         {
             let _ = queue.send(ask);
         }
-        self.thumbs_again();
+        self.thumbs_again(ui);
         self.follow_the_motion();
         self.follow_the_turn();
     }
@@ -732,7 +558,7 @@ impl FilesWindow {
     /// can move a dozen ways, and enumerating them is how a case gets missed.
     /// `wants_thumbs` answers with nothing when everything visible is already
     /// known, so this is a cheap call rather than a decision made here.
-    fn thumbs_again(&mut self) {
+    fn thumbs_again(&mut self, ui: &Ui) {
         let Some(queue) = self.thumbing.clone() else {
             return;
         };
@@ -745,10 +571,10 @@ impl FilesWindow {
         // decoded in physical pixels is one path off that list rather than one
         // more on it.
         #[allow(clippy::cast_precision_loss)]
-        let scale = self.scale as f32;
+        let scale = ui.scale as f32;
         let cell = tokens::metrics::cell_width(size) * scale;
         let line = tokens::metrics::line_height(size) * scale;
-        let geo = self.geometry();
+        let geo = self.geometry(ui);
         let (columns, room) = (geo.columns, geo.room());
         for ask in self.view.wants_thumbs(columns, room, cell, line) {
             let _ = queue.send(ask);
@@ -812,7 +638,7 @@ impl FilesWindow {
     /// `SCROLL_MARGIN` two, the same as the footer's — it is vi's `scrolloff`,
     /// and the reason is that a cursor pinned to the last visible line gives no
     /// warning of what is coming.
-    fn follow(&mut self) {
+    fn follow(&mut self, ui: &Ui) {
         // THE LISTING'S ROOM, and not the region's.
         //
         // This function used to compare the cursor against `room()` — chrome
@@ -824,7 +650,7 @@ impl FilesWindow {
         // The margin went with it: the footer had two and this door had two
         // written out separately, so they could drift. One function now, in
         // the view, for both doors.
-        let room = self.list_room();
+        let room = self.list_room(ui);
         if room == 0 {
             return;
         }
@@ -832,18 +658,18 @@ impl FilesWindow {
     }
 
     /// Carries out what the view asked for.
-    fn apply(&mut self, step: crate::files::Step) {
+    fn apply(&mut self, ui: &mut Ui, step: crate::files::Step) {
         use crate::files::{Doing, Errand, Step};
         match step {
             Step::Nothing => return,
             Step::Changed => {}
             Step::Closed => {
-                self.quit = true;
+                ui.quit = true;
                 return;
             }
             Step::Say(e) => {
-                let m = self.texts.t_with(e.key, &e.borrowed());
-                self.say(m);
+                let m = ui.texts.t_with(e.key, &e.borrowed());
+                self.say(ui, m);
             }
             // THE OPENED LINE IS THE DOOR'S, and this is where the keyboard's
             // ask lands. The view holds the focus that reached the control and
@@ -864,8 +690,8 @@ impl FilesWindow {
                 // is the same code the footer runs.
                 match doing {
                     Doing::Open(path) => {
-                        self.open_the_file(&path);
-                        self.ask_paint();
+                        self.open_the_file(ui, &path);
+                        ui.ask_paint();
                         return;
                     }
                     // THE MAP. DETACHED and never waited on: this runs inside
@@ -892,16 +718,16 @@ impl FilesWindow {
                                 tracing::error!("RONOCTUA_XDG_OPEN was not set at build time");
                             }
                         }
-                        self.ask_paint();
+                        ui.ask_paint();
                         return;
                     }
                     Doing::OpenWith(path, which) => {
                         if let Some(entry) = self.catalogue.iter().find(|e| e.id == which).cloned()
                         {
                             let (program, args) = crate::apps::command_for(&entry, &path);
-                            self.spawn(&program, &args, entry.working_directory.as_deref());
+                            Self::spawn(&program, &args, entry.working_directory.as_deref());
                         }
-                        self.ask_paint();
+                        ui.ask_paint();
                         return;
                     }
                     // AN APPLICATION FROM THE SIDEBAR, through the launcher's
@@ -912,15 +738,15 @@ impl FilesWindow {
                         {
                             let (program, args) =
                                 crate::apps::command_for(&entry, std::path::Path::new(""));
-                            self.spawn(&program, &args, entry.working_directory.as_deref());
+                            Self::spawn(&program, &args, entry.working_directory.as_deref());
                         } else {
-                            let m = self.texts.t_with(
+                            let m = ui.texts.t_with(
                                 ronoctua_i18n::key::FILES_SIDEBAR_GONE,
                                 &[("name", which.as_str())],
                             );
-                            self.say(m);
+                            self.say(ui, m);
                         }
-                        self.ask_paint();
+                        ui.ask_paint();
                         return;
                     }
                     // FORMATTING OPENS THE BUFFER, from this door too — and
@@ -930,39 +756,39 @@ impl FilesWindow {
                             && let Ok(w) = std::env::var("RONOCTUA_BUFFER_FORMAT")
                             && !w.is_empty()
                         {
-                            self.spawn(&me.to_string_lossy(), &["buffer".to_owned(), w, id], None);
+                            Self::spawn(&me.to_string_lossy(), &["buffer".to_owned(), w, id], None);
                         } else {
-                            let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
-                            self.say(m);
+                            let m = ui.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
+                            self.say(ui, m);
                         }
-                        self.ask_paint();
+                        ui.ask_paint();
                         return;
                     }
                     Doing::Terminal(dir) => {
                         if let Ok(me) = std::env::current_exe() {
-                            self.spawn(
+                            Self::spawn(
                                 &me.to_string_lossy(),
                                 &["terminal".to_owned()],
                                 Some(&dir.to_string_lossy()),
                             );
                         }
-                        self.ask_paint();
+                        ui.ask_paint();
                         return;
                     }
                     Doing::RootTerminal(dir) => {
-                        self.root_terminal(&dir);
-                        self.ask_paint();
+                        self.root_terminal(ui, &dir);
+                        ui.ask_paint();
                         return;
                     }
                     Doing::Copy(text) => {
                         let ok = crate::buffer::copy_to_clipboard(&text).is_ok();
-                        let m = self.texts.t(if ok {
+                        let m = ui.texts.t(if ok {
                             ronoctua_i18n::key::FILES_COPIED
                         } else {
                             ronoctua_i18n::key::FILES_NOT_COPIED
                         });
-                        self.say(m);
-                        self.ask_paint();
+                        self.say(ui, m);
+                        ui.ask_paint();
                         return;
                     }
                     other => {
@@ -973,17 +799,17 @@ impl FilesWindow {
                         match crate::files::carry_out(other, &self.sender, &clip) {
                             Errand::Done => self.view.reread(),
                             Errand::Say(e) => {
-                                let m = self.texts.t_with(e.key, &e.borrowed());
-                                self.say(m);
+                                let m = ui.texts.t_with(e.key, &e.borrowed());
+                                self.say(ui, m);
                             }
                         }
                     }
                 }
             }
         }
-        self.follow();
+        self.follow(ui);
         self.follow_the_place();
-        self.ask_paint();
+        ui.ask_paint();
     }
 
     /// Points the watch at whatever directory the view is on now.
@@ -1000,32 +826,32 @@ impl FilesWindow {
     }
 
     /// Opens a file with whatever handles its type.
-    fn open_the_file(&mut self, path: &std::path::Path) {
+    fn open_the_file(&mut self, ui: &mut Ui, path: &std::path::Path) {
         let of_type = ronoctua_files::mime::of_path(path, ronoctua_files::Kind::File, true);
         let Some(entry) = crate::apps::opens(&self.catalogue, of_type).cloned() else {
-            let m = self.texts.t_with(
+            let m = ui.texts.t_with(
                 ronoctua_i18n::key::FILES_NOTHING_OPENS,
                 &[("type", of_type)],
             );
-            self.say(m);
+            self.say(ui, m);
             return;
         };
         let (program, args) = crate::apps::command_for(&entry, path);
-        self.spawn(&program, &args, entry.working_directory.as_deref());
+        Self::spawn(&program, &args, entry.working_directory.as_deref());
     }
 
     /// A root shell in this directory, through polkit.
-    fn root_terminal(&mut self, dir: &std::path::Path) {
+    fn root_terminal(&mut self, ui: &mut Ui, dir: &std::path::Path) {
         let (Ok(me), Some(pkexec), Some(shell)) = (
             std::env::current_exe(),
             option_env!("RONOCTUA_PKEXEC"),
             option_env!("RONOCTUA_RESCUE_SHELL"),
         ) else {
-            let m = self.texts.t(ronoctua_i18n::key::FILES_NO_PKEXEC);
-            self.say(m);
+            let m = ui.texts.t(ronoctua_i18n::key::FILES_NO_PKEXEC);
+            self.say(ui, m);
             return;
         };
-        self.spawn(
+        Self::spawn(
             &me.to_string_lossy(),
             &[
                 "terminal".to_owned(),
@@ -1044,7 +870,7 @@ impl FilesWindow {
     /// the command finishes". Waiting here would freeze this window for the
     /// whole life of whatever it opened — the defect the app launcher already
     /// paid for once.
-    fn spawn(&mut self, program: &str, args: &[String], cwd: Option<&str>) {
+    fn spawn(program: &str, args: &[String], cwd: Option<&str>) {
         let Ok(scope) = crate::foreign::scope_name() else {
             tracing::error!("no scope name; nothing opened");
             return;
@@ -1065,18 +891,18 @@ impl FilesWindow {
     }
 
     /// What a thread came back with.
-    fn reported(&mut self, report: crate::files::Report) {
+    fn reported(&mut self, ui: &mut Ui, report: crate::files::Report) {
         match report {
             crate::files::Report::Done => self.view.reread(),
             crate::files::Report::Measured(name, bytes) => self.view.measured(&name, bytes),
-            crate::files::Report::Failed(why) => self.say(why),
+            crate::files::Report::Failed(why) => self.say(ui, why),
             crate::files::Report::Refused(which, why) => {
                 if matches!(which, ronoctua_disks::Refusal::AlreadyMounted) {
                     self.view.reread();
                 } else {
                     let e = self.view.refusal_said(which, &why);
-                    let m = self.texts.t_with(e.key, &e.borrowed());
-                    self.say(m);
+                    let m = ui.texts.t_with(e.key, &e.borrowed());
+                    self.say(ui, m);
                 }
             }
             crate::files::Report::Mounted(at) => self.view.mounted(&at),
@@ -1130,7 +956,34 @@ impl FilesWindow {
         // just mounted, so the watch has to follow from here too and not only
         // from the key that was pressed.
         self.follow_the_place();
-        self.ask_paint();
+        ui.ask_paint();
+    }
+
+    /// Remembers the modifiers a click will carry, from a key.
+    ///
+    /// A key's own `mods` are the truth at the moment it is pressed — except
+    /// for a MODIFIER key, whose press arrives before xkb has applied it. So a
+    /// modifier is read off its keysym on the way down and on the way up, and
+    /// every other key resynchronises all of them.
+    fn heard(&mut self, sym: Keysym, down: bool, mods: Option<Modifiers>) {
+        match sym {
+            Keysym::Control_L | Keysym::Control_R => self.held.ctrl = down,
+            Keysym::Shift_L | Keysym::Shift_R => self.held.shift = down,
+            Keysym::Alt_L | Keysym::Alt_R => self.held.alt = down,
+            Keysym::Super_L | Keysym::Super_R => self.held.logo = down,
+            _ => {
+                if let Some(m) = mods {
+                    self.held = m;
+                }
+            }
+        }
+    }
+
+    /// The modifiers a click carries: the keyboard ON THE POINTER'S OWN SEAT,
+    /// so a click of cursor 2 carries cursor 2's `Ctrl` — taken from the door
+    /// at the start of every pointer frame.
+    fn pointer_mods(&self) -> Modifiers {
+        self.held
     }
 
     /// One key, however it arrived — pressed, or repeated by the clock.
@@ -1138,13 +991,22 @@ impl FilesWindow {
     /// One body and not two: a repeat that took a different path is a key that
     /// does something slightly different the second time, which is the kind of
     /// difference nobody looks for.
-    fn typed(&mut self, event: KeyEvent) {
+    fn key(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+        self.heard(event.keysym, true, Some(mods));
         // THE RIGHT `Ctrl` AND THE ARROWS OPEN AND WALK THE LINE, before the
         // view sees anything — the pair the line teaches, answered here as in
-        // every other door (`chrome::Hinted::took_a_key`).
+        // every other door (`chrome::Hinted::took_a_key`). This window answers
+        // `false` to `header_keys` because the drawer is its OWN.
         if event.keysym == Keysym::Control_R {
             self.right_ctrl = true;
             return;
+        }
+        // A RELEASE THAT NEVER ARRIVED (focus lost with it down) is caught
+        // here: a key with no Ctrl held means the right one is not held
+        // either. The door has no hook for the modifiers event, which is
+        // where this used to be read.
+        if !mods.ctrl {
+            self.right_ctrl = false;
         }
         if self.right_ctrl {
             let ask = match event.keysym {
@@ -1157,12 +1019,12 @@ impl FilesWindow {
                 _ => None,
             };
             if let Some(ask) = ask {
-                self.apply(crate::files::Step::Fold(ask));
-                self.ask_paint();
+                self.apply(ui, crate::files::Step::Fold(ask));
+                ui.ask_paint();
                 return;
             }
         }
-        let Some(t) = key_of(&event, self.mods) else {
+        let Some(t) = key_of(event, mods) else {
             return;
         };
         // `Esc` CLOSES THE OPENED LINE FIRST, exactly as it does in the other
@@ -1170,38 +1032,38 @@ impl FilesWindow {
         // the first thing the outermost gesture shuts. The view's own `Esc`
         // ladder is one step behind and untouched.
         if matches!(t.sym, ronoctua_keymap::Sym::Esc) && self.fold.close() {
-            self.ask_paint();
+            ui.ask_paint();
             return;
         }
         // A key clears the last message: it answered something that is no
         // longer what is being done.
-        self.message = None;
+        ui.message = None;
         let step = self.view.key(t);
-        self.apply(step);
+        self.apply(ui, step);
     }
 
     /// Is the pointer inside the opened line's band?
     ///
     /// Line 0 and the rows under it — they are one thing, so a wheel on the
     /// summary row is a wheel on the drawer.
-    fn pointer_on_fold(&self, y: f64) -> bool {
-        let f = self.metric();
+    fn pointer_on_fold(&self, ui: &Ui, y: f64) -> bool {
+        let f = self.metric(ui);
         #[allow(clippy::cast_possible_truncation)]
         let Some(line) = f.line_at(y as f32) else {
             return false;
         };
-        line < self.first_of_region()
+        line < self.first_of_region(ui)
     }
 
     /// Is the pointer on the control that opens line 0?
     ///
     /// It asks the cell that was DRAWN, for the reason the footer's twin
     /// gives: what the pointer hits has to be what the eye saw.
-    fn fold_at(&self, x: f64, y: f64) -> bool {
+    fn fold_at(&self, ui: &Ui, x: f64, y: f64) -> bool {
         let Some(at) = self.fold_control else {
             return false;
         };
-        let f = self.metric();
+        let f = self.metric(ui);
         #[allow(clippy::cast_possible_truncation)]
         if f.line_at(y as f32) != Some(0) {
             return false;
@@ -1233,11 +1095,11 @@ impl FilesWindow {
     ///
     /// This is the whole extent, which is what the DRAG maps against. Where it
     /// may be GRABBED is one line shorter — see `on_fold_thumb`.
-    fn fold_track(&self) -> Option<(f32, f32, f32, f32)> {
+    fn fold_track(&self, ui: &Ui) -> Option<(f32, f32, f32, f32)> {
         if !self.fold.open || !self.fold_scroll.cut() {
             return None;
         }
-        let f = self.metric();
+        let f = self.metric(ui);
         let top = f.y_of(0);
         let tall = f.line() * f32::from(crate::fold::rows(self.fold).saturating_add(1));
         Some((f.width - f.cell(), top, f.cell(), tall))
@@ -1257,11 +1119,11 @@ impl FilesWindow {
     /// mouse. The bar loses one line of grab area and nothing else — the drag
     /// still maps against the FULL track, so a drag begun below can walk right
     /// up to the top.
-    fn on_fold_thumb(&self, x: f64, y: f64) -> bool {
-        let Some((bx, by, bw, bh)) = self.fold_track() else {
+    fn on_fold_thumb(&self, ui: &Ui, x: f64, y: f64) -> bool {
+        let Some((bx, by, bw, bh)) = self.fold_track(ui) else {
             return false;
         };
-        let line = self.metric().line();
+        let line = self.metric(ui).line();
         let (from, tall) = (by + line, bh - line);
         if tall <= 0.0 {
             return false;
@@ -1275,21 +1137,17 @@ impl FilesWindow {
     ///
     /// `Scroll::offset_at` is the inverse of the call that drew the thumb,
     /// which is what stops the handle and the content disagreeing.
-    fn fold_drag_to(&mut self, y: f64) {
-        let Some((_, top, _, tall)) = self.fold_track() else {
+    fn fold_drag_to(&mut self, ui: &mut Ui, y: f64) {
+        let Some((_, top, _, tall)) = self.fold_track(ui) else {
             return;
         };
-        let f = self.metric();
+        let f = self.metric(ui);
         #[allow(clippy::cast_possible_truncation)]
         let at = y as f32 - top;
         self.fold.offset = self.fold_scroll.offset_at(at, tall, f.line());
-        self.ask_paint();
+        ui.ask_paint();
     }
 
-    /// Columns and rows from the size in pixels.
-    ///
-    /// Integer arithmetic, without measuring text: the cell is exactly 0.600 ×
-    /// the font size, including in the Nerd Fonts.
     /// This door's measurements — see `chrome::Frame`, which is the one place a
     /// token becomes a pixel.
     ///
@@ -1297,66 +1155,19 @@ impl FilesWindow {
     /// `height` are the only facts, and a stored copy of what they imply is a
     /// second home for them.
     #[allow(clippy::cast_precision_loss)]
-    fn metric(&self) -> crate::chrome::Frame {
-        crate::chrome::Frame::of(
-            self.width as f32,
-            self.height as f32,
-            self.first_of_region(),
-        )
+    fn metric(&self, ui: &Ui) -> crate::chrome::Frame {
+        crate::chrome::Frame::of(ui.width as f32, ui.height as f32, self.first_of_region(ui))
     }
 
-    /// The size of the text changed under this door.
-    ///
-    /// THE SHAPER HAS TO HEAR IT TOO. It was built with a size and keeps it;
-    /// moving everything around it — the columns, the cell, every hit test —
-    /// and leaving the letters gives a grid at one size with text at another,
-    /// which reads as a broken font rather than as a setting that took.
-    fn text_size_changed(&mut self) {
-        if let Some(t) = self.text.as_mut() {
-            t.draw_at(ronoctua_tokens::text::size());
-        }
-        self.recount();
-        // AND THE TWO THREADS THAT DRAW INTO THE PANEL. `follow_the_motion`'s
-        // own comment says it: the pose changes from a key, from the wheel,
-        // from a drag and from the panel being resized, "and enumerating
-        // those is how one gets missed". A change of size resizes the panel
-        // without a `configure` — the window's pixels did not move, its cells
-        // did — so this is a fifth way in, and leaving it out would have the
-        // film keep the frame size of the old box.
-        self.follow_the_motion();
-        self.follow_the_turn();
-        self.ask_paint();
-    }
-
-    fn recount(&mut self) {
-        // THROUGH THE FRAME, and not through a fourth spelling of the cell.
-        // This function used to say `SIZE_LARGE * CELL_WIDTH_EM` — one of the
-        // three spellings of one number that the survey found living in this
-        // tree, beside `metrics::cell_width` and `chrome::cell_width`.
-        let f = self.metric();
-        let (cell, line) = (f.cell(), f.line());
-        let usable = f.width - 2.0 * cell * f32::from(CONTENT_MARGIN);
-        self.columns = if cell > 0.0 {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let n = ((usable / cell) as u16).max(1);
-            n
-        } else {
-            1
-        };
-        self.lines = if line > 0.0 { f.lines().max(1) } else { 1 };
-        self.follow();
-    }
-
-    /// Which row and cell a pointer position lands on.
     /// Where a point is, in the region's own coordinates.
     #[allow(clippy::cast_possible_truncation)]
-    fn line_and_cell(&self, x: f64, y: f64) -> Option<(usize, u16)> {
+    fn line_and_cell(&self, ui: &Ui, x: f64, y: f64) -> Option<(usize, u16)> {
         // THROUGH THE FRAME, which is the inverse of what the drawing used.
         // Spelled out here, as it was, the pointer had its own division and its
         // own cast — and a press on the first pixel of a cell resolved to the
         // cell before it, because `column * cell` and `x / cell` are not each
         // other's inverse in `f32` without the snap `Frame` applies.
-        let f = self.metric();
+        let f = self.metric(ui);
         if x < 0.0 || y < 0.0 {
             return None;
         }
@@ -1364,7 +1175,7 @@ impl FilesWindow {
         let margin = f64::from(f.x_of(CONTENT_MARGIN));
         let cell = f.column_at((x - margin).max(0.0) as f32);
         // LINE 0 BELONGS TO NO COLUMN: it is the one line above the region.
-        let k = line.checked_sub(self.first_of_region())?;
+        let k = line.checked_sub(self.first_of_region(ui))?;
         Some((usize::from(k), cell))
     }
 
@@ -1374,32 +1185,53 @@ impl FilesWindow {
     /// each of the two presses. Four numbers had to be set together and the day
     /// one of them was added is the day two of the three would have been left
     /// without it.
-    fn aim(&mut self, x: f64, y: f64) {
+    fn aim(&mut self, ui: &mut Ui, here: &mut PerSeat, x: f64, y: f64) {
         // WHICH SHORTCUT OF THE HINT LINE, first: it is ABOVE the region, so
         // `line_and_cell` answers nothing up there and everything below would
         // never be asked. Read off what the last frame DREW — see
         // `chrome::Hinted`.
-        let now = self
+        let now = ui
             .hinted
             .under(x, y)
-            .and_then(|id| crate::chrome::hint_sentence(id, &self.texts));
-        if self.hinted.say(now) {
-            self.ask_paint();
+            .and_then(|id| crate::chrome::hint_sentence(id, &ui.texts));
+        if ui.hinted.say(now) {
+            ui.ask_paint();
         }
-        self.here.under_pointer = self.target_at(x, y);
+        // ON A DRAWN BAR, THE BAR — and not the row beside it. The owner's rule
+        // for every list: while a section's bar is drawn its cells are the
+        // bar's alone, so the pointer resting there lights no row, explains no
+        // field and would click nothing but the bar. Without a bar the row
+        // answers across its whole width, which is the other half of the rule.
+        //
+        // Only the SCROLLBARS: the film's timeline is a track too, but it lies
+        // over the picture, where no row is drawn in the first place.
+        here.on_bar = self
+            .bar_at_point(ui, x, y)
+            .filter(|(_, axis)| !matches!(axis, crate::files::Axis::Time))
+            .map(|(pane, _)| pane);
+        here.under_pointer = if here.on_bar.is_some() {
+            None
+        } else {
+            self.target_at(ui, x, y)
+        };
         // AND WHETHER IT IS ON THE GLOBE, remembered where it was resolved —
         // the wheel arrives with less than this and must not ask again.
         self.view.pointing_globe(matches!(
-            self.here.under_pointer.as_ref().map(|t| &t.hit),
+            here.under_pointer.as_ref().map(|t| &t.hit),
             Some(crate::files::Hit::Globe | crate::files::Hit::GlobeDot)
         ));
-        let at = self.line_and_cell(x, y);
-        self.here.cell_under_pointer = at.map(|(_, c)| c);
-        self.here.line_under_pointer = at.map(|(l, _)| l);
+        let at = self.line_and_cell(ui, x, y);
+        here.cell_under_pointer = at.map(|(_, c)| c);
+        here.line_under_pointer = at.map(|(l, _)| l);
         // AND WHICH THUMBNAIL, so a film under the hand starts its tour. It
-        // opens no file — see `View::hover_thumb`.
-        let geo = self.geometry();
-        self.view.hover_thumb(geo.columns, geo.room(), at);
+        // opens no file — see `View::hover_thumb`. Not from the bar: a cell of
+        // a bar is no thumbnail's.
+        let geo = self.geometry(ui);
+        self.view.hover_thumb(
+            geo.columns,
+            geo.room(),
+            at.filter(|_| here.on_bar.is_none()),
+        );
         // AND WHICH SECTION, which is what decides the film's two buttons are
         // drawn: they appear under the pointer, and their CELLS are reserved
         // either way so nothing moves.
@@ -1409,12 +1241,12 @@ impl FilesWindow {
         // it refuses a row with no fields on it, so the pointer crossing the
         // blank part of a panel said "nowhere" and every control that comes out
         // under the hand went with it. See `files::View::pane_at`.
-        let pane = self.here.line_under_pointer.and_then(|line| {
+        let pane = here.line_under_pointer.and_then(|line| {
             self.view.pane_at(
-                self.columns,
-                self.room(),
+                ui.columns,
+                self.room(ui),
                 line,
-                self.here.cell_under_pointer.unwrap_or(0),
+                here.cell_under_pointer.unwrap_or(0),
             )
         });
         self.view.pointing(pane);
@@ -1423,8 +1255,7 @@ impl FilesWindow {
         // column, as well as the cursor. Through the TARGET, which is the
         // resolution that already knows which row of which section a cell is.
         self.view.pointing_at(
-            self.here
-                .under_pointer
+            here.under_pointer
                 .as_ref()
                 .filter(|t| t.pane == crate::files::Pane::Listing && t.row != usize::MAX)
                 .map(|t| t.row),
@@ -1432,26 +1263,24 @@ impl FilesWindow {
     }
 
     /// What is under a point, asked of the view.
-    fn target_at(&self, x: f64, y: f64) -> Option<crate::files::Target> {
-        let (line, cell) = self.line_and_cell(x, y)?;
+    fn target_at(&self, ui: &Ui, x: f64, y: f64) -> Option<crate::files::Target> {
+        let (line, cell) = self.line_and_cell(ui, x, y)?;
         self.view
-            .hit(self.columns, self.room(), line, cell, &self.texts)
+            .hit(ui.columns, self.room(ui), line, cell, &ui.texts)
     }
 
     /// Which section's bar a POINT is on — the same rectangles that were drawn.
-    fn bar_at_point(&self, x: f64, y: f64) -> Option<(crate::files::Pane, crate::files::Axis)> {
+    fn bar_at_point(
+        &self,
+        ui: &Ui,
+        x: f64,
+        y: f64,
+    ) -> Option<(crate::files::Pane, crate::files::Axis)> {
         // THE SAME RECTANGLES THE FRAME DREW, from the same value. Asking
         // `Geometry` here and in `frame()` is what makes "where it is drawn"
         // and "where it is grabbed" one answer instead of two that agree by
         // habit.
-        let geo = self.geometry();
-        let (cell, line_px) = (geo.metric.cell(), geo.metric.line());
-        let chrome = self.view.chrome_rows(self.columns, &self.texts);
-        let sections = self
-            .view
-            .sections(&chrome, geo.room(), self.columns, &self.texts);
-        let panes = self.view.panes(self.columns);
-        geo.bars(panes, &sections, cell, line_px)
+        self.section_bars(ui)
             .into_iter()
             .find(|(_, _, r)| {
                 let (bx, by, bw, bh) = *r;
@@ -1463,108 +1292,811 @@ impl FilesWindow {
             .map(|(p, axis, _)| (p, axis))
     }
 
-    fn assemble_gpu(&mut self) {
-        use raw_window_handle::{
-            RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
-        };
-        let (Some(disp), Some(surf)) = (
-            std::ptr::NonNull::new(self.conn.backend().display_ptr().cast::<std::ffi::c_void>()),
-            std::ptr::NonNull::new(
-                self.window
-                    .wl_surface()
-                    .id()
-                    .as_ptr()
-                    .cast::<std::ffi::c_void>(),
-            ),
-        ) else {
-            tracing::error!("null Wayland pointers");
+    /// Every section's bar, as the frame draws it — one list for the drawing,
+    /// the grab and the registry of bars (`crate::bars`).
+    fn section_bars(&self, ui: &Ui) -> Vec<crate::files::Bar> {
+        let geo = self.geometry(ui);
+        let (cell, line_px) = (geo.metric.cell(), geo.metric.line());
+        let chrome = self.view.chrome_rows(ui.columns, &ui.texts);
+        let sections = self
+            .view
+            .sections(&chrome, geo.room(), ui.columns, &ui.texts);
+        let panes = self.view.panes(ui.columns);
+        geo.bars(panes, &sections, cell, line_px)
+    }
+
+    /// Hangs the clock that walks a name too long for its column.
+    ///
+    /// The footer's twin, and the argument is written out there
+    /// (`Footer::arm_the_walk`): armed while a name is walking and dropped by
+    /// its own tick when none is. This door has no clock at all at rest — that
+    /// is what lets several of these windows be open at once — so the
+    /// alternative here is not a second timer but a first one.
+    fn arm_the_walk(&mut self) {
+        if self.walk_armed || !self.view.sliding() {
+            return;
+        }
+        let armed = self.handle.insert_source(
+            calloop::timer::Timer::from_duration(crate::slide::STEP),
+            move |_, (), door: &mut Door<Self>| {
+                if !door.content.view.sliding() {
+                    door.content.walk_armed = false;
+                    return calloop::timer::TimeoutAction::Drop;
+                }
+                // A TICK THAT MOVES NOTHING ASKS FOR NO FRAME: the walk rests
+                // a second at each end, which at this step is five ticks of
+                // standing still.
+                if door.content.view.slide(std::time::Instant::now()) {
+                    door.ui.ask_paint();
+                }
+                calloop::timer::TimeoutAction::ToDuration(crate::slide::STEP)
+            },
+        );
+        match armed {
+            Ok(_) => self.walk_armed = true,
+            Err(e) => tracing::warn!(error = %e, "could not hang the walking name's clock"),
+        }
+    }
+
+    /// The window's arithmetic, as a value.
+    ///
+    /// # Why this is a struct and not eight methods on the window
+    ///
+    /// Because a method on the window cannot be tested: it needs a door, and a
+    /// door owns a Wayland `Connection` and a `Gpu`, and there is no way to
+    /// stand one up in a unit test. That is the whole reason this file had
+    /// ZERO of them while `files.rs` had three hundred and forty-seven — and
+    /// it is also why five of the defects the owner reported were reported
+    /// from his screen rather than caught here.
+    ///
+    /// [`Geometry`] is a plain value: a frame, how many columns the margins
+    /// leave, and the two numbers the view asks for. Everything the door
+    /// decides about WHERE follows from it, so everything the door decides
+    /// about where can be asserted on.
+    fn geometry(&self, ui: &Ui) -> Geometry {
+        let panes = self.view.panes(ui.columns);
+        Geometry {
+            metric: self.metric(ui),
+            columns: ui.columns,
+            strip: panes.strip,
+            chrome: self.chrome_lines(),
+        }
+    }
+
+    /// Everything a frame is made of, borrowed out of the window.
+    fn scene<'a>(
+        &'a mut self,
+        ui: &'a mut Ui,
+        lit: &[(tokens::Color, Option<usize>)],
+    ) -> Scene<'a> {
+        let geo = self.geometry(ui);
+        // THE POINTER `here` — the one that spoke last — lights its field and
+        // explains it; every pointer, the finger among them, lights its band.
+        // A pointer on a drawn bar has no line here: see `PerSeat::on_bar`.
+        let pointed = &self.pointed;
+        Scene {
+            geo,
+            message: ui.message.clone(),
+            cell_under_pointer: pointed.cell,
+            line_under_pointer: pointed.line,
+            hovers: lit
+                .iter()
+                .map(|(color, row)| {
+                    (
+                        *color,
+                        row.map(|r| r / CELL_SPAN),
+                        #[allow(clippy::cast_possible_truncation)]
+                        row.map(|r| (r % CELL_SPAN) as u16),
+                    )
+                })
+                .collect(),
+            under_pointer: pointed.target.as_ref(),
+            fold: self.fold,
+            fold_control: None,
+            fold_scroll: self.fold_scroll,
+            fold_wrapped: self.fold_wrapped,
+            hinted: &mut ui.hinted,
+            fold_lit: self.fold_lit,
+            view: &mut self.view,
+            texts: &ui.texts,
+        }
+    }
+
+    /// Hands a frame to the door's canvas: the pictures go up to the GPU, and
+    /// everything else is only sorted into the canvas's layers.
+    ///
+    /// No arithmetic and no decision about where anything goes — a defect in
+    /// this function is a defect in what the renderer is handed, and a defect
+    /// anywhere else has a test that can reach it.
+    fn present(&self, painted: Painted, canvas: &mut Canvas<'_>) {
+        let Painted {
+            spans,
+            mut quads,
+            over,
+            pictures,
+        } = painted;
+        canvas.images.clear();
+        let preview_key = self.view.preview_key();
+        let globe_key = self.view.globe_key();
+        for (key, _) in &pictures {
+            // WHICH PICTURE THIS KEY IS, asked of the VIEW and not worked
+            // out here: the choice between "replace it every frame" and
+            // "only when it is missing" belongs where it can be made once.
+            //
+            // A MOVING FILE REPLACES THE TEXTURE UNDER THE SAME KEY, every
+            // frame — which is what keeps an animation to ONE slot of the
+            // renderer's ceiling. A key per frame would fill the cache with
+            // one file's film and evict every icon. The globe is the same
+            // kind of picture: it is redrawn as the hand moves.
+            let (gpu, im) = (canvas.gpu, &mut *canvas.images);
+            if preview_key.as_deref() == Some(key.as_str()) {
+                if let Some(frame) = self.view.live_frame() {
+                    im.upload_it(&gpu.device, &gpu.queue, key, frame);
+                } else if im.missing(key)
+                    // THE STILL ONE ONLY GOES UP WHEN IT IS MISSING: a
+                    // preview is up to a mebibyte, and `prepare` is
+                    // sixteen bytes.
+                    && let Some(rgba) = self.view.preview_pixels()
+                {
+                    im.upload_it(&gpu.device, &gpu.queue, key, rgba);
+                }
+            } else if globe_key.as_deref() == Some(key.as_str())
+                && let Some(rgba) = self.view.globe_frame()
+            {
+                im.upload_it(&gpu.device, &gpu.queue, key, &rgba);
+            } else if (im.missing(key) || self.view.thumb_moves(key))
+                // A STILL THUMBNAIL ONLY WHEN IT IS MISSING, for the reason
+                // the still preview gives: the key carries the file, the
+                // size and the theme, so the same key is the same picture.
+                // A screenful of them re-uploaded every frame would be tens
+                // of mebibytes a second across the bus for nothing.
+                //
+                // AND A MOVING ONE EVERY TIME, under the SAME key — which
+                // is what keeps an animation to one slot of the renderer's
+                // ceiling instead of filling the cache with one file's film.
+                && let Some(rgba) = self.view.thumb_pixels(key)
+            {
+                im.upload_it(&gpu.device, &gpu.queue, key, rgba);
+            }
+        }
+        // QUADS, THEN IMAGES, THEN THE FEW QUADS THAT GO ON TOP, THEN TEXT —
+        // the canvas's order, and the one this door always drew in. The picture
+        // sits on the background and UNDER the text, which has to stay legible
+        // over a light photograph — and under the film's transport and the
+        // rubber band, which are drawn ON the pictures by design.
+        let tail = quads.split_off(quads.len().saturating_sub(over));
+        canvas.under.extend(quads);
+        canvas.over.extend(tail);
+        canvas.spans.extend(spans);
+        canvas.pictures.extend(pictures);
+    }
+
+    /// Puts a sentence on the message line, and takes it off again.
+    ///
+    /// **THE ONE PLACE**, and there were nine. Nine assignments meant nine
+    /// chances to forget whatever a message needs, and one of them was already
+    /// forgotten by all nine: the message never went away. The owner found it
+    /// with `copy the path` — *"no filemanager versão janela, esse texto não
+    /// desapareceu"* — where the footer's `copied` fades after three seconds
+    /// and this door's stayed for the rest of the session.
+    ///
+    /// # Why a one-shot timer, and not a clock
+    ///
+    /// Because this window has no tick, deliberately: with several of them
+    /// open, a timer would be one wake-up per second per window for ever, and
+    /// the directory is watched by inotify precisely so that nothing has to
+    /// wake at rest (see the `Notice` above). A one-shot keeps that property
+    /// exactly — a window with nothing to say wakes not once — and pays for the
+    /// three seconds after a message, which is the only time there is anything
+    /// to do.
+    ///
+    /// The same three seconds as the footer, from the same constant: a message
+    /// that lingered here and not there would be two answers to "how long is a
+    /// message on screen".
+    fn say(&mut self, ui: &mut Ui, text: String) {
+        tracing::info!(echo = %text, "message line");
+        ui.message = Some(text);
+        self.said = self.said.wrapping_add(1);
+        let mine = self.said;
+        let armed = self.handle.insert_source(
+            calloop::timer::Timer::from_duration(std::time::Duration::from_secs(
+                crate::surface::ECHO_SECONDS,
+            )),
+            move |_, (), door: &mut Door<Self>| {
+                // ONLY ITS OWN. Between arming and firing the line may have
+                // been replaced or cleared by a key; wiping whatever is there
+                // would take a newer sentence down early.
+                if door.content.said == mine {
+                    door.ui.message = None;
+                    door.ui.ask_paint();
+                }
+                calloop::timer::TimeoutAction::Drop
+            },
+        );
+        if let Err(e) = armed {
+            // NOT SILENT, and the message STAYS. A line that outstays its
+            // welcome is a smaller failure than one that vanishes because a
+            // timer could not be hung, and the log says which happened.
+            tracing::warn!(error = %e, "no timer for the message line; it will stay");
+        }
+    }
+
+    /// A left click, on whatever cell it landed on.
+    fn click(&mut self, ui: &mut Ui, target: &crate::files::Target) {
+        // A CLICK CLEARS THE LAST MESSAGE, like a key does. This window has no
+        // timer, so the message stays until something else is being done — and
+        // with it drawn ABOVE the pointer's description (so a refusal cannot be
+        // covered), "something else" has to include the mouse. Otherwise a
+        // single error would own the line until a key was pressed.
+        ui.message = None;
+        // THE TARGET ALREADY SAYS WHAT WAS PRESSED. It came out of
+        // `files::View::hit`, which resolved the section first and the field
+        // among that section's own — so a press in the sidebar is the
+        // sidebar's, one in the facts is the facts', and one on the listing's
+        // chrome is the path's or the header's. Working it out again here was
+        // the second place it could be got wrong, and it was.
+        let step = self.view.click(
+            target.row,
+            &target.hit,
+            crate::chrome::held(self.pointer_mods()),
+        );
+        self.apply(ui, step);
+    }
+
+    /// WHERE A DRAG WOULD LAND, resolved through the pointer's own path.
+    ///
+    /// The same `line_and_cell` and the same `View::hit`: what lights under a
+    /// drag and what a drop takes are one answer, which is the law this
+    /// manager's controls are all held to.
+    fn carried_to(&mut self, ui: &mut Ui, x: f64, y: f64, copies: bool) {
+        let Some((line, cell)) = self.line_and_cell(ui, x, y) else {
             return;
         };
-        // SAFETY: `conn` and `window` are fields of `self`, like the `Gpu` — the
-        // handles do not outlive what produced them.
-        // ONE CALL, not the same one twice: two calls to a pure
-        // function are two places the arguments can be edited apart.
-        let first = crate::hidpi::physical(self.asked, self.scale);
-        #[allow(unsafe_code)]
-        let gpu = unsafe {
-            ronoctua_render::gpu::Gpu::new(
-                RawDisplayHandle::Wayland(WaylandDisplayHandle::new(disp)),
-                RawWindowHandle::Wayland(WaylandWindowHandle::new(surf)),
-                first.0,
-                first.1,
+        if self
+            .view
+            .carry_to(ui.columns, self.room(ui), line, cell, copies, &ui.texts)
+        {
+            ui.ask_paint();
+        }
+    }
+
+    /// Is there anywhere under the pointer for a drop to go?
+    fn takes_a_drop(&self) -> bool {
+        self.view.landing_now()
+    }
+
+    /// A drag of OURS ended, however it ended.
+    fn let_the_drag_go(&mut self, ui: &mut Ui) {
+        if let Some(c) = self.carrying.as_mut() {
+            c.done();
+        }
+        if self.view.carried_away() {
+            ui.ask_paint();
+        }
+    }
+
+    /// A right click: focus that row, then open the action menu.
+    ///
+    /// THROUGH THE VIEW'S ONE DECISION — see `files::View::menu_at`. What the
+    /// pointer is over was already resolved on the press; handing the row over
+    /// and letting the view resolve it a second time is what made the parameter
+    /// mean two things at once.
+    fn open_menu(&mut self, ui: &mut Ui, target: Option<&crate::files::Target>) {
+        ui.message = None;
+        let step = self.view.menu_at(target);
+        self.apply(ui, step);
+    }
+
+    /// One pointer's frame, with its state already `here`.
+    fn pointer_here(&mut self, ui: &mut Ui, here: &mut PerSeat, events: &[PointerEvent]) {
+        let before = (
+            here.under_pointer.clone(),
+            here.cell_under_pointer,
+            here.on_bar,
+        );
+        let mut left = None;
+        let mut right = false;
+        // BOTH COORDINATES: a bar going across is dragged by `x`.
+        let mut dragged: Option<(f64, f64)> = None;
+        let mut spun = false;
+        let mut wheel_at: Option<f64> = None;
+        for e in events {
+            match e.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    if here.dragging.is_some() {
+                        dragged = Some(e.position);
+                    }
+                    // THE OPENED LINE'S BAR IS DRAGGED HERE and not through
+                    // `dragged`, which carries a point to `View::drag_to` —
+                    // and the view does not own this line.
+                    if here.dragging_fold {
+                        self.fold_drag_to(ui, e.position.1);
+                    }
+                    // AND A SHAPE TURNS WITH THE HAND. The deltas are in
+                    // PIXELS and become radians here, because the view has no
+                    // idea how big a pixel is; a whole panel's width is about
+                    // half a turn, which is the ratio that makes a piece feel
+                    // attached to the pointer rather than geared to it.
+                    if let Some((was_x, was_y)) = here.dragging_globe {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let moved = self.view.pan_globe(
+                            (e.position.0 - was_x) as f32,
+                            (e.position.1 - was_y) as f32,
+                        );
+                        here.dragging_globe = Some(e.position);
+                        if moved {
+                            ui.ask_paint();
+                        }
+                    }
+                    if let Some((was_x, was_y)) = here.spinning {
+                        let wide = f64::from(ui.width.max(1));
+                        let by = std::f64::consts::PI / wide;
+                        #[allow(clippy::cast_possible_truncation)]
+                        // WHERE THE HAND WENT, in radians of turn. Which way a
+                        // yaw counts is `View::spin`'s business and written out
+                        // there — a convention spelled at two call sites is a
+                        // convention that gets one of them backwards, which is
+                        // what happened.
+                        let turned = self.view.spin(
+                            ((e.position.0 - was_x) * by) as f32,
+                            ((e.position.1 - was_y) * by) as f32,
+                        );
+                        here.spinning = Some(e.position);
+                        if turned {
+                            spun = true;
+                        }
+                    }
+                    self.aim(ui, here, e.position.0, e.position.1);
+                    // AND A BUTTON THAT IS DOWN ON THE LISTING IS A GESTURE
+                    // NOW, or still a click — see `files::View::moved_to`.
+                    if let Some((line, cell)) = self.line_and_cell(ui, e.position.0, e.position.1)
+                        && self.view.moved_to(ui.columns, self.room(ui), line, cell)
+                    {
+                        ui.ask_paint();
+                    }
+                    // AND A DRAG THAT HAS JUST PICKED SOMETHING UP HANDS IT TO
+                    // THE COMPOSITOR. From here on the pointer is its, and
+                    // what this surface hears is `wl_data_device`.
+                    if let Some((paths, copies)) = self.view.begun_carrying() {
+                        let serial = here.pressed_at;
+                        // ON THE SEAT THAT PRESSED — see `carry::Carrying`: the
+                        // press's serial is that seat's, and a drag started
+                        // from another seat's device is refused in silence.
+                        if let Some(c) = self.carrying.as_mut() {
+                            c.begin(
+                                &self.qh,
+                                ui.pointer_on.as_ref(),
+                                &ui.surface,
+                                serial,
+                                paths,
+                                copies,
+                            );
+                        }
+                    }
+                }
+                PointerEventKind::Leave { .. } => {
+                    // THE SENTENCE GOES WITH THE POINTER: one that leaves
+                    // sends no motion on the way out.
+                    if ui.hinted.say(None) {
+                        ui.ask_paint();
+                    }
+                    here.under_pointer = None;
+                    here.cell_under_pointer = None;
+                    here.line_under_pointer = None;
+                    here.on_bar = None;
+                    self.view.pointing(None);
+                    self.view.pointing_at(None);
+                    // AND A BAND ENDS WHERE THE HAND LEFT IT. What it took was
+                    // drawn, entry by entry, the whole way — undoing that
+                    // silently is the worse of the two answers.
+                    if self.view.gave_up() {
+                        ui.ask_paint();
+                    }
+                }
+                PointerEventKind::Press { button, serial, .. } if button == LEFT_BUTTON => {
+                    // THE PRESS'S OWN SERIAL, kept because a drag started from
+                    // any other is refused by the compositor with nothing said
+                    // on this side — see `carry::Carrying::begin`.
+                    here.pressed_at = serial;
+                    self.aim(ui, here, e.position.0, e.position.1);
+                    // THE LINE'S OWN CONTROL FIRST: it sits on line 0, which
+                    // belongs to no section, so nothing below here would ever
+                    // resolve it.
+                    if self.fold_at(ui, e.position.0, e.position.1) {
+                        self.fold.toggle();
+                        ui.ask_paint();
+                        continue;
+                    }
+                    // AND ITS BAR, for the same reason and in the same place:
+                    // it is drawn on line 0, which no section owns.
+                    if self.on_fold_thumb(ui, e.position.0, e.position.1) {
+                        here.dragging_fold = true;
+                        self.fold_drag_to(ui, e.position.1);
+                        continue;
+                    }
+                    // A BAR TAKES THE PRESS, and the row does not get it: the
+                    // thumb is a control, not a line of the list under it.
+                    here.dragging = self.bar_at_point(ui, e.position.0, e.position.1);
+                    if here.dragging.is_some() {
+                        dragged = Some(e.position);
+                    } else if here
+                        .under_pointer
+                        .as_ref()
+                        .is_some_and(|t| matches!(t.pane, crate::files::Pane::Preview))
+                        && self.view.shape_here()
+                    {
+                        // A PRESS ON THE PIECE TAKES THE POINTER. After the
+                        // bar, because a bar drawn over the panel is still a
+                        // control; before the row, because a shape has no rows
+                        // and the click would otherwise open the file — which
+                        // is what pressing a picture does, and is exactly what
+                        // somebody about to turn it does not want.
+                        here.spinning = Some(e.position);
+                    } else if here
+                        .under_pointer
+                        .as_ref()
+                        .is_some_and(|t| matches!(t.hit, crate::files::Hit::Globe))
+                    {
+                        // A PRESS ON THE GLOBE TAKES THE POINTER — the footer door's
+                        // twin, and a field of its own for the same reason. The
+                        // DOT is not part of it, for the reason written there:
+                        // it is a target, and a drag starting on it could never
+                        // be the press that frames on the coordinate.
+                        here.dragging_globe = Some(e.position);
+                    } else if let Some((line, cell)) =
+                        self.line_and_cell(ui, e.position.0, e.position.1)
+                        && self.view.pressed(
+                            ui.columns,
+                            self.room(ui),
+                            line,
+                            cell,
+                            crate::chrome::held(self.pointer_mods()),
+                            &ui.texts,
+                        )
+                    {
+                        // THE VIEW TOOK IT, and a press on the listing is no
+                        // longer a click: until the pointer moves or the button
+                        // comes up there is nothing that says which of the
+                        // three gestures it is. The click fires on the RELEASE
+                        // — see `files::View::pressed`.
+                    } else {
+                        left = here.under_pointer.clone();
+                    }
+                }
+                // AND THE BUTTON COMING BACK UP LETS THE THUMB GO.
+                //
+                // There was no `Release` arm at all: once a bar had been
+                // pressed, every motion afterwards went on dragging it, and
+                // the row under the pointer never got another click. A control
+                // one cannot let go of is worse than one that does not move.
+                PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
+                    here.dragging = None;
+                    here.dragging_fold = false;
+                    here.spinning = None;
+                    here.dragging_globe = None;
+                    // AND A PRESS THAT NEVER BECAME A GESTURE IS A CLICK, on
+                    // what it landed on and not on what is under the pointer
+                    // now — a hand that slipped a cell still clicked what it
+                    // aimed at.
+                    if let Some(at) = self.view.let_go() {
+                        left = Some(at);
+                    }
+                }
+                // THE RIGHT BUTTON OPENS THE MENU. It draws in this window's own
+                // region, has no surface of its own and does not float — see the
+                // note in `surface.rs`, where the same decision is written out.
+                PointerEventKind::Press { button, .. } if button == RIGHT_BUTTON => {
+                    // THE OTHER BUTTON ENDS A BAND FIRST. The menu is about
+                    // `chosen()` and its title counts the marks, so one opened
+                    // mid-sweep would be about a set that is still moving.
+                    self.view.gave_up();
+                    self.aim(ui, here, e.position.0, e.position.1);
+                    // THE PRESS ITSELF, and not the row it landed on: the
+                    // subject is `under_pointer`, which was just resolved, and
+                    // `None` there is an answer too — an empty directory has no
+                    // field anywhere and still has a menu.
+                    //
+                    // BUT NOT ON A BAR: its cells are the bar's alone, and a
+                    // menu about the directory opened from a scrollbar would be
+                    // an answer to a question nobody asked there.
+                    right = here.on_bar.is_none();
+                }
+                PointerEventKind::Axis {
+                    vertical,
+                    horizontal,
+                    ..
+                } => {
+                    // THE `stop` OF A CONTINUOUS GESTURE ZEROES WHAT WAS LEFT,
+                    // or half a detent from the last one would add itself to
+                    // the next and the first scroll would come out bigger than
+                    // the finger asked for. Same shape as the footer's.
+                    if vertical.stop || horizontal.stop {
+                        here.detents = 0.0;
+                    }
+                    let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
+                    here.detents += crate::surface::axis_detents(&vertical, line_px)
+                        + crate::surface::axis_detents(&horizontal, line_px);
+                    // WHERE THE WHEEL WAS: line 0 belongs to no section, so
+                    // the resolved target cannot answer for it.
+                    wheel_at = Some(e.position.1);
+                }
+                _ => {}
+            }
+        }
+        // A SHAPE TURNED, which is neither a drag along a track nor a click:
+        // it has already changed the view, so all that is left is to draw it
+        // and to tell the stage.
+        if spun {
+            self.follow_the_turn();
+            ui.ask_paint();
+        }
+        // THE DRAG, before the row and before the wheel: while the thumb is
+        // held, the pointer is not pointing at rows.
+        if let Some((px, py)) = dragged
+            && let Some((pane, axis)) = here.dragging
+        {
+            // AGAINST THE SECTION'S OWN BAND, and not the region's.
+            //
+            // The facts sit in the strip, below the listing: measured from the
+            // region's top, every `y` inside them came out past the end and the
+            // fraction saturated at one — the thumb jumped to the bottom and
+            // stayed there, which reads exactly like a bar that does not work.
+            let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
+            let chrome = self.view.chrome_rows(ui.columns, &ui.texts);
+            let found = self
+                .view
+                .sections(&chrome, self.room(ui), ui.columns, &ui.texts)
+                .into_iter()
+                .find(|s| s.pane == pane);
+            // AND THE CLOCK'S WIDTH COMES FROM THE SECTION TOO. It is what
+            // decides where the track ends, so grabbing it anywhere else would
+            // read a position the cursor was never drawn at.
+            let sec_clock = found.as_ref().map_or(0, |s| s.clock);
+            let (top_line, lines) = found.map_or((0, self.room(ui)), |s| (s.top, s.lines));
+            // ALONG THE TRACK THAT WAS GRABBED. A bar going across is dragged
+            // by `x` over the panel's own pixels; one going down by `y` over
+            // its band's.
+            let geo = self.geometry(ui);
+            let fraction = if matches!(axis, crate::files::Axis::Across | crate::files::Axis::Time)
+            {
+                let panes = self.view.panes(ui.columns);
+                let cell = geo.metric.cell();
+                match crate::files::section_px(
+                    panes,
+                    pane,
+                    CONTENT_MARGIN,
+                    ui.columns,
+                    cell,
+                    geo.metric.width,
+                ) {
+                    Some((x, wide)) if wide > 0.0 => {
+                        // THE FILM'S TRACK IS INSET, and by the same answer the
+                        // cursor was drawn at — see `files::track_px`.
+                        let (x, wide) = if matches!(axis, crate::files::Axis::Time) {
+                            match crate::files::track_px(x, wide, cell, sec_clock) {
+                                Some(it) => it,
+                                None => return,
+                            }
+                        } else {
+                            (x, wide)
+                        };
+                        (px - f64::from(x)) / f64::from(wide)
+                    }
+                    _ => return,
+                }
+            } else {
+                #[allow(clippy::cast_precision_loss)]
+                let top = f64::from(self.first_of_region(ui)) * line_px + top_line as f64 * line_px;
+                #[allow(clippy::cast_precision_loss)]
+                let tall = (line_px * lines as f64).max(1.0);
+                (py - top) / tall
+            };
+            if self
+                .view
+                .drag_to(pane, axis, fraction, ui.columns, self.rooms(ui))
+            {
+                ui.ask_paint();
+                return;
+            }
+        }
+        if right {
+            let target = here.under_pointer.clone();
+            self.open_menu(ui, target.as_ref());
+            return;
+        }
+        if let Some(row) = left {
+            self.click(ui, &row);
+            return;
+        }
+        // WHAT IS LEFT OF THE ACCUMULATOR STAYS: spending only the whole part
+        // is what lets a continuous gesture add up until it becomes a line.
+        #[allow(clippy::cast_possible_truncation)]
+        let whole = here.detents.trunc() as i64;
+        if whole != 0 {
+            #[allow(clippy::cast_precision_loss)]
+            {
+                here.detents -= whole as f64;
+            }
+            let by = whole * crate::surface::LINES_PER_DETENT as i64;
+            // THE OPENED LINE TAKES IT FIRST, when the pointer is on it.
+            //
+            // Line 0 and the rows under it belong to no section, so nothing
+            // below here would ever be asked about them — `under_pointer` is
+            // resolved out of `View::hit`, which only knows the region. A bar
+            // with no wheel is half a control.
+            if self.fold.open && wheel_at.is_some_and(|y| self.pointer_on_fold(ui, y)) {
+                let last = self
+                    .fold_scroll
+                    .total
+                    .saturating_sub(self.fold_scroll.lines);
+                let next = i64::try_from(self.fold.offset).unwrap_or(0) + by;
+                self.fold.offset = usize::try_from(next.max(0)).unwrap_or(0).min(last);
+                ui.ask_paint();
+                return;
+            }
+            // THE SECTION UNDER THE POINTER TAKES IT FIRST, and the target is
+            // what says which — it is the thing that resolved the point. Asking
+            // `section_at` again here was a second answer to a question already
+            // answered, and in the strip the two disagreed: the gesture went to
+            // the listing while the pointer was over the facts.
+            //
+            // ON A BAR, THE BAR'S SECTION: the pointer there is on no row, and
+            // the wheel over a scrollbar still scrolls the list it belongs to.
+            //
+            // Every section's offset is the view's; see `files::View::wheel`.
+            let which = here
+                .under_pointer
+                .as_ref()
+                .map(|t| t.pane)
+                .or(here.on_bar)
+                .unwrap_or(crate::files::Pane::Listing);
+            // BOTH PANELS SCROLL INSIDE THE PANEL'S OWN HEIGHT. The preview
+            // joined that sentence the day it began to show a file's letters;
+            // without it, a preview in the bottom strip would page four lines
+            // at a time inside a room the code believed was the whole listing.
+            let room = match which {
+                crate::files::Pane::Info | crate::files::Pane::Preview => self.panel_room(ui),
+                // THE REGION, and the view takes the listing's chrome off —
+                // the same rule `rooms` follows, and for the same reason: the
+                // sidebar has no chrome and was losing two rows to it.
+                _ => self.room(ui),
+            };
+            // EVERY SECTION ANSWERS, the listing included: there is no
+            // fallback here any more, and that is the point. What stood here
+            // was this door's own copy of the listing's offset, moved by hand
+            // because `View::wheel` used to answer `false` for it.
+            if self.view.wheel(which, by, ui.columns, room) {
+                ui.ask_paint();
+            }
+            return;
+        }
+        // Only redraws if something CHANGED: a `Motion` arrives on every pixel
+        // of movement, and painting per pixel would spend the GPU drawing the
+        // same thing.
+        if before
+            != (
+                here.under_pointer.clone(),
+                here.cell_under_pointer,
+                here.on_bar,
             )
-        };
-        let Ok(mut g) = gpu else {
-            tracing::error!("no usable GPU; the window will not draw");
-            return;
-        };
-        // AND THE FIRST BUFFER IS DIVISIBLE TOO. `Gpu::new` clamps at the
-        // GPU's ceiling like `resize` does, and the first frame sends the
-        // scale — see `crate::hidpi::resized`.
-        let (shown_w, shown_h) = crate::hidpi::resized(&mut g, self.asked, self.scale);
-        self.width = shown_w;
-        self.height = shown_h;
-        // AND THE COLUMNS ARE COUNTED AGAIN. `configure` counts them before the
-        // GPU exists, against the size the compositor gave; if the buffer came
-        // back smaller than that, the count that is on file is for a picture
-        // wider than the one this door draws into.
-        self.recount();
-        // THE SYSTEM'S ONE SIZE — see `ronoctua_tokens::text::size`. It used to be
-        // `SIZE_LARGE`, on the argument that the footer is peripheral
-        // reference and this is what one reads.
-        match ronoctua_render::Text::new(
-            &g.device,
-            &g.queue,
-            g.config.format,
-            self.scale,
-            tokens::text::size(),
-        ) {
-            Ok(t) => self.text = Some(t),
-            Err(e) => tracing::error!(error = %e, "assembling the text failed"),
+        {
+            ui.ask_paint();
         }
-        // The quad pipeline is what draws the focused row's background. Its
-        // failure costs the highlight, not the window.
-        match ronoctua_render::quad::Quads::new(&g.device, g.config.format) {
-            Ok(q) => self.quads = Some(q),
-            Err(e) => tracing::error!(error = %e, "the quad pipeline failed"),
-        }
-        // AND THE IMAGE PIPELINE, beside it and for the same reason: its
-        // failure costs the picture, not the window. The preview then draws the
-        // type's glyph, which is what it draws for a file that has none.
-        match ronoctua_render::image::Images::new(&g.device, g.config.format) {
-            Ok(im) => self.images = Some(im),
-            Err(e) => tracing::error!(error = %e, "the image pipeline failed"),
-        }
-        self.gpu = Some(g);
+    }
+}
+
+impl Content for Files {
+    type Hand = PerSeat;
+
+    fn app_id(&self) -> &'static str {
+        APP_ID
     }
 
-    /// Asks for a frame. It is drawn when the event queue empties.
+    /// `*name*` is Emacs's convention for a buffer that is not a file, the same
+    /// one the modeline already uses for `*scratch*`.
+    fn title(&self, _: &ronoctua_i18n::Texts) -> String {
+        "*files*".to_owned()
+    }
+
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+        self.key(ui, event, mods);
+    }
+
+    /// THE DRAWER ON LINE 0 IS THIS WINDOW'S OWN (`crate::fold`, the footer's
+    /// twin), so the right `Ctrl` and `Esc` are answered in `Files::key` and
+    /// not by the shared header — two drawers answering one key would open
+    /// the one nobody sees.
+    fn header_keys(&self) -> bool {
+        false
+    }
+
+    fn released(&mut self, _: &mut Ui, event: &KeyEvent) {
+        self.heard(event.keysym, false, None);
+        if event.keysym == Keysym::Control_R {
+            self.right_ctrl = false;
+        }
+    }
+
+    /// The modifiers whole, for the reason the footer already records: a state
+    /// that only updates with focus cannot keep holding without it, and a
+    /// stuck `alt` makes every following click come out as `M-…`.
+    fn keyboard_left(&mut self, _: &mut Ui) {
+        self.held = Modifiers::default();
+        self.right_ctrl = false;
+    }
+
+    /// A new size, a new scale or a new size of text: the columns have moved.
     ///
-    /// See the `owed` field for why nothing here presents directly.
-    const fn ask_paint(&mut self) {
-        self.owed = true;
+    /// AND THE TWO THREADS THAT DRAW INTO THE PANEL. `follow_the_motion`'s own
+    /// comment says it: the pose changes from a key, from the wheel, from a
+    /// drag and from the panel being resized, "and enumerating those is how one
+    /// gets missed". A change of the text's size resizes the panel without a
+    /// `configure` — the window's pixels did not move, its cells did — and
+    /// leaving it out would have the film keep the frame size of the old box.
+    fn resized(&mut self, ui: &mut Ui) {
+        self.follow(ui);
+        self.follow_the_motion();
+        self.follow_the_turn();
     }
 
-    /// Draws the owed frame, if one is owed.
-    ///
-    /// Called from the event loop's callback — the one place that knows the
-    /// batch is finished. A hundred `Motion` events in one batch come out as
-    /// one frame, drawn from the LAST of them.
-    fn settle(&mut self) {
-        if std::mem::take(&mut self.owed) {
-            self.paint();
+    /// THE DATA DEVICE IS THE SEAT'S, and so cannot be made before one arrives.
+    /// Asked on every capability, which is harmless: `took_a_seat` makes one
+    /// device per seat and refuses a second.
+    fn seat_capability(
+        door: &mut Door<Self>,
+        qh: &QueueHandle<Door<Self>>,
+        seat: &smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat,
+    ) {
+        if let Some(c) = door.content.carrying.as_mut() {
+            c.took_a_seat(qh, seat);
         }
     }
 
-    fn paint(&mut self) {
-        if self.width == 0 {
-            return;
+    /// This window's own pointer: four sections side by side, each with its
+    /// own bar and its own wheel, a drawer on line 0 that no section owns, a
+    /// shape and a globe that turn under the hand, and a drag that leaves for
+    /// other programs. The standard list pointer knows one list.
+    fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<PerSeat>, events: &[PointerEvent]) {
+        self.held = ui.pointer_mods;
+        // THE CHEVRON LIGHTS UNDER THE POINTER, like every header's control.
+        for e in events {
+            let now = match e.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    self.fold_at(ui, e.position.0, e.position.1)
+                }
+                PointerEventKind::Leave { .. } => false,
+                _ => continue,
+            };
+            if now != self.fold_lit {
+                self.fold_lit = now;
+                ui.ask_paint();
+            }
         }
+        ui.hinted.swap_hand(&mut hand.hint_drag);
+        self.pointer_here(ui, &mut hand.extra, events);
+        ui.hinted.swap_hand(&mut hand.hint_drag);
+        // WHAT THIS POINTER IS ON, for the frame — see `Pointed` and
+        // `CELL_SPAN`. On a drawn bar there is no line: the bar's cells are the
+        // bar's alone, and no band lights beside it.
+        let here = &hand.extra;
+        let line = here.line_under_pointer.filter(|_| here.on_bar.is_none());
+        hand.row_under_pointer =
+            line.map(|l| l * CELL_SPAN + usize::from(here.cell_under_pointer.unwrap_or(0)));
+        self.pointed = Pointed {
+            line,
+            cell: here.cell_under_pointer,
+            target: here.under_pointer.clone(),
+        };
+    }
+
+    fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
         // WHAT THE PANELS NEED, asked ONCE PER FRAME and in one place — the
         // same arrangement the footer has. Every other one was a list of the
         // ways the cursor can move, and the one that got forgotten would be a
-        // panel showing the previous file with nothing saying why.
-        self.look_again();
+        // panel showing the previous file with nothing saying why. It is also
+        // what re-asks a painted preview after the THEME moved: the theme is
+        // part of the preview's key.
+        self.look_again(ui);
         // A MESSAGE, A MENU ROW OR A FILTER TAKES THE HINT'S LINE, and then
         // there is no shortcut on it to point at.
         //
@@ -1577,32 +2109,48 @@ impl FilesWindow {
         // The pointer's own field explanation is not in this list on purpose:
         // it only exists while the pointer is over the REGION, and a pointer
         // cannot be there and on the hint line at once.
-        if self.message.is_some() || self.view.cursor_explains().is_some() || self.view.filtering()
-        {
-            self.hinted.say(None);
-        }
-        if self.gpu.is_none() {
-            self.assemble_gpu();
+        if ui.message.is_some() || self.view.cursor_explains().is_some() || self.view.filtering() {
+            ui.hinted.say(None);
         }
         // THE DRAWING ANSWERS TWO THINGS BACK: where it put the control that
         // opens the line, and how far the wrapped text ran. Both depend on a
         // width that only the drawing knows, and both are what the pointer
         // asks about afterwards — kept, and not worked out a second time.
-        let mut scene = self.scene();
+        let lit = canvas.lit.to_vec();
+        let mut scene = self.scene(ui, &lit);
         let painted = frame(&mut scene);
         let (control, scroll, wrapped) =
             (scene.fold_control, scene.fold_scroll, scene.fold_wrapped);
         self.fold_control = control;
         self.fold_scroll = scroll;
         self.fold_wrapped = wrapped;
-        self.present(painted);
+        // EVERY SECTION'S BAR IS RECORDED, by its track, and so is line 0's
+        // drawer bar: their columns are the bars' (`crate::bars`), for the
+        // pointer and for every band, whatever this frame drew beside them.
+        for (_, axis, r) in self.section_bars(ui) {
+            if !matches!(axis, crate::files::Axis::Time) {
+                canvas.bar(Some(crate::bars::Track::of(r)));
+            }
+        }
+        if self.fold.open && scroll.cut() {
+            let f = self.geometry(ui).metric;
+            let top = f.y_of(0);
+            let tall = f.line() * f32::from(u16::try_from(scroll.lines).unwrap_or(u16::MAX));
+            canvas.bar(Some(crate::bars::Track::of((
+                f.width - f.cell(),
+                top,
+                f.cell(),
+                tall,
+            ))));
+        }
+        self.present(painted, canvas);
         // AND ONCE MORE IF LINE 0 JUST OPENED: the region's first line is
         // asked for before the frame, and the wrap is only known inside it.
         // `fold::settle` answers once and then never again, so nothing loops —
         // and nothing the pointer does can reopen the question, which is the
         // whole of `Fold::held`.
         if crate::fold::settle(&mut self.fold, self.fold_wrapped) {
-            self.ask_paint();
+            ui.ask_paint();
         }
         // AND THE GLOBE IS ASKED FOR AFTER THE FRAME, for the reason the
         // walking name's clock is: what the stage has to draw is the box the
@@ -1625,219 +2173,6 @@ impl FilesWindow {
         // the same reason: what asks for thumbnails runs at the TOP of this
         // function, and a flag cleared there is a flag the painter never sees.
         self.view.thumbs_uploaded();
-    }
-
-    /// Hangs the clock that walks a name too long for its column.
-    ///
-    /// The footer's twin, and the argument is written out there
-    /// (`Footer::arm_the_walk`): armed while a name is walking and dropped by
-    /// its own tick when none is. This door has no clock at all at rest — that
-    /// is what lets several of these windows be open at once — so the
-    /// alternative here is not a second timer but a first one.
-    fn arm_the_walk(&mut self) {
-        if self.walk_armed || !self.view.sliding() {
-            return;
-        }
-        let armed = self.handle.insert_source(
-            calloop::timer::Timer::from_duration(crate::slide::STEP),
-            move |_, (), state: &mut Self| {
-                if !state.view.sliding() {
-                    state.walk_armed = false;
-                    return calloop::timer::TimeoutAction::Drop;
-                }
-                // A TICK THAT MOVES NOTHING ASKS FOR NO FRAME: the walk rests
-                // a second at each end, which at this step is five ticks of
-                // standing still.
-                if state.view.slide(std::time::Instant::now()) {
-                    state.ask_paint();
-                }
-                calloop::timer::TimeoutAction::ToDuration(crate::slide::STEP)
-            },
-        );
-        match armed {
-            Ok(_) => self.walk_armed = true,
-            Err(e) => tracing::warn!(error = %e, "could not hang the walking name's clock"),
-        }
-    }
-
-    /// The window's arithmetic, as a value.
-    ///
-    /// # Why this is a struct and not eight methods on the window
-    ///
-    /// Because a method on `FilesWindow` cannot be tested: the window owns a
-    /// Wayland `Connection`, a `Window` and a `Gpu`, and there is no way to
-    /// stand one up in a unit test. That is the whole reason this file had
-    /// ZERO of them while `files.rs` had three hundred and forty-seven — and
-    /// it is also why five of the defects the owner reported were reported
-    /// from his screen rather than caught here.
-    ///
-    /// [`Geometry`] is a plain value: a frame, how many columns the margins
-    /// leave, and the two numbers the view asks for. Everything the door
-    /// decides about WHERE follows from it, so everything the door decides
-    /// about where can be asserted on.
-    fn geometry(&self) -> Geometry {
-        let panes = self.view.panes(self.columns);
-        Geometry {
-            metric: self.metric(),
-            columns: self.columns,
-            strip: panes.strip,
-            chrome: self.chrome_lines(),
-        }
-    }
-
-    /// Everything a frame is made of, borrowed out of the window.
-    /// The modifiers a click of `here` carries: the keyboard's, when the
-    /// keyboard is on the pointer's seat, and none otherwise.
-    fn pointer_mods(&self) -> Modifiers {
-        // THE KEYBOARD ON THE POINTER'S OWN SEAT, whichever that is: with a
-        // keyboard per seat, a click of cursor 2 carries cursor 2's `Ctrl`.
-        self.pointers
-            .seat_here()
-            .and_then(|seat| self.keyboards.state_on(seat, &self.mods))
-            .copied()
-            .unwrap_or_default()
-    }
-
-    fn scene(&mut self) -> Scene<'_> {
-        let geo = self.geometry();
-        Scene {
-            geo,
-            message: self.message.clone(),
-            cell_under_pointer: self.here.cell_under_pointer,
-            line_under_pointer: self.here.line_under_pointer,
-            hovers: self
-                .pointers
-                .lit(&self.here)
-                .map(|(color, p)| (color, p.line_under_pointer, p.cell_under_pointer))
-                .collect(),
-            under_pointer: self.here.under_pointer.as_ref(),
-            fold: self.fold,
-            fold_control: None,
-            fold_scroll: self.fold_scroll,
-            fold_wrapped: self.fold_wrapped,
-            hinted: &mut self.hinted,
-            view: &mut self.view,
-            texts: &self.texts,
-        }
-    }
-
-    /// The half that owns the GPU, and the only half that cannot be tested.
-    ///
-    /// It takes what [`frame`] produced and does nothing but hand it over:
-    /// no arithmetic, no decision about where anything goes. That division is
-    /// the point — a defect in this function is a defect in wgpu's arguments,
-    /// and a defect anywhere else has a test that can reach it.
-    fn present(&mut self, painted: Painted) {
-        let Painted {
-            spans,
-            quads,
-            over,
-            pictures,
-        } = painted;
-        #[allow(clippy::cast_possible_truncation)]
-        let under = (quads.len() - over) as u32;
-        // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
-        // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes,
-        // and nothing else in this function may borrow `self` by then. See
-        // `crate::hidpi::told_before_present`.
-        let surface = self.window.wl_surface().clone();
-        let scale = self.scale;
-        let told = &mut self.scale_told;
-        let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
-            return;
-        };
-        // THE WINDOW'S OWN PIXELS — `resized` already made them what the
-        // buffer can show, so there is one number and this is it.
-        let (logical_w, logical_h) = (self.width, self.height);
-        if let Some(im) = self.images.as_mut() {
-            im.clear();
-            let preview_key = self.view.preview_key();
-            let globe_key = self.view.globe_key();
-            for (key, _) in &pictures {
-                // WHICH PICTURE THIS KEY IS, asked of the VIEW and not worked
-                // out here: the choice between "replace it every frame" and
-                // "only when it is missing" belongs where it can be made once.
-                //
-                // A MOVING FILE REPLACES THE TEXTURE UNDER THE SAME KEY, every
-                // frame — which is what keeps an animation to ONE slot of the
-                // renderer's ceiling. A key per frame would fill the cache with
-                // one file's film and evict every icon. The globe is the same
-                // kind of picture: it is redrawn as the hand moves.
-                if preview_key.as_deref() == Some(key.as_str()) {
-                    if let Some(frame) = self.view.live_frame() {
-                        im.upload_it(&gpu.device, &gpu.queue, key, frame);
-                    } else if im.missing(key)
-                        // THE STILL ONE ONLY GOES UP WHEN IT IS MISSING: a
-                        // preview is up to a mebibyte, and `prepare` is
-                        // sixteen bytes.
-                        && let Some(rgba) = self.view.preview_pixels()
-                    {
-                        im.upload_it(&gpu.device, &gpu.queue, key, rgba);
-                    }
-                } else if globe_key.as_deref() == Some(key.as_str())
-                    && let Some(rgba) = self.view.globe_frame()
-                {
-                    im.upload_it(&gpu.device, &gpu.queue, key, &rgba);
-                } else if (im.missing(key) || self.view.thumb_moves(key))
-                    // A STILL THUMBNAIL ONLY WHEN IT IS MISSING, for the reason
-                    // the still preview gives: the key carries the file, the
-                    // size and the theme, so the same key is the same picture.
-                    // A screenful of them re-uploaded every frame would be tens
-                    // of mebibytes a second across the bus for nothing.
-                    //
-                    // AND A MOVING ONE EVERY TIME, under the SAME key — which
-                    // is what keeps an animation to one slot of the renderer's
-                    // ceiling instead of filling the cache with one file's film.
-                    && let Some(rgba) = self.view.thumb_pixels(key)
-                {
-                    im.upload_it(&gpu.device, &gpu.queue, key, rgba);
-                }
-            }
-            im.prepare(&gpu.queue, logical_w, logical_h, &pictures);
-        }
-        if let Err(e) = text.prepare(
-            &gpu.device,
-            &gpu.queue,
-            gpu.config.width,
-            gpu.config.height,
-            ronoctua_render::Atlas::Pinned,
-            &spans,
-        ) {
-            tracing::error!(error = %e, "preparing the text failed");
-            return;
-        }
-        if let Some(q) = self.quads.as_mut() {
-            q.prepare(&gpu.device, &gpu.queue, logical_w, logical_h, &quads);
-        }
-        let quads_ref = self.quads.as_ref();
-        // QUADS, THEN IMAGES, THEN THE FEW QUADS THAT GO ON TOP, THEN TEXT.
-        //
-        // There is no depth test: whoever draws later ends up on top. The
-        // picture sits on the background and UNDER the text, which has to stay
-        // legible over a light photograph — and under the film's transport,
-        // which is drawn ON the film by design.
-        let images_ref = self.images.as_ref();
-        if let Err(e) = gpu.frame(
-            || crate::hidpi::told_before_present(scale, told, &surface),
-            |pass| {
-                if let Some(q) = quads_ref {
-                    q.draw_range(pass, 0, under);
-                }
-                if let Some(im) = images_ref {
-                    im.draw(pass);
-                }
-                if let Some(q) = quads_ref {
-                    q.draw_range(pass, under, u32::MAX);
-                }
-                text.draw(ronoctua_render::Atlas::Pinned, pass)
-            },
-        ) {
-            tracing::error!(error = %e, "drawing the frame failed");
-            return;
-        }
-        if let Err(e) = self.conn.flush() {
-            tracing::warn!(error = %e, "the flush failed");
-        }
     }
 }
 
@@ -1869,7 +2204,7 @@ pub(crate) struct Painted {
 
 /// The window's geometry: one home for every number about WHERE.
 ///
-/// See [`FilesWindow::geometry`] for why it is a value.
+/// See [`Files::geometry`] for why it is a value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Geometry {
     /// The surface, through the frame that owns the two rails.
@@ -2030,6 +2365,8 @@ pub(crate) struct Scene<'a> {
     /// shortcut landed — the pointer then asks that, and not a second
     /// placement of its own. See `chrome::Hinted`.
     pub hinted: &'a mut crate::chrome::Hinted,
+    /// Whether the pointer rests on line 0's chevron, which lights.
+    pub fold_lit: bool,
 }
 
 /// One frame, as spans and rectangles. No Wayland, no wgpu, no `self`.
@@ -2123,6 +2460,9 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     } else {
         second.clone().unwrap_or_default()
     };
+    // THE SHORTCUT UNDER THE POINTER, LIT — the rule of every header
+    // (`chrome::lit`); the door lights it (`Hinted::light_at`).
+    let line_pieces = crate::chrome::lit(&line_pieces, s.hinted.lit());
     // WHERE THE SHORTCUTS OF THIS LINE LAND, collected while they are drawn.
     let mut marks: Vec<crate::chrome::Mark> = Vec::new();
     // THE ROOM IS THE WHOLE OF `columns`: `recount` took BOTH margins off the
@@ -2264,8 +2604,12 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             line: 0,
             // WITH THE KEYBOARD ON IT, the accent — one glyph has no row to
             // band, so the colour is the whole of the focus.
+            // AND UNDER THE POINTER, LIT — the small step every header's
+            // controls take (`text.subtle.lit.key`).
             color: if lit {
                 tokens::color::STATE_ACCENT
+            } else if s.fold_lit {
+                tokens::color::TEXT_SUBTLE_LIT_KEY
             } else if s.fold.open {
                 tokens::color::TEXT_SUBTLE_STRONG
             } else {
@@ -2322,6 +2666,27 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // half of it and the band needs the panels' half too — see
     // `files::band_of`, which is where both doors' arithmetic lives.
     let panes_now = s.view.panes(s.geo.columns);
+    // EVERY SECTION'S BAR, asked ONCE for the frame: the bands below stop at
+    // them and the bars are drawn from the same list further down.
+    let bars = s.geo.bars(
+        panes_now,
+        &sections,
+        tokens::metrics::cell_width(size),
+        line_px,
+    );
+    // A BAND STOPS BEFORE ITS SECTION'S BAR, when the bar is DRAWN — the
+    // owner's rule for every list: the bar's cells are the bar's alone, so a
+    // row's band never runs under it. Without a bar the band keeps its whole
+    // width. Only the bar going DOWN can sit beside a row; the one going
+    // across takes a line of its own, and the film's timeline lies over a
+    // picture, where no band is drawn.
+    let short_of_the_bar = |pane: crate::files::Pane, at: f32, wide: f32| -> f32 {
+        bars.iter()
+            .filter(|(p, axis, _)| *p == pane && matches!(axis, crate::files::Axis::Down))
+            .map(|(_, _, r)| r.0)
+            .filter(|bx| *bx > at && *bx < at + wide)
+            .fold(wide, |w, bx| w.min(bx - at))
+    };
     if split > 0 {
         let cell = tokens::metrics::cell_width(size);
         // THE LINE SITS IN THE MIDDLE OF THE CELL RESERVED FOR IT — see
@@ -2379,7 +2744,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         quads.push(ronoctua_render::quad::Quad {
             x: at,
             y: f32::from(y) * line_px,
-            width: wide,
+            width: short_of_the_bar(pane, at, wide),
             height: tall,
             color: tokens::color::SURFACE_SELECTION,
         });
@@ -2413,7 +2778,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         quads.push(ronoctua_render::quad::Quad {
             x: at,
             y: f32::from(y) * line_px,
-            width: wide,
+            width: short_of_the_bar(crate::files::Pane::Listing, at, wide),
             height: tall,
             color: tokens::color::SURFACE_HOVER,
         });
@@ -2517,7 +2882,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             quads.push(ronoctua_render::quad::Quad {
                 x: at,
                 y: f32::from(y) * line_px,
-                width: wide,
+                width: short_of_the_bar(pane, at, wide),
                 height: tall,
                 // THE WEAKER OF THE TWO. Two rows, two colours, and which is
                 // which is legible; one row, and only the focus is drawn.
@@ -2642,13 +3007,12 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // listing's unreachable in the other, one drawn a cell past the border
     // and gone off screen, and a thumb that stopped half way down its own
     // column. `Section::bar_box` is the rectangle now — drawn here, and
-    // tested against by `FilesWindow::bar_at_point`.
+    // tested against by `Files::bar_at_point`.
     // THE FILM'S OWN THREE ARE NOT HERE. They go over the picture — see the
     // overlay at the end of this function — and a rectangle pushed here would
     // be painted before it and hidden by it.
     #[allow(clippy::cast_precision_loss)]
-    for (sec, axis, rect) in s.geo.bars(panes, &sections, cell, line_px) {
-        let _ = sec;
+    for &(_, axis, rect) in &bars {
         if matches!(axis, crate::files::Axis::Time) {
             continue;
         }
@@ -2991,121 +3355,6 @@ fn key_of(event: &KeyEvent, mods: Modifiers) -> Option<ronoctua_keymap::Key> {
     })
 }
 
-impl WindowHandler for FilesWindow {
-    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {
-        self.quit = true;
-    }
-
-    fn configure(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &Window,
-        cfg: WindowConfigure,
-        _: u32,
-    ) {
-        // WHAT THE COMPOSITOR SAID IS KEPT SEPARATELY, because what the
-        // buffer can show is what comes back below — see `asked`. It is
-        // taken from the CONFIGURE and from nothing else: built out of
-        // the door's own fields it would be the size `resized` last
-        // answered, which can only ever shrink.
-        self.asked = (
-            cfg.new_size.0.map_or(900, std::num::NonZeroU32::get),
-            cfg.new_size.1.map_or(600, std::num::NonZeroU32::get),
-        );
-        self.width = self.asked.0;
-        self.height = self.asked.1;
-        let asked = self.asked;
-        let scale = self.scale;
-        if let Some(g) = self.gpu.as_mut() {
-            // AND THE WINDOW KEEPS WHAT THE BUFFER CAN SHOW. Below the GPU's
-            // ceiling that is exactly what the compositor configured; above
-            // it, laying out against the bigger number would put the columns
-            // and the bars in a space the buffer does not have.
-            let (shown_w, shown_h) = crate::hidpi::resized(g, asked, scale);
-            self.width = shown_w;
-            self.height = shown_h;
-        }
-        self.recount();
-        self.ask_paint();
-    }
-}
-
-impl SeatHandler for FilesWindow {
-    fn seat_state(&mut self) -> &mut SeatState {
-        &mut self.seats
-    }
-    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
-
-    fn new_capability(
-        &mut self,
-        _: &Connection,
-        qh: &QueueHandle<Self>,
-        seat: wl_seat::WlSeat,
-        cap: Capability,
-    ) {
-        if cap == Capability::Keyboard {
-            // WITH REPEAT, and it had never been. `repeat_key` is written in
-            // both doors and was documented as making holding `j` walk the
-            // list — and SCTK only ever calls it for a keyboard created THIS
-            // way, so it was dead code in both and no key repeated anywhere.
-            // Found looking for why holding `S-<left>` turned a shape once and
-            // then stopped.
-            //
-            // The rate and the delay are the COMPOSITOR's, arriving as
-            // `RepeatInfo`; nothing here invents either.
-            match self.seats.get_keyboard_with_repeat(
-                qh,
-                &seat,
-                None,
-                self.handle.clone(),
-                Box::new(|state: &mut Self, kb, event| {
-                    state.keyboards.switch_to(kb, &mut state.mods);
-                    state.typed(event);
-                }),
-            ) {
-                Ok(k) => {
-                    let name = self.seats.info(&seat).and_then(|i| i.name);
-                    self.keyboards.took(&seat, k, name.as_deref());
-                }
-                Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
-            }
-        }
-        if cap == Capability::Pointer {
-            match self.seats.get_pointer(qh, &seat) {
-                Ok(p) => {
-                    // EVERY POINTER, and not only the first: one per cursor.
-                    let name = self.seats.info(&seat).and_then(|i| i.name);
-                    self.pointers.took(&seat, p, name.as_deref());
-                }
-                Err(e) => tracing::warn!(error = %e, "no pointer; keyboard only"),
-            }
-            // AND THE SEAT'S DATA DEVICE, which is what carries a drag. It
-            // hangs off the SEAT and so cannot be made before one arrives.
-            if let Some(c) = self.carrying.as_mut() {
-                c.took_a_seat(qh, &seat);
-            }
-        }
-    }
-
-    fn remove_capability(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        seat: wl_seat::WlSeat,
-        cap: Capability,
-    ) {
-        if cap == Capability::Keyboard {
-            self.keyboards.lost(&seat, &mut self.mods);
-        }
-        if cap == Capability::Pointer {
-            self.pointers.lost(&seat, &mut self.here);
-        }
-    }
-
-    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
-}
-
 // ---------------------------------------------------------------------------
 // THE DRAG — entries carried out, and files dropped in
 // ---------------------------------------------------------------------------
@@ -3114,8 +3363,12 @@ impl SeatHandler for FilesWindow {
 // point comes in the surface's own pixels, so it goes through the same
 // `line_and_cell` and the same `View::hit` the pointer does — what lights a
 // folder under a drag and what a drop lands in are one answer, read twice.
+//
+// They are written for `Door<Files>` and for no other door: the shared
+// dispatch (`door::handlers`) reaches them because the data device's objects
+// ask for exactly these three traits, and only this window has them.
 
-impl smithay_client_toolkit::data_device_manager::data_device::DataDeviceHandler for FilesWindow {
+impl smithay_client_toolkit::data_device_manager::data_device::DataDeviceHandler for Door<Files> {
     fn enter(
         &mut self,
         _: &Connection,
@@ -3154,8 +3407,11 @@ impl smithay_client_toolkit::data_device_manager::data_device::DataDeviceHandler
             DndAction::Copy
         };
         offer.set_actions(DndAction::Copy | DndAction::Move, wanted);
-        self.view.carrying_from_afar(wanted == DndAction::Copy);
-        self.carried_to(x, y, wanted == DndAction::Copy);
+        self.content
+            .view
+            .carrying_from_afar(wanted == DndAction::Copy);
+        self.content
+            .carried_to(&mut self.ui, x, y, wanted == DndAction::Copy);
     }
 
     fn leave(
@@ -3164,8 +3420,8 @@ impl smithay_client_toolkit::data_device_manager::data_device::DataDeviceHandler
         _: &QueueHandle<Self>,
         _: &wayland_client::protocol::wl_data_device::WlDataDevice,
     ) {
-        if self.view.carried_away() {
-            self.ask_paint();
+        if self.content.view.carried_away() {
+            self.ui.ask_paint();
         }
     }
 
@@ -3183,14 +3439,15 @@ impl smithay_client_toolkit::data_device_manager::data_device::DataDeviceHandler
         let copies = offer
             .as_ref()
             .is_some_and(|o| o.selected_action == DndAction::Copy);
-        self.carried_to(x, y, copies);
+        self.content.carried_to(&mut self.ui, x, y, copies);
         // AND THE OFFER IS TOLD WHETHER THERE IS ANYWHERE TO GO. Accepting
         // everywhere and doing nothing on the drop is a cursor that says "yes"
         // over a file it cannot take — see `View::landing_now`.
         if let Some(offer) = offer {
             offer.accept_mime_type(
                 offer.serial,
-                self.takes_a_drop()
+                self.content
+                    .takes_a_drop()
                     .then(|| crate::carry::URI_LIST.to_owned()),
             );
         }
@@ -3216,7 +3473,7 @@ impl smithay_client_toolkit::data_device_manager::data_device::DataDeviceHandler
             .data::<smithay_client_toolkit::data_device_manager::data_device::DataDeviceData>()
             .and_then(|d| d.drag_offer());
         let Some(offer) = offer else {
-            self.view.carried_away();
+            self.content.view.carried_away();
             return;
         };
         // OUR OWN DRAG IS NOT READ BACK THROUGH THE COMPOSITOR.
@@ -3227,6 +3484,7 @@ impl smithay_client_toolkit::data_device_manager::data_device::DataDeviceHandler
         // for the two log lines that measured it. A drag from somewhere else
         // IS read, with a deadline.
         let mine = self
+            .content
             .carrying
             .as_ref()
             .and_then(crate::carry::Carrying::offering)
@@ -3240,12 +3498,12 @@ impl smithay_client_toolkit::data_device_manager::data_device::DataDeviceHandler
         });
         offer.finish();
         tracing::info!(dropped = paths.len(), "files were let go over the listing");
-        let step = self.view.dropped(paths);
-        self.apply(step);
+        let step = self.content.view.dropped(paths);
+        self.content.apply(&mut self.ui, step);
     }
 }
 
-impl smithay_client_toolkit::data_device_manager::data_source::DataSourceHandler for FilesWindow {
+impl smithay_client_toolkit::data_device_manager::data_source::DataSourceHandler for Door<Files> {
     fn accept_mime(
         &mut self,
         _: &Connection,
@@ -3263,7 +3521,7 @@ impl smithay_client_toolkit::data_device_manager::data_source::DataSourceHandler
         mime: String,
         pipe: smithay_client_toolkit::data_device_manager::WritePipe,
     ) {
-        if let Some(c) = self.carrying.as_ref() {
+        if let Some(c) = self.content.carrying.as_ref() {
             c.send(&mime, pipe);
         }
     }
@@ -3274,7 +3532,7 @@ impl smithay_client_toolkit::data_device_manager::data_source::DataSourceHandler
         _: &QueueHandle<Self>,
         _: &wayland_client::protocol::wl_data_source::WlDataSource,
     ) {
-        self.let_the_drag_go();
+        self.content.let_the_drag_go(&mut self.ui);
     }
 
     fn dnd_dropped(
@@ -3291,7 +3549,7 @@ impl smithay_client_toolkit::data_device_manager::data_source::DataSourceHandler
         _: &QueueHandle<Self>,
         _: &wayland_client::protocol::wl_data_source::WlDataSource,
     ) {
-        self.let_the_drag_go();
+        self.content.let_the_drag_go(&mut self.ui);
     }
 
     fn action(
@@ -3304,7 +3562,7 @@ impl smithay_client_toolkit::data_device_manager::data_source::DataSourceHandler
     }
 }
 
-impl smithay_client_toolkit::data_device_manager::data_offer::DataOfferHandler for FilesWindow {
+impl smithay_client_toolkit::data_device_manager::data_offer::DataOfferHandler for Door<Files> {
     fn source_actions(
         &mut self,
         _: &Connection,
@@ -3323,706 +3581,10 @@ impl smithay_client_toolkit::data_device_manager::data_offer::DataOfferHandler f
     ) {
         // THE COMPOSITOR HAS DECIDED, and the line has to say the same thing
         // the drop will do.
-        self.carried_to(offer.x, offer.y, action == DndAction::Copy);
+        self.content
+            .carried_to(&mut self.ui, offer.x, offer.y, action == DndAction::Copy);
     }
 }
-
-impl KeyboardHandler for FilesWindow {
-    fn enter(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
-        _: u32,
-        _: &[u32],
-        _: &[Keysym],
-    ) {
-        self.keyboards.switch_to(kb, &mut self.mods);
-    }
-
-    fn leave(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
-        _: u32,
-    ) {
-        self.keyboards.switch_to(kb, &mut self.mods);
-        // The modifiers whole, for the reason the footer already records: a
-        // state that only updates with focus cannot keep holding without it,
-        // and a stuck `alt` makes every following key come out as `M-…`.
-        self.mods = Modifiers::default();
-    }
-
-    fn press_key(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: u32,
-        event: KeyEvent,
-    ) {
-        self.keyboards.switch_to(kb, &mut self.mods);
-        self.typed(event);
-    }
-
-    fn repeat_key(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
-        _: u32,
-        event: KeyEvent,
-    ) {
-        // Holding `j` walks the list, which is what a listing wants — unlike
-        // the footer, where repeating a leader key is always a mistake.
-        //
-        // SCTK delivers a repeat through the CALLBACK given to
-        // `get_keyboard_with_repeat` and not through this method, so this is
-        // the second door to the same room and both lead to `typed`.
-        self.typed(event);
-    }
-
-    fn release_key(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: u32,
-        event: KeyEvent,
-    ) {
-        self.keyboards.switch_to(kb, &mut self.mods);
-        if event.keysym == Keysym::Control_R {
-            self.right_ctrl = false;
-        }
-    }
-
-    fn update_modifiers(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: u32,
-        mods: Modifiers,
-        _: RawModifiers,
-        _: u32,
-    ) {
-        self.keyboards.switch_to(kb, &mut self.mods);
-        // A RELEASE THAT NEVER ARRIVED (focus lost with it down) is caught
-        // here: no Ctrl held means the right one is not held either.
-        if !mods.ctrl {
-            self.right_ctrl = false;
-        }
-        self.mods = mods;
-    }
-}
-
-impl PointerHandler for FilesWindow {
-    /// EVERY CURSOR HAS ITS OWN STATE: the pointer that spoke is made `here`
-    /// first, so a drag, a hover or a wheel's leftover never crosses from
-    /// one cursor to another. See `crate::seats`.
-    fn pointer_frame(
-        &mut self,
-        conn: &Connection,
-        qh: &QueueHandle<Self>,
-        pointer: &wl_pointer::WlPointer,
-        events: &[PointerEvent],
-    ) {
-        self.pointers.switch_to(pointer, &mut self.here);
-        self.hinted.swap_hand(&mut self.here.hint_drag);
-        self.pointer_frame_here(conn, qh, events);
-        self.hinted.swap_hand(&mut self.here.hint_drag);
-    }
-}
-
-impl FilesWindow {
-    ///
-    /// One pointer's frame, with its state already `here`.
-    fn pointer_frame_here(
-        &mut self,
-        _: &Connection,
-        qh: &QueueHandle<Self>,
-        events: &[PointerEvent],
-    ) {
-        let before = (
-            self.here.under_pointer.clone(),
-            self.here.cell_under_pointer,
-        );
-        let mut left = None;
-        let mut right = false;
-        // BOTH COORDINATES: a bar going across is dragged by `x`.
-        let mut dragged: Option<(f64, f64)> = None;
-        let mut spun = false;
-        let mut wheel_at: Option<f64> = None;
-        for e in events {
-            match e.kind {
-                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    if self.here.dragging.is_some() {
-                        dragged = Some(e.position);
-                    }
-                    // THE OPENED LINE'S BAR IS DRAGGED HERE and not through
-                    // `dragged`, which carries a point to `View::drag_to` —
-                    // and the view does not own this line.
-                    if self.here.dragging_fold {
-                        self.fold_drag_to(e.position.1);
-                    }
-                    // AND A SHAPE TURNS WITH THE HAND. The deltas are in
-                    // PIXELS and become radians here, because the view has no
-                    // idea how big a pixel is; a whole panel's width is about
-                    // half a turn, which is the ratio that makes a piece feel
-                    // attached to the pointer rather than geared to it.
-                    if let Some((was_x, was_y)) = self.here.dragging_globe {
-                        #[allow(clippy::cast_possible_truncation)]
-                        let moved = self.view.pan_globe(
-                            (e.position.0 - was_x) as f32,
-                            (e.position.1 - was_y) as f32,
-                        );
-                        self.here.dragging_globe = Some(e.position);
-                        if moved {
-                            self.ask_paint();
-                        }
-                    }
-                    if let Some((was_x, was_y)) = self.here.spinning {
-                        let wide = f64::from(self.width.max(1));
-                        let by = std::f64::consts::PI / wide;
-                        #[allow(clippy::cast_possible_truncation)]
-                        // WHERE THE HAND WENT, in radians of turn. Which way a
-                        // yaw counts is `View::spin`'s business and written out
-                        // there — a convention spelled at two call sites is a
-                        // convention that gets one of them backwards, which is
-                        // what happened.
-                        let turned = self.view.spin(
-                            ((e.position.0 - was_x) * by) as f32,
-                            ((e.position.1 - was_y) * by) as f32,
-                        );
-                        self.here.spinning = Some(e.position);
-                        if turned {
-                            spun = true;
-                        }
-                    }
-                    self.aim(e.position.0, e.position.1);
-                    // AND A BUTTON THAT IS DOWN ON THE LISTING IS A GESTURE
-                    // NOW, or still a click — see `files::View::moved_to`.
-                    if let Some((line, cell)) = self.line_and_cell(e.position.0, e.position.1)
-                        && self.view.moved_to(self.columns, self.room(), line, cell)
-                    {
-                        self.ask_paint();
-                    }
-                    // AND A DRAG THAT HAS JUST PICKED SOMETHING UP HANDS IT TO
-                    // THE COMPOSITOR. From here on the pointer is its, and
-                    // what this surface hears is `wl_data_device`.
-                    if let Some((paths, copies)) = self.view.begun_carrying() {
-                        let surface = self.window.wl_surface().clone();
-                        let serial = self.here.pressed_at;
-                        // ON THE SEAT THAT PRESSED — see `carry::Carrying`.
-                        let seat = self.pointers.seat_here().cloned();
-                        if let Some(c) = self.carrying.as_mut() {
-                            c.begin(qh, seat.as_ref(), &surface, serial, paths, copies);
-                        }
-                    }
-                }
-                PointerEventKind::Leave { .. } => {
-                    // THE SENTENCE GOES WITH THE POINTER: one that leaves
-                    // sends no motion on the way out.
-                    if self.hinted.say(None) {
-                        self.ask_paint();
-                    }
-                    self.here.under_pointer = None;
-                    self.here.cell_under_pointer = None;
-                    self.here.line_under_pointer = None;
-                    self.view.pointing(None);
-                    self.view.pointing_at(None);
-                    // AND A BAND ENDS WHERE THE HAND LEFT IT. What it took was
-                    // drawn, entry by entry, the whole way — undoing that
-                    // silently is the worse of the two answers.
-                    if self.view.gave_up() {
-                        self.ask_paint();
-                    }
-                }
-                PointerEventKind::Press { button, serial, .. } if button == LEFT_BUTTON => {
-                    // THE PRESS'S OWN SERIAL, kept because a drag started from
-                    // any other is refused by the compositor with nothing said
-                    // on this side — see `carry::Carrying::begin`.
-                    self.here.pressed_at = serial;
-                    self.aim(e.position.0, e.position.1);
-                    // THE LINE'S OWN CONTROL FIRST: it sits on line 0, which
-                    // belongs to no section, so nothing below here would ever
-                    // resolve it.
-                    if self.fold_at(e.position.0, e.position.1) {
-                        self.fold.toggle();
-                        self.ask_paint();
-                        continue;
-                    }
-                    // AND ITS BAR, for the same reason and in the same place:
-                    // it is drawn on line 0, which no section owns.
-                    if self.on_fold_thumb(e.position.0, e.position.1) {
-                        self.here.dragging_fold = true;
-                        self.fold_drag_to(e.position.1);
-                        continue;
-                    }
-                    // A BAR TAKES THE PRESS, and the row does not get it: the
-                    // thumb is a control, not a line of the list under it.
-                    self.here.dragging = self.bar_at_point(e.position.0, e.position.1);
-                    if self.here.dragging.is_some() {
-                        dragged = Some(e.position);
-                    } else if self
-                        .here
-                        .under_pointer
-                        .as_ref()
-                        .is_some_and(|t| matches!(t.pane, crate::files::Pane::Preview))
-                        && self.view.shape_here()
-                    {
-                        // A PRESS ON THE PIECE TAKES THE POINTER. After the
-                        // bar, because a bar drawn over the panel is still a
-                        // control; before the row, because a shape has no rows
-                        // and the click would otherwise open the file — which
-                        // is what pressing a picture does, and is exactly what
-                        // somebody about to turn it does not want.
-                        self.here.spinning = Some(e.position);
-                    } else if self
-                        .here
-                        .under_pointer
-                        .as_ref()
-                        .is_some_and(|t| matches!(t.hit, crate::files::Hit::Globe))
-                    {
-                        // A PRESS ON THE GLOBE TAKES THE POINTER — the footer door's
-                        // twin, and a field of its own for the same reason. The
-                        // DOT is not part of it, for the reason written there:
-                        // it is a target, and a drag starting on it could never
-                        // be the press that frames on the coordinate.
-                        self.here.dragging_globe = Some(e.position);
-                    } else if let Some((line, cell)) =
-                        self.line_and_cell(e.position.0, e.position.1)
-                        && self.view.pressed(
-                            self.columns,
-                            self.room(),
-                            line,
-                            cell,
-                            crate::chrome::held(self.pointer_mods()),
-                            &self.texts,
-                        )
-                    {
-                        // THE VIEW TOOK IT, and a press on the listing is no
-                        // longer a click: until the pointer moves or the button
-                        // comes up there is nothing that says which of the
-                        // three gestures it is. The click fires on the RELEASE
-                        // — see `files::View::pressed`.
-                    } else {
-                        left = self.here.under_pointer.clone();
-                    }
-                }
-                // AND THE BUTTON COMING BACK UP LETS THE THUMB GO.
-                //
-                // There was no `Release` arm at all: once a bar had been
-                // pressed, every motion afterwards went on dragging it, and
-                // the row under the pointer never got another click. A control
-                // one cannot let go of is worse than one that does not move.
-                PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
-                    self.here.dragging = None;
-                    self.here.dragging_fold = false;
-                    self.here.spinning = None;
-                    self.here.dragging_globe = None;
-                    // AND A PRESS THAT NEVER BECAME A GESTURE IS A CLICK, on
-                    // what it landed on and not on what is under the pointer
-                    // now — a hand that slipped a cell still clicked what it
-                    // aimed at.
-                    if let Some(at) = self.view.let_go() {
-                        left = Some(at);
-                    }
-                }
-                // THE RIGHT BUTTON OPENS THE MENU. It draws in this window's own
-                // region, has no surface of its own and does not float — see the
-                // note in `surface.rs`, where the same decision is written out.
-                PointerEventKind::Press { button, .. } if button == RIGHT_BUTTON => {
-                    // THE OTHER BUTTON ENDS A BAND FIRST. The menu is about
-                    // `chosen()` and its title counts the marks, so one opened
-                    // mid-sweep would be about a set that is still moving.
-                    self.view.gave_up();
-                    self.aim(e.position.0, e.position.1);
-                    // THE PRESS ITSELF, and not the row it landed on: the
-                    // subject is `under_pointer`, which was just resolved, and
-                    // `None` there is an answer too — an empty directory has no
-                    // field anywhere and still has a menu.
-                    right = true;
-                }
-                PointerEventKind::Axis {
-                    vertical,
-                    horizontal,
-                    ..
-                } => {
-                    // THE `stop` OF A CONTINUOUS GESTURE ZEROES WHAT WAS LEFT,
-                    // or half a detent from the last one would add itself to
-                    // the next and the first scroll would come out bigger than
-                    // the finger asked for. Same shape as the footer's.
-                    if vertical.stop || horizontal.stop {
-                        self.here.detents = 0.0;
-                    }
-                    let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
-                    self.here.detents += crate::surface::axis_detents(&vertical, line_px)
-                        + crate::surface::axis_detents(&horizontal, line_px);
-                    // WHERE THE WHEEL WAS: line 0 belongs to no section, so
-                    // the resolved target cannot answer for it.
-                    wheel_at = Some(e.position.1);
-                }
-                _ => {}
-            }
-        }
-        // A SHAPE TURNED, which is neither a drag along a track nor a click:
-        // it has already changed the view, so all that is left is to draw it
-        // and to tell the stage.
-        if spun {
-            self.follow_the_turn();
-            self.ask_paint();
-        }
-        // THE DRAG, before the row and before the wheel: while the thumb is
-        // held, the pointer is not pointing at rows.
-        if let Some((px, py)) = dragged
-            && let Some((pane, axis)) = self.here.dragging
-        {
-            // AGAINST THE SECTION'S OWN BAND, and not the region's.
-            //
-            // The facts sit in the strip, below the listing: measured from the
-            // region's top, every `y` inside them came out past the end and the
-            // fraction saturated at one — the thumb jumped to the bottom and
-            // stayed there, which reads exactly like a bar that does not work.
-            let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
-            let chrome = self.view.chrome_rows(self.columns, &self.texts);
-            let found = self
-                .view
-                .sections(&chrome, self.room(), self.columns, &self.texts)
-                .into_iter()
-                .find(|s| s.pane == pane);
-            // AND THE CLOCK'S WIDTH COMES FROM THE SECTION TOO. It is what
-            // decides where the track ends, so grabbing it anywhere else would
-            // read a position the cursor was never drawn at.
-            let sec_clock = found.as_ref().map_or(0, |s| s.clock);
-            let (top_line, lines) = found.map_or((0, self.room()), |s| (s.top, s.lines));
-            // ALONG THE TRACK THAT WAS GRABBED. A bar going across is dragged
-            // by `x` over the panel's own pixels; one going down by `y` over
-            // its band's.
-            let geo = self.geometry();
-            let fraction = if matches!(axis, crate::files::Axis::Across | crate::files::Axis::Time)
-            {
-                let panes = self.view.panes(self.columns);
-                let cell = geo.metric.cell();
-                match crate::files::section_px(
-                    panes,
-                    pane,
-                    CONTENT_MARGIN,
-                    self.columns,
-                    cell,
-                    geo.metric.width,
-                ) {
-                    Some((x, wide)) if wide > 0.0 => {
-                        // THE FILM'S TRACK IS INSET, and by the same answer the
-                        // cursor was drawn at — see `files::track_px`.
-                        let (x, wide) = if matches!(axis, crate::files::Axis::Time) {
-                            match crate::files::track_px(x, wide, cell, sec_clock) {
-                                Some(it) => it,
-                                None => return,
-                            }
-                        } else {
-                            (x, wide)
-                        };
-                        (px - f64::from(x)) / f64::from(wide)
-                    }
-                    _ => return,
-                }
-            } else {
-                #[allow(clippy::cast_precision_loss)]
-                let top = f64::from(self.first_of_region()) * line_px + top_line as f64 * line_px;
-                #[allow(clippy::cast_precision_loss)]
-                let tall = (line_px * lines as f64).max(1.0);
-                (py - top) / tall
-            };
-            if self
-                .view
-                .drag_to(pane, axis, fraction, self.columns, self.rooms())
-            {
-                self.ask_paint();
-                return;
-            }
-        }
-        if right {
-            self.open_menu();
-            return;
-        }
-        if let Some(row) = left {
-            self.click(&row);
-            return;
-        }
-        // WHAT IS LEFT OF THE ACCUMULATOR STAYS: spending only the whole part
-        // is what lets a continuous gesture add up until it becomes a line.
-        #[allow(clippy::cast_possible_truncation)]
-        let whole = self.here.detents.trunc() as i64;
-        if whole != 0 {
-            #[allow(clippy::cast_precision_loss)]
-            {
-                self.here.detents -= whole as f64;
-            }
-            let by = whole * crate::surface::LINES_PER_DETENT as i64;
-            // THE OPENED LINE TAKES IT FIRST, when the pointer is on it.
-            //
-            // Line 0 and the rows under it belong to no section, so nothing
-            // below here would ever be asked about them — `under_pointer` is
-            // resolved out of `View::hit`, which only knows the region. A bar
-            // with no wheel is half a control.
-            if self.fold.open && wheel_at.is_some_and(|y| self.pointer_on_fold(y)) {
-                let last = self
-                    .fold_scroll
-                    .total
-                    .saturating_sub(self.fold_scroll.lines);
-                let next = i64::try_from(self.fold.offset).unwrap_or(0) + by;
-                self.fold.offset = usize::try_from(next.max(0)).unwrap_or(0).min(last);
-                self.ask_paint();
-                return;
-            }
-            // THE SECTION UNDER THE POINTER TAKES IT FIRST, and the target is
-            // what says which — it is the thing that resolved the point. Asking
-            // `section_at` again here was a second answer to a question already
-            // answered, and in the strip the two disagreed: the gesture went to
-            // the listing while the pointer was over the facts.
-            //
-            // Every section's offset is the view's; see `files::View::wheel`.
-            let which = self
-                .here
-                .under_pointer
-                .as_ref()
-                .map_or(crate::files::Pane::Listing, |t| t.pane);
-            // BOTH PANELS SCROLL INSIDE THE PANEL'S OWN HEIGHT. The preview
-            // joined that sentence the day it began to show a file's letters;
-            // without it, a preview in the bottom strip would page four lines
-            // at a time inside a room the code believed was the whole listing.
-            let room = match which {
-                crate::files::Pane::Info | crate::files::Pane::Preview => self.panel_room(),
-                // THE REGION, and the view takes the listing's chrome off —
-                // the same rule `rooms` follows, and for the same reason: the
-                // sidebar has no chrome and was losing two rows to it.
-                _ => self.room(),
-            };
-            // EVERY SECTION ANSWERS, the listing included: there is no
-            // fallback here any more, and that is the point. What stood here
-            // was this door's own copy of the listing's offset, moved by hand
-            // because `View::wheel` used to answer `false` for it.
-            if self.view.wheel(which, by, self.columns, room) {
-                self.ask_paint();
-            }
-            return;
-        }
-        // Only redraws if something CHANGED: a `Motion` arrives on every pixel
-        // of movement, and painting per pixel would spend the GPU drawing the
-        // same thing.
-        if before
-            != (
-                self.here.under_pointer.clone(),
-                self.here.cell_under_pointer,
-            )
-        {
-            self.ask_paint();
-        }
-    }
-}
-
-impl FilesWindow {
-    /// Puts a sentence on the message line, and takes it off again.
-    ///
-    /// **THE ONE PLACE**, and there were nine. Nine assignments meant nine
-    /// chances to forget whatever a message needs, and one of them was already
-    /// forgotten by all nine: the message never went away. The owner found it
-    /// with `copy the path` — *"no filemanager versão janela, esse texto não
-    /// desapareceu"* — where the footer's `copied` fades after three seconds
-    /// and this door's stayed for the rest of the session.
-    ///
-    /// # Why a one-shot timer, and not a clock
-    ///
-    /// Because this window has no tick, deliberately: with several of them
-    /// open, a timer would be one wake-up per second per window for ever, and
-    /// the directory is watched by inotify precisely so that nothing has to
-    /// wake at rest (see the `Notice` above). A one-shot keeps that property
-    /// exactly — a window with nothing to say wakes not once — and pays for the
-    /// three seconds after a message, which is the only time there is anything
-    /// to do.
-    ///
-    /// The same three seconds as the footer, from the same constant: a message
-    /// that lingered here and not there would be two answers to "how long is a
-    /// message on screen".
-    fn say(&mut self, text: String) {
-        tracing::info!(echo = %text, "message line");
-        self.message = Some(text);
-        self.said = self.said.wrapping_add(1);
-        let mine = self.said;
-        let armed = self.handle.insert_source(
-            calloop::timer::Timer::from_duration(std::time::Duration::from_secs(
-                crate::surface::ECHO_SECONDS,
-            )),
-            move |_, (), state: &mut Self| {
-                // ONLY ITS OWN. Between arming and firing the line may have
-                // been replaced or cleared by a key; wiping whatever is there
-                // would take a newer sentence down early.
-                if state.said == mine {
-                    state.message = None;
-                    state.ask_paint();
-                }
-                calloop::timer::TimeoutAction::Drop
-            },
-        );
-        if let Err(e) = armed {
-            // NOT SILENT, and the message STAYS. A line that outstays its
-            // welcome is a smaller failure than one that vanishes because a
-            // timer could not be hung, and the log says which happened.
-            tracing::warn!(error = %e, "no timer for the message line; it will stay");
-        }
-    }
-
-    /// A left click, on whatever cell it landed on.
-    fn click(&mut self, target: &crate::files::Target) {
-        // A CLICK CLEARS THE LAST MESSAGE, like a key does. This window has no
-        // timer, so the message stays until something else is being done — and
-        // with it drawn ABOVE the pointer's description (so a refusal cannot be
-        // covered), "something else" has to include the mouse. Otherwise a
-        // single error would own the line until a key was pressed.
-        self.message = None;
-        // THE TARGET ALREADY SAYS WHAT WAS PRESSED. It came out of
-        // `files::View::hit`, which resolved the section first and the field
-        // among that section's own — so a press in the sidebar is the
-        // sidebar's, one in the facts is the facts', and one on the listing's
-        // chrome is the path's or the header's. Working it out again here was
-        // the second place it could be got wrong, and it was.
-        let step = self.view.click(
-            target.row,
-            &target.hit,
-            crate::chrome::held(self.pointer_mods()),
-        );
-        self.apply(step);
-    }
-
-    /// WHERE A DRAG WOULD LAND, resolved through the pointer's own path.
-    ///
-    /// The same `line_and_cell` and the same `View::hit`: what lights under a
-    /// drag and what a drop takes are one answer, which is the law this
-    /// manager's controls are all held to.
-    fn carried_to(&mut self, x: f64, y: f64, copies: bool) {
-        let Some((line, cell)) = self.line_and_cell(x, y) else {
-            return;
-        };
-        if self
-            .view
-            .carry_to(self.columns, self.room(), line, cell, copies, &self.texts)
-        {
-            self.ask_paint();
-        }
-    }
-
-    /// Is there anywhere under the pointer for a drop to go?
-    fn takes_a_drop(&self) -> bool {
-        self.view.landing_now()
-    }
-
-    /// A drag of OURS ended, however it ended.
-    fn let_the_drag_go(&mut self) {
-        if let Some(c) = self.carrying.as_mut() {
-            c.done();
-        }
-        if self.view.carried_away() {
-            self.ask_paint();
-        }
-    }
-
-    /// A right click: focus that row, then open the action menu.
-    ///
-    /// THROUGH THE VIEW'S ONE DECISION — see `files::View::menu_at`. What the
-    /// pointer is over was already resolved on the press; handing the row over
-    /// and letting the view resolve it a second time is what made the parameter
-    /// mean two things at once.
-    fn open_menu(&mut self) {
-        self.message = None;
-        let target = self.here.under_pointer.clone();
-        let step = self.view.menu_at(target.as_ref());
-        self.apply(step);
-    }
-}
-
-impl CompositorHandler for FilesWindow {
-    /// The window moved to a screen of another scale — or was told its first.
-    ///
-    /// It was EMPTY here and in eight other doors, which is what made every
-    /// one of them blurry on a HiDPI screen. The rule and the measurement are
-    /// in [`crate::hidpi`].
-    fn scale_factor_changed(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        // THE SURFACE IS NEEDED to ask its VERSION, not to tell it anything:
-        // it is told its scale inside the frame, which is the only commit that
-        // carries a matching buffer — see `crate::hidpi::told_before_present`.
-        surface: &wl_surface::WlSurface,
-        factor: i32,
-    ) {
-        if let Some((w, h)) = crate::hidpi::followed(
-            &mut self.scale,
-            factor,
-            surface,
-            self.gpu.as_mut(),
-            self.text.as_mut(),
-            self.asked,
-        ) {
-            // AND THE DOOR KEEPS WHAT THE BUFFER CAN SHOW. Below the
-            // GPU's ceiling this is what the compositor configured;
-            // above it, going on with the old number lays the picture
-            // out in a space the buffer does not have.
-            self.width = w;
-            self.height = h;
-            self.recount();
-            self.ask_paint();
-        }
-    }
-    fn transform_changed(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: wl_output::Transform,
-    ) {
-    }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
-    fn surface_enter(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
-    ) {
-    }
-    fn surface_leave(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
-    ) {
-    }
-}
-
-impl OutputHandler for FilesWindow {
-    fn output_state(&mut self) -> &mut OutputState {
-        &mut self.outputs
-    }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-}
-
-impl ProvidesRegistryState for FilesWindow {
-    fn registry(&mut self) -> &mut RegistryState {
-        &mut self.registry
-    }
-    registry_handlers![OutputState, SeatState];
-}
-
-smithay_client_toolkit::delegate_registry!(FilesWindow);
-smithay_client_toolkit::delegate_dispatch2!(FilesWindow);
 
 #[cfg(test)]
 mod tests {
@@ -4313,6 +3875,7 @@ mod tests {
                 fold_control: None,
                 fold_wrapped: 0,
                 hinted: &mut crate::chrome::Hinted::default(),
+                fold_lit: false,
                 fold_scroll: ronoctua_design::Scroll {
                     total: 0,
                     lines: 0,

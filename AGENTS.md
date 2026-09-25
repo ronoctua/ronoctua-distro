@@ -80,6 +80,59 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 
 ## Como funciona
 
+- **TODA JANELA É UMA PORTA, e a porta é escrita UMA vez** (`door/`, a pedido do dono): uma
+  janela é um `door::Content` — o que desenha e o que as teclas e as linhas fazem — aberto por
+  `door::run`, e a `Door<C>` é dona de todo o resto: registro, assentos, cada teclado (e a
+  repetição), cada ponteiro, cada DEDO, a escala, a GPU, as três vigias (tema, idioma, tamanho do
+  texto), o cabeçalho, a lista, a barra e a roda. Os handlers do SCTK são UM `impl<C: Content>` cada
+  (`door/handlers.rs`, `delegate_dispatch2!(@<C: Content> Door<C>)`). Eram dezenove cópias de mil
+  linhas, e derivavam: a vigia do idioma faltava em três, a coluna da barra acendia a linha ao lado
+  em todas, e o toque não chegava a nenhuma. **Nada fica engessado**: todo comportamento além dos
+  três que uma janela escreve (`app_id`, `title`, `typed`) tem um PADRÃO que é o padrão do sistema, e
+  quem quer outro sobrescreve aquele método — o gerenciador o ponteiro e a pintura, a câmera a roda,
+  o player a superfície (`open`, a coluna) e o tamanho próprio do canto (`own_size`). O que uma
+  janela não consegue é ESQUECER um: cobra o `every-window-is-a-door`. Rodapé e linha de vida seguem
+  layer-shell com handlers próprios e tomam as peças comuns. **O toque é da porta**
+  (`door::touch::Fingers`): toque é clique, arrastar é o botão segurado, e o dedo parado 500 ms é o
+  botão DIREITO — tocado pelo MESMO código de ponteiro de um mouse, com uma mão própria; todo buffer
+  WASM o ganha porque o hospedeiro é uma porta. Não testado em tela de toque (o dono não tem uma).
+- **A COLUNA DA BARRA É DELA — enquanto ela é desenhada, e quem responde é UM registro**
+  (`bars.rs`): toda pintura que desenha uma barra anota a TRILHA dela (a coluna inteira, em
+  pixels) — `canvas.bar` nas portas, `bars_drawn.record` no rodapé —, e duas coisas leem o registro
+  sem saber quem desenhou: o PONTEIRO (na porta, um movimento sobre uma trilha sem botão apertado
+  chega ao conteúdo como SAÍDA das linhas; no rodapé, linha e célula nenhuma) e as FAIXAS (toda
+  quadra de seleção ou de hover, um conjunto fechado de tokens, é cortada onde uma trilha começa).
+  Sem barra, a linha vai até a borda. Era regra lista a lista, e o gerenciador a guardava por
+  CÉLULA onde a barra é desenhada por PIXEL: a metade direita da barra acendia a linha ao lado, e o
+  dono fotografou e pediu a solução global e definitiva. Os buffers só recuam a faixa com barra
+  desenhada (`Pen::keeping_for`). Cobra o `a-bar-owns-its-column`, que varre as PINTURAS: barra
+  desenhada sem trilha anotada é recusada.
+- **UM CABEÇALHO, e todo atalho dele é um CLIQUE.** Glifo, rótulo e título vêm antes dos atalhos
+  por `chrome::Title` (acento, cinza frio do `text.subtle.explain`, `text.header-title` — próprio do cabeçalho, e não o `text.heading` dos títulos do conteúdo), sempre no chão
+  da página — o cabeçalho do brain tinha fundo próprio, em que os tons da dica nunca foram medidos, e
+  o dono leu os atalhos fora de contraste. Cada peça de atalho carrega `press: Option<chrome::Act>`:
+  `Act::Key` é a tecla, apertada pelo MESMO caminho do teclado (`door::keys::event_of`, e no
+  rodapé `hint_clicked`), e `Act::Run` é um comando do registro (`LEADER 0`, as teclas de um modo).
+  Tecla sem ação é desenhada em `Register::Inert` (`text.subtle.inert`, o degrau da tecla sem
+  matiz) — decidido no `chrome::laid`, então nada parece controle sem ser. **E o atalho clicável
+  sob o ponteiro ACENDE, em todo cabeçalho** (`chrome::lit`, `Hinted::light_at` na porta, o
+  `hint_lit` do minibuffer, o gerenciador e o brain), junto com o chevron: nos tons
+  `text.subtle.lit.*`, o MESMO degrau do tom em repouso com mais da própria matiz — o dono pediu
+  variações pequenas, e o brain acendia em `text.once` e no cinza do conteúdo, outras cores. As
+  teclas que um cabeçalho ensina funcionam onde são ensinadas: **na janela de um buffer, a tecla
+  local `, r` é o acorde `C-r`** — o hospedeiro põe o grupo na frente (`buffer.rs`, e `C-v` só cola
+  quando o buffer não declara `, v`); o `,` é o grupo atrás da leader (`LEADER , r`, pelo rodapé) e
+  não se digita na janela. Letra sozinha é TEXTO, para um buffer poder ganhar um campo de
+  digitação sem barreira; o brain ensina `C-r`, `C-e`, `C-o`, `C-k` (`in_window`). Atalho contextual segue
+  `Register::Contextual` em toda vista que filtra por linha. Cobra o
+  `every-hint-key-is-a-click-or-says-so`.
+- **QUATRO TONS PARA UMA LINHA, pelo TIPO e nunca por argumento de cor** (`chrome::Kind`): rótulo
+  de fato (`text.label.fact`), rótulo de ajuste (`text.label.acts`), valor de fato
+  (`text.read.strong`), valor de ajuste (`text.answer`) — e `Disabled`, `ListedFact`,
+  `ListedSetting`; sob o cursor, `text.here.*`. `field_pair` recebe um `Kind`, e o valor que diz um
+  ESTADO (bateria, enlace) passa por `chrome::tinted`. Do lado WASM são `Role::LabelFact`,
+  `LabelSetting`, `ValueFact`, `ValueSetting` (`Run::names`/`answers`). Cobra o
+  `labels-say-what-they-are`.
 - **O rodapé é o desktop.** `wlr-layer-shell` embaixo: modeline e minibuffer COLADAS, expansão com teto e página abaixo, **faixa de notificação acima**, e além dele no máximo uma coluna à direita (inv. 14). Ancorado embaixo, crescer para cima não move a modeline. Clique só faz o que tecla faz.
 - **Todo buffer tem ESTADO, e o primeiro é `normal`** — recusado no load se não for. `Esc` sozinho volta UM nível (o buffer é que anda, e relata); **segurar `Esc` + setas gira**; `LEADER w s` escolhe; clique na modeline gira. O toque-contra-retenção é resolvido NO HOST do buffer (keyd pegaria o `Esc` do vim), que avisa o rodapé pelo socket de controle — e o rodapé PERGUNTA na troca de foco. Estrangeira não tem estado. Id inglês, tela por `state-<id>`; `normal` discreto, todo o resto num token SÓ.
 - **A fronteira com o compositor é um CONTRATO, e só o adaptador fala IPC** — `ronoctua-compositor`
@@ -949,7 +1002,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   pode repintá-la. Só o hover é por tema, porque deita na superfície do tema. As formas são o
   Bibata Modern recolorido na build (`nix/cursors.nix`, a mesma fonte que o nixpkgs pina) — oito
   temas `ronoctua-pointer-N`, 43 MB com quatro tamanhos (24, 32, 48, 64; com 16 e 96 eram 92).
-- **Toda porta segue a ESCALA da tela em que está** (`hidpi.rs`, uma regra e dez chamadas):
+- **Toda porta segue a ESCALA da tela em que está** (`hidpi.rs`, uma regra, e a porta a chama):
   `scale_factor_changed` estava VAZIA nas nove daquele dia, ninguém chamava `set_buffer_scale`, e num monitor que
   o compositor dirige em escala 2 cada porta entregava um buffer do tamanho LÓGICO que o compositor
   esticava — letra borrada, e nada na tela dizia por quê (as colunas estavam certas, o layout também;

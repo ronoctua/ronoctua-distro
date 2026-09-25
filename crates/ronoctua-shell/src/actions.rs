@@ -944,24 +944,38 @@ pub fn mode_hint(name: &str, texts: &ronoctua_i18n::Texts) -> Option<Vec<crate::
         if !out.is_empty() {
             out.push(Piece::separator());
         }
-        out.push(Piece::key(shows, false).about(first.command));
-        out.push(
-            Piece::prose(format!(
-                " {}",
-                texts.t(&format!("{}{}", ronoctua_cmd::KEY_PREFIX_OF, first.command))
-            ))
-            .about(first.command),
-        );
+        // A BAND OF DIGITS IS NOT ONE KEY, and a click cannot say which of
+        // them — so only a single key is a control (`chrome::Act::Run`), and
+        // the band is drawn as a key that is only read.
+        let single = last == i;
+        let key = Piece::key(shows, false).about(first.command);
+        let words = Piece::prose(format!(
+            " {}",
+            texts.t(&format!("{}{}", ronoctua_cmd::KEY_PREFIX_OF, first.command))
+        ))
+        .about(first.command);
+        if single {
+            out.push(key.running(first.command));
+            out.push(words.running(first.command));
+        } else {
+            out.push(key);
+            out.push(words);
+        }
         i = last + 1;
     }
     out.push(Piece::separator());
-    out.push(Piece::key("ESC", false).about("wm-mode-default"));
+    out.push(
+        Piece::key("ESC", false)
+            .about("wm-mode-default")
+            .running("wm-mode-default"),
+    );
     out.push(
         Piece::prose(format!(
             " {}",
             texts.t(&format!("{}wm-mode-default", ronoctua_cmd::KEY_PREFIX_OF))
         ))
-        .about("wm-mode-default"),
+        .about("wm-mode-default")
+        .running("wm-mode-default"),
     );
     Some(out)
 }

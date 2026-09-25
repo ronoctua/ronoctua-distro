@@ -1513,30 +1513,18 @@ fn draft_rows(d: &Draft, left: u16, room: u16, texts: &ronoctua_i18n::Texts) -> 
                 ),
             };
             let focused = n == d.line;
-            let tone = if focused {
-                tokens::color::STATE_ACCENT
-            } else {
-                tokens::color::TEXT_LABEL_FACT
-            };
             Row {
+                // EVERY ROW OF THIS DRAFT IS TURNED BY THE ARROWS, so it is a
+                // SETTING — label and value. Its label was drawn in the FACT's
+                // tone beside a setting's value, which is the pair
+                // contradicting itself.
                 fields: crate::chrome::field_pair(
                     left,
                     room,
                     &texts.t(&label),
                     &value,
-                    tone,
-                    // THE ACCENT TOOK BOTH HALVES HERE, which is the shape
-                    // `network.rs` left behind and wrote down why: a door and
-                    // a fact became one row at the very moment the cursor was
-                    // on them, which is the moment the question is asked. The
-                    // LABEL says "the keyboard is here" and the value goes on
-                    // saying whether the answer can be changed — every row of
-                    // this draft is turned by the arrows, so it is `.acts`.
-                    if focused {
-                        tokens::color::TEXT_HERE_ACTS
-                    } else {
-                        tokens::color::TEXT_ANSWER
-                    },
+                    crate::chrome::Kind::Setting,
+                    focused,
                 ),
             }
         })
@@ -1685,8 +1673,8 @@ fn facts_of(
             room,
             &texts.t(label),
             &value,
-            tokens::color::TEXT_LABEL_FACT,
-            tokens::color::TEXT_READ_STRONG,
+            crate::chrome::Kind::Fact,
+            false,
         )
     })
     .collect()
@@ -2190,19 +2178,10 @@ impl View {
             // 15 leaves. Without it the sheet is seven rows and no cursor, and
             // pressing an arrow changes a line nobody was looking at.
             let focused = i == knob;
-            let label = if focused {
-                tokens::color::STATE_ACCENT
-            } else {
-                tokens::color::TEXT_SECONDARY
-            };
-            // AND THE VALUE SAYS THE OTHER HALF. Both were the accent, so the
-            // row stopped saying whether its answer moves exactly when
-            // somebody was looking at it; see the draft's rows above.
-            let value = if focused {
-                tokens::color::TEXT_HERE_ACTS
-            } else {
-                tokens::color::TEXT_ANSWER
-            };
+            // A KNOB IS A SETTING, label and value — its label was drawn in the
+            // content's grey, the one row of the sheet that said nothing about
+            // being changeable. `chrome::Kind` is the one place that answers.
+            let (label, value) = crate::chrome::Kind::Setting.tones(focused);
             // A SWITCH THAT SWITCHES NOTHING OFF STILL SAYS SO — but on the
             // MESSAGE LINE, when the row is focused, and not as a third column
             // beside it. See [`View::hint`].
@@ -2441,11 +2420,9 @@ impl View {
                             vec![piece(
                                 left,
                                 text,
-                                if self.open_line() == n {
-                                    tokens::color::STATE_ACCENT
-                                } else {
-                                    tokens::color::TEXT_LABEL_ACTS
-                                },
+                                // AN ACTION IS A SETTING'S LABEL: a thing a
+                                // click does.
+                                crate::chrome::Kind::Setting.tones(self.open_line() == n).0,
                             )]
                         })
                         .unwrap_or_default(),
@@ -2591,11 +2568,8 @@ impl View {
                     tokens::mark::SEPARATOR,
                     value_of(&now, Knob::Life, texts),
                 ),
-                tokens::color::TEXT_LABEL_FACT,
-                // A FACT'S LABEL WANTS A FACT'S VALUE. This one row drew the
-                // question in the fact tone and the answer in the body text's,
-                // which is the pair contradicting itself.
-                tokens::color::TEXT_READ_STRONG,
+                crate::chrome::Kind::Fact,
+                false,
             ),
         });
         out.push(Row { fields: Vec::new() });

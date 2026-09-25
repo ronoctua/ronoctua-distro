@@ -145,6 +145,29 @@ impl<I> Run<I> {
         self
     }
 
+    /// Make it the LABEL of a row: of a fact, or of a setting when `acts` —
+    /// the same two tones the host's `chrome::Kind` gives.
+    #[must_use]
+    pub const fn names(mut self, acts: bool) -> Self {
+        self.role = if acts {
+            Role::LabelSetting
+        } else {
+            Role::LabelFact
+        };
+        self
+    }
+
+    /// Make it the VALUE of a row: of a fact, or of a setting when `acts`.
+    #[must_use]
+    pub const fn answers(mut self, acts: bool) -> Self {
+        self.role = if acts {
+            Role::ValueSetting
+        } else {
+            Role::ValueFact
+        };
+        self
+    }
+
     /// Mark it — by COLOUR, never by a box or an outline (invariant 15).
     #[must_use]
     pub const fn accent(mut self) -> Self {
@@ -1291,6 +1314,20 @@ impl<P: Palette> Pen<'_, P> {
         self.keeps = cells;
     }
 
+    /// Keep the bar's cell — ONLY when the bar is drawn.
+    ///
+    /// # Why this and not `keeping(1)`
+    ///
+    /// Because a list that fits has no bar, and a band that stopped a cell
+    /// short of the edge with nothing there is a band with a hole in it. The
+    /// owner asked for both halves: the row answers across the whole width
+    /// while there is no bar, and the bar's column is the bar's alone while
+    /// there is one. `drawn` is the same question the bar itself asks
+    /// (`Scroll::cut`), so the two cannot disagree.
+    pub const fn keeping_for(&mut self, drawn: bool) {
+        self.keeps = if drawn { 1 } else { 0 };
+    }
+
     /// How wide a band of this block is: its columns, less what is kept.
     const fn banded(&self) -> u16 {
         // ZERO IS "TO THE EDGE" in `ground_in`, so a block that keeps nothing
@@ -1316,6 +1353,30 @@ impl<P: Palette> Pen<'_, P> {
         if let Some(line) = self.at(row, 1) {
             self.screen.shelf(line);
         }
+    }
+
+    /// THE HEADER'S NAME: a glyph and a title on the block's first row, in
+    /// the system's header standard — the glyph in the accent, the title in
+    /// the heading's ink, on the page's own ground. The shortcuts are the
+    /// caller's to place after the column this returns.
+    ///
+    /// # Why the ground is not filled
+    ///
+    /// Because the hint's tones are measured on the chrome, and a header of
+    /// its own colour put them on a ground nobody had measured them against —
+    /// the owner read the brain's shortcuts out of contrast beside the rest of
+    /// the system's. Every header of the system is drawn on the page.
+    pub fn head(&mut self, glyph: P::Icon, title: &str, within: u16) -> u16 {
+        self.put(0, Run::glyph(glyph).accent().at(0));
+        let from = crate::ICON + crate::GAP;
+        self.put(
+            0,
+            Run::label(title)
+                .playing(Role::Heading)
+                .at(from)
+                .within(within),
+        );
+        from + within
     }
 
     /// A one-line rule at the end of a row of this block, in the register the

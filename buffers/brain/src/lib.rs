@@ -748,7 +748,7 @@ impl State {
         } else {
             ronoctua_design::wide(&said)
         };
-        ronoctua_design::wide(keys) + ronoctua_design::GAP + phrase
+        ronoctua_design::wide(&in_window(keys)) + ronoctua_design::GAP + phrase
     }
 
     /// How wide the page's own name comes out, MEASURED.
@@ -892,16 +892,10 @@ impl State {
         if pen.empty() {
             return;
         }
-        pen.fill(Role::Header);
-        pen.put(0, Run::glyph(glyph).accent().at(0));
-        let from = ronoctua_design::ICON + ronoctua_design::GAP;
-        pen.put(
-            0,
-            Run::label(&title)
-                .title()
-                .at(from)
-                .within(self.title_cells()),
-        );
+        // THE SYSTEM'S HEADER, on the page's own ground (`Pen::head`): it
+        // had a ground of its own, and the hint's tones — measured on the
+        // chrome — read out of contrast on it beside every other header.
+        pen.head(glyph, &title, self.title_cells());
 
         let mut row = u16::MAX;
         for rung in &ladder {
@@ -918,7 +912,8 @@ impl State {
                 );
             }
             row = rung.row;
-            let wide = ronoctua_design::wide(rung.keys);
+            // THE KEY AS IT IS TYPED HERE — see [`in_window`].
+            let wide = ronoctua_design::wide(&in_window(rung.keys));
             // THE SYSTEM'S OWN THREE TONES. `Role::Key` and `Role::Prose`
             // resolve to `text.subtle.strong` and `text.subtle.default` — the
             // two the minibuffer's hint line is drawn in, a hue family
@@ -929,16 +924,33 @@ impl State {
             //
             // AND UNDER THE POINTER THE NOTATION LIGHTS, because a click on it
             // does what it says: what the eye sees lit is what the click takes.
+            //
+            // AND A PAIR A CLICK CANNOT PRESS SAYS SO, in the tone the host
+            // gives the same thing (`Register::Inert`) — see
+            // [`is_a_control`].
             let lit = self.on_rung(rung);
-            let keys_role = if lit { Role::Once } else { Role::Key };
+            // LIT IN THE SYSTEM'S LIT TONES — the same small step every
+            // header of the system takes (`text.subtle.lit.*`); it was
+            // `text.once` and the content's grey, other colours altogether.
+            let keys_role = match (lit, is_a_control(rung.keys)) {
+                (true, true) => Role::KeyLit,
+                (_, false) => Role::Inert,
+                (false, true) => Role::Key,
+            };
             pen.put(
                 rung.row,
-                Run::datum(rung.keys).playing(keys_role).at(rung.at),
+                Run::datum(&in_window(rung.keys))
+                    .playing(keys_role)
+                    .at(rung.at),
             );
             pen.put(
                 rung.row,
                 Run::label(rung.says)
-                    .playing(if lit { Role::Body } else { Role::Prose })
+                    .playing(if lit && is_a_control(rung.keys) {
+                        Role::ProseLit
+                    } else {
+                        Role::Prose
+                    })
                     .at(rung.at + wide + ronoctua_design::GAP)
                     .within(rung.cells.saturating_sub(wide + ronoctua_design::GAP)),
             );
@@ -969,10 +981,14 @@ impl State {
                 Icon::Expand
             };
             let cell = pen.columns().saturating_sub(1);
+            // THE SYSTEM'S CHEVRON TONES — the prose's when shut and the key's
+            // when open, as the minibuffer's and every window's are.
             let role = if self.hovering(self.blocks.head, 0, cell) {
-                Role::Once
+                Role::KeyLit
+            } else if self.keys_open {
+                Role::Key
             } else {
-                Role::Accent
+                Role::Prose
             };
             // COUNTED FROM THE BORDER, so the air after it is the host's margin
             // at every width, as the modeline's marks are.
@@ -1297,16 +1313,18 @@ impl State {
                 if !layout.has(vid) {
                     break;
                 }
+                // A FACT'S LABEL, in the tone every fact's label wears
+                // (`Role::LabelFact`, the host's `chrome::Kind::Fact`).
                 if !label.is_empty() {
-                    row.put(lid, Run::label(label).dim());
+                    row.put(lid, Run::label(label).names(false));
                 }
                 // A VALUE IS NOT THE DESCRIPTION, and it may not wear the
                 // description's colour. Both were `quiet` — `text.dim` — so
                 // the sentence above and the figures below read as one block
                 // of grey, which is what the owner said about this footer.
-                // The label names and the value is the fact: `dim` and `body`,
-                // which is the pairing every list in the shell already uses.
-                row.put(vid, Run::datum(value).playing(Role::Body));
+                // The label names and the value is the fact — the pairing
+                // every list in the system uses (`chrome::Kind::Fact`).
+                row.put(vid, Run::datum(value).answers(false));
             }
         }
     }
@@ -1414,8 +1432,8 @@ impl State {
         // some it could not reach at all, and the wheel over it moved the
         // CURSOR instead of the page. Both are the same missing thing: an
         // offset. See [`State::follows`] for which of the two moves it.
-        pen.keeping(1);
         let shown = usize::from(pen.lines().saturating_sub(1)).max(1);
+        pen.keeping_for(tasks.len() > shown);
         if self.follows {
             if cursor < self.body_from {
                 self.body_from = cursor;
@@ -1583,8 +1601,9 @@ impl State {
         // THE LANE THE BAR TAKES, declared before a single row is drawn: every
         // band and every hover below stops one cell short of it. Without it the
         // band runs UNDER the bar, and the owner read the result as the
-        // scrollbar *"ficando por cima do item selecionado"*.
-        pen.keeping(1);
+        // scrollbar *"ficando por cima do item selecionado"*. ONLY WHILE THE
+        // BAR IS DRAWN: a log that fits is banded to the edge.
+        pen.keeping_for(total > shown);
         let layout = log_columns(pen.columns(), widest_name(&seen));
         for (n, run) in seen.iter().enumerate() {
             let row = 1 + u16::try_from(n).unwrap_or(0);
@@ -2012,8 +2031,9 @@ impl State {
         if pen.empty() {
             return;
         }
-        // THE LANE THE BAR TAKES; see the same line in the activity log.
-        pen.keeping(1);
+        // THE LANE THE BAR TAKES; see the same line in the activity log — and
+        // only while there is a bar, which is the page not fitting its block.
+        pen.keeping_for(lines_before(&rows, rows.len()) > height);
         let last = pen.lines();
         let mut line = 0;
         // THE SPOT INDEX IS NOT THE ROW INDEX, and conflating them put the
@@ -2118,6 +2138,30 @@ impl State {
     }
 }
 
+/// The key a pair is typed as INSIDE this window: the chord.
+///
+/// `, r` is the buffer's group behind the leader (`LEADER , r`, from the
+/// footer). In the buffer's own window the host takes `C-r` as `, r` — it puts
+/// the group in front — so `C-r` is what this header teaches: a comma is not a
+/// key anybody should type, and a bare letter is text, which a page must stay
+/// free to take one day.
+fn in_window(keys: &str) -> std::borrow::Cow<'_, str> {
+    keys.strip_prefix(", ")
+        .map_or(std::borrow::Cow::Borrowed(keys), |rest| {
+            std::borrow::Cow::Owned(format!("C-{rest}"))
+        })
+}
+
+/// Whether a click on a rung whose notation is `keys` does anything.
+///
+/// The one question [`State::acts`] answers by doing it: the three keys the
+/// page handles itself, and whatever the keymap binds. A rung that is none of
+/// those is drawn in [`Role::Inert`], so no pair looks like a control and is
+/// not one.
+fn is_a_control(keys: &str) -> bool {
+    matches!(keys, "RET" | "Esc" | "Tab") || KEYMAP.iter().any(|(k, _)| *k == keys)
+}
+
 /// The footer's fact slots — a label and a value each.
 ///
 /// A LADDER OF STATIC IDS and not names built per frame: a `Column` takes a
@@ -2220,7 +2264,9 @@ impl State {
         let mut after_unit: Option<(u16, u16)> = None;
         match spot {
             Spot::Enabled => {
-                row.put("label", Run::label(key::ENABLED).dim());
+                // A SETTING: its label wears the tone of a thing that can be
+                // changed (`Role::LabelSetting`) — the four standards of a row.
+                row.put("label", Run::label(key::ENABLED).names(true));
                 row.put(
                     "value",
                     if task.enabled {
@@ -2229,13 +2275,13 @@ impl State {
                         Run::label(key::OFF).accent()
                     },
                 );
-                row.put("keys", Run::datum(", o").accent());
+                row.put("keys", Run::datum(&in_window(", o")).accent());
             }
             Spot::Interval => {
-                row.put("label", Run::label(key::EVERY).dim());
+                row.put("label", Run::label(key::EVERY).names(true));
                 let days = task.interval_days.to_string();
-                row.put("value", Run::datum(&days));
-                row.put("keys", Run::datum(", i").accent());
+                row.put("value", Run::datum(&days).answers(true));
+                row.put("keys", Run::datum(&in_window(", i")).accent());
                 // THE UNIT SITS AGAINST THE NUMBER, which is why its column
                 // is worked out here and drawn below rather than being put in
                 // a column of its own. In its own column it started where the
@@ -2263,12 +2309,13 @@ impl State {
                 });
             }
             Spot::Window => {
-                row.put("label", Run::label(key::PART).dim());
+                row.put("label", Run::label(key::PART).names(true));
                 row.put(
                     "value",
-                    Run::label(&format!("brain-part-{}", part_word(task.part_of_day))),
+                    Run::label(&format!("brain-part-{}", part_word(task.part_of_day)))
+                        .answers(true),
                 );
-                row.put("keys", Run::datum(", w").accent());
+                row.put("keys", Run::datum(&in_window(", w")).accent());
             }
             Spot::Next => {
                 // THE LABEL NAMES WHAT THE VALUE IS, and the value is one of
@@ -2280,11 +2327,12 @@ impl State {
                 // There is no key column: nothing here changes this. What
                 // changes it is the three rows above.
                 let (label, value) = self.when_of(task);
-                row.put("label", Run::label(label).dim());
+                // A FACT: nothing on this row changes it.
+                row.put("label", Run::label(label).names(false));
                 row.put("value", value);
             }
             Spot::RunNow => {
-                row.put("label", Run::label(key::RUN_NOW).dim());
+                row.put("label", Run::label(key::RUN_NOW).names(true));
                 // THE VALUE IS WHAT IS HAPPENING, never when it will happen.
                 // It used to fall through to the next date, so the page read
                 // `Run now   22/09/2026 14:00` — a verb answered with a
@@ -2292,11 +2340,11 @@ impl State {
                 if let Some(doing) = self.doing_of(task) {
                     row.put("value", doing);
                 }
-                row.put("keys", Run::datum(", r").accent());
+                row.put("keys", Run::datum(&in_window(", r")).accent());
             }
             Spot::Rehearse => {
-                row.put("label", Run::label(key::REHEARSE).dim());
-                row.put("keys", Run::datum(", e").accent());
+                row.put("label", Run::label(key::REHEARSE).names(true));
+                row.put("keys", Run::datum(&in_window(", e")).accent());
             }
             Spot::Step(_) | Spot::Ran(_) => {}
         }
@@ -2911,6 +2959,7 @@ impl State {
     /// the HOST sends as inputs — there is no command id for `RET`, so the
     /// notation is what says which it is.
     fn acts(&mut self, keys: &str) -> Vec<Effect> {
+        debug_assert!(is_a_control(keys), "a rung acted on that is no control");
         match keys {
             "RET" => self.confirm(),
             "Esc" => {
@@ -3293,6 +3342,8 @@ impl State {
                 self.phrases = Phrases::of(said.into_iter().map(|p| (p.key, p.text)).collect());
                 vec![Effect::Redraw]
             }
+            // A LETTER IS TEXT, and this page takes none: its keys are chords
+            // (`C-r`), which the host turns into this page's commands.
             Input::Left
             | Input::Right
             | Input::Character(_)
@@ -3429,6 +3480,21 @@ mod tests {
         let mut s = State::fresh();
         s.received(a_mind());
         s
+    }
+
+    /// A KEY THE HEADER TEACHES WORKS WHERE IT IS TAUGHT.
+    #[test]
+    fn a_taught_sequence_works_typed_here() {
+        // THE HEADER TEACHES THE CHORD the host turns into the pair — and a
+        // bare letter is text, which reaches no command.
+        assert_eq!(in_window(", k"), "C-k");
+        assert_eq!(in_window("RET"), "RET");
+        let mut plain = a_state();
+        assert!(plain.act(Input::Character('k')).is_empty());
+        assert!(!plain.keys_open);
+        let mut clicked = a_state();
+        let _ = clicked.acts(", k");
+        assert!(clicked.keys_open, "the pair still acts");
     }
 
     fn a_context(lines: u16, columns: u16) -> Context {

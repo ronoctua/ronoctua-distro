@@ -317,11 +317,18 @@ fn main() -> Result<()> {
     if d.mode != "lucide" {
         bail!("the buffer's mode is `{}` and should be `lucide`", d.mode);
     }
-    // EVERY BINDING UNDER `m`: the host refuses at load whoever leaves that, and a keymap
-    // the host refuses becomes a buffer with no keys at all — with no error on screen.
+    // EVERY BINDING UNDER THE BUFFER'S GROUP (`LOCAL_PREFIX`, the comma — it was
+    // `m`, and this line kept asking for `m` after the group moved): the host refuses
+    // at load whoever leaves that, and a keymap the host refuses becomes a buffer with
+    // no keys at all — with no error on screen.
+    let group = format!("{} ", ronoctua_protocol::LOCAL_PREFIX);
     for l in &d.keymap {
-        if !l.keys.starts_with("m ") {
-            bail!("the binding `{}` leaves `SPC m`", l.keys);
+        if !l.keys.starts_with(&group) {
+            bail!(
+                "the binding `{}` leaves the buffer's group `{}`",
+                l.keys,
+                group.trim()
+            );
         }
     }
     // THE 19 COPY FORMS HAVE DISTINCT KEYS. Two identical ones give no error:
@@ -334,7 +341,7 @@ fn main() -> Result<()> {
         bail!("there are repeated keys in the buffer's keymap");
     }
     println!(
-        "OK: descriptor with {} bindings, all under `SPC m`",
+        "OK: descriptor with {} bindings, all under the buffer's group",
         d.keymap.len()
     );
 

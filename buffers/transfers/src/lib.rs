@@ -679,9 +679,10 @@ fn field(
     if let Some(mark) = mark {
         fields.put(id::MARK, mark);
     }
-    // `dim` and not `body`: a label naming a value is the crate's own word for
-    // this part, and it is the same part the browsers' sheet draws.
-    fields.put(id::LABEL, Run::label(label).dim());
+    // THE LABEL OF A FACT: nothing on a job's sheet is changed by editing it
+    // there, and it is the same part the browsers' sheet draws
+    // (`chrome::Kind::Fact` on the host's side).
+    fields.put(id::LABEL, Run::label(label).names(false));
     fields.put(id::VALUE, value);
     fields.done()
 }
@@ -713,6 +714,14 @@ impl State {
         let layout = row_layout(body);
         self.list_top = Some(line);
         let first = line;
+        // THE BANDS STOP AT THE BAR ONLY WHILE THERE IS ONE: a queue that fits
+        // its window is banded to the edge (zero is "to the edge").
+        let jobs = self.queue.jobs.len();
+        let band = if jobs > room.min(jobs.saturating_sub(self.top)) {
+            body
+        } else {
+            0
+        };
 
         for (n, job) in self.queue.jobs.iter().enumerate().skip(self.top).take(room) {
             // `room` is at least one even in a window that has no room at all;
@@ -721,12 +730,12 @@ impl State {
                 break;
             }
             if Some(job.id) == self.on {
-                screen.ground_in(line, 0, body, Role::Band);
+                screen.ground_in(line, 0, band, Role::Band);
             } else if let Some(seat) = self.hover_on(n) {
                 // THE ROW UNDER THE POINTER, in a tone of its own: the cursor
                 // is where the KEYBOARD is and the hover is where a click
                 // would land.
-                screen.ground_in(line, 0, body, Role::hover_of(seat));
+                screen.ground_in(line, 0, band, Role::hover_of(seat));
             }
             line = line.saturating_add(row(screen, line, job, &layout));
         }

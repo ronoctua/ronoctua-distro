@@ -571,12 +571,15 @@ impl View {
         let target = rows
             .get(self.cursor)
             .map_or(Target::Nothing, |r| r.target.clone());
-        let here: Vec<(&str, &str)> = OF_THE_VIEW
+        // A KEY THAT IS ONLY HERE BECAUSE OF THE ROW UNDER THE CURSOR reads as
+        // one (`Register::Contextual`): the owner asked for the passing guests to
+        // look apart from the keys that are always on the line.
+        let here: Vec<(&str, &str, bool)> = OF_THE_VIEW
             .iter()
             .filter(|(_, _, w)| w.shown(&target))
-            .map(|(k, id, _)| (*k, *id))
+            .map(|(k, id, w)| (*k, *id, !matches!(w, Where::Anywhere)))
             .collect();
-        crate::chrome::hint_of(&here, texts)
+        crate::chrome::hint_of_marked(&here, |_| None, texts)
     }
 
     /// A click on row `n`, at `column` (a field's `at`); `true` when the
@@ -1960,21 +1963,9 @@ impl Builder<'_> {
     fn pair(&mut self, label: String, value: String, target: Target, spot: &str) {
         let focused = self.cursor == self.out.len();
         let acts = target.acts();
-        let (label_colour, value_colour) = match (focused, acts) {
-            (true, true) => (tokens::color::STATE_ACCENT, tokens::color::TEXT_HERE_ACTS),
-            (true, false) => (tokens::color::STATE_ACCENT, tokens::color::TEXT_HERE_READ),
-            (false, true) => (tokens::color::TEXT_LABEL_ACTS, tokens::color::TEXT_ANSWER),
-            (false, false) => (tokens::color::TEXT_SECONDARY, tokens::color::TEXT_DIM),
-        };
+        let kind = crate::chrome::Kind::of(acts);
         self.out.push(Row {
-            fields: crate::chrome::field_pair(
-                self.left,
-                self.room,
-                &label,
-                &value,
-                label_colour,
-                value_colour,
-            ),
+            fields: crate::chrome::field_pair(self.left, self.room, &label, &value, kind, focused),
             focused,
             heading: false,
             target,

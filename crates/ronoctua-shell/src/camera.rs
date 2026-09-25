@@ -757,7 +757,13 @@ pub fn buttons(view: &View, state: Option<&State>, texts: &ronoctua_i18n::Texts)
 pub fn about_button(id: &str, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
     let mut out = Vec::new();
     if let Some((key, _, _)) = OF_THE_VIEW.iter().find(|(_, i, _)| *i == id) {
-        out.push(crate::chrome::Piece::key(*key, false));
+        let piece = crate::chrome::Piece::key(*key, false);
+        // THE KEY IS A CONTROL like every other one on a header: a click on
+        // it presses it.
+        out.push(match ronoctua_keymap::Key::parse(key) {
+            Ok(k) => piece.pressing(k),
+            Err(_) => piece,
+        });
         out.push(crate::chrome::Piece::prose(" "));
     }
     if let Some(sentence) = crate::chrome::hint_sentence(id, texts) {

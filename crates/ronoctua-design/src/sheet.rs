@@ -103,10 +103,12 @@ impl<P: Palette> Screen<P> {
             line,
             Run::label(label)
                 .small()
+                // A SHEET IS FACTS: the label of a fact, the value of one — the
+                // two tones the host's `chrome::Kind::Fact` gives.
                 .playing(if marked {
                     crate::Role::Accent
                 } else {
-                    crate::Role::Dim
+                    crate::Role::LabelFact
                 })
                 .at(0)
                 .within(split.label),
@@ -118,7 +120,7 @@ impl<P: Palette> Screen<P> {
                 .playing(if marked {
                     crate::Role::Accent
                 } else {
-                    crate::Role::Body
+                    crate::Role::ValueFact
                 })
                 .at(split.value)
                 .within(split.room);

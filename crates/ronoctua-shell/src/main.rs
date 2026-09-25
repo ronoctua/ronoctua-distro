@@ -49,6 +49,9 @@ mod audio;
 mod audio_window;
 mod audio_words;
 mod band;
+// WHERE EVERY SCROLLBAR OF A FRAME WAS DRAWN: its column is the bar's, for
+// the pointer and for every band, whatever drew it.
+mod bars;
 mod bluetooth;
 mod bluetooth_window;
 mod bluetooth_words;
@@ -64,6 +67,11 @@ mod disks;
 mod display;
 mod display_window;
 mod display_words;
+// EVERY WINDOW'S PLUMBING, ONCE: the seats, the scale, the GPU, the watches,
+// the header, the list, the pointer and the finger. A window is what it
+// draws and what its keys do; the rest is here, and a window that wants it
+// otherwise says so by overriding one method.
+mod door;
 mod files;
 mod files_window;
 mod fold;

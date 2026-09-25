@@ -26,52 +26,18 @@
 //! opening a prompt that cannot exist — the arrangement the Bluetooth
 //! window's pairing questions already have.
 
-use anyhow::{Context as _, Result};
-use ronoctua_tokens as tokens;
+use crate::door::{Canvas, Content, Door, Hand, LEFT_BUTTON, Ui};
+use anyhow::Result;
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
-    output::{OutputHandler, OutputState},
-    reexports::calloop::{self, EventLoop, channel},
-    reexports::calloop_wayland_source::WaylandSource,
-    registry::{ProvidesRegistryState, RegistryState},
-    registry_handlers,
+    reexports::calloop::{self, channel},
     seat::{
-        Capability, SeatHandler, SeatState,
-        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
-        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        keyboard::{KeyEvent, Keysym, Modifiers},
+        pointer::{PointerEvent, PointerEventKind},
     },
-    shell::{
-        WaylandSurface as _,
-        xdg::{
-            XdgShell,
-            window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
-        },
-    },
-};
-use wayland_client::{
-    Connection, Proxy as _, QueueHandle,
-    globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
 };
 
 /// The window's `app_id`.
 pub const APP_ID: &str = "br.ronoctua.network";
-
-/// `BTN_LEFT`, from `linux/input-event-codes.h`.
-const LEFT_BUTTON: u32 = 0x110;
-
-/// The first line of the list, before the explanation takes its own.
-///
-/// Everything asks [`Self::first_of_list`] instead: while the pointer rests on
-/// a shortcut of the hint, the sentence about it is drawn on the line under
-/// the hint and the list starts one row lower. A window is not anchored to the
-/// bottom of the screen, so that costs a row of list and nothing else — the
-/// footer, which is anchored, pays for the same line another way (see
-/// `Footer::explain_rows`).
-const FIRST_OF_LIST: u16 = 1;
-
-/// The margin inside the window, in cells — see `chrome::FIELDS_LEAD`.
-const CONTENT_MARGIN: u16 = crate::chrome::FIELDS_LEAD;
 
 /// Opens the network view in a window.
 ///
@@ -80,287 +46,117 @@ const CONTENT_MARGIN: u16 = crate::chrome::FIELDS_LEAD;
 /// When there is no Wayland compositor, or the compositor offers no
 /// `xdg_shell`.
 pub fn host_it() -> Result<()> {
-    let conn = Connection::connect_to_env()
-        .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
-    let (globals, queue) = registry_queue_init(&conn).context("Wayland's registry")?;
-    let qh: QueueHandle<NetworkWindow> = queue.handle();
-
-    let compositor = CompositorState::bind(&globals, &qh).context("no wl_compositor")?;
-    let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
-
-    let surface_of = compositor.create_surface(&qh);
-    let window = xdg.create_window(surface_of, WindowDecorations::RequestServer, &qh);
-    let texts = std::rc::Rc::new(crate::language::texts());
-    window.set_title(format!("*{}*", texts.t(ronoctua_i18n::key::NETWORK_TITLE)));
-    window.set_app_id(APP_ID);
-    window.commit();
-
-    let mut cycle: EventLoop<NetworkWindow> = EventLoop::try_new().context("calloop")?;
-    let handle = cycle.handle();
-
-    // THE THEME'S FILE, watched, so a choice made in the footer recolours this
-    // window without it being reopened.
-    let (theme_sender, theme_changed) = channel::channel::<()>();
-    let _theme_watch = crate::theme::watch(move || theme_sender.send(()).is_ok());
-    handle
-        .insert_source(theme_changed, |event, (), state: &mut NetworkWindow| {
-            if let channel::Event::Msg(()) = event
-                && crate::theme::reload()
-            {
-                state.ask_paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
-
-    // THE LANGUAGE'S FILE, watched for the theme's reason and by the theme's
-    // means: a language chosen in the footer has to reach this window
-    // without it being reopened. A door that adopted it only at its next
-    // start is the incomplete preview the owner read off the screen when
-    // the theme did exactly that.
-    let (language_sender, language_changed) = channel::channel::<()>();
-    let _language_watch = crate::language::watch(move || language_sender.send(()).is_ok());
-    handle
-        .insert_source(language_changed, |event, (), state: &mut NetworkWindow| {
-            if let channel::Event::Msg(()) = event {
-                state.texts = std::rc::Rc::new(crate::language::texts());
-                state.ask_paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the language channel: {e}"))?;
-
-    // AND THE SIZE OF THE TEXT, watched for the same reason and by the same
-    // means. A size chosen anywhere moves this window without it being
-    // reopened — and without it this door would sit beside the footer at a
-    // different size, which is the photograph that made this system have one
-    // size at all.
-    let (size_sender, size_changed) = channel::channel::<()>();
-    let _size_watch = crate::toolkits::watch(move || size_sender.send(()).is_ok());
-    handle
-        .insert_source(size_changed, |event, (), state: &mut NetworkWindow| {
-            if let channel::Event::Msg(()) = event
-                && crate::toolkits::reload()
-            {
-                state.text_size_changed();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the text size channel: {e}"))?;
-
-    // THE DAEMON, on a thread of this process — the bus is the clock.
-    let (net_sender, net_changes) = channel::channel::<ronoctua_network::Snapshot>();
-    if let Err(e) = ronoctua_network::watch(move |s| {
-        let _ = net_sender.send(s);
-    }) {
-        tracing::warn!(error = %e, "no NetworkManager; the window opens with nothing to read");
-    }
-    handle
-        .insert_source(net_changes, |event, (), state: &mut NetworkWindow| {
-            if let channel::Event::Msg(s) = event {
-                state.net_arrived(s);
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the network channel: {e}"))?;
-
-    // AND THE SCAN, which is a different clock: `RequestScan` returns at once
-    // and the radio answers seconds later. Without this the list would sit
-    // still until somebody pressed something.
-    let (scan_sender, scans) = channel::channel::<()>();
-    if let Err(e) = ronoctua_network::watch_scan(move || {
-        let _ = scan_sender.send(());
-    }) {
-        tracing::debug!(error = %e, "no scan watcher; the list only rereads on request");
-    }
-    handle
-        .insert_source(scans, |event, (), state: &mut NetworkWindow| {
-            if let channel::Event::Msg(()) = event {
-                state.wire.reread();
-                state.ask_paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the scan channel: {e}"))?;
-
-    // A CLOCK, AND IT IS HERE because this view has a section that MEASURES: a rate is a difference over a
-    // time, and the bus's signals do not arrive on a schedule. One second is
-    // the same coarse beat the footer uses, for the same reason — the
-    // resolution that matters is "it is moving", not the exact byte.
-    handle
-        .insert_source(
-            calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
-            |_, (), state: &mut NetworkWindow| {
-                state.watch.sample();
-                let rows = state.rows();
-                state.view.settle(&rows);
-                state.ask_paint();
-                calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
-            },
-        )
-        .map_err(|e| anyhow::anyhow!("could not hang the second: {e}"))?;
-
-    let wire = crate::network::Wire::fresh();
-    let net = wire.look();
-    let mut watch = crate::network::Watch::default();
-    watch.sample();
-
-    // THE LOCAL NETWORK'S SWEEP, a thread per press — see the footer's own.
-    let (lan_sender, lan_answers) = channel::channel::<ronoctua_lan::Found>();
-    handle
-        .insert_source(lan_answers, |event, (), state: &mut NetworkWindow| {
-            if let channel::Event::Msg(found) = event {
-                state.watch.found(found);
-                let rows = state.rows();
-                state.view.settle(&rows);
-                state.ask_paint();
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the sweep channel: {e}"))?;
-
-    // AND THE TWO TUNNELS, on this window's own thread — the same arrangement
-    // as the footer's, and for the reason the module header gives: neither
-    // daemon signals, so somebody has to ask.
-    let (tunnel_sender, tunnel_events) = channel::channel::<ronoctua_tunnel::Event>();
-    let hand = match ronoctua_tunnel::watch(
-        // `systemctl` AND THE FRAGMENT DIRECTORY ARE IN `Places` NOW. They
-        // used to be a second parameter and a constant; both are answers to
-        // "where is it", which is what `Places` is, and Tor needed to be able
-        // to ask systemd where the unit stands before it could offer to start
-        // it.
-        ronoctua_tunnel::Places::default(),
-        move |e| {
-            let _ = tunnel_sender.send(e);
-        },
-    ) {
-        Ok(h) => Some(h),
-        Err(e) => {
-            tracing::warn!(error = %e, "no tunnel thread; the two sections stay empty");
-            None
+    crate::door::run(|w| {
+        // THE DAEMON, on a thread of this process — the bus is the clock.
+        let (net_sender, net_changes) = channel::channel::<ronoctua_network::Snapshot>();
+        if let Err(e) = ronoctua_network::watch(move |s| {
+            let _ = net_sender.send(s);
+        }) {
+            tracing::warn!(error = %e, "no NetworkManager; the window opens with nothing to read");
         }
-    };
-    handle
-        .insert_source(tunnel_events, |event, (), state: &mut NetworkWindow| {
-            if let channel::Event::Msg(e) = event {
-                state.tunnel_event(e);
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the tunnel channel: {e}"))?;
-    let mut state = NetworkWindow {
-        conn: conn.clone(),
-        handle: handle.clone(),
-        _theme_watch,
-        registry: RegistryState::new(&globals),
-        outputs: OutputState::new(&globals, &qh),
-        seats: SeatState::new(&globals, &qh),
-        _compositor: compositor,
-        keyboards: crate::seats::Seats::default(),
-        key_here: Modifiers::default(),
-        pointers: crate::seats::Seats::default(),
-        here: PerSeat::default(),
-        window,
-        width: 0,
-        height: 0,
-        asked: (0, 0),
-        // ONE TO ONE UNTIL A SCREEN SAYS OTHERWISE: the surface exists before
-        // the compositor has said which output it is on, and
-        // `scale_factor_changed` is what says so.
-        scale: 1,
-        scale_told: 1,
-        columns: 80,
-        lines: 24,
-        quit: false,
-        owed: false,
-        gpu: None,
-        text: None,
-        quads: None,
-        view: crate::network::View::fresh(),
-        wire,
-        net,
-        watch,
-        lan_sender: Some(lan_sender),
-        tunnels: ronoctua_tunnel::Scene::default(),
-        hand,
-        texts,
-        hinted: crate::chrome::Hinted::default(),
-        offset: 0,
-        message: None,
-    };
+        w.handle
+            .insert_source(net_changes, |event, (), door: &mut Door<Network>| {
+                if let channel::Event::Msg(s) = event {
+                    door.content.net_arrived(&mut door.ui, s);
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the network channel: {e}"))?;
 
-    WaylandSource::new(conn, queue)
-        .insert(cycle.handle())
-        .map_err(|e| anyhow::anyhow!("could not hang Wayland: {e}"))?;
+        // AND THE SCAN, which is a different clock: `RequestScan` returns at
+        // once and the radio answers seconds later. Without this the list
+        // would sit still until somebody pressed something.
+        let (scan_sender, scans) = channel::channel::<()>();
+        if let Err(e) = ronoctua_network::watch_scan(move || {
+            let _ = scan_sender.send(());
+        }) {
+            tracing::debug!(error = %e, "no scan watcher; the list only rereads on request");
+        }
+        w.handle
+            .insert_source(scans, |event, (), door: &mut Door<Network>| {
+                if let channel::Event::Msg(()) = event {
+                    door.content.wire.reread();
+                    door.ui.ask_paint();
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the scan channel: {e}"))?;
 
-    let signal = cycle.get_signal();
-    cycle
-        .run(None, &mut state, |e| {
-            e.settle();
-            if e.quit {
-                signal.stop();
+        // A CLOCK, AND IT IS HERE because this view has a section that
+        // MEASURES: a rate is a difference over a time, and the bus's signals
+        // do not arrive on a schedule. One second is the same coarse beat the
+        // footer uses, for the same reason — the resolution that matters is
+        // "it is moving", not the exact byte.
+        w.handle
+            .insert_source(
+                calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
+                |_, (), door: &mut Door<Network>| {
+                    door.content.watch.sample();
+                    door.content.settle(&door.ui);
+                    door.ui.ask_paint();
+                    calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
+                },
+            )
+            .map_err(|e| anyhow::anyhow!("could not hang the second: {e}"))?;
+
+        let wire = crate::network::Wire::fresh();
+        let net = wire.look();
+        let mut watch = crate::network::Watch::default();
+        watch.sample();
+
+        // THE LOCAL NETWORK'S SWEEP, a thread per press — see the footer's own.
+        let (lan_sender, lan_answers) = channel::channel::<ronoctua_lan::Found>();
+        w.handle
+            .insert_source(lan_answers, |event, (), door: &mut Door<Network>| {
+                if let channel::Event::Msg(found) = event {
+                    door.content.watch.found(found);
+                    door.content.settle(&door.ui);
+                    door.ui.ask_paint();
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the sweep channel: {e}"))?;
+
+        // AND THE TWO TUNNELS, on this window's own thread — the same
+        // arrangement as the footer's, and for the reason the module header
+        // gives: neither daemon signals, so somebody has to ask.
+        let (tunnel_sender, tunnel_events) = channel::channel::<ronoctua_tunnel::Event>();
+        let hand = match ronoctua_tunnel::watch(
+            // `systemctl` AND THE FRAGMENT DIRECTORY ARE IN `Places` NOW. They
+            // used to be a second parameter and a constant; both are answers
+            // to "where is it", which is what `Places` is, and Tor needed to
+            // be able to ask systemd where the unit stands before it could
+            // offer to start it.
+            ronoctua_tunnel::Places::default(),
+            move |e| {
+                let _ = tunnel_sender.send(e);
+            },
+        ) {
+            Ok(h) => Some(h),
+            Err(e) => {
+                tracing::warn!(error = %e, "no tunnel thread; the two sections stay empty");
+                None
             }
+        };
+        w.handle
+            .insert_source(tunnel_events, |event, (), door: &mut Door<Network>| {
+                if let channel::Event::Msg(e) = event {
+                    door.content.tunnel_event(&mut door.ui, e);
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the tunnel channel: {e}"))?;
+
+        Ok(Network {
+            view: crate::network::View::fresh(),
+            wire,
+            net,
+            watch,
+            lan_sender: Some(lan_sender),
+            tunnels: ronoctua_tunnel::Scene::default(),
+            hand,
         })
-        .context("event loop")?;
-    Ok(())
+    })
 }
 
-/// The window.
-struct NetworkWindow {
-    conn: Connection,
-    /// The loop, for the ONE thing that needs it here: a keyboard that
-    /// REPEATS. SCTK only generates repeat events for a keyboard made with
-    /// `get_keyboard_with_repeat`, and that wants a `LoopHandle` — so this is
-    /// carried rather than reached for. Without it `repeat_key` below is dead
-    /// code and holding an arrow moves exactly one row, which is the trap
-    /// AGENTS.md records and which nine windows inherited.
-    handle: calloop::LoopHandle<'static, Self>,
-    _theme_watch: Option<ronoctua_files::notice::Notice>,
-    registry: RegistryState,
-    outputs: OutputState,
-    seats: SeatState,
-    _compositor: CompositorState,
-    keyboards: crate::seats::Seats<Modifiers, wl_keyboard::WlKeyboard>,
-    /// The modifiers of the keyboard whose events are being handled — the
-    /// per-seat state `keyboards` swaps in (`crate::seats`).
-    key_here: Modifiers,
-    /// Every pointer this window was offered — one per cursor — with the
-    /// state of each while another is `here`. See `crate::seats`.
-    pointers: crate::seats::Seats<PerSeat>,
-    /// The state of the pointer whose events are being handled now.
-    here: PerSeat,
-    window: Window,
-    /// The window's size in LOGICAL pixels — what the compositor configured
-    /// it to, what the columns are counted from, what the pointer arrives in.
-    width: u32,
-    /// See the field above.
-    height: u32,
-    /// The logical size the COMPOSITOR configured, before any clamp.
-    ///
-    /// `width`/`height` are what the BUFFER can show — which is what the
-    /// columns, the bars and the hit tests are laid out against; this is what
-    /// the GPU is asked for. They are the same pair on every machine anybody
-    /// has, and they come apart exactly at the GPU's texture ceiling. Keeping
-    /// only one of them is a ratchet: a window clamped once at scale 3 would
-    /// ask for the size it was cut down to and could never grow back. See
-    /// [`crate::hidpi`].
-    asked: (u32, u32),
-    /// How many physical pixels one logical pixel is on the screen this
-    /// window is on — see [`crate::hidpi`], where the rule and its
-    /// measurement live.
-    scale: i32,
-    /// What the SURFACE has been told, which lags `scale` by one frame.
-    ///
-    /// `set_buffer_scale` has to travel in the commit that carries a buffer of
-    /// the matching size, and the only such commit is the present inside
-    /// `Gpu::frame` — see [`crate::hidpi::told_before_present`].
-    scale_told: i32,
-    columns: u16,
-    lines: u16,
-    quit: bool,
-    /// Whether a frame is owed — see `notifications_window`'s field of the
-    /// same name for why nothing here paints straight away.
-    owed: bool,
-    gpu: Option<ronoctua_render::gpu::Gpu>,
-    text: Option<ronoctua_render::Text>,
-    /// The one rectangle this window draws: the list's scrollbar.
-    ///
-    /// It had none — see `chrome::list_bar` for what that cost — and the wheel
-    /// was the only way down a nine-section list.
-    quads: Option<ronoctua_render::quad::Quads>,
+/// The window: the view, and what it reads.
+struct Network {
     view: crate::network::View,
     /// This window's own telephone to the daemon, and the access points it
     /// has seen.
@@ -376,78 +172,46 @@ struct NetworkWindow {
     tunnels: ronoctua_tunnel::Scene,
     /// The thread that reads them and carries out their orders.
     hand: Option<ronoctua_tunnel::Hand>,
-    texts: std::rc::Rc<ronoctua_i18n::Texts>,
-    /// The hint line, and the shortcut the pointer is resting on it.
-    hinted: crate::chrome::Hinted,
-    /// The first visible row. A window has no page: it scrolls.
-    offset: usize,
-    message: Option<String>,
 }
 
-/// What this window keeps for ONE pointer — see `crate::seats`.
+/// What this window keeps for ONE pointer, past what every door keeps.
 #[derive(Debug, Default)]
-struct PerSeat {
-    /// Is the pointer dragging the bar?
-    ///
-    /// Held, because a drag is three events: the press that grabs it, every
-    /// motion until the release, and the release. Without the flag the list
-    /// would only move where the pointer was PRESSED.
-    dragging: bool,
-    /// And WHICH shelf, when the bar grabbed was a shelf's.
+struct Shelving {
+    /// WHICH shelf's bar this pointer is dragging, when it is one.
     ///
     /// A shelf's bar is drawn at its CONTAINER's right edge and the list's at
-    /// the surface's (`chrome::shelf_box`), so a press has to
-    /// reach the bar that was drawn at that HEIGHT. Without this the shelf's
-    /// thumb was visible, and pressing it dragged the whole list.
+    /// the surface's (`chrome::shelf_box`), so a press has to reach the bar
+    /// that was drawn at that HEIGHT. Without this the shelf's thumb was
+    /// visible, and pressing it dragged the whole list.
     dragging_shelf: Option<crate::network::Shelf>,
-    /// How many LINES the wheel and the touchpad have asked for and not yet
-    /// been paid.
-    ///
-    /// LINES, and the unit is in the name on purpose: the footer's own
-    /// accumulator holds DETENTS, because one of its two modes turns a page per
-    /// detent. Two fields of one crate holding two units under one name is the
-    /// `ink-is-not-a-count` confusion, and it costs a factor of three.
-    ///
-    /// A touchpad sends fractions of a line and a mouse sends a detent as
-    /// fifteen pixels, which is also a fraction. Spending only the whole part
-    /// and keeping the rest is what makes a slow gesture move the list at the
-    /// speed of the finger instead of standing still and then jumping — the
-    /// reason is written over `surface::wheel_arrived`.
-    lines_owed: f64,
-    row_under_pointer: Option<usize>,
-    /// Whether this pointer is dragging the header's drawer bar — the
-    /// per-pointer half of `chrome::Hinted`, swapped in around every frame.
-    hint_drag: bool,
 }
 
-impl NetworkWindow {
+impl Network {
     /// A fresh reading of the daemon's whole state.
-    fn net_arrived(&mut self, s: ronoctua_network::Snapshot) {
+    fn net_arrived(&mut self, ui: &mut Ui, s: ronoctua_network::Snapshot) {
         // THE VIEW FOLLOWS THE NEW ROWS, the footer's reason: a cable plugged
         // in brings six facts, a tunnel coming up brings a row, and a cursor
         // past the end focuses nothing.
         self.net = s;
-        let rows = self.rows();
-        self.view.settle(&rows);
-        self.ask_paint();
+        self.settle(ui);
+        ui.ask_paint();
     }
 
     /// A fresh reading of the two tunnels, or the end of an order.
-    fn tunnel_event(&mut self, e: ronoctua_tunnel::Event) {
+    fn tunnel_event(&mut self, ui: &mut Ui, e: ronoctua_tunnel::Event) {
         match e {
             ronoctua_tunnel::Event::Scene(scene) => {
                 self.tunnels = *scene;
-                let rows = self.rows();
-                self.view.settle(&rows);
-                self.ask_paint();
+                self.settle(ui);
+                ui.ask_paint();
             }
             ronoctua_tunnel::Event::Done { refused, .. } => {
                 if let Some(words) = refused {
-                    self.message = Some(self.texts.t_with(
+                    ui.message = Some(ui.texts.t_with(
                         ronoctua_i18n::key::ECHO_NETWORK_REFUSED,
                         &[("error", &words)],
                     ));
-                    self.ask_paint();
+                    ui.ask_paint();
                 }
             }
             // THE LOGIN'S PAGE, opened with whatever the person's desktop
@@ -456,69 +220,20 @@ impl NetworkWindow {
                 let _ = std::process::Command::new(crate::network::OPEN)
                     .arg(&url)
                     .spawn();
-                self.message = Some(
-                    self.texts
+                ui.message = Some(
+                    ui.texts
                         .t_with(ronoctua_i18n::key::ECHO_NETWORK_LOGIN, &[("url", &url)]),
                 );
-                self.ask_paint();
+                ui.ask_paint();
             }
         }
     }
 
-    /// How many rows fit under the hint line.
-    fn room(&self) -> usize {
-        self.lines.saturating_sub(self.first_of_list()) as usize
-    }
-
-    /// Keeps the cursor on screen, starting to scroll two rows before the edge.
-    /// Keeps the offset inside the list, and nothing else.
-    ///
-    /// # Why this is not `follow`
-    ///
-    /// Because a paint may not move the list. `follow` slaves the offset to
-    /// the CURSOR, and calling it from `paint` undid, on the same frame, every
-    /// offset the pointer had just set: a drag of the scrollbar and a turn of
-    /// the wheel both wrote an offset and then watched the paint put it back
-    /// under the cursor — which on a freshly-opened window (cursor on row 1)
-    /// means back to the top, every time. The bar looked like a bar that does
-    /// not work, which is exactly the report it was built to answer.
-    ///
-    /// The footer never made this mistake: `Footer::follow_cursor` is called
-    /// from twenty places and every one of them is an EVENT.
-    ///
-    /// What a paint may do is keep the offset inside a list that changed size
-    /// under it — the watch thread brings a new reading while nobody is
-    /// touching anything — and honour an anchor the view asked for.
-    fn settle_offset(&mut self, rows: usize) {
-        let room = self.room();
-        if room == 0 {
-            return;
-        }
-        // A VIEW MAY ASK FOR A LINE AT THE TOP — see
-        // `network::View::take_anchor`. `TAB` lands on a section and has to
-        // SHOW it, and keeping the cursor visible is satisfied by the
-        // section's title being off the screen above it.
-        if let Some(top) = self.view.take_anchor() {
-            self.offset = top.min(rows.saturating_sub(room));
-            return;
-        }
-
-        self.offset = self.offset.min(rows.saturating_sub(room));
-    }
-
-    fn follow(&mut self, rows: usize) {
-        const MARGIN: usize = 2;
-        let room = self.room();
-        if room == 0 {
-            return;
-        }
-        let cursor = self.view.cursor();
-        if cursor < self.offset + MARGIN {
-            self.offset = cursor.saturating_sub(MARGIN);
-        } else if cursor + MARGIN >= self.offset + room {
-            self.offset = cursor + MARGIN + 1 - room;
-        }
-        self.offset = self.offset.min(rows.saturating_sub(room));
+    /// The view settles on the rows as they are now. An ARRIVAL does not
+    /// follow the cursor: only a key or a click moves the page.
+    fn settle(&mut self, ui: &Ui) {
+        let rows = self.view_rows(ui);
+        self.view.settle(&rows);
     }
 
     /// Carries out what the view asked for.
@@ -526,7 +241,7 @@ impl NetworkWindow {
     /// EVERY ORDER RE-READS: the watch thread would bring the same reading a
     /// moment later, and this is what makes the screen answer the key that
     /// was just pressed rather than a quarter of a second afterwards.
-    fn apply(&mut self, errand: crate::network::Errand) {
+    fn apply(&mut self, ui: &mut Ui, errand: crate::network::Errand) {
         use crate::network::Errand;
         use ronoctua_i18n::key;
         let refused = |e: &anyhow::Error, texts: &ronoctua_i18n::Texts| {
@@ -538,27 +253,24 @@ impl NetworkWindow {
             // `chrome::information_of`, and `chrome::copied` for the
             // one place the six doors share.
             Errand::Copy(text) => {
-                self.message = Some(crate::chrome::copied(&text, &self.texts));
+                ui.message = Some(crate::chrome::copied(&text, &ui.texts));
             }
             Errand::Close => {
-                self.quit = true;
+                ui.quit = true;
                 return;
             }
             // A PATH IS TYPED IN THE MINIBUFFER, which this window has not
             // got — the pairing question's own arrangement, and its reason.
             Errand::Ask => {
-                self.message = Some(
-                    self.texts
-                        .t(ronoctua_i18n::key::NETWORK_ANSWER_IN_THE_FOOTER),
-                );
+                ui.message = Some(ui.texts.t(ronoctua_i18n::key::NETWORK_ANSWER_IN_THE_FOOTER));
             }
             Errand::Bring(path, kind) => {
                 let name = ronoctua_network::vpn::name_of(&path);
-                self.message = Some(match self.wire.import(&path, kind) {
-                    Ok(()) => self
+                ui.message = Some(match self.wire.import(&path, kind) {
+                    Ok(()) => ui
                         .texts
                         .t_with(key::ECHO_NETWORK_IMPORTED, &[("network", &name)]),
-                    Err(e) => self.texts.t_with(
+                    Err(e) => ui.texts.t_with(
                         key::ECHO_NETWORK_IMPORT_FAILED,
                         &[("file", &name), ("reason", &e.to_string())],
                     ),
@@ -569,18 +281,18 @@ impl NetworkWindow {
             // truth.
             Errand::Hotspot(true) => {
                 let name = crate::network::hostname();
-                self.message = Some(
+                ui.message = Some(
                     match ronoctua_network::hotspot_password()
                         .and_then(|word| self.wire.hotspot(&name, &word).map(|()| word))
                     {
                         Ok(word) => {
                             self.view.sharing(Some(word.clone()));
-                            self.texts.t_with(
+                            ui.texts.t_with(
                                 key::ECHO_NETWORK_HOTSPOT,
                                 &[("network", &name), ("password", &word)],
                             )
                         }
-                        Err(e) => self.texts.t_with(
+                        Err(e) => ui.texts.t_with(
                             key::ECHO_NETWORK_HOTSPOT_FAILED,
                             &[("reason", &e.to_string())],
                         ),
@@ -589,8 +301,8 @@ impl NetworkWindow {
             }
             Errand::Hotspot(false) => {
                 self.view.sharing(None);
-                self.message = Some(
-                    self.texts.t(
+                ui.message = Some(
+                    ui.texts.t(
                         if self
                             .wire
                             .disconnect(ronoctua_network::Medium::Radio)
@@ -626,11 +338,11 @@ impl NetworkWindow {
                             self.watch.sweeping(false);
                         }
                     }
-                    _ => self.message = Some(self.texts.t(key::ECHO_NETWORK_NO_LINK)),
+                    _ => ui.message = Some(ui.texts.t(key::ECHO_NETWORK_NO_LINK)),
                 }
             }
             Errand::Radio(on) => {
-                self.message = Some(self.texts.t(match self.wire.radio(on) {
+                ui.message = Some(ui.texts.t(match self.wire.radio(on) {
                     Ok(()) if on => key::ECHO_NETWORK_RADIO_ON,
                     Ok(()) => key::ECHO_NETWORK_RADIO_OFF,
                     Err(_) => key::ECHO_NETWORK_UNAVAILABLE,
@@ -638,43 +350,43 @@ impl NetworkWindow {
             }
             Errand::Airplane(on) => {
                 if let Err(e) = self.wire.airplane(on) {
-                    self.message = Some(refused(&e, &self.texts));
+                    ui.message = Some(refused(&e, &ui.texts));
                 }
             }
             Errand::Disconnect(medium) => {
-                self.message = Some(self.texts.t(if self.wire.disconnect(medium).is_ok() {
+                ui.message = Some(ui.texts.t(if self.wire.disconnect(medium).is_ok() {
                     key::ECHO_NETWORK_DISCONNECTED
                 } else {
                     key::ECHO_NETWORK_UNAVAILABLE
                 }));
             }
             Errand::Facts => {
-                self.message = Some(match crate::network::carrying(&self.net) {
-                    Some(l) if l.medium == ronoctua_network::Medium::Wired => self.texts.t_with(
+                ui.message = Some(match crate::network::carrying(&self.net) {
+                    Some(l) if l.medium == ronoctua_network::Medium::Wired => ui.texts.t_with(
                         key::ECHO_NETWORK_LINK_WIRED,
                         &[
                             ("network", &l.interface),
-                            ("rate", &crate::network::rate_of(l, &self.texts)),
+                            ("rate", &crate::network::rate_of(l, &ui.texts)),
                         ],
                     ),
-                    Some(l) => self.texts.t_with(
+                    Some(l) => ui.texts.t_with(
                         key::ECHO_NETWORK_LINK,
                         &[
                             ("network", l.network.as_deref().unwrap_or(&l.interface)),
-                            ("band", &crate::network::band_text(l.band, &self.texts)),
-                            ("rate", &crate::network::rate_of(l, &self.texts)),
+                            ("band", &crate::network::band_text(l.band, &ui.texts)),
+                            ("rate", &crate::network::rate_of(l, &ui.texts)),
                             ("signal", &format!("{}%", l.signal)),
                         ],
                     ),
-                    None => self.texts.t(key::ECHO_NETWORK_NO_LINK),
+                    None => ui.texts.t(key::ECHO_NETWORK_NO_LINK),
                 });
             }
             Errand::Forget(ssid) => {
-                self.message = Some(if self.wire.forget(&ssid).is_ok() {
-                    self.texts
+                ui.message = Some(if self.wire.forget(&ssid).is_ok() {
+                    ui.texts
                         .t_with(key::ECHO_NETWORK_FORGOTTEN, &[("network", &ssid)])
                 } else {
-                    self.texts.t(key::ECHO_NETWORK_UNAVAILABLE)
+                    ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE)
                 });
             }
             // A PASSWORD IS TYPED IN THE FOOTER, which this window has not
@@ -682,16 +394,13 @@ impl NetworkWindow {
             // that needs typing says where, rather than looking broken.
             Errand::Connect(target) => {
                 if target.secured && !target.saved {
-                    self.message = Some(
-                        self.texts
-                            .t(ronoctua_i18n::key::NETWORK_ANSWER_IN_THE_FOOTER),
-                    );
+                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::NETWORK_ANSWER_IN_THE_FOOTER));
                 } else {
-                    self.message = Some(match self.wire.connect(&target.ssid, None, false) {
-                        Ok(()) => self
+                    ui.message = Some(match self.wire.connect(&target.ssid, None, false) {
+                        Ok(()) => ui
                             .texts
                             .t_with(key::ECHO_NETWORK_CONNECTED, &[("network", &target.ssid)]),
-                        Err(e) => self.texts.t_with(
+                        Err(e) => ui.texts.t_with(
                             key::ECHO_NETWORK_FAILED,
                             &[("network", &target.ssid), ("reason", &e.to_string())],
                         ),
@@ -703,11 +412,11 @@ impl NetworkWindow {
                     self.net.active.iter().find(|a| a.at == at).map(|a| &a.id),
                     &at,
                 );
-                self.message = Some(match self.wire.drop_it(&at) {
-                    Ok(()) => self
+                ui.message = Some(match self.wire.drop_it(&at) {
+                    Ok(()) => ui
                         .texts
                         .t_with(key::ECHO_NETWORK_TUNNEL_DOWN, &[("network", &name)]),
-                    Err(e) => refused(&e, &self.texts),
+                    Err(e) => refused(&e, &ui.texts),
                 });
             }
             Errand::Raise(at) => {
@@ -715,11 +424,11 @@ impl NetworkWindow {
                     self.net.saved.iter().find(|s| s.at == at).map(|s| &s.id),
                     &at,
                 );
-                self.message = Some(match self.wire.raise(&at) {
-                    Ok(()) => self
+                ui.message = Some(match self.wire.raise(&at) {
+                    Ok(()) => ui
                         .texts
                         .t_with(key::ECHO_NETWORK_TUNNEL_UP, &[("network", &name)]),
-                    Err(e) => refused(&e, &self.texts),
+                    Err(e) => refused(&e, &ui.texts),
                 });
             }
             // THE TUNNEL ORDERS GO TO THIS WINDOW'S OWN THREAD: neither
@@ -728,7 +437,7 @@ impl NetworkWindow {
             Errand::Tunnel(order) => match self.hand.as_ref() {
                 Some(h) => h.send(order),
                 None => {
-                    self.message = Some(self.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
+                    ui.message = Some(ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
                 }
             },
             // TOR'S SETTINGS GO THROUGH THE SAME THREAD, and the sentence
@@ -745,21 +454,21 @@ impl NetworkWindow {
                 match self.hand.as_ref() {
                     Some(h) => {
                         h.send(ronoctua_tunnel::Order::Configure(lines));
-                        self.message = Some(self.texts.t(if running {
+                        ui.message = Some(ui.texts.t(if running {
                             key::ECHO_TOR_WRITTEN
                         } else {
                             key::ECHO_TOR_NOT_RUNNING
                         }));
                     }
                     None => {
-                        self.message = Some(self.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
+                        ui.message = Some(ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
                     }
                 }
             }
             Errand::TorAutostart(on) => match self.hand.as_ref() {
                 Some(h) => h.send(ronoctua_tunnel::Order::Autostart(on)),
                 None => {
-                    self.message = Some(self.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
+                    ui.message = Some(ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
                 }
             },
             // THE ONE THING THIS DOOR CANNOT DO IS TYPE. The minibuffer is the
@@ -767,7 +476,7 @@ impl NetworkWindow {
             // which is what it already does for a Wi-Fi password and a VPN
             // path.
             Errand::TorEdit(_) => {
-                self.message = Some(self.texts.t(key::NETWORK_ANSWER_IN_THE_FOOTER));
+                ui.message = Some(ui.texts.t(key::NETWORK_ANSWER_IN_THE_FOOTER));
             }
             Errand::Delete(at) => {
                 let name = name_of(
@@ -789,155 +498,33 @@ impl NetworkWindow {
                 } else {
                     key::ECHO_NETWORK_DELETED
                 };
-                self.message = Some(match self.wire.delete(&at) {
-                    Ok(()) => self.texts.t_with(saying, &[("network", &name)]),
-                    Err(e) => refused(&e, &self.texts),
+                ui.message = Some(match self.wire.delete(&at) {
+                    Ok(()) => ui.texts.t_with(saying, &[("network", &name)]),
+                    Err(e) => refused(&e, &ui.texts),
                 });
             }
         }
         self.net = self.wire.look();
-        let rows = self.rows();
+        let rows = self.view_rows(ui);
         self.view.settle(&rows);
-        self.ask_paint();
-    }
-
-    /// The size of the text changed under this door.
-    ///
-    /// THE SHAPER HAS TO HEAR IT TOO. It was built with a size and keeps it;
-    /// moving everything around it — the columns, the cell, every hit test —
-    /// and leaving the letters gives a grid at one size with text at another,
-    /// which reads as a broken font rather than as a setting that took.
-    fn text_size_changed(&mut self) {
-        if let Some(t) = self.text.as_mut() {
-            t.draw_at(ronoctua_tokens::text::size());
-        }
-        self.recount();
-        self.ask_paint();
-    }
-
-    /// Columns and rows from the size in pixels.
-    fn recount(&mut self) {
-        let size = tokens::text::size();
-        let cell = tokens::metrics::cell_width(size);
-        let line = tokens::metrics::line_height(size);
-        let usable = (self.width as f32) - 2.0 * cell * f32::from(CONTENT_MARGIN);
-        self.columns = tokens::metrics::columns(usable.max(0.0), size);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let lines = (self.height as f32 / line).floor().max(0.0) as u16;
-        self.lines = lines;
-    }
-
-    fn assemble_gpu(&mut self) {
-        use raw_window_handle::{
-            RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
-        };
-        let (Some(disp), Some(surf)) = (
-            std::ptr::NonNull::new(self.conn.backend().display_ptr().cast()),
-            std::ptr::NonNull::new(self.window.wl_surface().id().as_ptr().cast()),
-        ) else {
-            tracing::error!("null Wayland pointers");
-            return;
-        };
-        // SAFETY: `conn` and `window` are fields of `self`, like the `Gpu` — the
-        // handles do not outlive what produced them.
-        // ONE CALL, not the same one twice: two calls to a pure
-        // function are two places the arguments can be edited apart.
-        let first = crate::hidpi::physical(self.asked, self.scale);
-        #[allow(unsafe_code)]
-        let gpu = unsafe {
-            ronoctua_render::gpu::Gpu::new(
-                RawDisplayHandle::Wayland(WaylandDisplayHandle::new(disp)),
-                RawWindowHandle::Wayland(WaylandWindowHandle::new(surf)),
-                first.0,
-                first.1,
-            )
-        };
-        let Ok(mut g) = gpu else {
-            tracing::error!("no usable GPU; the window will not draw");
-            return;
-        };
-        // AND THE FIRST BUFFER IS DIVISIBLE TOO. `Gpu::new` clamps at the
-        // GPU's ceiling like `resize` does, and the first frame sends the
-        // scale — see `crate::hidpi::resized`.
-        let (shown_w, shown_h) = crate::hidpi::resized(&mut g, self.asked, self.scale);
-        self.width = shown_w;
-        self.height = shown_h;
-        // AND THE COLUMNS ARE COUNTED AGAIN. `configure` counts them before the
-        // GPU exists, against the size the compositor gave; if the buffer came
-        // back smaller than that, the count that is on file is for a picture
-        // wider than the one this door draws into.
-        self.recount();
-        match ronoctua_render::Text::new(
-            &g.device,
-            &g.queue,
-            g.config.format,
-            self.scale,
-            tokens::text::size(),
-        ) {
-            Ok(t) => self.text = Some(t),
-            Err(e) => tracing::error!(error = %e, "assembling the text failed"),
-        }
-        // AND THE ONE RECTANGLE THIS WINDOW DRAWS: the list's scrollbar.
-        match ronoctua_render::quad::Quads::new(&g.device, g.config.format) {
-            Ok(q) => self.quads = Some(q),
-            Err(e) => tracing::error!(error = %e, "assembling the quads failed"),
-        }
-        self.gpu = Some(g);
-    }
-
-    /// One key, from a press or from a REPEAT.
-    ///
-    /// Both doors of every view take this path: SCTK delivers a repeat
-    /// through the callback given to `get_keyboard_with_repeat`, which has no
-    /// `Connection` and no `QueueHandle` to hand on — so the work cannot live
-    /// in `press_key`, and while it did, `repeat_key` was dead code and
-    /// holding an arrow moved exactly one row.
-    fn typed(&mut self, event: KeyEvent) {
-        let Some(press) = press_of(&event) else {
-            return;
-        };
-        self.pressed(press);
+        ui.ask_paint();
     }
 
     /// What one key means — from the keyboard, or `RET` from a second click
     /// on the row the cursor is already on (invariant 19).
-    fn pressed(&mut self, press: crate::network::Press) {
-        self.message = None;
+    fn pressed(&mut self, ui: &mut Ui, press: crate::network::Press) {
+        ui.message = None;
         let errand = {
             let mut view = std::mem::take(&mut self.view);
-            let errand = view.key(press, &self.facts(), self.columns, &self.texts);
+            let errand = view.key(press, &self.facts(), ui.columns, &ui.texts);
             self.view = view;
             errand
         };
-        // THE CURSOR MOVED, so the list follows it — here, on the EVENT, and
-        // never in the paint. See `settle_offset` for what following from a
-        // paint cost.
-        let rows = self.rows().len();
-        self.follow(rows);
-        self.apply(errand);
+        self.apply(ui, errand);
     }
 
-    /// Asks for a frame. It is drawn when the event queue empties.
-    const fn ask_paint(&mut self) {
-        self.owed = true;
-    }
-
-    /// Draws the owed frame, if one is owed.
-    fn settle(&mut self) {
-        if std::mem::take(&mut self.owed) {
-            self.paint();
-            // AND ONCE MORE IF THE HEADER'S DRAWER JUST OPENED: the list's
-            // first line is asked for before the frame and the wrap is only
-            // known inside it. It answers once and then never again, so
-            // nothing loops — see `fold::Fold::held`.
-            if self.hinted.settled() {
-                self.paint();
-            }
-        }
-    }
-
-    fn rows(&self) -> Vec<crate::network::Row> {
-        self.view.rows(&self.facts(), self.columns, &self.texts)
+    fn view_rows(&self, ui: &Ui) -> Vec<crate::network::Row> {
+        self.view.rows(&self.facts(), ui.columns, &ui.texts)
     }
 
     /// Everything the rows are drawn from — see `network::Facts`.
@@ -950,232 +537,35 @@ impl NetworkWindow {
         }
     }
 
-    fn paint(&mut self) {
-        if self.width == 0 {
-            return;
-        }
-        if self.gpu.is_none() {
-            self.assemble_gpu();
-        }
-        let size = tokens::text::size();
-        let margin = CONTENT_MARGIN;
-        // A MESSAGE TAKES THIS LINE, and then there is no shortcut on it to
-        // point at. Decided BEFORE the list is measured, because the
-        // explanation's row comes out of that measurement — see
-        // `Self::first_of_list`. Left until the drawing, the list would be
-        // measured against a row that the frame then does not draw.
-        if self.message.is_some() {
-            self.hinted.say(None);
-        }
-        let rows = self.rows();
-        self.settle_offset(rows.len());
-
-        let mut spans: Vec<ronoctua_render::Span> = Vec::new();
-
-        // LINE 0: what the last order said, or the keys — the footer's
-        // minibuffer, through the other door. `columns` is already net of both
-        // margins (`recount`), so the whole of it is the room.
-        let room = self.columns;
-        // LINE 0 AND THE DRAWER IT OPENS INTO: the view's shortcuts or what
-        // the last order said, the chevron on the right edge when the line
-        // does not fit, the wrapped rest of it once that has been pressed,
-        // and the sentence about the shortcut the pointer is resting on.
-        //
-        // ONE PAINTER for every door of this shape — see `chrome::Hinted`:
-        // this was written out in each of the ten windows, and the drawer was
-        // written in none of them.
-        let (pieces, hinting) = self.message.clone().map_or_else(
-            || (self.view.hint(&self.texts), true),
-            |text| (vec![crate::chrome::Piece::said(text)], false),
-        );
-        spans.extend(
-            self.hinted
-                .head(&pieces, hinting, margin, room, &self.texts),
-        );
-
-        // THE FOCUS IS A COLOUR, NOT A BAND — the same mark the footer's door
-        // draws for these rows.
-        for (i, row) in rows.iter().skip(self.offset).take(self.room()).enumerate() {
-            let y = self.first_of_list() + u16::try_from(i).unwrap_or(0);
-            for f in &row.fields {
-                spans.push(ronoctua_render::Span {
-                    size: ronoctua_render::Size::Px(size),
-                    text: f.text.clone(),
-                    column: margin + f.at,
-                    line: y,
-                    color: f.color,
-                    edge: false,
-                    foot: false,
-                });
-            }
-        }
-
-        #[allow(clippy::cast_precision_loss)]
-        let (bar_w, bar_h) = (self.width as f32, self.height as f32);
-        let mut bar: Vec<ronoctua_render::quad::Quad> = Vec::new();
-        // EVERY CONTAINER ON SCREEN GETS ITS GROUND, and it goes in FIRST —
-        // before the page's bar and before every other rectangle. Quads draw in
-        // order and there is no depth test, so a ground pushed after the page's
-        // bar paints the page's THUMB out of existence wherever a container is
-        // on screen, which is what the owner read off the screen: *"ela acaba
-        // desaparecendo e mudando de tamanho"*. The box (`chrome::shelf_box`)
-        // now makes that impossible by geometry as well; the order is the
-        // second lock, and the footer's door has both.
-        let box_of = self.shelf_box();
-        for band in self.view.shelves(&rows) {
-            let (from, to) = (band.first, band.first + band.lines);
-            let seen_from = from.max(self.offset);
-            let seen_to = to.min(self.offset + self.room());
-            if seen_to > seen_from
-                && let Ok(line) = u16::try_from(seen_from - self.offset)
-            {
-                bar.push(crate::chrome::shelf_ground(
-                    box_of,
-                    self.first_of_list() + line,
-                    seen_to - seen_from,
-                    bar_w,
-                    bar_h,
-                ));
-            }
-        }
-        // EVERY CURSOR'S HOVER, in its own colour — see `crate::seats` —
-        // AFTER the grounds and before every bar. A row inside a shelf is CUT
-        // to the shelf's box: the band says which line of THAT list is under
-        // the pointer, and a band past the box would paint over the page.
-        let shelves = self.view.shelves(&rows);
-        let cell = crate::chrome::Frame::of(bar_w, bar_h, 0).cell();
-        for mut band in crate::chrome::hover_bands(
-            self.pointers
-                .lit(&self.here)
-                .map(|(color, s)| (color, s.row_under_pointer)),
-            self.offset,
-            self.room(),
-            rows.len(),
-            self.first_of_list(),
-            bar_w,
-        ) {
-            let line_px = tokens::metrics::line_height(tokens::text::size());
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            // ROUNDED: the band was placed at `line × line_px`, and a division
-            // back can land a hair under the whole line.
-            let row = (band.y / line_px).round() as usize - usize::from(self.first_of_list())
-                + self.offset;
-            if shelves
-                .iter()
-                .any(|s| (s.first..s.first + s.lines).contains(&row))
-            {
-                band.x = f32::from(box_of.from) * cell;
-                band.width = f32::from(box_of.cells) * cell;
-            }
-            bar.push(band);
-        }
-        // THE PAGE'S BAR, from the same `Scroll` every other bar in this system
-        // uses.
-        let scroll = crate::chrome::list_scroll(rows.len(), self.room(), self.offset);
-        bar.extend(crate::chrome::list_bar(
-            scroll,
-            self.first_of_list(),
-            bar_w,
-            bar_h,
-        ));
-        // AND THE HEADER'S OWN, when its drawer is open and the wrap ran past
-        // it. Two bars, two lists, and neither is the other's.
-        bar.extend(self.hinted.bar(crate::chrome::Frame::of(bar_w, bar_h, 0)));
-        // AND A CONTAINER'S OWN, when the whole band is on screen — for the
-        // reason the footer's door writes down: a track shorter than its band
-        // would move the list by a different amount than the drag.
-        for band in self.view.shelves(&rows) {
-            let (from, to) = (band.first, band.first + band.lines);
-            if band.total <= band.lines {
-                continue;
-            }
-            if from < self.offset || to > self.offset + self.room() {
-                continue;
-            }
-            let Ok(line) = u16::try_from(from - self.offset) else {
-                continue;
-            };
-            let inner = crate::chrome::list_scroll(band.total, band.lines, band.offset);
-            if let Some(q) =
-                crate::chrome::shelf_bar(inner, box_of, self.first_of_list() + line, bar_w, bar_h)
-            {
-                bar.push(q);
-            }
-        }
-        // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
-        // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes,
-        // and nothing else in this function may borrow `self` by then. See
-        // `crate::hidpi::told_before_present`.
-        let surface = self.window.wl_surface().clone();
-        let scale = self.scale;
-        let told = &mut self.scale_told;
-        let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
-            return;
-        };
-        // THE WINDOW'S OWN PIXELS — `resized` already made them what the
-        // buffer can show, so there is one number and this is it.
-        let (logical_w, logical_h) = (self.width, self.height);
-        if let Err(e) = text.prepare(
-            &gpu.device,
-            &gpu.queue,
-            gpu.config.width,
-            gpu.config.height,
-            ronoctua_render::Atlas::Pinned,
-            &spans,
-        ) {
-            tracing::error!(error = %e, "preparing the text failed");
-            return;
-        }
-        if let Some(q) = self.quads.as_mut() {
-            q.prepare(&gpu.device, &gpu.queue, logical_w, logical_h, &bar);
-        }
-        // THE RECTANGLE FIRST, THEN THE TEXT. There is no depth test: whoever
-        // draws later is on top, and a bar over a letter would hide it.
-        let quads_ref = self.quads.as_ref();
-        if let Err(e) = gpu.frame(
-            || crate::hidpi::told_before_present(scale, told, &surface),
-            |pass| {
-                if let Some(q) = quads_ref {
-                    q.draw(pass);
-                }
-                text.draw(ronoctua_render::Atlas::Pinned, pass)
-            },
-        ) {
-            tracing::error!(error = %e, "drawing the frame failed");
-            return;
-        }
-        if let Err(e) = self.conn.flush() {
-            tracing::warn!(error = %e, "the flush failed");
-        }
-    }
-
     /// The box every container of this view is drawn in.
     ///
     /// ONE BOX FOR ALL OF THEM, and it comes from the same `extent` the rows
     /// were built with — a ground measured from a different width than the
     /// text inside it is a ground that cuts its own rows.
-    fn shelf_box(&self) -> crate::chrome::ShelfBox {
-        let (left, room) = crate::network::extent(self.columns);
+    fn shelf_box(ui: &Ui) -> crate::chrome::ShelfBox {
+        let (left, room) = crate::network::extent(ui.columns);
         crate::chrome::shelf_box(left, room)
     }
 
-    /// Every shelf whose band is WHOLLY on screen, and the line it starts on.
+    /// Every shelf whose band is WHOLLY on screen and does not fit — the ones
+    /// that draw a bar — and the line it starts on.
     ///
     /// The same filter the drawing uses, so what can be grabbed is exactly
     /// what was drawn — see `chrome::on_the_band` for why a band that is half
     /// out gets no bar.
-    fn bands(&self, rows: &[crate::network::Row]) -> Vec<(u16, crate::network::Band)> {
+    fn bands(&self, ui: &Ui, rows: &[crate::network::Row]) -> Vec<(u16, crate::network::Band)> {
+        let room = ui.room_for_rows();
         self.view
             .shelves(rows)
             .into_iter()
             .filter(|b| b.total > b.lines)
             .filter_map(|b| {
                 let (from, to) = (b.first, b.first + b.lines);
-                if from < self.offset || to > self.offset + self.room() {
+                if from < ui.offset || to > ui.offset + room {
                     return None;
                 }
-                let line = u16::try_from(from - self.offset).ok()?;
-                Some((self.first_of_list() + line, b))
+                let line = u16::try_from(from - ui.offset).ok()?;
+                Some((ui.first_of_list() + line, b))
             })
             .collect()
     }
@@ -1183,51 +573,245 @@ impl NetworkWindow {
     /// The shelf whose BAR is under `(x, y)`, if any.
     fn shelf_bar_at(
         &self,
+        ui: &Ui,
         rows: &[crate::network::Row],
         x: f32,
         y: f32,
     ) -> Option<crate::network::Band> {
         #[allow(clippy::cast_precision_loss)]
-        let (w, h) = (self.width as f32, self.height as f32);
-        self.bands(rows).into_iter().find_map(|(line, b)| {
+        let (w, h) = (ui.width as f32, ui.height as f32);
+        let box_of = Self::shelf_box(ui);
+        self.bands(ui, rows).into_iter().find_map(|(line, b)| {
             let inner = crate::chrome::list_scroll(b.total, b.lines, b.offset);
-            crate::chrome::on_the_band(inner, self.shelf_box(), line, w, h, x, y).then_some(b)
+            crate::chrome::on_the_band(inner, box_of, line, w, h, x, y).then_some(b)
         })
     }
 
     /// Where a drag of that shelf's bar puts it.
     fn shelf_offset_at(
         &self,
+        ui: &Ui,
         rows: &[crate::network::Row],
         which: crate::network::Shelf,
         y: f32,
     ) -> Option<usize> {
         #[allow(clippy::cast_precision_loss)]
-        let (w, h) = (self.width as f32, self.height as f32);
-        self.bands(rows).into_iter().find_map(|(line, b)| {
+        let (w, h) = (ui.width as f32, ui.height as f32);
+        self.bands(ui, rows).into_iter().find_map(|(line, b)| {
             (b.shelf == which).then(|| {
                 let inner = crate::chrome::list_scroll(b.total, b.lines, b.offset);
                 crate::chrome::shelf_offset_at(inner, line, w, h, y)
             })
         })
     }
+}
 
-    /// The first line of the list, pushed down by the explanation line.
-    fn first_of_list(&self) -> u16 {
-        FIRST_OF_LIST + self.hinted.rows()
+impl Content for Network {
+    type Hand = Shelving;
+
+    fn app_id(&self) -> &'static str {
+        APP_ID
     }
 
-    /// Which drawn row is at height `y`.
-    fn row_at(&self, y: f64) -> Option<usize> {
-        let line = f64::from(tokens::metrics::line_height(tokens::text::size()));
-        if line <= 0.0 || y < 0.0 {
-            return None;
+    fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
+        format!("*{}*", texts.t(ronoctua_i18n::key::NETWORK_TITLE))
+    }
+
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, _: Modifiers) {
+        if let Some(press) = press_of(event) {
+            self.pressed(ui, press);
         }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let which = (y / line) as usize;
-        which
-            .checked_sub(usize::from(self.first_of_list()))
-            .map(|i| i + self.offset)
+    }
+
+    fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
+        self.view.hint(&ui.texts)
+    }
+
+    fn rows(&self, ui: &Ui) -> Vec<Vec<crate::files::Field>> {
+        self.view_rows(ui).into_iter().map(|r| r.fields).collect()
+    }
+
+    fn cursor(&self) -> Option<usize> {
+        Some(self.view.cursor())
+    }
+
+    /// THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19: a click
+    /// puts the cursor on the row, and a click on the row it is already on is
+    /// that row's `RET`, through the same `pressed` a key goes through.
+    fn clicked(&mut self, ui: &mut Ui, row: usize) {
+        let rows = self.view_rows(ui);
+        if self.view.clicked(row, &rows) {
+            self.pressed(ui, crate::network::Press::Enter);
+        }
+    }
+
+    /// The standard list, with the SHELVES' bars taken first.
+    ///
+    /// A SHELF'S BAR FIRST: it is drawn at its container's right edge and the
+    /// list's at the surface's, so the two are different columns — but the
+    /// list's TRACK runs the whole height, so asking it first would let it
+    /// answer for a press on a container's thumb and drag the wrong list.
+    ///
+    /// THE WHEEL IS THE PAGE'S. A shelf took it, on the manager's rule that
+    /// the gesture scrolls the section under the hand — but the manager's
+    /// sections are COLUMNS side by side and a shelf is a band inside one
+    /// list, so with five of them the page stopped scrolling almost
+    /// everywhere. A shelf has its own bar, its own column and the arrows at
+    /// its edge — so the wheel is left to the standard list.
+    fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<Shelving>, events: &[PointerEvent]) {
+        // THE ROWS ARE ONLY BUILT WHEN A SHELF'S BAR CAN BE IN PLAY: a
+        // `Motion` arrives on every pixel of movement. AND A SHELF'S DRAG
+        // COUNTS AS ONE — without it every Motion frame of the drag found no
+        // rows and no band, and the shelf froze under a held thumb.
+        let in_play = hand.extra.dragging_shelf.is_some()
+            || events.iter().any(|e| {
+                matches!(e.kind, PointerEventKind::Press { button, .. } if button == LEFT_BUTTON)
+            });
+        let rows = if in_play {
+            self.view_rows(ui)
+        } else {
+            Vec::new()
+        };
+        let mut shelved: Option<(crate::network::Shelf, usize)> = None;
+        let mut rest: Vec<PointerEvent> = Vec::with_capacity(events.len());
+        for e in events {
+            #[allow(clippy::cast_possible_truncation)]
+            let (px, py) = (e.position.0 as f32, e.position.1 as f32);
+            match e.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    if let Some(which) = hand.extra.dragging_shelf {
+                        shelved = self
+                            .shelf_offset_at(ui, &rows, which, py)
+                            .map(|at| (which, at));
+                        continue;
+                    }
+                }
+                PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
+                    if let Some(band) = self.shelf_bar_at(ui, &rows, px, py) {
+                        hand.extra.dragging_shelf = Some(band.shelf);
+                        shelved = self
+                            .shelf_offset_at(ui, &rows, band.shelf, py)
+                            .map(|at| (band.shelf, at));
+                        continue;
+                    }
+                }
+                // AND THE DRAG ENDS WITH THE BUTTON, or with the pointer: a
+                // grab broken by an unmap drops the release.
+                PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
+                    hand.extra.dragging_shelf = None;
+                }
+                PointerEventKind::Leave { .. } => hand.extra.dragging_shelf = None,
+                _ => {}
+            }
+            rest.push(e.clone());
+        }
+        if let Some((which, at)) = shelved {
+            self.view.put_shelf(which, at);
+            ui.ask_paint();
+        }
+        if !rest.is_empty() {
+            crate::door::list::pointer(self, ui, hand, &rest);
+        }
+    }
+
+    fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
+        crate::door::list::header(self, ui, canvas);
+        let rows = self.view_rows(ui);
+        let room = ui.room_for_rows();
+        // A VIEW MAY ASK FOR A LINE AT THE TOP — see
+        // `network::View::take_anchor`. `TAB` lands on a section and has to
+        // SHOW it, and keeping the cursor visible is satisfied by the
+        // section's title being off the screen above it. Honoured ONCE.
+        if let Some(top) = self.view.take_anchor() {
+            ui.offset = top.min(rows.len().saturating_sub(room));
+        }
+        ui.settle_offset(rows.len());
+        let first = ui.first_of_list();
+        #[allow(clippy::cast_precision_loss)]
+        let (w, h) = (ui.width as f32, ui.height as f32);
+        let cell = ui.frame(0).cell();
+        let box_of = Self::shelf_box(ui);
+        let shelves = self.view.shelves(&rows);
+        // EVERY CONTAINER ON SCREEN GETS ITS GROUND, and it goes in FIRST —
+        // before the page's bar and before every other rectangle. Quads draw
+        // in order and there is no depth test, so a ground pushed after the
+        // page's bar paints the page's THUMB out of existence wherever a
+        // container is on screen, which is what the owner read off the
+        // screen: *"ela acaba desaparecendo e mudando de tamanho"*. The box
+        // (`chrome::shelf_box`) now makes that impossible by geometry as well;
+        // the order is the second lock, and the footer's door has both.
+        for band in &shelves {
+            let (from, to) = (band.first, band.first + band.lines);
+            let seen_from = from.max(ui.offset);
+            let seen_to = to.min(ui.offset + room);
+            if seen_to > seen_from
+                && let Ok(line) = u16::try_from(seen_from - ui.offset)
+            {
+                canvas.under.push(crate::chrome::shelf_ground(
+                    box_of,
+                    first + line,
+                    seen_to - seen_from,
+                    w,
+                    h,
+                ));
+            }
+        }
+        // THE LIST, WITHOUT ITS HOVER — drawn below, cut to the shelves.
+        let fields: Vec<Vec<crate::files::Field>> = rows.iter().map(|r| r.fields.clone()).collect();
+        let lit = canvas.lit;
+        canvas.lit = &[];
+        crate::door::list::body(ui, canvas, &fields);
+        canvas.lit = lit;
+        // EVERY CURSOR'S HOVER, in its own colour — see `crate::seats`. A row
+        // on the page stops at the PAGE's bar (`Room::band_width`); a row
+        // inside a shelf is CUT to the shelf's box — the band says which line
+        // of THAT list is under the pointer, and a band past the box would
+        // paint over the page — and stops at the SHELF's bar while one is
+        // drawn: a scrollbar's column is its own while it is drawn.
+        let barred = self.bands(ui, &rows);
+        for &(color, row) in lit {
+            let Some(row) = row else {
+                continue;
+            };
+            let shelf = shelves
+                .iter()
+                .find(|s| (s.first..s.first + s.lines).contains(&row));
+            for mut band in crate::chrome::hover_bands(
+                std::iter::once((color, Some(row))),
+                ui.offset,
+                room,
+                rows.len(),
+                first,
+                ui.room.band_width(),
+            ) {
+                if let Some(s) = shelf {
+                    let own_bar = barred.iter().any(|(_, b)| b.shelf == s.shelf);
+                    let cells = box_of.cells.saturating_sub(u16::from(own_bar));
+                    band.x = f32::from(box_of.from) * cell;
+                    band.width = f32::from(cells) * cell;
+                }
+                canvas.under.push(band);
+            }
+        }
+        // AND A CONTAINER'S OWN BAR, when the whole band is on screen — for
+        // the reason the footer's door writes down: a track shorter than its
+        // band would move the list by a different amount than the drag.
+        for (line, band) in barred {
+            let inner = crate::chrome::list_scroll(band.total, band.lines, band.offset);
+            if let Some(q) = crate::chrome::shelf_bar(inner, box_of, line, w, h) {
+                // THE WHOLE TRACK is the bar's column, not only the thumb:
+                // from the box's last cell, over every line of the shelf.
+                let f = ui.frame(line);
+                let track = crate::bars::Track::of((
+                    q.x,
+                    f.y_of(line),
+                    q.width,
+                    f.line() * f32::from(u16::try_from(band.lines).unwrap_or(u16::MAX)),
+                ));
+                canvas.bar(Some(track));
+                canvas.under.push(q);
+            }
+        }
     }
 }
 
@@ -1263,534 +847,3 @@ fn press_of(event: &KeyEvent) -> Option<crate::network::Press> {
         }
     })
 }
-
-impl WindowHandler for NetworkWindow {
-    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {
-        self.quit = true;
-    }
-
-    fn configure(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &Window,
-        cfg: WindowConfigure,
-        _: u32,
-    ) {
-        // WHAT THE COMPOSITOR SAID IS KEPT SEPARATELY, because what the
-        // buffer can show is what comes back below — see `asked`. It is
-        // taken from the CONFIGURE and from nothing else: built out of
-        // the door's own fields it would be the size `resized` last
-        // answered, which can only ever shrink.
-        self.asked = (
-            cfg.new_size.0.map_or(900, std::num::NonZeroU32::get),
-            cfg.new_size.1.map_or(600, std::num::NonZeroU32::get),
-        );
-        self.width = self.asked.0;
-        self.height = self.asked.1;
-        let asked = self.asked;
-        let scale = self.scale;
-        if let Some(g) = self.gpu.as_mut() {
-            // AND THE WINDOW KEEPS WHAT THE BUFFER CAN SHOW. Below the GPU's
-            // ceiling that is exactly what the compositor configured; above
-            // it, laying out against the bigger number would put the columns
-            // and the bars in a space the buffer does not have.
-            let (shown_w, shown_h) = crate::hidpi::resized(g, asked, scale);
-            self.width = shown_w;
-            self.height = shown_h;
-        }
-        self.recount();
-        self.ask_paint();
-    }
-}
-
-impl SeatHandler for NetworkWindow {
-    fn seat_state(&mut self) -> &mut SeatState {
-        &mut self.seats
-    }
-    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
-
-    fn new_capability(
-        &mut self,
-        _: &Connection,
-        qh: &QueueHandle<Self>,
-        seat: wl_seat::WlSeat,
-        cap: Capability,
-    ) {
-        if cap == Capability::Keyboard {
-            // A KEYBOARD THAT REPEATS — see the `handle` field. The rate and
-            // the delay are the COMPOSITOR's, arriving as `RepeatInfo`;
-            // nothing here invents either.
-            match self.seats.get_keyboard_with_repeat(
-                qh,
-                &seat,
-                None,
-                self.handle.clone(),
-                Box::new(|state: &mut Self, kb, event| {
-                    state.keyboards.switch_to(kb, &mut state.key_here);
-                    state.typed(event);
-                }),
-            ) {
-                Ok(k) => {
-                    // EVERY KEYBOARD, and not only the first: one per seat, and in
-                    // Independent mode one per cursor.
-                    let name = self.seats.info(&seat).and_then(|i| i.name);
-                    self.keyboards.took(&seat, k, name.as_deref());
-                }
-                Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
-            }
-        }
-        if cap == Capability::Pointer {
-            match self.seats.get_pointer(qh, &seat) {
-                Ok(p) => {
-                    // EVERY POINTER, and not only the first: one per cursor.
-                    let name = self.seats.info(&seat).and_then(|i| i.name);
-                    self.pointers.took(&seat, p, name.as_deref());
-                }
-                Err(e) => tracing::warn!(error = %e, "no pointer; keyboard only"),
-            }
-        }
-    }
-
-    fn remove_capability(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        seat: wl_seat::WlSeat,
-        cap: Capability,
-    ) {
-        if cap == Capability::Keyboard {
-            self.keyboards.lost(&seat, &mut self.key_here);
-        }
-        if cap == Capability::Pointer {
-            self.pointers.lost(&seat, &mut self.here);
-        }
-    }
-
-    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
-}
-
-impl KeyboardHandler for NetworkWindow {
-    fn enter(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
-        _: u32,
-        _: &[u32],
-        _: &[Keysym],
-    ) {
-        self.keyboards.switch_to(kb, &mut self.key_here);
-    }
-
-    fn leave(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
-        _: u32,
-    ) {
-        self.keyboards.switch_to(kb, &mut self.key_here);
-        // A MODIFIER HELD WHEN THE FOCUS WENT IS A MODIFIER NOBODY WILL SEE
-        // COME UP — the release goes to whoever has the keyboard now.
-        self.hinted.let_everything_go();
-    }
-
-    fn press_key(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: u32,
-        event: KeyEvent,
-    ) {
-        self.keyboards.switch_to(kb, &mut self.key_here);
-        // THE HEADER'S OWN KEYS FIRST — the right `Ctrl` and its pair, and the
-        // `Esc` that shuts an open drawer before it closes the window. See
-        // `chrome::Hinted::took_a_key`.
-        if self.hinted.took_a_key(event.keysym, true) {
-            self.ask_paint();
-            return;
-        }
-        self.typed(event);
-    }
-
-    fn repeat_key(
-        &mut self,
-        conn: &Connection,
-        qh: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        serial: u32,
-        event: KeyEvent,
-    ) {
-        self.press_key(conn, qh, kb, serial, event);
-    }
-
-    fn release_key(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: u32,
-        event: KeyEvent,
-    ) {
-        self.keyboards.switch_to(kb, &mut self.key_here);
-        // THE MODIFIER IS LET GO HERE, and it has to be: xkb merges both
-        // Ctrls into one bit, so the modifier event cannot say which of them
-        // came up.
-        self.hinted.took_a_key(event.keysym, false);
-    }
-
-    fn update_modifiers(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        _: u32,
-        _: Modifiers,
-        _: RawModifiers,
-        _: u32,
-    ) {
-        self.keyboards.switch_to(kb, &mut self.key_here);
-    }
-}
-
-impl PointerHandler for NetworkWindow {
-    /// EVERY CURSOR HAS ITS OWN STATE: the pointer that spoke is made `here`
-    /// first, so a drag, a hover or a wheel's leftover never crosses from
-    /// one cursor to another. See `crate::seats`.
-    fn pointer_frame(
-        &mut self,
-        conn: &Connection,
-        qh: &QueueHandle<Self>,
-        pointer: &wl_pointer::WlPointer,
-        events: &[PointerEvent],
-    ) {
-        self.pointers.switch_to(pointer, &mut self.here);
-        self.hinted.swap_hand(&mut self.here.hint_drag);
-        self.pointer_frame_here(conn, qh, events);
-        self.hinted.swap_hand(&mut self.here.hint_drag);
-    }
-}
-
-impl NetworkWindow {
-    /// One pointer's frame, with its state already `here`.
-    fn pointer_frame_here(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        events: &[PointerEvent],
-    ) {
-        let before = self.here.row_under_pointer;
-        let mut clicked: Option<usize> = None;
-        let mut turned = false;
-        // THE BAR IS A CONTROL, and a drag is three events. `Scroll::offset_at`
-        // maps any point of the TRACK, so nobody has to aim at the handle.
-        // THE ROWS ARE ONLY BUILT WHEN THE BAR IS IN PLAY.
-        //
-        // A `Motion` arrives on every pixel of movement, and these windows
-        // deliberately skip a REPAINT on motion because it "spent a GPU frame
-        // per row crossed". Building the whole list to answer "is the pointer
-        // on the bar?" would spend the more expensive half of that anyway.
-        // AND A SHELF'S DRAG COUNTS AS ONE. It did not, and the consequence was
-        // exactly the defect this bar was built to answer: the press builds the
-        // rows (a Press is in that frame) and the shelf jumps once, then every
-        // Motion frame carries no press, `rows` comes back empty, `bands(&[])`
-        // is empty and `shelf_offset_at` answers `None` — the thumb is held and
-        // the shelf is frozen until the button comes up. The footer's twin
-        // never had it: `drag_shelf_to` builds its own rows.
-        let bar_in_play = self.here.dragging
-            || self.here.dragging_shelf.is_some()
-            || events.iter().any(|e| {
-                matches!(e.kind, PointerEventKind::Press { button, .. } if button == LEFT_BUTTON)
-            });
-        let rows = if bar_in_play { self.rows() } else { Vec::new() };
-        let scroll = crate::chrome::list_scroll(rows.len(), self.room(), self.offset);
-        #[allow(clippy::cast_precision_loss)]
-        let (w, h) = (self.width as f32, self.height as f32);
-        // THE HEADER'S OWN SURFACE, for its chevron and its bar. Line 0 is
-        // where its drawer begins, which is what the `0` says.
-        let head = crate::chrome::Frame::of(w, h, 0);
-        // WHETHER THE HEADER TOOK THE GESTURE. Asked before the list's own
-        // bar and before a click on a row, so each control keeps the meaning
-        // it has.
-        let mut header = false;
-        // WHERE THE WHEEL WAS, so the drawer can answer for a gesture over
-        // itself. The turn is accumulated and spent after the loop, and by
-        // then the position is gone.
-        let mut wheel_at: Option<f64> = None;
-        let mut dragged: Option<usize> = None;
-        let mut shelved: Option<(crate::network::Shelf, usize)> = None;
-        // WHETHER THE LINE UNDER THE HINT CHANGED, which is the one thing
-        // the pointer does draw in this door.
-        let mut explained = false;
-        for e in events {
-            #[allow(clippy::cast_possible_truncation)]
-            let (px, py) = (e.position.0 as f32, e.position.1 as f32);
-            match e.kind {
-                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    // THE HEADER'S BAR IS BEING DRAGGED, and then nothing
-                    // else on this surface is.
-                    if self.hinted.dragged(head, e.position.1) {
-                        header = true;
-                        continue;
-                    }
-                    // WHICH SHORTCUT OF THE HINT LINE the pointer is resting
-                    // on, read off what the last frame DREW — see
-                    // `chrome::Hinted`.
-                    let now = self
-                        .hinted
-                        .under(e.position.0, e.position.1)
-                        .and_then(|id| crate::chrome::hint_sentence(id, &self.texts));
-                    explained |= self.hinted.say(now);
-                    if let Some(which) = self.here.dragging_shelf {
-                        shelved = self.shelf_offset_at(&rows, which, py).map(|at| (which, at));
-                    } else if self.here.dragging {
-                        dragged = Some(crate::chrome::list_offset_at(
-                            scroll,
-                            self.first_of_list(),
-                            w,
-                            h,
-                            py,
-                        ));
-                    } else {
-                        self.here.row_under_pointer = self.row_at(e.position.1);
-                    }
-                }
-                PointerEventKind::Leave { .. } => {
-                    // AND THE HEADER'S DRAG ENDS WITH THE POINTER, for the
-                    // reason the list's does.
-                    self.hinted.let_go();
-                    // THE SENTENCE GOES WITH THE POINTER. A pointer that
-                    // leaves sends no motion on the way out.
-                    explained |= self.hinted.say(None);
-                    // AND THE DRAG ENDS WITH THE POINTER. Wayland's implicit
-                    // grab usually delivers the release, but a popup grab, an
-                    // unmap or a broken grab drops it — and a `dragging` left
-                    // true makes the next ENTER, with no button held, jump the
-                    // list to wherever the pointer came in.
-                    self.here.dragging = false;
-                    self.here.dragging_shelf = None;
-                    self.here.row_under_pointer = None;
-                }
-                PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
-                    // THE HEADER'S CONTROLS FIRST: the chevron that opens the
-                    // line, and the bar that walks it once it is open.
-                    if self.hinted.pressed(head, e.position.0, e.position.1) {
-                        header = true;
-                        continue;
-                    }
-                    // A SHELF'S BAR FIRST: it is drawn at its container's
-                    // right edge and the list's at the surface's, so the two
-                    // are different columns — but the list's TRACK runs the
-                    // whole height, so asking it first would let it answer for
-                    // a press on a container's thumb and drag the wrong list.
-                    if let Some(band) = self.shelf_bar_at(&rows, px, py) {
-                        self.here.dragging_shelf = Some(band.shelf);
-                        shelved = self
-                            .shelf_offset_at(&rows, band.shelf, py)
-                            .map(|at| (band.shelf, at));
-                    } else if crate::chrome::on_the_list_bar(
-                        scroll,
-                        self.first_of_list(),
-                        w,
-                        h,
-                        px,
-                        py,
-                    ) {
-                        self.here.dragging = true;
-                        dragged = Some(crate::chrome::list_offset_at(
-                            scroll,
-                            self.first_of_list(),
-                            w,
-                            h,
-                            py,
-                        ));
-                    } else {
-                        self.here.row_under_pointer = self.row_at(e.position.1);
-                        clicked = self.here.row_under_pointer;
-                    }
-                }
-                PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
-                    self.hinted.let_go();
-                    self.here.dragging = false;
-                    self.here.dragging_shelf = None;
-                }
-                PointerEventKind::Axis {
-                    vertical,
-                    horizontal,
-                    ..
-                } => {
-                    // THE ARITHMETIC IS SHARED — see `surface::wheel_arrived`.
-                    // Written out here it was `(pixels / line) * 3`, which
-                    // moved nothing for a slow gesture and three lines for the
-                    // next one: a list that jumps.
-                    crate::surface::wheel_arrived(
-                        &mut self.here.lines_owed,
-                        &vertical,
-                        &horizontal,
-                    );
-                    wheel_at = Some(e.position.1);
-                    turned = true;
-                }
-                _ => {}
-            }
-        }
-        if let Some((which, at)) = shelved {
-            self.view.put_shelf(which, at);
-            self.ask_paint();
-            return;
-        }
-        if header {
-            self.ask_paint();
-            return;
-        }
-        if let Some(offset) = dragged {
-            self.offset = offset;
-            self.ask_paint();
-            return;
-        }
-        // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19: a click
-        // puts the cursor on the row, and a click on the row it is already on
-        // is that row's `RET`, through the same `pressed` a key goes through.
-        if let Some(row) = clicked {
-            let rows = self.rows();
-            let again = self.view.clicked(row, &rows);
-            self.follow(rows.len());
-            if again {
-                self.pressed(crate::network::Press::Enter);
-            } else {
-                self.ask_paint();
-            }
-            return;
-        }
-        if turned {
-            let by = crate::surface::wheel_lines(&mut self.here.lines_owed);
-            // A WHEEL OVER THE OPEN DRAWER WALKS THE DRAWER, and not the list
-            // under it: the gesture belongs to what is under the pointer.
-            if by != 0 && wheel_at.is_some_and(|y| self.hinted.turned(head, y, by)) {
-                self.ask_paint();
-                return;
-            }
-            if by == 0 {
-                // WHAT IS LEFT OVER STAYS. A gesture too small to be a line
-                // yet is not a gesture that did nothing — it is one that has
-                // not finished adding up.
-                return;
-            }
-            // THE WHEEL IS THE PAGE'S. A shelf took it, on the manager's rule
-            // that the gesture scrolls the section under the hand — but the
-            // manager's sections are COLUMNS side by side and a shelf is a
-            // band inside one list, so with five of them the page stopped
-            // scrolling almost everywhere. A shelf has its own bar, its own
-            // column and the arrows at its edge.
-            let rows = self.rows().len();
-            let last = rows.saturating_sub(self.room());
-            self.offset = usize::try_from(
-                i64::try_from(self.offset)
-                    .unwrap_or(0)
-                    .saturating_add(by)
-                    .max(0),
-            )
-            .unwrap_or(0)
-            .min(last);
-            self.ask_paint();
-            return;
-        }
-        // EXCEPT THE LINE UNDER THE HINT, which IS drawn from the pointer:
-        // resting on a shortcut spells it out, and moving off it takes the
-        // sentence away. The ROW under the pointer is the
-        // paragraph below.
-        if explained {
-            self.ask_paint();
-        }
-        // A FRAME ONLY WHEN SOMETHING THAT IS DRAWN MOVED. The row under the
-        // pointer is drawn now — every cursor's in its own colour — so a new
-        // row is a new picture; a pointer moving inside the same row is not.
-        if before != self.here.row_under_pointer {
-            self.ask_paint();
-        }
-    }
-}
-
-impl CompositorHandler for NetworkWindow {
-    /// The window moved to a screen of another scale — or was told its first.
-    ///
-    /// It was EMPTY here and in eight other doors, which is what made every
-    /// one of them blurry on a HiDPI screen. The rule and the measurement are
-    /// in [`crate::hidpi`].
-    fn scale_factor_changed(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        // THE SURFACE IS NEEDED to ask its VERSION, not to tell it anything:
-        // it is told its scale inside the frame, which is the only commit that
-        // carries a matching buffer — see `crate::hidpi::told_before_present`.
-        surface: &wl_surface::WlSurface,
-        factor: i32,
-    ) {
-        if let Some((w, h)) = crate::hidpi::followed(
-            &mut self.scale,
-            factor,
-            surface,
-            self.gpu.as_mut(),
-            self.text.as_mut(),
-            self.asked,
-        ) {
-            // AND THE DOOR KEEPS WHAT THE BUFFER CAN SHOW. Below the
-            // GPU's ceiling this is what the compositor configured;
-            // above it, going on with the old number lays the picture
-            // out in a space the buffer does not have.
-            self.width = w;
-            self.height = h;
-            self.recount();
-            self.ask_paint();
-        }
-    }
-    fn transform_changed(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: wl_output::Transform,
-    ) {
-    }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
-    fn surface_enter(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
-    ) {
-    }
-    fn surface_leave(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
-    ) {
-    }
-}
-
-impl OutputHandler for NetworkWindow {
-    fn output_state(&mut self) -> &mut OutputState {
-        &mut self.outputs
-    }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-}
-
-impl ProvidesRegistryState for NetworkWindow {
-    fn registry(&mut self) -> &mut RegistryState {
-        &mut self.registry
-    }
-    registry_handlers![OutputState, SeatState];
-}
-
-smithay_client_toolkit::delegate_registry!(NetworkWindow);
-smithay_client_toolkit::delegate_dispatch2!(NetworkWindow);

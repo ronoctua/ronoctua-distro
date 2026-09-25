@@ -946,7 +946,9 @@ impl State {
     fn grid(&self, ctx: &Context) -> Grid {
         let cells = Self::glyph_cells(ctx);
         Grid::fitted(
-            ctx.columns,
+            // THE LAST COLUMN IS THE BAR'S LANE: a grid that scrolls draws its bar
+            // there (`Grid::scroll`), and an icon under it would be covered.
+            ctx.columns.saturating_sub(1),
             cells,
             // PAST THE RULE'S OWN ROW. A rule is one cell tall by definition
             // — the host paints it at that row's bottom edge — so the grid
@@ -1295,6 +1297,16 @@ impl State {
                     .within(room_for_it),
             );
         }
+        // AND THE BAR, in the lane the grid left for it. A grid of thousands
+        // with nothing saying how far into it one is was a list with no end in
+        // sight; the wheel and the drag answer it (`Grid::wheeled`,
+        // `Grid::top_at_row`). Nothing is drawn when everything fits.
+        screen.bar(
+            grid.first,
+            grid.track_lines(),
+            ctx.columns.saturating_sub(1),
+            grid.scroll(self.result.len(), self.top),
+        );
 
         // The NAME of the focused glyph, on the last line. Only one: in a grid
         // of hundreds, one name per icon would be noise, and none would make
@@ -2395,21 +2407,28 @@ impl State {
                     e.filter_now();
                     vec![Effect::Redraw]
                 }
+                // THE WHEEL AND THE BAR MOVE THE GRID, by whole rows, and leave the
+                // cursor where it is — the window moves, not the choice.
+                Input::Wheel(w) => {
+                    let grid = e.grid(&e.ctx);
+                    e.top = grid.wheeled(e.top, i64::from(w.lines), e.result.len());
+                    vec![Effect::Redraw]
+                }
+                Input::Scrolled(d) => {
+                    let grid = e.grid(&e.ctx);
+                    e.top = grid.top_at_row(d.first as usize, e.result.len());
+                    vec![Effect::Redraw]
+                }
                 Input::Survey(_)
                 | Input::Queue(_)
                 | Input::Rack(_)
                 | Input::Mind(_)
-            | Input::Hover { .. }
-            | Input::Unhover(_)
-            | Input::KeyboardSeat(_)
-            | Input::KeyboardLeft(_)
+                | Input::Hover { .. }
+                | Input::Unhover(_)
+                | Input::KeyboardSeat(_)
+                | Input::KeyboardLeft(_)
                 | Input::Keyboards(_)
                 | Input::Formatted(_)
-
-                // A GRID THAT PAGES, not one that scrolls: `C-,` turns the
-                // page and the grid is sized to the window it is in.
-                | Input::Wheel(_)
-            | Input::Scrolled(_)
                 | Input::EnterState(_) => {
                     vec![]
                 }

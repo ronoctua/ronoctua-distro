@@ -778,12 +778,15 @@ impl View {
             ));
             out.push(crate::chrome::Piece::separator());
         }
-        let here: Vec<(&str, &str)> = OF_THE_VIEW
+        // A KEY THAT IS ONLY HERE BECAUSE OF THE ROW UNDER THE CURSOR reads as
+        // one (`Register::Contextual`): the owner asked for the passing guests to
+        // look apart from the keys that are always on the line.
+        let here: Vec<(&str, &str, bool)> = OF_THE_VIEW
             .iter()
             .filter(|(_, _, w)| w.shown(&self.level, self.question.is_some(), self.settings))
-            .map(|(k, id, _)| (*k, *id))
+            .map(|(k, id, w)| (*k, *id, !matches!(w, Where::Anywhere)))
             .collect();
-        out.extend(crate::chrome::hint_of(&here, texts));
+        out.extend(crate::chrome::hint_of_marked(&here, |_| None, texts));
         out
     }
 
@@ -2087,37 +2090,12 @@ impl Builder<'_> {
         disabled: bool,
     ) {
         let focused = self.cursor == self.out.len();
-        let (label_colour, value_colour) = match (focused, disabled) {
-            // AND UNDER THE CURSOR IT STILL SAYS SO. The accent took BOTH
-            // halves here, so a door and a fact became one row at the very
-            // moment the cursor was on them — which is the moment the question
-            // is being asked. Now the label carries "the keyboard is here"
-            // (neither window draws a band behind the cursor, so the accent on
-            // the text is the only thing that says it) and the value goes on
-            // saying whether the answer can be changed. See `colors.nix`,
-            // `text.here`.
-            (true, disabled) => (
-                tokens::color::STATE_ACCENT,
-                if disabled || target == Target::Nothing {
-                    tokens::color::TEXT_HERE_READ
-                } else {
-                    tokens::color::TEXT_HERE_ACTS
-                },
-            ),
-            (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
-            (false, false) => (
-                if target == Target::Nothing {
-                    tokens::color::TEXT_LABEL_FACT
-                } else {
-                    tokens::color::TEXT_LABEL_ACTS
-                },
-                if target == Target::Nothing {
-                    tokens::color::TEXT_READ_STRONG
-                } else {
-                    tokens::color::TEXT_ANSWER
-                },
-            ),
+        let kind = if disabled {
+            crate::chrome::Kind::Disabled
+        } else {
+            crate::chrome::Kind::of(target != Target::Nothing)
         };
+        let (label_colour, value_colour) = kind.tones(focused);
         let end = self.left + self.room;
         let mut fields = vec![Self::piece(
             self.left,
@@ -2167,11 +2145,8 @@ impl Builder<'_> {
             fields: vec![Self::piece(
                 self.left,
                 layout::elide_end(&label, self.room),
-                if focused {
-                    tokens::color::STATE_ACCENT
-                } else {
-                    tokens::color::TEXT_LABEL_ACTS
-                },
+                // A DOOR IS A SETTING'S LABEL with no value beside it.
+                crate::chrome::Kind::Setting.tones(focused).0,
             )],
             focused,
             heading: false,
@@ -2202,52 +2177,19 @@ impl Builder<'_> {
         // see `colors.nix`, `label`. It replaced a mark in front of the row,
         // which the owner refused: a chevron is what a tree uses to open and
         // close, and this row does neither.
-        let (label_colour, value_colour) = match (focused, disabled) {
-            // AND UNDER THE CURSOR IT STILL SAYS SO. The accent took BOTH
-            // halves here, so a door and a fact became one row at the very
-            // moment the cursor was on them — which is the moment the question
-            // is being asked. Now the label carries "the keyboard is here"
-            // (neither window draws a band behind the cursor, so the accent on
-            // the text is the only thing that says it) and the value goes on
-            // saying whether the answer can be changed. See `colors.nix`,
-            // `text.here`.
-            (true, disabled) => (
-                tokens::color::STATE_ACCENT,
-                if disabled || target == Target::Nothing {
-                    tokens::color::TEXT_HERE_READ
-                } else {
-                    tokens::color::TEXT_HERE_ACTS
-                },
-            ),
-            (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
-            (false, false) => (
-                if target == Target::Nothing {
-                    tokens::color::TEXT_LABEL_FACT
-                } else {
-                    tokens::color::TEXT_LABEL_ACTS
-                },
-                // AND THE VALUE SAYS THE SAME FROM THE OTHER SIDE: a row one
-                // cannot act on takes the colour out of its value — see
-                // `colors.nix`, `text.read`.
-                if target == Target::Nothing {
-                    tokens::color::TEXT_READ_STRONG
-                } else {
-                    tokens::color::TEXT_ANSWER
-                },
-            ),
+        let kind = if disabled {
+            crate::chrome::Kind::Disabled
+        } else {
+            crate::chrome::Kind::of(target != Target::Nothing)
         };
-        let value_colour = colour.filter(|_| !focused).unwrap_or(value_colour);
         // ONE ARITHMETIC, and it is `chrome::field_pair` — see the comment on
         // `chrome::value_column` for what the three copies of it had drifted
         // into.
         self.out.push(Row {
-            fields: crate::chrome::field_pair(
-                self.left,
-                self.room,
-                &label,
-                &value,
-                label_colour,
-                value_colour,
+            fields: crate::chrome::tinted(
+                crate::chrome::field_pair(self.left, self.room, &label, &value, kind, focused),
+                colour,
+                focused,
             ),
             focused,
             heading: false,

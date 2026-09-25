@@ -1158,7 +1158,9 @@ impl State {
     /// character while the screen showed another.
     fn grid(&self, ctx: &Context) -> Grid {
         Grid::fitted(
-            ctx.columns,
+            // THE LAST COLUMN IS THE BAR'S LANE: a grid that scrolls draws its bar
+            // there (`Grid::scroll`), and an icon under it would be covered.
+            ctx.columns.saturating_sub(1),
             self.item_cells(ctx),
             self.grid_first_row(ctx),
             Self::footer_row(ctx),
@@ -1549,6 +1551,16 @@ impl State {
                     .within(budget(ctx.columns, column, s.ink(cells))),
             );
         }
+        // AND THE BAR, in the lane the grid left for it. A grid of thousands
+        // with nothing saying how far into it one is was a list with no end in
+        // sight; the wheel and the drag answer it (`Grid::wheeled`,
+        // `Grid::top_at_row`). Nothing is drawn when everything fits.
+        screen.bar(
+            grid.first,
+            grid.track_lines(),
+            ctx.columns.saturating_sub(1),
+            grid.scroll(self.result.len(), self.top),
+        );
     }
 
     /// The focused character's line, at the foot of the window.
@@ -2517,20 +2529,28 @@ impl State {
                 // six components: an `input` case added for one of them has to
                 // be answered by all, and "answered" here is "ignored".
                 Input::Phrases(said) => e.receive_phrases(said),
+                // THE WHEEL AND THE BAR MOVE THE GRID, by whole rows, and leave the
+                // cursor where it is — the window moves, not the choice.
+                Input::Wheel(w) => {
+                    let grid = e.grid(&e.ctx);
+                    e.top = grid.wheeled(e.top, i64::from(w.lines), e.result.len());
+                    vec![Effect::Redraw]
+                }
+                Input::Scrolled(d) => {
+                    let grid = e.grid(&e.ctx);
+                    e.top = grid.top_at_row(d.first as usize, e.result.len());
+                    vec![Effect::Redraw]
+                }
                 Input::Survey(_)
                 | Input::Queue(_)
                 | Input::Rack(_)
                 | Input::Mind(_)
-            | Input::Hover { .. }
-            | Input::Unhover(_)
-            | Input::KeyboardSeat(_)
-            | Input::KeyboardLeft(_)
+                | Input::Hover { .. }
+                | Input::Unhover(_)
+                | Input::KeyboardSeat(_)
+                | Input::KeyboardLeft(_)
                 | Input::Keyboards(_)
                 | Input::Formatted(_)
-                // A CATALOGUE PAGES, it does not scroll: `C-,` turns the
-                // page and the grid is sized to the window.
-                | Input::Wheel(_)
-            | Input::Scrolled(_)
                 | Input::EnterState(_) => {
                     vec![]
                 }

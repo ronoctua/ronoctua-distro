@@ -4609,9 +4609,9 @@ let
     host = code_of((shell / "buffer.rs").read_text())
     gaps = []
 
-    # `pointer_frame_here`: the trait method only makes the pointer that
+    # `pointer_here`: the door makes the pointer that spoke `here`, and
     # spoke `here` (`crate::seats`); what answers the events is this.
-    frame = must(body_of(host, "pointer_frame_here"), "`pointer_frame_here`")
+    frame = must(body_of(host, "pointer_here"), "`pointer_here`")
 
     # 1) THE POINTER AT REST IS ANSWERED, and by the CELL.
     #
@@ -4638,7 +4638,7 @@ let
         # `self.here`: the cell of THE POINTER THAT SPOKE, one per cursor
         # (`crate::seats`) — a single field would be two hands taking one
         # highlight from each other.
-        ("self.here.cell_under_pointer", "the host no longer remembers which cell each pointer is on"),
+        ("hand.extra.cell_under_pointer", "the host no longer remembers which cell each pointer is on"),
         ("Input::Hover", "motion no longer reaches the buffer"),
     ):
         if wanted not in motion:
@@ -4646,7 +4646,7 @@ let
     # AND ONLY WHEN THE CELL CHANGED. Without the comparison this is an event
     # per pointer report, which is the objection the old "there is no hover"
     # rule made and the only thing that would have made it true.
-    if not re.search(r"if\s+now\s*!=\s*self\.here\.cell_under_pointer", motion):
+    if not re.search(r"if\s+now\s*!=\s*hand\.extra\.cell_under_pointer", motion):
         gaps.append("the host delivers a hover without asking whether the CELL changed")
     # AND THE MARGIN IS NOT CELL ZERO. `cell_at` answers `None` there, and
     # lighting the first row whenever a hand crossed the border is what sending
@@ -4778,9 +4778,9 @@ let
 
         # 5) AND THE PRESS ASKS WITH A POINT, not with a cell. `shut_at` reads the
         #    call's own arguments, by its parentheses.
-        # `pointer_frame_here`: the trait method only makes the pointer that
+        # `pointer_here`: the door makes the pointer that spoke `here`, and
         # spoke `here` (`crate::seats`); what answers the events is this.
-        frame = must(body_of(host, "pointer_frame_here"), "`pointer_frame_here`")
+        frame = must(body_of(host, "pointer_here"), "`pointer_here`")
         call = "self.bar_under("
         if call not in frame:
             gaps.append("the press no longer asks whether it landed on a bar")
@@ -8996,63 +8996,64 @@ let
 
     exec(open("${pyPrelude}").read())
 
-    # FILE-WIDE: a door draws its bar from wherever it paints, and the question
-    # is whether the call appears in the file at all.
+    # FILE-WIDE: the bar is drawn, pressed and dragged in ONE place now — the
+    # door's standard list (`door/list.rs`) — and what is asked of a window is
+    # whether it keeps that list or, overriding it, keeps the bar with it.
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    # THE MANAGER'S WINDOW IS THE EXCEPTION, and it is the one that already
-    # had a bar: it has FOUR bands rather than one list, so it asks `Scroll`
-    # per section instead of going through `chrome::list_bar`.
-    EXCEPT = {"files_window.rs"}
-    # AND ONE WINDOW ANSWERS THE WHEEL WITH NO LIST AT ALL: the camera's. Its
-    # wheel resizes a layer of the picture or turns a sound's volume, and it
-    # keeps no offset because there is nothing to scroll. The exception is
-    # PROVED below rather than granted: the day that window grows an offset,
-    # it is a list, and it is checked like the rest.
-    NOT_A_LIST = {"camera_window.rs"}
+    listed = code_of((shell / "door" / "list.rs").read_text())
+    door = code_of((shell / "door" / "mod.rs").read_text())
     wrong, windows = [], 0
 
-    # COMMENTS COME OFF FIRST. The strings below are grepped for, and four of
-    # these files name `chrome::list_bar` in a doc comment explaining why they
-    # have one — so a check that read the comments would pass on a window
-    # whose CALL had been deleted and whose prose survived. That is a check
-    # satisfiable by a sentence, which is worse than no check.
-    # This was a local `code_of` that cut at the first `//` on a line, which is
-    # wrong inside a string literal. The prelude's knows the difference, and it
-    # is the one this name now means.
+    # THE STANDARD LIST HAS THE BAR, all four halves of it — and the column it
+    # owns while it is drawn (`chrome::Room`), which the pointer reads.
+    for what, why in (
+        ("chrome::list_bar", "draws no scrollbar"),
+        ("chrome::on_the_list_bar", "has a bar that cannot be pressed"),
+        ("chrome::list_offset_at", "has a bar that cannot be dragged"),
+        ("chrome::Room::of", "does not say where the bar was drawn"),
+    ):
+        if what not in listed:
+            wrong.append(f"door/list.rs: the standard list {why} (`{what}` is not there)")
+    if "quad::Quads::new" not in door:
+        wrong.append("door/mod.rs: the door has no renderer to draw a rectangle with")
 
-    for f in sorted(shell.rglob("*_window.rs")):
+    # THE MANAGER'S WINDOW IS THE EXCEPTION, and it is the one that already
+    # had a bar: it has FOUR bands rather than one list, so it asks `Scroll`
+    # per section. The camera's wheel resizes a layer or turns a volume and
+    # scrolls nothing; the terminal's grid is the program's. Each exception is
+    # PROVED: the day one of them keeps an offset of its own, it is a list.
+    EXCEPT = {"files_window.rs"}
+    NOT_A_LIST = {"camera_window.rs", "terminal.rs"}
+
+    for f in sorted(list(shell.rglob("*_window.rs")) + [shell / "terminal.rs"]):
         body = code_of(f.read_text())
-        # A WINDOW THAT SCROLLS IS ONE THAT ANSWERS THE WHEEL.
-        #
-        # It was "has an offset", and that missed the manager's window
-        # entirely — it scrolls through `files::Section`, so the `EXCEPT`
-        # written for it and the comment explaining that were both dead, and
-        # `update_window` was detected only by the substring `offset: usize`
-        # inside `step_offset: usize`. Every window that scrolls a list
-        # handles `Axis`; nothing else does.
-        if "PointerEventKind::Axis" not in body:
+        content = scope(body, r"impl\s+Content\s+for\s+\w+")
+        if content is None:
             continue
         windows += 1
         if f.name in EXCEPT:
             continue
         if f.name in NOT_A_LIST:
-            if re.search(r"\boffset", body):
-                wrong.append(f"{f.name}: keeps an offset now, so it scrolls a list and needs the bar")
+            if re.search(r"\bui\.offset\b", body):
+                wrong.append(f"{f.name}: moves an offset now, so it scrolls a list and needs the bar")
             continue
-        for what, why in (
-            ("chrome::list_bar", "draws no scrollbar"),
-            ("chrome::on_the_list_bar", "has a bar that cannot be pressed"),
-            ("chrome::list_offset_at", "has a bar that cannot be dragged"),
-            ("quad::Quads::new", "has no renderer to draw a rectangle with"),
+        paints = body_of(content, "paint")
+        points = body_of(content, "pointer")
+        # A WINDOW THAT PAINTS ITS OWN FRAME keeps the list's half of it, or
+        # draws the bar itself.
+        if paints is not None and not any(
+            w in paints or w in body
+            for w in ("list::body(", "list::paint(", "chrome::list_bar(")
         ):
-            if what not in body:
-                wrong.append(f"{f.name}: {why} (`{what}` is not there)")
+            wrong.append(f"{f.name}: paints its own frame and draws no scrollbar")
+        # AND A WINDOW THAT ANSWERS THE POINTER ITSELF keeps the bar a control.
+        if points is not None and "list::pointer(" not in body and not (
+            "chrome::on_the_list_bar(" in body and "chrome::list_offset_at(" in body
+        ):
+            wrong.append(f"{f.name}: answers the pointer itself and has a bar that cannot be grabbed")
 
-    # SEVEN with the screens' own window, and it is a FLOOR rather than the
-    # count: an eighth is checked like the rest, and a window that loses its
-    # `PointerEventKind::Axis` takes the sweep below the number and says so. A
-    # guard set to exactly what the sweep found is a guard that proves nothing.
-    floor(windows, 7, "scrolling windows found")
+    # A FLOOR, not the count: every window of the shell is a door now.
+    floor(windows, 18, "windows found")
 
     if wrong:
         print("ERROR: a list nobody can see the length of.", file=sys.stderr)
@@ -9060,13 +9061,12 @@ let
         for w in wrong:
             print("       " + w, file=sys.stderr)
         print("", file=sys.stderr)
-        print("       A window that scrolls draws its bar from `chrome::list_bar`,", file=sys.stderr)
-        print("       presses it through `on_the_list_bar` and drags it through", file=sys.stderr)
-        print("       `list_offset_at` — one arithmetic, the same one the footer's", file=sys.stderr)
-        print("       region and the manager's four sections already use.", file=sys.stderr)
+        print("       The standard list (`door/list.rs`) draws its bar from", file=sys.stderr)
+        print("       `chrome::list_bar`, presses it through `on_the_list_bar` and drags", file=sys.stderr)
+        print("       it through `list_offset_at`; a window that overrides it keeps them.", file=sys.stderr)
         raise SystemExit(1)
 
-    print(f"OK: {windows} scrolling windows, and every list has a bar to grab")
+    print(f"OK: {windows} windows, and every list has a bar to grab")
     END
   '';
 
@@ -9346,27 +9346,37 @@ let
 
     exec(open("${pyPrelude}").read())
 
-    # FILE-WIDE: a door paints from one place, answers the pointer in another
-    # and the keyboard in a third, and the question is whether each call is in
-    # the file at all.
+    # FILE-WIDE: the header is drawn, opened and walked in the DOOR now, once
+    # for every window (`door/`); what a window is asked is whether it keeps
+    # the door's header or, drawing its own frame, still draws it through
+    # `chrome::Hinted`.
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    # THE MANAGER'S WINDOW IS THE EXCEPTION, and it is the one that already had
-    # a drawer: its control is in the `Tab` ring, so it keeps a `fold::Fold` of
-    # its own and collects the marks itself. The exception is PROVED below
-    # rather than asserted — a window that quietly lost its drawer would
-    # otherwise be excused by being named here.
-    EXCEPT = "files_window.rs"
+    door = _re.sub(r"\s+", "", "".join(
+        code_of(p.read_text()) for p in sorted((shell / "door").glob("*.rs"))
+    ))
     wrong, windows = [], 0
+    for what, why in (
+        ("hinted.head(", "does not draw its header through `chrome::Hinted`"),
+        ("hinted.bar(", "draws an opened header with no bar"),
+        ("hinted.settled(", "never measures the drawer it opened"),
+        ("hinted.pressed(", "has a chevron the pointer cannot press"),
+        ("hinted.dragged(", "has a drawer bar that cannot be dragged"),
+        ("hinted.turned(", "has a drawer the wheel does not reach"),
+        ("hinted.took_a_key(", "has a drawer no key opens"),
+        ("hinted.press_under(", "has shortcuts a click cannot press"),
+    ):
+        if what not in door:
+            wrong.append(f"door/: the door {why} (`{what}` is not there)")
 
-    for f in sorted(shell.rglob("*_window.rs")):
-        # WHITESPACE SQUASHED, because the formatter decides where these calls
-        # break: `self.hinted.head(…)` comes out on two lines in some doors and
-        # one in others, and a check that grepped the literal would be
-        # answered by `nix fmt` rather than by the code.
+    # THE MANAGER'S WINDOW KEEPS ITS OWN DRAWER — its control is in the `Tab`
+    # ring — and PROVES it. Three windows have no line of keys at all: the
+    # update's, the terminal's and a buffer's, whose header is the component's.
+    EXCEPT = "files_window.rs"
+    NO_HEADER = {"update_window.rs", "terminal.rs"}
+
+    for f in sorted(list(shell.rglob("*_window.rs")) + [shell / "terminal.rs"]):
         body = _re.sub(r"\s+", "", code_of(f.read_text()))
-        # A WINDOW WITH A HEADER IS ONE THAT DRAWS A HINT. `update_window` has
-        # no line of keys at all and is not one.
-        if "chrome::Hinted" not in body and "hinted" not in body:
+        if "implContentfor" not in body:
             continue
         windows += 1
         if f.name == EXCEPT:
@@ -9378,22 +9388,20 @@ let
                 if what not in body:
                     wrong.append(f"{f.name}: {why} (`{what}` is not there)")
             continue
-        for what, why in (
-            ("hinted.head(", "does not draw its header through `chrome::Hinted`"),
-            ("hinted.bar(", "draws an opened header with no bar"),
-            ("hinted.settled(", "never measures the drawer it opened"),
-            ("hinted.pressed(", "has a chevron the pointer cannot press"),
-            ("hinted.dragged(", "has a drawer bar that cannot be dragged"),
-            ("hinted.turned(", "has a drawer the wheel does not reach"),
-            ("hinted.took_a_key(", "has a drawer no key opens"),
+        if f.name in NO_HEADER:
+            continue
+        # A WINDOW THAT PAINTS ITS OWN FRAME draws the header the door's way.
+        if "fnpaint(" in body and not any(
+            w in body for w in ("list::header(", "list::header_of(", "list::paint(", "hinted.head(")
         ):
-            if what not in body:
-                wrong.append(f"{f.name}: {why} (`{what}` is not there)")
+            wrong.append(f"{f.name}: paints its own frame without the system's header")
+        # AND ANSWERS ITS CONTROLS, if it answers the pointer itself.
+        if "fnpointer(" in body and "list::pointer(" not in body:
+            for what in ("hinted.pressed(", "hinted.dragged("):
+                if what not in body:
+                    wrong.append(f"{f.name}: answers the pointer itself and not `{what}`")
 
-    # ELEVEN, and it is a FLOOR rather than the count: a twelfth is checked
-    # like the rest, and a window that loses its header takes the sweep below
-    # the number and says so.
-    floor(windows, 11, "windows with a header")
+    floor(windows, 18, "windows found")
 
     if wrong:
         print("ERROR: a header nobody can open.", file=sys.stderr)
@@ -9402,11 +9410,270 @@ let
             print("       " + w, file=sys.stderr)
         print("", file=sys.stderr)
         print("       The line that teaches a view's keys is cut at the width it", file=sys.stderr)
-        print("       is given. `chrome::Hinted` is the drawer that opens it, and", file=sys.stderr)
-        print("       every door of that shape goes through the same one.", file=sys.stderr)
+        print("       is given. `chrome::Hinted` is the drawer that opens it, and the", file=sys.stderr)
+        print("       door draws, opens and walks it for every window.", file=sys.stderr)
         raise SystemExit(1)
 
     print(f"OK: {windows} windows, and every header opens")
+    END
+  '';
+
+  # EVERY WINDOW IS A DOOR, and a door is written once.
+  #
+  # Nineteen windows each carried their own copy of the Wayland plumbing — the
+  # seats, the keyboards and their repeat, the pointers, the scale, the GPU,
+  # the three watches — and the copies drifted: the language watch was missing
+  # from three, the bar's column answered the row beside it in all of them, and
+  # touch reached none. The owner asked for one base giving every window, and
+  # every window still to come, the same behaviour by construction. That base
+  # is `door/`, and this is what keeps it the only one: no window implements a
+  # handler of its own, every window is opened through `door::run`, and the
+  # door hears every finger.
+  #
+  # The minimal edit that breaks the promise and still compiles: give a new
+  # window its own `impl PointerHandler` beside a `Door<…>`. It would work, and
+  # it would be the twentieth copy.
+  every-window-is-a-door = mkCheck "every-window-is-a-door" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a handler is an `impl` anywhere in a file, and the question is
+    # whether any file but the door's own answers one.
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    door = shell / "door"
+    # THE TWO LAYER SURFACES THAT ARE NOT WINDOWS keep their own handlers, and
+    # the reason is written where they are: the footer is the desktop, with a
+    # surface per screen and a keyboard it takes and gives back; the lifeline
+    # is drawn when the footer is dead, and may not depend on what died.
+    OWN = {"surface.rs", "lifeline.rs"}
+    HANDLERS = r"(WindowHandler|SeatHandler|KeyboardHandler|PointerHandler|TouchHandler|CompositorHandler|OutputHandler|LayerShellHandler|ProvidesRegistryState)"
+    wrong, windows = [], 0
+    for f in sorted(shell.rglob("*.rs")):
+        if door in f.parents or f.name in OWN:
+            continue
+        code = code_of(without_tests(f.read_text()))
+        for m in re.finditer(r"impl(?:<[^>]*>)?\s+" + HANDLERS + r"\s+for\s+([\w<>:]+)", code):
+            wrong.append(f"{f.name}: implements `{m.group(1)}` for `{m.group(2)}` — a window's handlers are the door's")
+        if re.search(r"delegate_(dispatch2|registry)!", code):
+            wrong.append(f"{f.name}: delegates dispatch of its own")
+        # THE DRAG'S THREE HANDLERS are the one thing a window may add, and
+        # only for the door it is (`Door<Files>`): the generic dispatch hands
+        # them to it.
+        for m in re.finditer(r"impl\s+(Data\w+Handler)\s+for\s+([\w<>:]+)", code):
+            if not m.group(2).startswith("Door<"):
+                wrong.append(f"{f.name}: `{m.group(1)}` for `{m.group(2)}`, and not for its door")
+    for f in sorted(list(shell.glob("*_window.rs")) + [shell / "terminal.rs", shell / "buffer.rs"]):
+        code = code_of(f.read_text())
+        windows += 1
+        if "crate::door::run(" not in code:
+            wrong.append(f"{f.name}: is not opened through `door::run`")
+        if not re.search(r"impl\s+Content\s+for\s+\w+", code):
+            wrong.append(f"{f.name}: is not a `door::Content`")
+
+    handlers = code_of((door / "handlers.rs").read_text())
+    touch = body_of(handlers, "new_capability")
+    if touch is None or "Capability::Touch" not in touch or "get_touch(" not in touch:
+        wrong.append("door/handlers.rs: the door binds no touch screen")
+    if not re.search(r"impl<C:\s*Content>\s+TouchHandler\s+for\s+Door<C>", handlers):
+        wrong.append("door/handlers.rs: the door hears no finger")
+    played = body_of(handlers, "finger_did")
+    if played is None or "as_the_finger(" not in played:
+        wrong.append("door/handlers.rs: a finger is not played through the pointer's own code")
+    if not re.search(r"delegate_dispatch2!\(@<C:\s*Content>\s+Door<C>\)", handlers):
+        wrong.append("door/handlers.rs: the dispatch is not the door's, generic")
+
+    floor(windows, 19, "windows found")
+    if wrong:
+        print("ERROR: a window that is not a door.", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A window is a `door::Content`, opened by `door::run`: the", file=sys.stderr)
+        print("       seats, the scale, the GPU, the watches, the header and the", file=sys.stderr)
+        print("       finger are the door's, once. What a window wants otherwise", file=sys.stderr)
+        print("       it says by overriding one method of `Content`.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {windows} windows, and every one is a door")
+    END
+  '';
+
+  # A SCROLLBAR'S COLUMN IS ITS OWN — WHILE IT IS DRAWN, WHOEVER DREW IT.
+  #
+  # The owner's rule, in both halves: a row lights and takes a click across the
+  # whole width while there is no bar, and once a bar is drawn its column is
+  # the bar's, so the pointer resting on it lights no row and the row's band
+  # stops before it. It was kept list by list, and a list kept it by CELL where
+  # the bar is drawn by PIXEL: the file manager's right half of the bar lit the
+  # row beside it, and the owner asked for the answer to be global and
+  # definitive. It is ONE registry (`crate::bars`): every painter records the
+  # track of the bar it draws, and the pointer and every band read it — the
+  # door for every window and buffer, and the footer for itself.
+  #
+  # The minimal edit that breaks it and still compiles: draw a new bar and
+  # not record it. Every list still works, and the hover comes back under it —
+  # which is why this check walks the PAINTERS and not the lists.
+  a-bar-owns-its-column = mkCheck "a-bar-owns-its-column" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a bar can be drawn anywhere in a painter's file, and the
+    # question is whether that file records what it drew.
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    buffers = pathlib.Path("${../buffers}")
+    wrong, painters = [], 0
+
+    def must_ask(where, text, name, needles):
+        body = body_of(text, name)
+        must(body, where + ": `" + name + "`")
+        for n in needles:
+            if n not in body:
+                wrong.append(f"{where}: `{name}` does not ask `{n}`")
+
+    # THE REGISTRY, and what it cuts: every band colour and nothing else.
+    bars = code_of((shell / "bars.rs").read_text())
+    must_ask("bars.rs", bars, "is_a_band", ["SURFACE_SELECTION", "SURFACE_HOVER", "is_a_cursor_hover"])
+    must_ask("bars.rs", bars, "clip", ["is_a_band("])
+    # THE DOOR READS IT for the pointer and for the bands, and records the
+    # header's drawer itself — the header is the door's.
+    door = code_of((shell / "door" / "mod.rs").read_text())
+    must_ask("door/mod.rs", door, "pointer_frame_here", ["self.bars.on(", "Leave"])
+    # THE DOOR'S OWN PAINT, whose name the trait's default shares: asked of
+    # the door's module as a whole.
+    for n in ("bars.clip(&mut under)", "bars.clip(&mut over)", "drawer_track("):
+        if n not in door:
+            wrong.append(f"door/mod.rs: the door's paint does not ask `{n}`")
+    listed = code_of((shell / "door" / "list.rs").read_text())
+    must_ask("door/list.rs", listed, "body", ["canvas.bar(", "list_track("])
+    # THE FOOTER IS NOT A DOOR, and keeps the same registry for itself.
+    footer = code_of((shell / "surface.rs").read_text())
+    for n in ("bars_drawn.clip(", "screen.bars = bars_drawn", "on_a_drawn_bar("):
+        if n not in footer:
+            wrong.append(f"surface.rs: the footer does not keep the registry (`{n}`)")
+
+    # AND EVERY PAINTER THAT DRAWS A BAR RECORDS IT.
+    DRAWS = re.compile(r"(?<!fn )\b(list_bar|shelf_bar|region_bar|fold_bar|section_bars|files_bars|bar_box)\(|scroll\.bar\(")
+    for f in sorted(shell.rglob("*.rs")):
+        if f.name in ("chrome.rs", "bars.rs", "paint.rs") or "door" in f.parts:
+            continue
+        code = code_of(without_tests(f.read_text()))
+        if not DRAWS.search(code):
+            continue
+        painters += 1
+        if not re.search(r"canvas\.bar\(|bars_drawn\.record", code):
+            wrong.append(f"{f.name}: draws a bar and does not record its track (`canvas.bar`)")
+
+    # AND NO BUFFER KEEPS A CELL FOR A BAR IT MAY NOT DRAW: `keeping(1)` is a
+    # band with a hole in it whenever the list fits.
+    for f in sorted(buffers.glob("*/src/*.rs")):
+        code = code_of(f.read_text())
+        if re.search(r"\.keeping\(\s*1\s*\)", code):
+            wrong.append(f"{f.parent.parent.name}/{f.name}: keeps a cell for a bar unconditionally")
+
+    floor(painters, 6, "painters that draw a bar")
+    if wrong:
+        print("ERROR: a scrollbar whose column is not its own.", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {painters} painters draw bars, and every bar's column is its own")
+    END
+  '';
+
+  # EVERY SHORTCUT OF A HEADER IS A CLICK — OR LOOKS LIKE IT IS NOT.
+  #
+  # The owner asked for both halves: every shortcut a header teaches does, on a
+  # click, what its key does; and one that cannot be pressed by a click reads
+  # slightly apart (`text.subtle.inert`). The second half is not chosen by
+  # anybody: `chrome::laid` gives the inert register to every key piece that
+  # arrives without a press, so a key cannot look clickable and not be.
+  every-hint-key-is-a-click-or-says-so =
+    mkCheck "every-hint-key-is-a-click-or-says-so" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, sys
+        exec(open("${pyPrelude}").read())
+
+        shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+        chrome = code_of((shell / "chrome.rs").read_text())
+        door = code_of((shell / "door" / "mod.rs").read_text())
+        footer = code_of((shell / "surface.rs").read_text())
+        brain = code_of(pathlib.Path("${../buffers/brain/src/lib.rs}").read_text())
+        wrong, asked = [], 0
+        for where, text, name, needles in (
+            ("chrome.rs", chrome, "laid", ["press.is_none()", "Register::Inert"]),
+            ("chrome.rs", chrome, "hint_of_marked", [".pressing("]),
+            ("chrome.rs", chrome, "hint_marks", ["press"]),
+            ("door/mod.rs", door, "pointer_frame_here", ["press_under("]),
+            ("door/mod.rs", door, "act", ["keys::event_of(", "forward("]),
+            ("surface.rs", footer, "hint_clicked", ["keys::event_of(", "run_command("]),
+            ("brain", brain, "header", ["is_a_control(", "Role::Inert"]),
+        ):
+            body = body_of(text, name)
+            must(body, f"{where}: `{name}`")
+            asked += 1
+            for n in needles:
+                if n not in body:
+                    wrong.append(f"{where}: `{name}` does not ask `{n}`")
+        if "hint_act_under(" not in (body_of(footer, "pointer_frame_here") or ""):
+            wrong.append("surface.rs: a click on the minibuffer's hint does nothing")
+        floor(asked, 7, "places asked")
+        if wrong:
+            print("ERROR: a shortcut that looks clickable and is not, or the other way.", file=sys.stderr)
+            for w in wrong:
+                print("       " + w, file=sys.stderr)
+            raise SystemExit(1)
+        print(f"OK: {asked} places, and every shortcut is a click or says it is not")
+        END
+      '';
+
+  # FOUR TONES FOR A ROW, BY KIND AND NEVER BY COLOUR ARGUMENT.
+  #
+  # A label that informs, a label whose value can be changed, and the two
+  # values: the four existed, and every view picked its own pair — three drew a
+  # fact's label in the content's grey, two drew a fact's value at full
+  # strength, one drew a setting with the fact's label. The owner asked for one
+  # standard each, applied everywhere; `chrome::Kind` is where it is decided,
+  # and this keeps it the only place.
+  labels-say-what-they-are = mkCheck "labels-say-what-they-are" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a tone picked by hand can be anywhere in a view.
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    design = pathlib.Path("${../crates/ronoctua-design/src}")
+    TONES = r"TEXT_(LABEL_ACTS|LABEL_FACT|ANSWER|READ_STRONG|READ_WEAK)\b"
+    wrong, files = [], 0
+    for f in sorted(shell.rglob("*.rs")):
+        files += 1
+        code = code_of(without_tests(f.read_text()))
+        if f.name == "chrome.rs":
+            tones = body_of(code, "tones")
+            must(tones, "chrome.rs: `Kind::tones`")
+            code = code.replace(tones, " ")
+        for m in re.finditer(TONES, code):
+            wrong.append(f"{f.name}: picks `{m.group(0)}` by hand — say the row's `chrome::Kind`")
+    chrome = code_of((shell / "chrome.rs").read_text())
+    pair = scope(chrome, r"pub fn field_pair\(")
+    signature = chrome[chrome.index("pub fn field_pair("):chrome.index("pub fn field_pair(") + 300]
+    if "kind: Kind" not in signature:
+        wrong.append("chrome.rs: `field_pair` takes colours again instead of a `Kind`")
+    # AND THE BUFFERS HAVE THE SAME FOUR, on both sides of the wall.
+    lib = code_of((design / "lib.rs").read_text())
+    guest = code_of((design / "guest.rs").read_text())
+    for role in ("LabelFact", "LabelSetting", "ValueFact", "ValueSetting"):
+        for where, text in (("lib.rs", lib), ("guest.rs", guest)):
+            if "Role::" + role not in text:
+                wrong.append(f"ronoctua-design/{where}: `Role::{role}` resolves to nothing")
+    floor(files, 80, "shell files read")
+    if wrong:
+        print("ERROR: a row whose tones were chosen by hand.", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {files} files, and every row says what it is")
     END
   '';
 
@@ -10824,11 +11091,29 @@ let
         return body_of(text, name) or ""
 
 
-    for f in sorted(shell.rglob("*.rs")):
-        body = code_of(f.read_text())
-        if "impl CompositorHandler for" not in body:
+    # THE DOOR IS ONE DOOR, written over several files: its handlers are
+    # generic (`impl<C: Content> CompositorHandler for Door<C>`), and its
+    # configure is `configured`, the one function both `configure`s call.
+    door_dir = shell / "door"
+    units = [(
+        door_dir,
+        "\n".join(code_of(p.read_text()) for p in sorted(door_dir.glob("*.rs"))),
+    )]
+    units += [(f, code_of(f.read_text())) for f in sorted(shell.rglob("*.rs"))
+              if door_dir not in f.parents]
+
+    for f, body in units:
+        if not re.search(r"impl(?:<[^>]*>)?\s+CompositorHandler\s+for", body):
             continue
         doors += 1
+        is_door = f == door_dir
+        if is_door:
+            # BOTH `configure`s HAND OVER THE COMPOSITOR'S NUMBER, and nothing
+            # else: `configured` is where `asked` is written.
+            for m in re.finditer(r"fn\s+configure\b", body):
+                span = body_of(body[m.start():], "configure") or ""
+                if "cfg.new_size" not in span or "self.configured(" not in span:
+                    wrong.append("door/: a `configure` that does not hand the compositor's size to `configured`")
         if EMPTY.search(body):
             wrong.append(f"{f.name}: `scale_factor_changed` has an empty body")
         # THE HALVES OF THE RULE, and each was a defect in some door before the
@@ -10874,7 +11159,7 @@ let
         # `asked` may be written from ONE place, and that place is the
         # configure, because `cfg.new_size` is the only thing that carries the
         # compositor's own number.
-        configured = span_of(body, "configure")
+        configured = span_of(body, "configured" if is_door else "configure")
         elsewhere = body.replace(configured, " ") if configured else body
         for m in re.finditer(r"\.asked(?:\.[01])?\s*=", elsewhere):
             wrong.append(
@@ -10898,7 +11183,8 @@ let
                 # compositor's number is there, and so is the answer that can
                 # only shrink.
                 built = m.group(1)
-                if "cfg.new_size" not in built or any(
+                source = ("width", "height") if is_door else ("cfg.new_size",)
+                if not all(w in built for w in source) or any(
                     v in built for v in ("self.width", "self.height", "shown")
                 ):
                     wrong.append(
@@ -10910,9 +11196,12 @@ let
             # rule was written for `scale_factor_changed` alone, and the same
             # defect one path over — `let (_shown_w, _shown_h) = resized(…)` —
             # compiles past `#[must_use]` and passed.
+            # THE DOOR LAYS OUT IN `take_the_size`, which both its configure
+            # and a window's own size call — asked there.
+            laid = span_of(body, "take_the_size") if is_door else configured
             bound = re.search(
                 r"let \(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)\s*=\s*[^;]*hidpi::resized\(",
-                configured,
+                laid,
                 re.S,
             )
             if not bound:
@@ -10920,8 +11209,8 @@ let
                     f"{f.name}: `configure` does not take the size `resized` answers"
                 )
             elif (
-                f".width = {bound.group(1)};" not in configured
-                or f".height = {bound.group(2)};" not in configured
+                f".width = {bound.group(1)};" not in laid
+                or f".height = {bound.group(2)};" not in laid
             ):
                 wrong.append(
                     f"{f.name}: `configure` does not keep what the buffer can "
@@ -10931,7 +11220,7 @@ let
         # AND A LOCAL CALLED `asked` COMES FROM THE FIELD. The two rules above
         # read the CALL; this reads where the name came from, which is the
         # third way the same ratchet can be written.
-        for span in (span_of(body, "configure"), span_of(body, "scale_factor_changed")):
+        for span in (span_of(body, "configured" if is_door else "configure"), span_of(body, "scale_factor_changed")):
             for m in re.finditer(r"let\s+asked\s*=\s*([^;]*);", span, re.S):
                 if ".asked" not in m.group(1):
                     wrong.append(
@@ -10942,7 +11231,7 @@ let
 
         built = span_of(body, "assemble_gpu") or span_of(body, "ensure_gpu")
         for span, why in (
-            (span_of(body, "configure"),
+            (span_of(body, "take_the_size" if is_door else "configure"),
              "does not resize on `configure`, so no resize follows the size the "
              "compositor just gave"),
             (built,
@@ -11230,7 +11519,9 @@ let
     # checked like the rest, and a door that loses its `CompositorHandler`
     # takes the sweep below the number and says so. It was nine, which is the
     # count from before the screens grew a window of their own.
-    floor(doors, 10, "compositor handlers found")
+    # THREE: the door every window is, the footer and the lifeline. That no
+    # fourth grows beside the door is `every-window-is-a-door`'s to say.
+    floor(doors, 3, "compositor handlers found")
 
     if wrong:
         print("ERROR: a door that does not know how sharp its screen is.", file=sys.stderr)
@@ -11272,9 +11563,9 @@ let
     # are handled and not merely somewhere in the file.
     wrong = []
     doors = 0
-    for path in sorted(pathlib.Path("${../crates/ronoctua-shell/src}").glob("*.rs")):
+    for path in sorted(pathlib.Path("${../crates/ronoctua-shell/src}").rglob("*.rs")):
         code = code_of(without_tests(path.read_text()))
-        if not re.search(r"impl SeatHandler for \w+", code):
+        if not re.search(r"impl(?:<[^>]*>)?\s+SeatHandler\s+for\s+\w+", code):
             continue
         if "Capability::Pointer" not in code:
             continue  # a door with no pointer at all — the terminal
@@ -11293,7 +11584,10 @@ let
         frame = body_of(code, "pointer_frame")
         if frame is None or "switch_to(" not in frame:
             wrong.append(f"{name}: its `pointer_frame` does not start from `switch_to`")
-    floor(doors, 15, "doors that take pointers")
+    # THREE: the door every window is (`door/handlers.rs`), the footer and the
+    # line that outlives it. `every-window-is-a-door` is what keeps a window
+    # from growing a fourth.
+    floor(doors, 3, "doors that take pointers")
     if wrong:
         print("ERROR: a door that drops a cursor:", file=sys.stderr)
         for w in wrong:
@@ -11321,9 +11615,9 @@ let
     # the switch has to be where the events are handled.
     wrong = []
     doors = 0
-    for path in sorted(pathlib.Path("${../crates/ronoctua-shell/src}").glob("*.rs")):
+    for path in sorted(pathlib.Path("${../crates/ronoctua-shell/src}").rglob("*.rs")):
         code = code_of(without_tests(path.read_text()))
-        if not re.search(r"impl KeyboardHandler for \w+", code):
+        if not re.search(r"impl(?:<[^>]*>)?\s+KeyboardHandler\s+for\s+\w+", code):
             continue
         doors += 1
         name = path.name
@@ -11336,13 +11630,13 @@ let
                 wrong.append(f"{name}: takes a keyboard only when `{cond.strip()}`")
         if not re.search(r"\.\w+\.took\(&seat,\s*k\b", code):
             wrong.append(f"{name}: never hands a keyboard to `Seats::took`")
-        start = code.index("impl KeyboardHandler for")
+        start = re.search(r"impl(?:<[^>]*>)?\s+KeyboardHandler\s+for", code).start()
         handler = code[start:]
         for fn in ("enter", "leave", "press_key", "release_key", "update_modifiers"):
             body = body_of(handler, fn)
             if body is None or "switch_to(" not in body:
                 wrong.append(f"{name}: its `{fn}` does not start from the keyboard that spoke")
-    floor(doors, 17, "doors that take keyboards")
+    floor(doors, 3, "doors that take keyboards")
     if wrong:
         print("ERROR: a door that drops a keyboard:", file=sys.stderr)
         for w in wrong:
@@ -11589,7 +11883,7 @@ let
 
     for f in sorted(shell.rglob("*.rs")):
         body = code_of(f.read_text())
-        if "impl KeyboardHandler for" not in body:
+        if not _re.search(r"impl(?:<[^>]*>)?\s+KeyboardHandler\s+for", body):
             continue
         handlers += 1
         if f.name in EXCUSED:
@@ -11627,7 +11921,7 @@ let
             wrong.append(f"{name} is excused and is not there any more")
 
     # AND THE CHECK ITSELF IS NOT VACUOUS: it has to have found the windows.
-    floor(handlers, 6, "keyboard handlers found")
+    floor(handlers, 3, "keyboard handlers found")
 
     if wrong:
         print("ERROR: a keyboard that does not repeat.", file=sys.stderr)
@@ -22887,6 +23181,10 @@ let
       every-window-knows-its-scale
       every-list-window-has-a-bar
       every-window-header-opens
+      every-window-is-a-door
+      a-bar-owns-its-column
+      every-hint-key-is-a-click-or-says-so
+      labels-say-what-they-are
       a-claim-is-taken-where-it-is-drawn
       one-answer-about-how-tall
       the-claim-is-drawn-over-the-pictures
@@ -22976,6 +23274,10 @@ let
       every-window-knows-its-scale
       every-list-window-has-a-bar
       every-window-header-opens
+      every-window-is-a-door
+      a-bar-owns-its-column
+      every-hint-key-is-a-click-or-says-so
+      labels-say-what-they-are
       a-claim-is-taken-where-it-is-drawn
       one-answer-about-how-tall
       the-claim-is-drawn-over-the-pictures

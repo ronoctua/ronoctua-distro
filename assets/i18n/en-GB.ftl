@@ -2959,6 +2959,7 @@ power-kind-bluetooth = Bluetooth device
 
 # What the doors say when a daemon refused, and what the window cannot do.
 power-answer-in-the-footer = The lock is the footer's to hold: { $awake }, or { $lid }
+door-no-footer = The footer could not be reached to run this
 power-what-profile = the profile
 power-what-lock = the lock
 power-what-thresholds = the thresholds

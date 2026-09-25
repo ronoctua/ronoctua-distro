@@ -433,6 +433,18 @@
     # which of the two jobs it is. The contrast gates that were written for
     # `text.group` came here with it, because they were always measuring this.
     heading = "group.solid";
+    # THE TITLE OF A HEADER — the window's name on line 0, and the brain's.
+    #
+    # It was `text.heading`, the ink of every title INSIDE the content, and the
+    # owner read the two side by side on the manual's window: the header's
+    # name and the first section under it wore the same colour, so the line
+    # that frames the window read as one more heading of its body. It is the
+    # hint's own family (`subtle`) on its loud rung, with a little more of its
+    # hue: part of the header, and the strongest thing on it.
+    header-title = {
+      of = "subtle.text-loud";
+      chroma = 1.6;
+    };
     # THE KEY ONE PRESSES, in every list that teaches one.
     #
     # It was `state.accent` — the same token as the PENDING CHORD one line
@@ -549,6 +561,47 @@
       # from every other text.
       explain = {
         of = "explain.text";
+      };
+      # A KEY ON A HINT LINE THAT A CLICK CANNOT PRESS.
+      #
+      # Every shortcut a header teaches is clickable: a click presses the key
+      # it names (`chrome::Mark::press`). A few notations are not one key —
+      # `RCtrl ↑↓`, a range of digits, a held modifier — and the owner asked
+      # for those to read slightly apart from the rest, so the hand does not
+      # reach for a control that does nothing.
+      #
+      # The key's own rung with its hue taken away: the same weight, because
+      # it IS a key and the eye still hunts for it, and a tone that says
+      # "this one is only to be read". A degree and not another kind of
+      # thing, which is why it is not a family.
+      inert = {
+        of = "subtle.text";
+        chroma = 0.0;
+      };
+      # A SHORTCUT UNDER THE POINTER — the one a click would press.
+      #
+      # Every header of the system lights it, and the owner asked for the lit
+      # tones to be SMALL variations of the resting ones: the same rung (the
+      # same weight, so nothing on the line jumps) with more of its own hue. The
+      # brain lit its keys in `text.once` and its words in the content's grey,
+      # which were other colours altogether; these are the same colours, lit.
+      lit = {
+        key = {
+          of = "subtle.text";
+          chroma = 2.4;
+        };
+        prose = {
+          of = "subtle.text-muted";
+          chroma = 2.4;
+        };
+        alternate = {
+          of = "alternate.text";
+          chroma = 1.6;
+        };
+        contextual = {
+          of = "alternate.text-muted";
+          chroma = 1.9;
+        };
       };
     };
     # THE LABEL COLUMN of the three views that are a list of a label and a
