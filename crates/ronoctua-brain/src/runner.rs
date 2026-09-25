@@ -505,6 +505,16 @@ impl Runner {
         // has a one-second clock already, and a daemon that pushed a digit
         // every second would wake three processes to redraw one.
         let seconds = task.countdown(prefs);
+        // A COUNTDOWN OF ZERO IS NO WARNING, and it is not published. It was:
+        // the announcement stood for the few milliseconds until `perform`
+        // took it down, and every screen drew it — the footer grew a line for
+        // the brain and shrank again, so the modeline and the minibuffer
+        // jumped every thirty seconds, as long as a watch (`emacs-daemon`,
+        // `clock-sync`, both zero by design) kept its minute.
+        if seconds == 0 {
+            self.perform(&id, now);
+            return;
+        }
         let deadline = match &mind.announcement {
             Some(a) if a.task == id => a.deadline,
             _ => {
@@ -1129,6 +1139,51 @@ mod tests {
         assert!(
             shared.snapshot().0.announcement.is_none(),
             "the notice stayed"
+        );
+    }
+
+    /// A TASK WITH NO COUNTDOWN RUNS WITHOUT A WARNING — not even one that
+    /// stands for the instant before it starts, which every screen drew.
+    #[test]
+    fn a_zero_countdown_is_never_announced() {
+        struct Watch(Arc<Mutex<u8>>);
+        impl Task for Watch {
+            fn id(&self) -> &'static str {
+                "watch"
+            }
+            fn due(&self, _now: Moment, _prefs: &Prefs, _last: Option<Moment>) -> Due {
+                Due::Not { why: "test" }
+            }
+            fn needs(&self, _pulse: &Pulse, _prefs: &Prefs) -> Verdict {
+                Verdict::Go
+            }
+            fn countdown(&self, _prefs: &Prefs) -> u16 {
+                0
+            }
+            fn run(&self, _report: &Report) -> Outcome {
+                *self.0.lock().expect("runs") += 1;
+                Outcome::Done(Vec::new())
+            }
+        }
+        let runs = Arc::new(Mutex::new(0));
+        let shared = Arc::new(Shared::of(Prefs::default()));
+        let mut runner = Runner::new(
+            Arc::clone(&shared),
+            Registry::of(vec![Box::new(Watch(Arc::clone(&runs)))]).expect("the registry"),
+            Box::new(FakeMeter(Pulse::default())),
+            Box::new(Hand(Arc::new(Mutex::new(1000)))),
+            nowhere(),
+        );
+        shared.queue_up("watch");
+        runner.pump();
+        assert_eq!(
+            *runs.lock().expect("runs"),
+            1,
+            "it did not run in the same pass"
+        );
+        assert!(
+            !shared.ever_announced(),
+            "a countdown of zero was published"
         );
     }
 

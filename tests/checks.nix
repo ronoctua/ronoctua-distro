@@ -11743,6 +11743,52 @@ let
     END
   '';
 
+  # THE CURSOR'S SHAPE HAS ONE DOOR, and every surface walks through it.
+  # `wp_cursor_shape_v1` is the owner's approved exception to invariant 3
+  # (2026-09-25): a surface that never names a cursor leaves the compositor's
+  # last image on it, which was the resize arrows kept inside a window after
+  # crossing its border. So two questions: nobody but `cursor_shape.rs` names
+  # the protocol, and every one of the three kinds of surface asks for the
+  # arrow on an enter — the door, the footer and the lifeline.
+  one-cursor-shape = mkCheck "one-cursor-shape" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: whether ANY other file names the protocol, anywhere in it.
+    # `code_of` because the needles are names in CODE.
+    crates = pathlib.Path("${../crates}")
+    needles = ("cursor_shape::v1", "WpCursorShape", "CursorShapeManager")
+    wrong, looked = [], 0
+    for path in sorted(crates.rglob("*.rs")):
+        looked += 1
+        if path.name == "cursor_shape.rs" and "ronoctua-shell" in path.parts:
+            continue
+        code = code_of(path.read_text())
+        if any(n in code for n in needles):
+            wrong.append(str(path.relative_to(crates)))
+    floor(looked, 300, "Rust files read")
+    if wrong:
+        print("ERROR: a file other than ronoctua-shell/src/cursor_shape.rs names the cursor shape:", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        sys.exit(1)
+
+    src = pathlib.Path("${../crates/ronoctua-shell/src}")
+    silent = []
+    for name in ("door/handlers.rs", "surface.rs", "lifeline.rs"):
+        frame = body_of(code_of((src / name).read_text()), "pointer_frame")
+        if "shapes.entered" not in frame:
+            silent.append(name)
+    if silent:
+        print("ERROR: a surface lets a pointer in without asking for the arrow — the last image stays on it:", file=sys.stderr)
+        for s in silent:
+            print("       " + s, file=sys.stderr)
+        sys.exit(1)
+    print("OK: only cursor_shape.rs names the shape, and all three surfaces ask for it")
+    END
+  '';
+
   one-virtual-pointer = mkCheck "one-virtual-pointer" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
@@ -23177,6 +23223,7 @@ let
       one-input-device-boundary
       one-virtual-keyboard
       one-virtual-pointer
+      one-cursor-shape
       keys-rules-carry-the-leader
       every-window-knows-its-scale
       every-list-window-has-a-bar
@@ -23270,6 +23317,7 @@ let
       one-input-device-boundary
       one-virtual-keyboard
       one-virtual-pointer
+      one-cursor-shape
       keys-rules-carry-the-leader
       every-window-knows-its-scale
       every-list-window-has-a-bar

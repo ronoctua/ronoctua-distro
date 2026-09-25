@@ -17,7 +17,11 @@ linhas. Scroll como compositor, camada de shell própria em Rust. O porquê de c
    `wl_data_device` (arrastar), `ext-image-copy-capture-v1` (a captura do estúdio) e
    `zwp_virtual_keyboard_v1` (o teclado na tela, 2026-09-25; só o `virtual_keys.rs` o nomeia,
    cobra o `one-virtual-keyboard`) e `zwlr_virtual_pointer_v1` (os gestos, 2026-09-25; só o
-   `virtual_pointer.rs`, cobra o `one-virtual-pointer`).
+   `virtual_pointer.rs`, cobra o `one-virtual-pointer`) e `wp_cursor_shape_v1` (a seta, 2026-09-25:
+   superfície que não nomeia cursor fica com a ÚLTIMA imagem do compositor — a de redimensionar a
+   borda, dentro da janela —, e forma e não imagem porque cada assento veste o tema recolorido dele;
+   só o `cursor_shape.rs`, e a porta, o rodapé e a linha de vida pedem a seta a cada `enter`, cobra o
+   `one-cursor-shape`).
 4. **O shell nunca reimplementa layout de janelas.** Um `xdg_toplevel` por buffer nativo.
 5. **Sem lógica Nix reimplementada em Rust.**
 6. **Nada imperativo.** Se não está no flake, não existe.

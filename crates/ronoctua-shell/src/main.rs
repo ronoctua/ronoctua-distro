@@ -142,6 +142,7 @@ mod workspaces;
 mod world;
 // `LEADER s u`, the animated mark on the modeline, and the window that watches
 // a run happen. It knows no step: the sequence is `assets/updates.nix`.
+mod cursor_shape;
 mod update_window;
 mod virtual_keys;
 mod virtual_pointer;

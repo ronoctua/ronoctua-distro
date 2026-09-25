@@ -313,6 +313,7 @@ pub fn host_it(unit: &str) -> Result<()> {
         keyboards: crate::seats::Seats::default(),
         key_here: Modifiers::default(),
         pointers: crate::seats::Seats::default(),
+        shapes: crate::cursor_shape::Shapes::bind(&globals, &qh),
         here: PerSeat::default(),
         layer,
         asked: (0, height),
@@ -385,6 +386,8 @@ struct Lifeline {
     /// Every pointer this window was offered — one per cursor — with the
     /// state of each while another is `here`. See `crate::seats`.
     pointers: crate::seats::Seats<PerSeat>,
+    /// The arrow each pointer is asked for on entering. See `crate::cursor_shape`.
+    shapes: crate::cursor_shape::Shapes,
     /// The state of the pointer whose events are being handled now.
     here: PerSeat,
     layer: LayerSurface,
@@ -935,6 +938,7 @@ impl SeatHandler for Lifeline {
                 Ok(p) => {
                     // EVERY POINTER, and not only the first: one per cursor.
                     let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.shapes.took(&seat, &p, qh);
                     self.pointers.took(&seat, p, name.as_deref());
                 }
                 Err(e) => tracing::warn!(error = %e, "no pointer"),
@@ -953,6 +957,7 @@ impl SeatHandler for Lifeline {
             self.keyboards.lost(&seat, &mut self.key_here);
         }
         if capability == Capability::Pointer {
+            self.shapes.lost(&seat);
             self.pointers.lost(&seat, &mut self.here);
         }
     }
@@ -1065,6 +1070,9 @@ impl PointerHandler for Lifeline {
         pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
+        for serial in crate::cursor_shape::enters(events) {
+            self.shapes.entered(self.pointers.seat_of(pointer), serial);
+        }
         self.pointers.switch_to(pointer, &mut self.here);
         self.pointer_frame_here(conn, qh, events);
     }

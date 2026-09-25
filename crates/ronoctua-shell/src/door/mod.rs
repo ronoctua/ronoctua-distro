@@ -562,6 +562,8 @@ pub struct Door<C: Content> {
     /// Every pointer — one per cursor — with the state of each while another
     /// is `here`. See `crate::seats`.
     pointers: crate::seats::Seats<Hand<C::Hand>>,
+    /// The arrow each pointer is asked for on entering. See `crate::cursor_shape`.
+    shapes: crate::cursor_shape::Shapes,
     /// The state of the pointer whose events are being handled now.
     pub here: Hand<C::Hand>,
     /// Every touch screen on every seat.
@@ -655,6 +657,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
         keyboards: crate::seats::Seats::default(),
         mods: Modifiers::default(),
         pointers: crate::seats::Seats::default(),
+        shapes: crate::cursor_shape::Shapes::bind(&globals, &qh),
         here: Hand::default(),
         touches: crate::seats::Seats::default(),
         fingers: touch::Fingers::default(),

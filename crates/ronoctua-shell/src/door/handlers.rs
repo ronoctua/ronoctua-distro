@@ -224,7 +224,10 @@ impl<C: Content> SeatHandler for Door<C> {
         if cap == Capability::Pointer {
             match self.seats.get_pointer(qh, &seat) {
                 // EVERY POINTER, and not only the first: one per cursor.
-                Ok(p) => self.pointers.took(&seat, p, name.as_deref()),
+                Ok(p) => {
+                    self.shapes.took(&seat, &p, qh);
+                    self.pointers.took(&seat, p, name.as_deref());
+                }
                 Err(e) => tracing::warn!(error = %e, "no pointer; keyboard only"),
             }
         }
@@ -252,6 +255,7 @@ impl<C: Content> SeatHandler for Door<C> {
             self.keyboards.lost(&seat, &mut self.mods);
         }
         if cap == Capability::Pointer {
+            self.shapes.lost(&seat);
             self.pointers.lost(&seat, &mut self.here);
         }
         if cap == Capability::Touch {
@@ -370,6 +374,9 @@ impl<C: Content> PointerHandler for Door<C> {
         pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
+        for serial in crate::cursor_shape::enters(events) {
+            self.shapes.entered(self.pointers.seat_of(pointer), serial);
+        }
         self.pointers.switch_to(pointer, &mut self.here);
         self.pointer_frame_here(events);
     }

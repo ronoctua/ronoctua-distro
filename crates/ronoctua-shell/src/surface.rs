@@ -557,6 +557,8 @@ struct Footer {
     /// Every pointer this window was offered — one per cursor — with the
     /// state of each while another is `here`. See `crate::seats`.
     pointers: crate::seats::Seats<PerSeat>,
+    /// The arrow each pointer is asked for on entering. See `crate::cursor_shape`.
+    shapes: crate::cursor_shape::Shapes,
     /// The state of the pointer whose events are being handled now.
     here: PerSeat,
     /// The transfer queue's panel, when it is open. `None` = it is not.
@@ -1362,6 +1364,10 @@ struct Screen {
     /// Every bar the last frame drew on this screen, by its track — its column
     /// is the bar's, for the pointer and for every band (`crate::bars`).
     bars: crate::bars::Drawn,
+    /// A HEIGHT the footer decided and the compositor has not been told yet —
+    /// with its exclusive zone. It travels in the commit that carries the
+    /// frame drawn at it (see `Footer::apply_geometry`).
+    size_owed: Option<(u32, i32)>,
     configured: bool,
     /// Assembled on the first `configure`, when there is a size. They stay `None`
     /// if there is no usable GPU — the footer still resolves the layout and logs,
@@ -2457,6 +2463,7 @@ pub fn run() -> Result<()> {
         echo: None,
         mx: crate::minibuffer::Minibuffer::default(),
         pointers: crate::seats::Seats::default(),
+        shapes: crate::cursor_shape::Shapes::bind(&globals, &qh),
         here: PerSeat::default(),
         transfers: None,
         jobs: Vec::new(),
@@ -5116,6 +5123,7 @@ impl SeatHandler for Footer {
                 Ok(p) => {
                     // EVERY POINTER, and not only the first: one per cursor.
                     let name = self.seats.info(&seat).and_then(|i| i.name);
+                    self.shapes.took(&seat, &p, qh);
                     self.pointers.took(&seat, p, name.as_deref());
                 }
                 // With no pointer the footer works whole: what is lost is the
@@ -5158,6 +5166,7 @@ impl SeatHandler for Footer {
             self.keyboards.lost(&seat, &mut self.mods);
         }
         if cap == Capability::Pointer {
+            self.shapes.lost(&seat);
             self.pointers.lost(&seat, &mut self.here);
         }
         if cap == Capability::Touch {
@@ -5633,6 +5642,9 @@ impl PointerHandler for Footer {
         pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
+        for serial in crate::cursor_shape::enters(events) {
+            self.shapes.entered(self.pointers.seat_of(pointer), serial);
+        }
         self.pointers.switch_to(pointer, &mut self.here);
         // THE KEYBOARD FIRST: a press on a key is the key's, and never reaches
         // the rows above it.
@@ -6708,6 +6720,7 @@ impl Footer {
             scale: 1,
             scale_told: 1,
             bars: crate::bars::Drawn::default(),
+            size_owed: None,
             configured: false,
             gpu: None,
             text: None,
@@ -16682,11 +16695,53 @@ impl Footer {
         // THE ZONE FOLLOWS THE HEIGHT. See the top of the module: the expansion
         // pushes the buffers, it does not cover them.
         let exclusive = height as i32;
-        for t in &self.screens {
-            t.layer.set_size(0, height);
-            t.layer.set_exclusive_zone(exclusive);
+        // A NEW HEIGHT TRAVELS WITH THE FRAME DRAWN AT IT.
+        //
+        // It was committed ALONE, before any frame at the new height existed:
+        // the compositor then placed the surface at its new height, anchored
+        // to the bottom, still showing the OLD buffer — shorter or taller than
+        // the box — and the next frame put everything back. That is the
+        // modeline and the minibuffer jumping for an instant whenever a
+        // notification rose above them, or anything else changed the height
+        // (a keyboard dropping and coming back raises a note and moves the
+        // marks). The owner saw it as the bar blinking.
+        //
+        // So a screen that already draws lays itself out at the height it
+        // decided, draws, and hands the height to the compositor in the SAME
+        // commit as that frame (`size_owed`, read in `paint`'s present hook) —
+        // the move `crate::hidpi::told_before_present` makes for the scale. A
+        // screen with nothing drawn yet commits the size alone, as before: it
+        // has no old frame to show.
+        let mut drawn_again = false;
+        for i in 0..self.screens.len() {
+            let t = &self.screens[i];
             t.layer.set_keyboard_interactivity(keyboard);
-            t.layer.commit();
+            let grows = t.configured && t.gpu.is_some() && t.asked.1 != height;
+            if !grows {
+                t.layer.set_size(0, height);
+                t.layer.set_exclusive_zone(exclusive);
+                t.layer.commit();
+                continue;
+            }
+            // THE HEIGHT IS OURS — the compositor only echoes `set_size` —
+            // and the width stays what it configured. `asked` itself waits for
+            // that echo in `configure`: it is the compositor's number.
+            let asked = (self.screens[i].asked.0, height);
+            let scale = self.screens[i].scale;
+            if let Some(g) = self.screens[i].gpu.as_mut() {
+                let (shown_w, shown_h) = crate::hidpi::resized(g, asked, scale);
+                self.screens[i].width = shown_w;
+                self.screens[i].height = shown_h;
+            }
+            self.screens[i].size_owed = Some((height, exclusive));
+            drawn_again = true;
+        }
+        // `draw` and `paint` and not `draw_and_paint`: that one calls back
+        // here when the opened line settles, and a cycle among the footer's
+        // methods is what `the-footer-does-not-ask-itself` refuses.
+        if drawn_again {
+            self.draw();
+            self.paint();
         }
         if let Err(e) = self.conn.flush() {
             tracing::warn!(error = %e, "flushing the connection failed");
@@ -19368,6 +19423,10 @@ impl Footer {
             // makes. See `crate::hidpi::told_before_present`.
             let surface = screen.layer.wl_surface().clone();
             let scale = screen.scale;
+            // AND THE HEIGHT THE FOOTER DECIDED, when there is one owed: it goes
+            // in the same commit as this frame (`Footer::apply_geometry`).
+            let layer = screen.layer.clone();
+            let mut owed = screen.size_owed.take();
             // THIS SCREEN'S OWN PIXELS — `resized` already made them what the
             // buffer can show, so there is one number and this is it.
             let (logical_w, logical_h) = (screen.width, screen.height);
@@ -19485,7 +19544,13 @@ impl Footer {
             // with a light capture underneath.
             let images = screen.images.as_ref();
             if let Err(e) = gpu.frame(
-                || crate::hidpi::told_before_present(scale, told, &surface),
+                || {
+                    if let Some((height, zone)) = owed.take() {
+                        layer.set_size(0, height);
+                        layer.set_exclusive_zone(zone);
+                    }
+                    crate::hidpi::told_before_present(scale, told, &surface);
+                },
                 |pass| {
                     if let Some(q) = quads {
                         q.draw_range(pass, 0, under);
@@ -19502,7 +19567,13 @@ impl Footer {
                 },
             ) {
                 tracing::error!(error = %e, screen = index, "drawing the frame failed");
+                screen.size_owed = screen.size_owed.or(owed);
                 continue;
+            }
+            // A FRAME THAT DID NOT PRESENT (occluded, timed out) never ran the
+            // hook, and the height is still owed to the next one that does.
+            if owed.is_some() {
+                screen.size_owed = owed;
             }
             painted = true;
             // Only the first frames, and only of the first screen: after that they

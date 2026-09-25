@@ -243,6 +243,11 @@ struct Inner {
     version: u64,
     /// Flipped by `abort` and read by whatever is running.
     stop: Arc<AtomicBool>,
+    /// Whether any change EVER left an announcement standing — a witness for
+    /// the tests, which otherwise see only the state after a pass and never
+    /// one that lived for a few instructions inside it.
+    #[cfg(test)]
+    ever_announced: bool,
 }
 
 /// The mind, shared by the daemon's threads.
@@ -264,6 +269,8 @@ impl Shared {
                 },
                 version: 0,
                 stop: Arc::new(AtomicBool::new(false)),
+                #[cfg(test)]
+                ever_announced: false,
             }),
             bell: Condvar::new(),
         }
@@ -324,10 +331,21 @@ impl Shared {
         let mut state = self.locked();
         let before = state.mind.clone();
         what(&mut state.mind);
+        #[cfg(test)]
+        {
+            state.ever_announced |= state.mind.announcement.is_some();
+        }
         if state.mind == before {
             return;
         }
         self.rang(state);
+    }
+
+    /// Whether an announcement was ever published, however briefly.
+    #[cfg(test)]
+    #[must_use]
+    pub fn ever_announced(&self) -> bool {
+        self.locked().ever_announced
     }
 
     /// Puts a task in the queue, if it is not already somewhere.
