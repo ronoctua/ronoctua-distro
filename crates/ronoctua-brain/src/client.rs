@@ -166,6 +166,48 @@ fn listen_once(path: &Path, each: &mut impl FnMut(Mind) -> bool) -> Result<bool>
     Ok(false)
 }
 
+/// Follows the daemon's own log forever, calling `each` with every batch of
+/// lines — the whole ring first, then only what is new.
+///
+/// It reconnects the way [`watch`] does, and starts the daemon the same way.
+/// After a reconnection the ring arrives WHOLE again (a restarted daemon
+/// numbers from one), so the caller replaces what it held when the first
+/// line of a batch is not after its last.
+///
+/// # Errors
+///
+/// `XDG_RUNTIME_DIR` absent, which is the one failure retrying cannot fix.
+pub fn tail(mut each: impl FnMut(Vec<crate::tail::Line>) -> bool) -> Result<()> {
+    let path = socket_path()?;
+    loop {
+        match tail_once(&path, &mut each) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(e) => tracing::debug!(error = %e, "the brain went down; trying again"),
+        }
+        std::thread::sleep(AGAIN * 10);
+    }
+}
+
+/// One connection's worth of following. `true` when the caller asked to stop.
+fn tail_once(path: &Path, each: &mut impl FnMut(Vec<crate::tail::Line>) -> bool) -> Result<bool> {
+    let stream = connect_or_start(path)?;
+    let mut out = BufWriter::new(stream.try_clone().context("duplicate the socket")?);
+    write_line(&mut out, &Ask::Tail)?;
+    let mut input = BufReader::new(stream);
+    while let Some(said) = read_line::<Say>(&mut input)? {
+        match said {
+            Say::Lines { lines } => {
+                if each(lines) {
+                    return Ok(true);
+                }
+            }
+            other => tracing::warn!(?other, "an unexpected answer on the brain's log"),
+        }
+    }
+    Ok(false)
+}
+
 /// Connects, starting the daemon if nobody is listening.
 fn connect_or_start(path: &Path) -> Result<UnixStream> {
     if let Ok(s) = UnixStream::connect(path) {

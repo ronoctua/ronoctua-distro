@@ -31,12 +31,21 @@ fn main() -> Result<()> {
     // The unit's log goes to the journal; the short-lived doors are quiet
     // unless something is wrong, because whoever runs `look` wants the JSON on
     // stdout and nothing else on it.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ronoctua_brain=info".into()),
+    //
+    // AND EVERY LINE IT PRINTS IS ALSO KEPT (`tail::Copier`), under the same
+    // filter — the ring the brain's page follows is a copy of this output and
+    // nothing else.
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_new(ronoctua_brain::tail::directives(
+                std::env::var("RUST_LOG").ok().as_deref(),
+            ))
+            .unwrap_or_else(|_| "ronoctua_brain=info".into()),
         )
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(ronoctua_brain::tail::Copier)
         .init();
 
     match std::env::args().nth(1).as_deref() {
@@ -111,6 +120,7 @@ fn look() -> Result<()> {
             Ok(())
         }
         wire::Say::Refused { why } => anyhow::bail!("{why}"),
+        wire::Say::Lines { .. } => anyhow::bail!("the brain answered a look with its log"),
     }
 }
 
@@ -128,6 +138,7 @@ fn ask_for(rehearsal: bool) -> Result<()> {
             Ok(())
         }
         wire::Say::Refused { why } => anyhow::bail!("{why}"),
+        wire::Say::Lines { .. } => anyhow::bail!("the brain answered a run with its log"),
     }
 }
 

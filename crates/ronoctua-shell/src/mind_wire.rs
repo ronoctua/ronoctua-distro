@@ -106,6 +106,38 @@ pub fn mind_of(
     }
 }
 
+/// The daemon's own log, as the WIT carries it, oldest first.
+///
+/// The time is formatted HERE, with the machine's zone, for the reason every
+/// date in this file is: the component has neither. The text crosses as it was
+/// written — a log line is data (`ronoctua_brain::tail`).
+#[must_use]
+pub fn log_of<'a>(
+    lines: impl IntoIterator<Item = &'a ronoctua_brain::tail::Line>,
+    zone: &ronoctua_files::when::Zone,
+) -> Vec<ronoctua_protocol::LogLine> {
+    use ronoctua_brain::tail::Level as From;
+    use ronoctua_protocol::LogLevel as To;
+    lines
+        .into_iter()
+        .map(|l| {
+            let c = ronoctua_files::when::civil(l.at_ms.div_euclid(1000), zone);
+            ronoctua_protocol::LogLine {
+                seq: l.seq,
+                at_text: format!("{:02}:{:02}:{:02}", c.hour, c.minute, c.second),
+                level: match l.level {
+                    From::Error => To::Error,
+                    From::Warn => To::Warn,
+                    From::Info => To::Info,
+                    From::Debug => To::Debug,
+                    From::Trace => To::Trace,
+                },
+                text: l.text.clone(),
+            }
+        })
+        .collect()
+}
+
 /// The warning, as the WIT carries it.
 fn announcement_of(a: &Announcement) -> ronoctua_protocol::Announcement {
     ronoctua_protocol::Announcement {

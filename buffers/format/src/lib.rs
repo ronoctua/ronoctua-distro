@@ -1331,6 +1331,7 @@ impl State {
             | Input::Survey(_)
             | Input::Queue(_)
             | Input::Mind(_)
+            | Input::Log(_)
             | Input::Hover { .. }
             | Input::Unhover(_)
             | Input::KeyboardSeat(_)

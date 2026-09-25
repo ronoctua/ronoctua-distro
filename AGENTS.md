@@ -1692,6 +1692,21 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   (`Screen::split`, quando o último bloco é fixo) e o hospedeiro conta de BAIXO (`Span::foot`), com
   o fundo de cima esticando até a costura — senão o resto vira uma tira da cor da página entre o
   container do log e o rodapé.
+- **O BRAIN MOSTRA O PRÓPRIO LOG, AO VIVO** (`, l` na janela dele, que é o `C-l`; `ronoctua_brain::tail`):
+  uma CÓPIA da saída do daemon — cada entrada, cada tick (a linha `tick` de todo passe, com o pulso e
+  a fila), cada aviso e erro —, a pedido do dono, e sem custo: um anel de 500 linhas em memória
+  (`tail::Copier`, uma camada do `tracing` sob o MESMO filtro da saída, então o anel é o que o log
+  imprime e nada mais), e um reinício o esvazia — o que precisa durar já dura, no journal do brain e
+  no do systemd. **Canal PRÓPRIO** (`Ask::Tail` → `Say::Lines`, sino próprio): no `Mind` cada tick
+  acordaria toda tela que observa o brain, que é o custo que o `Shared::change` existe para evitar.
+  O hospedeiro segue numa segunda conexão e manda o log INTEIRO ao buffer (`Input::Log`), com a hora
+  formatada do lado dele; o anel que chega inteiro de novo (reconexão, daemon reiniciado) SUBSTITUI o
+  que havia. O cursor ACOMPANHA a linha mais nova enquanto está nela, e subiu para ler fica na linha
+  lida, achada pelo número. **A linha é DADO** (inv. 8, leitura aprovada pelo dono em 2026-09-25, e só
+  para log): as palavras são as do daemon, em inglês pelo inv. 18, como o conteúdo de um arquivo; a
+  moldura — título, teclas — é chave nos dois idiomas. O nível tem tom (`Role::Danger`, o novo
+  `Role::Warning` → `state.warning`, o corpo, e o `Dim` para detalhe), e o rodapé da página traz a
+  linha INTEIRA, quebrada, que a fileira corta na largura.
 - **O EMACS TEM UMA VIGIA, e ela é a primeira tarefa que só OLHA** (`tasks/emacs.rs`). Três perguntas:
   o daemon responde (`emacsclient -e`, um processo, e `run` é o único método impuro), há um Emacs
   que NÃO é cliente (`ronoctua_memory::emacs`, porque o `/proc` tem uma fronteira só), e o daemon é

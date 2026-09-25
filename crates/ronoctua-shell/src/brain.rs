@@ -524,6 +524,30 @@ pub fn abort(mind: &Mind) -> ronoctua_brain::Ask {
 // The daemon's mind, as the component draws it
 // ---------------------------------------------------------------------------
 
+/// Follows the daemon's own log on a thread of its own, sending every batch
+/// of lines down `channel` until the other end goes away.
+///
+/// `true` when the thread started; the daemon itself is started by the same
+/// door [`listen`] uses when nobody is home.
+pub fn follow(
+    channel: smithay_client_toolkit::reexports::calloop::channel::Sender<
+        Vec<ronoctua_brain::tail::Line>,
+    >,
+) -> bool {
+    let built = std::thread::Builder::new()
+        .name("brain-log".into())
+        .spawn(move || {
+            let _ = ronoctua_brain::client::tail(|lines| channel.send(lines).is_err());
+        });
+    match built {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::error!(error = %e, "could not start the brain log's thread");
+            false
+        }
+    }
+}
+
 /// The conversion to the WIT's records lives in [`crate::mind_wire`].
 ///
 /// It moved out so `ronoctua-render-png` could link it without linking this

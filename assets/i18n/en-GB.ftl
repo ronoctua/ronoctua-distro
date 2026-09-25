@@ -2547,6 +2547,7 @@ cmd-brain-window = Change time
 cmd-brain-switch = Switch it off
 cmd-brain-keys = Every key
 cmd-brain-notice = Do what it offers
+cmd-brain-log = Live log
 
 # THE PAGE ITSELF.
 brain-title = Brain
@@ -2554,6 +2555,8 @@ brain-nothing = Nothing is set up yet
 brain-tasks = Tasks
 brain-activity = Activity
 brain-no-activity = Nothing has happened yet
+brain-log = Live log
+brain-no-log = Nothing logged yet
 brain-schedule = Schedule
 brain-steps = Steps
 brain-history = History
@@ -2579,6 +2582,7 @@ about-brain-window = Step to the next part of the day this task may run in.
 about-brain-reset-steps = Put every step of this task back as the distro ships it.
 about-brain-proceed = Start the task that is counting down now, without waiting for the count.
 about-brain-abort = Stop the task that is running or counting down.
+about-brain-log = Show the brain's own log as it is written — every tick, what it decided, every warning and error — or go back.
 brain-task-emacs-daemon = Watch the Emacs daemon
 brain-task-emacs-daemon-does = Looks, every few minutes, for the Emacs server that holds your session and your configuration — and for an Emacs that is running WITHOUT it, which looks the same on screen and is not: it loaded its own copy, its buffers are not the session's, and closing it loses them. It reads the process table and nothing else, and the only thing it ever starts is the distro's own service.
 emacs-no-daemon = The Emacs daemon is not running. Every editor window will load the whole configuration again, and none of them will share your buffers.

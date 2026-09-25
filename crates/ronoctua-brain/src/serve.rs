@@ -89,7 +89,7 @@ fn serve(desk: &Arc<Desk>, stream: UnixStream) {
                     return;
                 }
                 // A watch never comes back: the connection IS the subscription.
-                if matches!(ask, Ask::Watch) {
+                if matches!(ask, Ask::Watch | Ask::Tail) {
                     return;
                 }
             }
@@ -120,6 +120,7 @@ fn answer(desk: &Arc<Desk>, ask: &Ask, out: &mut impl Write) -> Result<()> {
     match ask {
         Ask::Look => {}
         Ask::Watch => return stream_it(desk, out),
+        Ask::Tail => return tail_it(out),
         Ask::Run { task, rehearsal } => {
             if let Some(why) = unknown(desk, task) {
                 return write_line(out, &Say::Refused { why });
@@ -273,6 +274,24 @@ fn stream_it(desk: &Arc<Desk>, out: &mut impl Write) -> Result<()> {
     }
 }
 
+/// Streams the daemon's log: everything kept, then every new line.
+///
+/// The wait is the TAIL's bell and not the mind's, so a follower is woken by a
+/// line and by nothing else — and a quiet brain writes nothing on the socket.
+fn tail_it(out: &mut impl Write) -> Result<()> {
+    let tail = crate::tail::global();
+    let (lines, mut seen) = tail.after(0);
+    write_line(out, &Say::Lines { lines })?;
+    loop {
+        let (lines, now) = tail.wait_after(seen, std::time::Duration::from_secs(60));
+        if lines.is_empty() {
+            continue;
+        }
+        write_line(out, &Say::Lines { lines })?;
+        seen = now;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,8 +344,39 @@ mod tests {
     fn mind_of(socket: &Path, ask: &Ask) -> Mind {
         match client::ask_at(socket, ask).expect("ask") {
             Say::Mind { mind } => *mind,
-            Say::Refused { why } => panic!("refused: {why}"),
+            other => panic!("not a mind: {other:?}"),
         }
+    }
+
+    /// A FOLLOWER GETS THE RING, THEN WHAT IS NEW — and a line written after
+    /// it connected arrives without asking again.
+    #[test]
+    fn the_log_is_followed_line_by_line() {
+        let root = scratch("tail");
+        let (_desk, socket) = a_brain(&root);
+        crate::tail::global().push(crate::tail::Level::Info, "before".to_owned());
+        let stream = UnixStream::connect(&socket).expect("connect");
+        let mut out = std::io::BufWriter::new(stream.try_clone().expect("twin"));
+        write_line(&mut out, &Ask::Tail).expect("ask");
+        let mut input = BufReader::new(stream);
+        let Some(Say::Lines { lines }) = read_line::<Say>(&mut input).expect("read") else {
+            panic!("the first answer was not lines");
+        };
+        assert!(
+            lines.iter().any(|l| l.text == "before"),
+            "the ring did not come first"
+        );
+        crate::tail::global().push(crate::tail::Level::Error, "after".to_owned());
+        loop {
+            let Some(Say::Lines { lines }) = read_line::<Say>(&mut input).expect("read") else {
+                panic!("the stream ended");
+            };
+            if let Some(l) = lines.iter().find(|l| l.text == "after") {
+                assert_eq!(l.level, crate::tail::Level::Error);
+                break;
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

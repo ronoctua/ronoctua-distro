@@ -1137,6 +1137,28 @@ interface types {
         asleep,
     }
 
+    // How loud one line of the brain's own log is — the log's own levels.
+    enum log-level {
+        error,
+        warn,
+        info,
+        debug,
+        trace,
+    }
+
+    // ONE LINE OF THE BRAIN'S OWN LOG. The text is DATA — the daemon's words as
+    // it wrote them — and the time is formatted by the host, which has the zone
+    // (invariant 11).
+    record log-line {
+        // Its place in the daemon's log, counted from the daemon's start.
+        seq: u64,
+        // `HH:MM:SS`.
+        at-text: string,
+        level: log-level,
+        // `target: message key=value …`, as the log prints it.
+        text: string,
+    }
+
     // `skipped` FIRST, and deliberately the harmless one: a record built from a
     // file that lost a field must not read as "it worked".
     enum outcome-kind {
@@ -1731,6 +1753,10 @@ interface types {
         // Like `queue`, nobody pressed it: the host is subscribed to the
         // brain's own socket on a thread, and what arrives is the whole mind.
         mind(mind),
+        // THE BRAIN'S OWN LOG, whole, oldest first. Only for whoever declared
+        // `capability::brain`, and like `mind` nobody pressed it: the host
+        // follows the daemon's log on a thread.
+        log(list<log-line>),
         // WHERE THE POINTER IS RESTING, in the buffer's own cells.
         //
         // It used to be refused, and the reason written down was that
@@ -1795,6 +1821,7 @@ interface view {
         // list exists for.
         vital, vital-sign, pulse, standing, hold-kind, outcome-kind, day-part,
         step-outcome, run-record, task-step, task-state, announcement, gate, mind,
+        log-level, log-line,
         step-switch, knob, setting,
         // And the independent keyboards', reachable only from inside `boards`
         // and `effect`.

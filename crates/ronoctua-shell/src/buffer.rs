@@ -672,6 +672,9 @@ struct Brain {
     /// `buffers/memory` already states about its survey — the numbers arrive on
     /// a clock, and the screen moves when they CHANGED.
     last: Option<ronoctua_brain::Mind>,
+    /// The daemon's own log, as far as this window has followed it — at most
+    /// the daemon's own ring, oldest first (`ronoctua_brain::tail`).
+    log: std::collections::VecDeque<ronoctua_brain::tail::Line>,
 }
 
 impl Brain {
@@ -681,6 +684,24 @@ impl Brain {
             prefs: ronoctua_brain::Prefs::default(),
             zone: ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
             last: None,
+            log: std::collections::VecDeque::new(),
+        }
+    }
+
+    /// Takes a batch of the daemon's log into what this window holds.
+    ///
+    /// A batch whose first line is not after the last one held is the RING,
+    /// sent whole — on a reconnection, or from a daemon that restarted and
+    /// numbers from one again — and it replaces what was held rather than
+    /// being appended to it twice.
+    fn took_lines(&mut self, lines: Vec<ronoctua_brain::tail::Line>) {
+        let last = self.log.back().map_or(0, |l| l.seq);
+        if lines.first().is_some_and(|l| l.seq <= last) {
+            self.log.clear();
+        }
+        self.log.extend(lines);
+        while self.log.len() > ronoctua_brain::tail::KEPT {
+            self.log.pop_front();
         }
     }
 }
@@ -1259,6 +1280,24 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
                 }
             } else {
                 tracing::warn!("could not hang the brain's channel");
+            }
+            // AND ITS OWN LOG, on a second connection: the daemon's lines have
+            // a bell of their own, so following them wakes nothing that
+            // watches the mind (`ronoctua_brain::tail`).
+            let (send, lines) = calloop_channel::channel::<Vec<ronoctua_brain::tail::Line>>();
+            if w.handle
+                .insert_source(lines, |event, (), door: &mut Door<Host>| {
+                    if let calloop_channel::Event::Msg(lines) = event {
+                        door.content.lines_arrived(lines);
+                    }
+                })
+                .is_ok()
+            {
+                if !crate::brain::follow(send) {
+                    tracing::warn!("no brain; its log stays empty");
+                }
+            } else {
+                tracing::warn!("could not hang the brain log's channel");
             }
         }
 
@@ -2445,6 +2484,22 @@ impl Host {
         self.deliver(&ronoctua_protocol::Input::Mind(Box::new(over)));
     }
 
+    /// Lines of the daemon's own log arrived.
+    ///
+    /// The whole log this window holds goes to the component every time, for
+    /// the reason the mind does: the buffer keeps nothing that can go out of
+    /// step.
+    fn lines_arrived(&mut self, lines: Vec<ronoctua_brain::tail::Line>) {
+        let over = {
+            let Some(b) = self.brain.as_mut() else {
+                return;
+            };
+            b.took_lines(lines);
+            crate::mind_wire::log_of(&b.log, &b.zone)
+        };
+        self.deliver(&ronoctua_protocol::Input::Log(over));
+    }
+
     /// A fresh queue arrived from the unit.
     ///
     /// The whole list, every time, and never a delta: the buffer holds no
@@ -3599,9 +3654,51 @@ fn advance_sequence(
 
 #[cfg(test)]
 mod tests {
-    use super::{Escape, EscapeAct};
+    use super::{Brain, Escape, EscapeAct};
     use crate::paint::{bar_grabbed, cell, quads_of};
     use smithay_client_toolkit::seat::keyboard::Keysym;
+
+    fn lines(from: u64, many: u64) -> Vec<ronoctua_brain::tail::Line> {
+        (from..from + many)
+            .map(|seq| ronoctua_brain::tail::Line {
+                seq,
+                at_ms: 1_700_000_000_000 + i64::try_from(seq).unwrap_or(0) * 1000,
+                level: ronoctua_brain::tail::Level::Info,
+                text: format!("line {seq}"),
+            })
+            .collect()
+    }
+
+    /// THE RING SENT WHOLE AGAIN REPLACES WHAT WAS HELD — a reconnection, or a
+    /// daemon that restarted and numbers from one — and a batch that follows
+    /// is appended. Held twice, every line would be on the page twice.
+    #[test]
+    fn a_whole_ring_replaces_and_a_batch_appends() {
+        let mut b = Brain::fresh();
+        b.took_lines(lines(1, 10));
+        b.took_lines(lines(11, 2));
+        assert_eq!(b.log.len(), 12);
+        b.took_lines(lines(1, 5));
+        assert_eq!(b.log.len(), 5, "the ring was appended to what was held");
+        let most = u64::try_from(ronoctua_brain::tail::KEPT).unwrap_or(u64::MAX);
+        b.took_lines(lines(6, most));
+        assert_eq!(
+            b.log.len(),
+            ronoctua_brain::tail::KEPT,
+            "more than the ring was held"
+        );
+    }
+
+    /// THE TIME IS THE MACHINE'S, in seconds, and the words cross as written.
+    #[test]
+    fn a_log_line_crosses_with_its_clock() {
+        let one = lines(7, 1);
+        let over = crate::mind_wire::log_of(&one, &ronoctua_files::when::Zone::utc());
+        assert_eq!(over[0].seq, 7);
+        // 1 700 000 007 s is 22:13:27 UTC.
+        assert_eq!(over[0].at_text, "22:13:27");
+        assert_eq!(over[0].text, "line 7");
+    }
 
     /// A surface with a RESIDUE on both axes, which is every real window: a
     /// compositor hands out pixels and the grid is `floor` of them.

@@ -2545,6 +2545,7 @@ impl State {
                 | Input::Queue(_)
                 | Input::Rack(_)
                 | Input::Mind(_)
+                | Input::Log(_)
                 | Input::Hover { .. }
                 | Input::Unhover(_)
                 | Input::KeyboardSeat(_)

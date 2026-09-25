@@ -94,6 +94,7 @@ pub mod runner;
 pub mod schedule;
 pub mod serve;
 pub mod systemd;
+pub mod tail;
 pub mod task;
 pub mod tasks;
 pub mod wire;

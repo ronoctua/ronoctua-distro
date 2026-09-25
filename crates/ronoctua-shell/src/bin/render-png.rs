@@ -129,6 +129,7 @@ usage: ronoctua-render-png <component.wasm> [options]
   --scale <n>         physical px per logical   (default: 1)
 
   --mind <file>       a brain mind, as JSON, delivered before drawing
+  --log <file>        the brain's own log: one `lines` answer of its socket
   --hover <col,line[,cursor]>  rests a pointer on a cell; the cursor number
                       (from 0) lets two hands rest at once
   --seat <cursor>     the keys after this are that cursor's keyboard's
@@ -288,6 +289,24 @@ fn parse() -> Result<Ask> {
                 // order, and a `--key` after a `--mind` means something
                 // different from one before it.
                 me.mind = Some((me.inputs.len(), mind, zone));
+            }
+            // THE BRAIN'S OWN LOG, in the spelling its socket answers
+            // `Ask::Tail` with — one `{"say":"lines",…}` line — and converted
+            // by the production `mind_wire::log_of`, for the reason `--mind`
+            // gives: a fixture of the tool's own shape would photograph a
+            // screen no door is in.
+            "--log" => {
+                let file = value()?;
+                let raw = std::fs::read_to_string(&file)
+                    .with_context(|| format!("could not read `{file}`"))?;
+                let said: ronoctua_brain::wire::Say = serde_json::from_str(&raw)
+                    .with_context(|| format!("`{file}` is not an answer of the brain"))?;
+                let ronoctua_brain::wire::Say::Lines { lines } = said else {
+                    anyhow::bail!("`{file}` is an answer of the brain, but not its log");
+                };
+                let zone =
+                    ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime"));
+                me.inputs.push(Input::Log(mind_wire::log_of(&lines, &zone)));
             }
             "--list" => me.list = true,
             // WHERE THE POINTER IS RESTING, as `column,line` in the buffer's

@@ -212,6 +212,21 @@ impl Runner {
     pub fn pump(&mut self) {
         let now = self.clock.now();
         let pulse = self.meter.read(now);
+        // THE HEARTBEAT, one line a pass: what the gate is about to judge by,
+        // and where the queue stands. The owner asked to see every tick on the
+        // brain's page, and the page is a copy of this log (`crate::tail`).
+        {
+            let (mind, _) = self.shared.snapshot();
+            tracing::info!(
+                ram_pct = pulse.ram_used_pct,
+                memory_stall = pulse.memory_stall,
+                cpu_stall = pulse.cpu_stall,
+                on_battery = pulse.on_battery,
+                queued = mind.queue.len(),
+                running = %mind.running,
+                "tick"
+            );
+        }
         // BEFORE ANYTHING IS ENROLLED. A postponement that were written down
         // after the enrolment would put the task straight back in the queue it
         // was just taken out of, and the person would answer the same question

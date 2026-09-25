@@ -474,6 +474,7 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
         Input::Rack(r) => ("rack", Some(val_of_rack(r))),
         Input::Keyboards(b) => ("keyboards", Some(val_of_boards(b))),
         Input::Mind(m) => ("mind", Some(val_of_mind(m))),
+        Input::Log(lines) => ("log", Some(val_of_log(lines))),
         Input::Formatted(o) => (
             "formatted",
             Some(wasmtime::component::Val::Record(vec![
@@ -1055,6 +1056,37 @@ fn val_of_survey(s: &ronoctua_protocol::Survey) -> wasmtime::component::Val {
         ("scanning".into(), Val::Bool(s.scanning)),
         ("progress".into(), Val::U16(s.progress)),
     ])
+}
+
+/// The brain's log, as a `Val`: a list of `log-line`, in the WIT's field order.
+fn val_of_log(lines: &[ronoctua_protocol::LogLine]) -> wasmtime::component::Val {
+    use ronoctua_protocol::LogLevel as L;
+    use wasmtime::component::Val;
+    Val::List(
+        lines
+            .iter()
+            .map(|l| {
+                Val::Record(vec![
+                    ("seq".into(), Val::U64(l.seq)),
+                    ("at-text".into(), Val::String(l.at_text.clone())),
+                    (
+                        "level".into(),
+                        Val::Enum(
+                            match l.level {
+                                L::Error => "error",
+                                L::Warn => "warn",
+                                L::Info => "info",
+                                L::Debug => "debug",
+                                L::Trace => "trace",
+                            }
+                            .to_owned(),
+                        ),
+                    ),
+                    ("text".into(), Val::String(l.text.clone())),
+                ])
+            })
+            .collect(),
+    )
 }
 
 /// The mind, as a `Val` the guest can receive.

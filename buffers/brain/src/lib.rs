@@ -48,8 +48,8 @@ use ronoctua_design::guest::Wit;
 use ronoctua_design::screen::Pen;
 use ronoctua_design::types::{
     Binding, BufferState, Capability, Column, Context, Demand, Descriptor, Effect, Guest, HoldKind,
-    Icon, Input, Knob, Layout, Mind, OutcomeKind, Request, Role, Run, RunRecord, Screen, Scroll,
-    Setting, Standing, StepSwitch, Table, TaskKind, TaskState, Tone,
+    Icon, Input, Knob, Layout, LogLevel, LogLine, Mind, OutcomeKind, Request, Role, Run, RunRecord,
+    Screen, Scroll, Setting, Standing, StepSwitch, Table, TaskKind, TaskState, Tone,
 };
 use ronoctua_design::{Phrases, Region, Slice};
 use std::cell::RefCell;
@@ -113,6 +113,13 @@ mod key {
     pub const HELD_BATTERY: &str = "brain-held-battery";
     pub const HELD_OTHER: &str = "brain-held-other";
 
+    // ---- the daemon's own log -----------------------------------------
+    /// The page that follows it.
+    pub const LOG: &str = "brain-log";
+    /// What that page says before the first line arrives.
+    pub const NO_LOG: &str = "brain-no-log";
+    pub const ABOUT_LOG: &str = "about-brain-log";
+
     // ---- the footer ---------------------------------------------------
     pub const LAST_RUN: &str = "brain-last-run";
     pub const NO_ACTIVITY: &str = "brain-no-activity";
@@ -162,6 +169,7 @@ const KEYMAP: &[(&str, &str)] = &[
     (", o", "brain-switch"),
     (", k", "brain-keys"),
     (", n", "brain-notice"),
+    (", l", "brain-log"),
 ];
 
 /// One thing the header teaches: a notation, and the key of what it does.
@@ -197,7 +205,16 @@ const HOME_TEACHES: &[Teach] = &[
     ("Tab", key::DO_PANE),
     (", r", "cmd-brain-run"),
     (", e", "cmd-brain-rehearse"),
+    (", l", "cmd-brain-log"),
     (", o", "cmd-brain-switch"),
+    (", k", key::DO_KEYS),
+];
+
+/// And what the LOG's page answers to: the way back, the key that is also the
+/// way back, and the rest of the keys.
+const LOG_TEACHES: &[Teach] = &[
+    ("Esc", key::DO_BACK),
+    (", l", "cmd-brain-log"),
     (", k", key::DO_KEYS),
 ];
 
@@ -252,6 +269,7 @@ fn about_of(says: &str) -> &'static str {
         "cmd-brain-reset-steps" => key::ABOUT_RESET_STEPS,
         "cmd-brain-proceed" => key::ABOUT_PROCEED,
         "cmd-brain-abort" => key::ABOUT_ABORT,
+        "cmd-brain-log" => key::ABOUT_LOG,
         _ => key::ABOUT_KEYS,
     }
 }
@@ -328,6 +346,9 @@ enum Page {
     Home,
     /// One task: what it is, when it runs, what it runs, how it has gone.
     Task,
+    /// The daemon's own log, followed live: every line it writes — each tick,
+    /// each decision, each warning and error — as it wrote it.
+    Log,
 }
 
 /// Which half of the home page the keyboard is in.
@@ -422,6 +443,12 @@ struct State {
     phrases: Phrases,
     /// Which cell the pointer is resting on, if it is in the window.
     hover: ronoctua_design::Hovers,
+    /// The daemon's own log, as the host last delivered it, oldest first.
+    tail: Vec<LogLine>,
+    /// Which line of it the cursor is on.
+    tail_at: usize,
+    /// The first line of it that is drawn.
+    tail_from: usize,
     /// The blocks the last `render` divided the window into.
     ///
     /// Recorded rather than computed, for the reason the memory panel's own
@@ -484,6 +511,9 @@ impl State {
             columns: 80,
             phrases: Phrases::empty(),
             hover: ronoctua_design::Hovers::new(),
+            tail: Vec::new(),
+            tail_at: 0,
+            tail_from: 0,
             blocks: Blocks::new(),
         }
     }
@@ -674,6 +704,7 @@ fn every_taught_phrase() -> Vec<String> {
     HOME_TEACHES
         .iter()
         .chain(TASK_TEACHES)
+        .chain(LOG_TEACHES)
         .chain(ANSWER_TEACHES)
         .chain(NOTICE_TEACHES)
         .map(|(_, says)| (*says).to_owned())
@@ -683,7 +714,7 @@ fn every_taught_phrase() -> Vec<String> {
         // the top of this page. A task's page takes its name from the mind
         // (`TaskState::name_text`); the home page's is a key of this side's
         // own, so it is asked for here.
-        .chain(core::iter::once(key::TITLE.to_owned()))
+        .chain([key::TITLE, key::LOG].into_iter().map(str::to_owned))
         // AND THE FOOTER'S FACT LABELS, measured for the same reason: the
         // value begins where the label ENDS, and a label reserved blind put
         // `Last run` eight cells from the date beside it. See
@@ -716,6 +747,7 @@ impl State {
         let base: &[Teach] = match self.page {
             Page::Home => HOME_TEACHES,
             Page::Task => TASK_TEACHES,
+            Page::Log => LOG_TEACHES,
         };
         let mut out = base.to_vec();
         if self.counting_down() {
@@ -770,6 +802,7 @@ impl State {
     fn title_cells(&self) -> u16 {
         let said = match self.page {
             Page::Home => self.phrases.or(key::TITLE, ""),
+            Page::Log => self.phrases.or(key::LOG, ""),
             Page::Task => self.here().map(|t| t.name_text.clone()).unwrap_or_default(),
         };
         if said.is_empty() {
@@ -881,10 +914,11 @@ impl State {
     fn header(&self, screen: &mut Screen<Wit>) {
         let title = match self.page {
             Page::Home => key::TITLE.to_owned(),
+            Page::Log => key::LOG.to_owned(),
             Page::Task => self.here().map_or_else(|| key::TITLE.to_owned(), task_key),
         };
         let glyph = match self.page {
-            Page::Home => Icon::Brain,
+            Page::Home | Page::Log => Icon::Brain,
             Page::Task => self.here().map_or(Icon::Brain, |t| kind_glyph(t.kind)),
         };
         let ladder = self.ladder();
@@ -1124,6 +1158,9 @@ struct Told {
     about: Option<String>,
     /// A sentence the machine produced, drawn as it came.
     trouble: Option<String>,
+    /// A line of the daemon's log, whole, in its level's tone — data, drawn
+    /// as it came, and wrapped where the row above had to cut it.
+    logged: Option<(String, Role)>,
     /// A line of label-and-value pairs.
     facts: Vec<(String, String)>,
 }
@@ -1144,6 +1181,10 @@ impl Told {
             part(&self.said),
             part(&self.about),
             part(&self.trouble),
+            self.logged
+                .as_ref()
+                .map(|(t, _)| t.clone())
+                .unwrap_or_default(),
         ]
         .join("\u{1f}")
     }
@@ -1255,7 +1296,14 @@ impl State {
             // same lane every list here keeps.
             let box_wide = wide.saturating_sub(1);
             let scroll = self.foot_scroll;
-            if let Some(trouble) = &told.trouble {
+            if let Some((text, role)) = &told.logged {
+                pen.paragraph_from(
+                    from,
+                    room,
+                    scroll,
+                    Run::datum(text).playing(*role).within(box_wide),
+                );
+            } else if let Some(trouble) = &told.trouble {
                 // THE MACHINE'S OWN WORDS ARE DATA, never a key.
                 pen.paragraph_from(
                     from,
@@ -1375,6 +1423,38 @@ fn widest_name(runs: &[RunRecord]) -> u16 {
 ///
 /// A cell is kept on the right for the bar, always: a bar drawn over the last
 /// column is the defect the working rules name in those words.
+/// The columns of one line of the daemon's log: when, how loud, what.
+fn tail_columns(columns: u16) -> Layout {
+    Table::across(columns.saturating_sub(1))
+        .with(Column::fixed("at", 8, 2))
+        .with(Column::fixed("level", 5, 1))
+        .with(Column::fill("text", 0))
+        .resolve()
+}
+
+/// A level as the log prints it. DATA, like the line it heads: it is the
+/// log's own word, and the page is a copy of the log.
+const fn level_word(l: LogLevel) -> &'static str {
+    match l {
+        LogLevel::Error => "ERROR",
+        LogLevel::Warn => "WARN",
+        LogLevel::Info => "INFO",
+        LogLevel::Debug => "DEBUG",
+        LogLevel::Trace => "TRACE",
+    }
+}
+
+/// The tone a level wears: the error's red, the warning's amber, what the
+/// daemon did in the body's tone, and detail below it.
+const fn level_role(l: LogLevel) -> Role {
+    match l {
+        LogLevel::Error => Role::Danger,
+        LogLevel::Warn => Role::Warning,
+        LogLevel::Info => Role::Body,
+        LogLevel::Debug | LogLevel::Trace => Role::Dim,
+    }
+}
+
 fn log_columns(columns: u16, name: u16) -> Layout {
     Table::across(columns.saturating_sub(1))
         .with(Column::fixed("when", 17, 2))
@@ -1652,6 +1732,85 @@ impl State {
                 top: 0,
             },
         );
+    }
+
+    /// THE DAEMON'S LOG, the whole page below the header: one line per entry,
+    /// newest at the bottom, and the window stays on the newest while the
+    /// cursor does.
+    fn log_page(&mut self, screen: &mut Screen<Wit>) {
+        let hovered = self.hovered_rows(self.blocks.body);
+        let mut pen = screen.region(self.blocks.body);
+        if pen.empty() {
+            return;
+        }
+        if self.tail.is_empty() {
+            pen.put(0, Run::label(key::NO_LOG).quiet());
+            return;
+        }
+        let total = self.tail.len();
+        let shown = usize::from(pen.lines()).max(1);
+        // THE LANE THE BAR TAKES, only while the bar is drawn.
+        pen.keeping_for(total > shown);
+        if self.follows {
+            if self.tail_at < self.tail_from {
+                self.tail_from = self.tail_at;
+            } else if self.tail_at >= self.tail_from + shown {
+                self.tail_from = self.tail_at.saturating_sub(shown.saturating_sub(1));
+            }
+        }
+        self.tail_from = self.tail_from.min(total.saturating_sub(shown.min(total)));
+        let from = self.tail_from;
+        let layout = tail_columns(pen.columns());
+        for (n, line) in self.tail.iter().enumerate().skip(from).take(shown) {
+            let row = u16::try_from(n - from).unwrap_or(u16::MAX);
+            if n == self.tail_at {
+                pen.band(row);
+            } else if let Some(seat) = seat_on(&hovered, row) {
+                pen.ground(row, Role::hover_of(seat));
+            }
+            let Some(mut r) = pen.row_of(row, &layout) else {
+                break;
+            };
+            let tone = level_role(line.level);
+            r.put("at", Run::datum(&line.at_text).dim());
+            r.put("level", Run::datum(level_word(line.level)).playing(tone));
+            r.put("text", Run::datum(&line.text).playing(tone));
+        }
+        pen.bar_from(
+            0,
+            pen.columns().saturating_sub(1),
+            Scroll {
+                total,
+                lines: shown,
+                offset: from,
+                top: 0,
+            },
+        );
+    }
+
+    /// The daemon's log arrived, whole.
+    ///
+    /// THE CURSOR RIDES THE NEWEST LINE while it is on it, so a page left open
+    /// keeps showing what was just written; moved up to read something, it
+    /// stays on THAT line — found again by its number, since older lines fall
+    /// off the front of the ring.
+    fn logged(&mut self, lines: Vec<LogLine>) -> Vec<Effect> {
+        let at_the_end = self.tail_at + 1 >= self.tail.len();
+        let held = self.tail.get(self.tail_at).map(|l| l.seq);
+        self.tail = lines;
+        if at_the_end {
+            self.tail_at = self.tail.len().saturating_sub(1);
+            self.follows = true;
+        } else {
+            self.tail_at = held
+                .and_then(|seq| self.tail.iter().position(|l| l.seq == seq))
+                .unwrap_or(0);
+        }
+        if self.page == Page::Log {
+            vec![Effect::Redraw]
+        } else {
+            Vec::new()
+        }
     }
 
     /// When this task will next be considered, or the word for why it will not.
@@ -2481,6 +2640,22 @@ impl State {
                 Pane::Log => self.told_about_activity(),
             },
             Page::Task => self.told_about_spot(),
+            Page::Log => self.told_about_line(),
+        }
+    }
+
+    /// The line of the daemon's log under the cursor: when, how loud, and the
+    /// whole of what it says — the row above cuts it at the width, and this is
+    /// where it can be read to the end.
+    fn told_about_line(&self) -> Told {
+        let Some(line) = self.tail.get(self.tail_at) else {
+            return Told::default();
+        };
+        Told {
+            name: Some(key::LOG.to_owned()),
+            said: Some(format!("{}  {}", line.at_text, level_word(line.level))),
+            logged: Some((line.text.clone(), level_role(line.level))),
+            ..Told::default()
         }
     }
 
@@ -2575,6 +2750,7 @@ impl State {
                     about: Some(format!("update-does-{}", step.id)),
                     trouble: None,
                     facts,
+                    ..Told::default()
                 }
             }
             Some(Spot::Ran(n)) => {
@@ -2605,6 +2781,7 @@ impl State {
                     trouble: (!run.trouble.is_empty()).then(|| run.trouble.clone()),
                     facts: vec![(key::LAST_RUN.to_owned(), run.when_text.clone())],
                     said: None,
+                    logged: None,
                 }
             }
             // EVERY OTHER SPOT IS ABOUT THE TASK, which is what the page is
@@ -2649,6 +2826,7 @@ impl State {
         match self.page {
             Page::Home => "normal",
             Page::Task => "task",
+            Page::Log => "log",
         }
     }
 
@@ -2750,6 +2928,20 @@ impl State {
                 self.keys_open = !self.keys_open;
                 vec![Effect::Redraw]
             }
+            // THE LOG'S PAGE, and the same key takes it away: a page that is
+            // looked at and left, the way `, k` opens and closes the header.
+            "brain-log" => {
+                self.page = if self.page == Page::Log {
+                    Page::Home
+                } else {
+                    // Opened ON THE NEWEST line, which is the one a live log
+                    // is opened to read.
+                    self.tail_at = self.tail.len().saturating_sub(1);
+                    self.follows = true;
+                    Page::Log
+                };
+                vec![Effect::Redraw]
+            }
             _ => Vec::new(),
         }
     }
@@ -2813,6 +3005,10 @@ impl State {
                 // because there is nothing about a moment to do.
                 Some(Spot::Next | Spot::Ran(_)) | None => Vec::new(),
             },
+            // A LINE OF THE LOG ONLY ANSWERS: the footer already holds the
+            // whole of it, and there is nothing to do to a line that has been
+            // written.
+            Page::Log => Vec::new(),
         }
     }
 
@@ -2824,6 +3020,7 @@ impl State {
                 Pane::Log => self.mind.activity.len(),
             },
             Page::Task => self.spots().len(),
+            Page::Log => self.tail.len(),
         }
     }
 
@@ -2835,6 +3032,7 @@ impl State {
                 Pane::Log => &mut self.log,
             },
             Page::Task => &mut self.spot,
+            Page::Log => &mut self.tail_at,
         }
     }
 
@@ -2913,6 +3111,12 @@ impl State {
                         return self.reach(spot, self.spot == spot, |s, n| s.spot = n);
                     }
                 }
+                Page::Log => {
+                    let n = self.tail_from + usize::from(row);
+                    if n < self.tail.len() {
+                        return self.reach(n, self.tail_at == n, |s, n| s.tail_at = n);
+                    }
+                }
                 Page::Home => {}
             }
         }
@@ -2963,7 +3167,7 @@ impl State {
         match keys {
             "RET" => self.confirm(),
             "Esc" => {
-                if self.page == Page::Task {
+                if matches!(self.page, Page::Task | Page::Log) {
                     self.page = Page::Home;
                     return vec![Effect::Redraw];
                 }
@@ -3024,6 +3228,16 @@ impl State {
                 } else {
                     return Vec::new();
                 }
+            }
+            Page::Log => {
+                if !self.blocks.body.holds(line) || self.tail.is_empty() {
+                    return Vec::new();
+                }
+                put(
+                    &mut self.tail_from,
+                    usize::from(self.blocks.body.lines).max(1),
+                    self.tail.len(),
+                );
             }
             Page::Task => {
                 // IN LINES, like everything else about this page: the bar the
@@ -3099,6 +3313,18 @@ impl State {
                 }
                 Vec::new()
             }
+            Page::Log => {
+                if !self.blocks.body.holds(line) || self.tail.is_empty() {
+                    return Vec::new();
+                }
+                self.tail_from = by(
+                    self.tail_from,
+                    usize::from(self.blocks.body.lines).max(1),
+                    self.tail.len(),
+                );
+                self.follows = false;
+                vec![Effect::Redraw]
+            }
             Page::Task => {
                 let rows = self.page_rows();
                 if rows.is_empty() {
@@ -3133,6 +3359,11 @@ impl Guest for Component {
                 BufferState {
                     id: "task".into(),
                     letter: 't',
+                    tone: Tone::Standard,
+                },
+                BufferState {
+                    id: "log".into(),
+                    letter: 'l',
                     tone: Tone::Standard,
                 },
             ],
@@ -3250,6 +3481,7 @@ impl State {
             match s.page {
                 Page::Home => s.home(&mut screen),
                 Page::Task => s.task_page(&mut screen),
+                Page::Log => s.log_page(&mut screen),
             }
             s.draw_log(&mut screen);
             s.foot(&mut screen, &told);
@@ -3261,12 +3493,17 @@ impl State {
     fn act(&mut self, e: Input) -> Vec<Effect> {
         match e {
             Input::EnterState(id) => {
-                self.page = if id == "task" { Page::Task } else { Page::Home };
+                self.page = match id.as_str() {
+                    "task" => Page::Task,
+                    "log" => Page::Log,
+                    _ => Page::Home,
+                };
                 self.spot = 0;
                 self.body_from = 0;
                 vec![Effect::Redraw]
             }
             Input::Mind(mind) => self.received(mind),
+            Input::Log(lines) => self.logged(lines),
             Input::Command(id) => self.command(&id),
             Input::Down => {
                 let most = self.walkable().saturating_sub(1);
@@ -3298,7 +3535,7 @@ impl State {
             }
             Input::Confirm => self.confirm(),
             Input::Cancel => {
-                if self.page == Page::Task {
+                if matches!(self.page, Page::Task | Page::Log) {
                     self.page = Page::Home;
                     return vec![Effect::Redraw];
                 }
@@ -3479,7 +3716,96 @@ mod tests {
     fn a_state() -> State {
         let mut s = State::fresh();
         s.received(a_mind());
+        let _ = s.logged(a_tail(1, 40));
         s
+    }
+
+    /// Lines of the daemon's log numbered `from` onwards, every level among
+    /// them, and some longer than any window.
+    fn a_tail(from: u64, many: u64) -> Vec<LogLine> {
+        (from..from + many)
+            .map(|seq| LogLine {
+                seq,
+                at_text: format!("12:00:{:02}", seq % 60),
+                level: match seq % 5 {
+                    0 => LogLevel::Error,
+                    1 => LogLevel::Warn,
+                    2 => LogLevel::Debug,
+                    _ => LogLevel::Info,
+                },
+                text: format!(
+                    "ronoctua_brain::runner: tick ram_pct={seq} running=\"\" {}",
+                    "and a long tail of fields ".repeat(usize::try_from(seq % 4).unwrap_or(0))
+                ),
+            })
+            .collect()
+    }
+
+    /// A LIVE LOG STAYS ON ITS NEWEST LINE while the cursor is on it, and a
+    /// line somebody went up to read stays under the cursor as new ones come
+    /// and old ones fall off the front of the ring.
+    #[test]
+    fn the_log_rides_the_newest_line_until_somebody_reads_up() {
+        let mut s = a_state();
+        let _ = s.command("brain-log");
+        assert_eq!(s.page, Page::Log);
+        assert_eq!(s.tail_at, 39, "it did not open on the newest line");
+        let _ = s.logged(a_tail(1, 45));
+        assert_eq!(s.tail_at, 44, "a new line did not take the cursor with it");
+
+        let _ = s.act(Input::Up);
+        let _ = s.act(Input::Up);
+        let read = s.tail[s.tail_at].seq;
+        // TEN NEW LINES, and the ring drops the ten oldest.
+        let _ = s.logged(a_tail(11, 45));
+        assert_eq!(
+            s.tail[s.tail_at].seq, read,
+            "the line being read moved away"
+        );
+    }
+
+    /// `, l` OPENS THE LOG AND CLOSES IT, and `Esc` comes back from it.
+    #[test]
+    fn the_log_opens_and_closes_by_one_key() {
+        let mut s = a_state();
+        let _ = s.command("brain-log");
+        assert_eq!(s.state_id(), "log");
+        let _ = s.command("brain-log");
+        assert_eq!(s.page, Page::Home);
+        let _ = s.command("brain-log");
+        let _ = s.act(Input::Cancel);
+        assert_eq!(s.page, Page::Home);
+    }
+
+    /// THE FOOTER HOLDS THE WHOLE LINE, in its level's tone: the row cuts it
+    /// at the width, and this is where it is read to the end.
+    #[test]
+    fn the_footer_holds_the_whole_line() {
+        let mut s = a_state();
+        let _ = s.command("brain-log");
+        s.tail_at = 3;
+        let told = s.told();
+        let (text, role) = told.logged.expect("the footer says nothing about the line");
+        assert_eq!(text, s.tail[3].text);
+        assert_eq!(role, level_role(s.tail[3].level));
+        assert!(told.said.expect("no time").starts_with(&s.tail[3].at_text));
+    }
+
+    /// A CLICK SELECTS THE LINE UNDER IT, counted from the window and not from
+    /// the top of the log.
+    #[test]
+    fn a_click_selects_a_log_line_from_the_window() {
+        let mut s = a_state();
+        let _ = s.command("brain-log");
+        let _ = drawn(&mut s, 24, 100);
+        let from = s.tail_from;
+        assert!(from > 0, "the fixture is meant to scroll");
+        let line = s.blocks.body.top + 2;
+        let _ = s.act(Input::Click(ronoctua_design::types::Position {
+            column: 20,
+            line,
+        }));
+        assert_eq!(s.tail_at, from + 2);
     }
 
     /// A KEY THE HEADER TEACHES WORKS WHERE IT IS TAUGHT.
@@ -3586,7 +3912,7 @@ mod tests {
     fn nothing_is_drawn_outside_the_window() {
         for lines in [6_u16, 10, 14, 24, 40] {
             for columns in [46_u16, 80, 100, 140] {
-                for page in [Page::Home, Page::Task] {
+                for page in [Page::Home, Page::Task, Page::Log] {
                     let mut s = a_state();
                     s.page = page;
                     let screen = drawn(&mut s, lines, columns);
@@ -3625,7 +3951,7 @@ mod tests {
     fn the_frame_passes_its_own_check() {
         for lines in [6_u16, 10, 14, 24, 40] {
             for columns in [46_u16, 80, 100, 140] {
-                for page in [Page::Home, Page::Task] {
+                for page in [Page::Home, Page::Task, Page::Log] {
                     for open in [false, true] {
                         let mut s = a_state();
                         s.page = page;
@@ -3645,7 +3971,7 @@ mod tests {
     fn nothing_overlaps_anything() {
         for lines in [10_u16, 24, 40] {
             for columns in [60_u16, 100, 140] {
-                for page in [Page::Home, Page::Task] {
+                for page in [Page::Home, Page::Task, Page::Log] {
                     for held in [false, true] {
                         let mut s = a_state();
                         s.page = page;

@@ -1146,6 +1146,39 @@ pub enum HoldKind {
     Asleep,
 }
 
+/// How loud one line of the brain's own log is — the log's own levels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LogLevel {
+    /// Something failed.
+    Error,
+    /// Something is wrong, and the daemon carried on.
+    Warn,
+    /// What it did. The default, because a line that lost its level is still
+    /// a line and not an alarm.
+    #[default]
+    Info,
+    /// Detail.
+    Debug,
+    /// More detail.
+    Trace,
+}
+
+/// One line of the brain's own log, as the page that follows it draws it.
+///
+/// The TEXT is data — the daemon's words as it wrote them, like a file's
+/// contents — and the time is formatted on the host, which has the zone.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LogLine {
+    /// Its place in the daemon's log, counted from the daemon's start.
+    pub seq: u64,
+    /// When, as the host's clock reads it: `HH:MM:SS`.
+    pub at_text: String,
+    /// How loud.
+    pub level: LogLevel,
+    /// `target: message key=value …`, as the log prints it.
+    pub text: String,
+}
+
 /// How a run ended.
 ///
 /// [`OutcomeKind::Skipped`] is FIRST, and deliberately the harmless one: a
@@ -2746,6 +2779,13 @@ pub enum Input {
     /// the arrow keys. One allocation on a path that already crossed a socket
     /// is the cheaper half of that trade by a wide margin.
     Mind(Box<Mind>),
+    /// The brain's own log, WHOLE: every line the host holds, oldest first.
+    /// Only for a buffer that declared [`Capability::Brain`].
+    ///
+    /// Whole for the reason the mind is: the buffer holds nothing that could
+    /// go out of step, and a few hundred short lines cost less than being
+    /// wrong about which ones it has.
+    Log(Vec<LogLine>),
     /// Where the pointer is resting, in the buffer's own cells.
     ///
     /// FLATTENED here and a `position` record on the wire, exactly as

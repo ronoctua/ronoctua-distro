@@ -332,6 +332,10 @@ pub enum Role {
     /// something" — and the brain's whole reason for having a screen is the
     /// second kind of sentence.
     Danger,
+    /// Something is wrong and nothing stopped: the step below [`Role::Danger`],
+    /// in the theme's warning tone. A log's `WARN` wears it, beside the error's
+    /// red, so the two levels are not one alarm.
+    Warning,
     /// A thing that happens ONCE and is then gone, against the things that
     /// repeat.
     ///
@@ -522,6 +526,7 @@ impl Palette for Tokens {
             Role::Shelf => "surface-container",
             Role::Header => "surface-header",
             Role::Danger => "state-error",
+            Role::Warning => "state-warning",
             Role::Once => "text-once",
             Role::Hover => "surface-hover",
             // ONE CURSOR'S HOVER, by its colour number — eight colours, and a

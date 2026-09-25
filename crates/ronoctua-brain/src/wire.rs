@@ -42,6 +42,13 @@ pub enum Ask {
     /// these open on a thread and pushes what arrives into `calloop`, exactly
     /// as it already does with the transfer queue and with the compositor's events.
     Watch,
+    /// The daemon's own log: every line it keeps, and then every new one as it
+    /// is written, until the connection drops. See [`crate::tail`].
+    ///
+    /// A stream of its own and not a field of the mind, because the mind's
+    /// every change wakes every screen that watches the brain — and a tick is
+    /// a line every half minute that only the log's page wants.
+    Tail,
     /// Put this task in the queue now, whatever its schedule says.
     Run {
         /// Which.
@@ -96,6 +103,12 @@ pub enum Say {
     Mind {
         /// The state.
         mind: Box<Mind>,
+    },
+    /// Lines of the daemon's own log, oldest first: the whole ring on the
+    /// first answer to [`Ask::Tail`], and only the new ones after it.
+    Lines {
+        /// In order.
+        lines: Vec<crate::tail::Line>,
     },
     /// The ask made no sense, and this is why.
     Refused {
