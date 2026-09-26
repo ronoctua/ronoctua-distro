@@ -99,6 +99,7 @@ mod camera;
 mod camera_settings;
 mod camera_settings_window;
 mod camera_window;
+mod capture;
 mod gestures;
 mod mind_wire;
 mod minibuffer;
@@ -146,6 +147,7 @@ mod world;
 // `LEADER s u`, the animated mark on the modeline, and the window that watches
 // a run happen. It knows no step: the sequence is `assets/updates.nix`.
 mod cursor_shape;
+mod text_select;
 mod update_window;
 mod virtual_keys;
 mod virtual_pointer;
@@ -334,6 +336,12 @@ fn main() -> Result<()> {
         // The SAME `notifications::View` the footer draws from: what differs is
         // the window and its events, which is what makes "one implementation,
         // two doors" true rather than claimed.
+        // THE SCREEN CAPTURE: a frozen picture of the screen with the focus,
+        // and a region, a window or all of it chosen on top — see `capture`.
+        // The footer starts it and reads back where the file went.
+        Some("capture") => {
+            return capture::host_it().context("the screen capture");
+        }
         Some("notifications") => {
             return notifications_window::host_it().context("host the manager");
         }

@@ -879,6 +879,26 @@
     pictures = 12;
   };
 
+  # THE SCREEN CAPTURE'S OVERLAY (`ronoctua-shell capture`), in LOGICAL
+  # PIXELS for the drawing and in PIXELS OF THE PICTURE for the magnifier.
+  #
+  # `dash` and `gap` make the two guides dotted: a solid line one pixel wide
+  # is lost over a photograph's own edges, a dotted one is not a thing a
+  # photograph has. `dragFrom` is how far a held button travels before the
+  # press is a rectangle rather than a click on a window — under it a hand
+  # that shakes would sweep a sliver. `loupeReach` is how many pixels the
+  # magnifier shows on each side of the one under the pointer, `loupeZoom`
+  # how many times it enlarges them, and `hintFlee` how many lines above the
+  # shortcut line the pointer may come before the line goes to the bottom.
+  capture = {
+    dash = 4;
+    gap = 4;
+    dragFrom = 4;
+    loupeReach = 8;
+    loupeZoom = 8;
+    hintFlee = 2;
+  };
+
   # THE PLAYER'S OWN MEASURES, in cells.
   #
   # `browseColumn` is the narrowest a column of the file browser gets: the

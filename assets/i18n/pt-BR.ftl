@@ -101,11 +101,14 @@ notif-memory-killed-body = Um aplicativo foi fechado para a máquina não travar
 notif-action-edit = Editar a imagem
 notif-action-open = Abrir a imagem
 notif-action-folder = Abrir a pasta
+notif-action-copy-image = Copiar a imagem
 notif-action-copy-path = Copiar o caminho
 notif-action-memory-panel = Abrir o painel de memória
 
 # OS FILTROS QUE A DISTRO JÁ TRAZ. O gerenciador os lista por estes nomes.
 notif-rule-important-gets-room = O que é importante ganha espaço
+notif-rule-bluetooth-connected-is-quiet = Aparelho Bluetooth que conecta é dito pela marca
+notif-rule-bluetooth-disconnected-is-quiet = Aparelho Bluetooth que sai é dito pela marca
 notif-rule-small-things-are-quick = Coisa pequena passa rápido
 
 # O gerenciador: três listas, e um título para cada.
@@ -235,6 +238,11 @@ hint-notif-bell = { $unread ->
        *[other] { $filtered } filtradas
     } — clique abre o gerenciador
 hint-notif-read = marcar como lida e tirar da tela
+hint-notif-open = tirar da faixa e abrir inteira no gerenciador
+notif-see-whole = ver inteira
+notif-glyph-read = Marcar como lida
+notif-glyph-unread = Marcar como não lida de novo
+notif-glyph-delete = Esquecer de vez
 hint-notif-countdown = quanto tempo ela ainda tem
 hint-notif-paused = o tempo está parado enquanto o ponteiro está nela
 hint-notif-action = { $action } — clique, ou abra a notificação
@@ -322,6 +330,19 @@ cmd-workspace-previous = Espaço anterior
 cmd-workspace-move-next = Levar a janela para o próximo espaço
 cmd-workspace-move-previous = Levar a janela para o espaço anterior
 cmd-screen-capture = Capturar a tela
+capture-drag = arraste para uma região
+capture-click = clique numa janela
+capture-whole = a tela inteira
+about-capture-whole = Guarda a tela com foco inteira, como estava quando a captura começou.
+capture-loupe = a lupa
+about-capture-loupe = Mostra ou esconde a lupa ao lado do ponteiro: os pixels sob ele, ampliados, com aquele em que ele está contornado.
+capture-hide-hint = esconder esta linha
+about-capture-hide-hint = Guarda esta linha de atalhos, esteja o ponteiro onde estiver; a mesma tecla a traz de volta.
+capture-cancel = cancelar
+about-capture-cancel = Desiste da captura e não guarda nada.
+capture-size = { $width } × { $height }
+capture-at = { $x }, { $y }
+echo-capture-failed = A captura não pôde ser feita — o motivo está no log
 group-window = janela/buffer
 group-terminal = terminal
 group-workspace = workspace
@@ -829,6 +850,7 @@ clipboard-content = Conteúdo
 clipboard-types = Tipos
 clipboard-size = Tamanho
 echo-copied = Copiado
+echo-image-copied = A imagem está na área de transferência
 echo-copied-value = Copiado: { $value }
 echo-copy-failed = Não consegui copiar — veja o log
 echo-qr-large = O conteúdo é grande demais para um QR code
@@ -3677,6 +3699,7 @@ display-what-turn = A imagem foi girada
 display-refused-no-compositor = não há compositor para perguntar
 display-refused-no-screen = essa tela não está mais aí
 display-refused-no-light = o brilho desta tela está nos botões dela
+display-no-light-here = O brilho de nenhuma tela pode ser mudado daqui
 display-refused-not-writable = o arquivo é do root, e a regra que o abre não rodou neste painel
 display-refused-nowhere = não há onde escrever
 display-refused-other = não deu

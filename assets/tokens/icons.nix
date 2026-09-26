@@ -49,23 +49,12 @@
   # open one's 95%, so the pair would have read as two different sizes of the
   # same idea.
   notification-mark-read = "md-email_open_outline";
+  # OPEN IT WHOLE, in the manager: beside the envelope on the band, and what
+  # the band cannot hold is what the open record is for. An arrow out of a box
+  # into a larger one, which is the verb and not the place.
+  notification-open = "md-arrow_expand";
   notification-mark-unread = "md-email_mark_as_unread";
   notification-delete = "cod-trash";
-
-  # AND THE MARK THAT SAYS "THERE IS SOMETHING TO PRESS HERE".
-  #
-  # Not the buttons: a notification may carry several, with labels that are
-  # sentences, and a row is one line — the owner read two of them crowding a
-  # line out and said so. The row says only THAT there are some; opening it
-  # lists them, one under the other.
-  #
-  # It was an ELLIPSIS, and the owner read that off the screen too: three dots
-  # mean "there is more text", which is what the elision beside it already
-  # means — the two ran together as `disconn…⋯`. A HAND TAPPING means the one
-  # thing that is true here and nowhere else on the row: there is something to
-  # press. It is not itself a control — what acts is `RET`, and what the
-  # pointer can press are the two targets at the end.
-  notification-has-actions = "md-gesture_tap";
 
   # HOW LONG THE ONE ON SCREEN HAS LEFT — a pie in ONE cell, eight steps.
   #
@@ -499,6 +488,10 @@
   # a second glyph for "not listening" would be a mark that is always there,
   # which the modeline does not do at rest.
   microphone = "md-microphone";
+
+  # A SCREEN'S BRIGHTNESS, on the line that flashes when the brightness keys
+  # are pressed. One glyph and a bar, for the volume's reason just above.
+  brightness = "md-brightness_6";
 
   battery = "md-battery";
   monitor = "md-monitor";

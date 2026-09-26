@@ -14,11 +14,11 @@
 //!
 //! # An entry is a recognition, not a constructor
 //!
-//! Ours do not all originate here. The screenshot's is sent by the compositor,
-//! in English, with the file's path in the icon field — so the entry says how
-//! to RECOGNISE it and what to make of it, and the same machinery then serves a
-//! notification we raise ourselves and one that arrives from outside. Two
-//! paths, one table.
+//! Ours do not all originate here: the radio's, the power's and the capture's
+//! are raised by the footer with a TAG, and others arrive from outside — so an
+//! entry says how to RECOGNISE a notification and what to make of it, and the
+//! same machinery then serves a notification we raise ourselves and one that
+//! arrives from outside. Two paths, one table.
 
 use crate::Notification;
 use crate::action::{Action, Arg, Doing, Label, Program};
@@ -297,9 +297,14 @@ mod tests {
             let p = book.decide(&n);
             assert_eq!(p.catalogue.as_deref(), Some(tag));
             assert!(p.auto_read, "`{tag}` still counts on the bell");
-            assert!(
-                !matches!(p.show, Show::Hidden),
-                "`{tag}` stopped showing, which is not what was asked"
+            // A DEVICE COMING AND GOING IS SAID BY ITS MARK, and the distro
+            // keeps those two off the screen (the owner, 2026-09-26). The
+            // other two are a question and an alarm, and they show.
+            let quiet = matches!(tag, "bluetooth-connected" | "bluetooth-disconnected");
+            assert_eq!(
+                matches!(p.show, Show::Hidden),
+                quiet,
+                "`{tag}`: shown when it should not be, or hidden when it should show"
             );
         }
         // AND IT IS THE QUEUE THAT HONOURS IT, not the manager: the record is
@@ -312,7 +317,7 @@ mod tests {
             String::new(),
             Urgency::Normal,
         );
-        n.tags = vec!["bluetooth-connected".to_owned()];
+        n.tags = vec!["bluetooth-battery-low".to_owned()];
         let p = book.decide(&n);
         let mut q = crate::Queue::fresh_one();
         q.enqueue(n, p, std::time::Instant::now());

@@ -107,6 +107,9 @@ pub enum Doing {
     /// (`ronoctua-clipboard`), so spawning anything for it would be starting a
     /// process to talk to ourselves.
     CopyPath,
+    /// Put the notification's file ITSELF on the clipboard, as an image —
+    /// what a capture is taken for more often than not: to paste it.
+    CopyImage,
 }
 
 /// One thing a notification lets you do.

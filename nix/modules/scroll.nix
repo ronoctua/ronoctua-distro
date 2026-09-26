@@ -332,12 +332,12 @@ in
       # Only the nested loop worked, because there `nix/dev.nix` starts the binary by hand.
       ronoctua.shell
       # THE CAPTURE, which is ours now: the compositor has no screenshot of
-      # its own, so `grim` takes the picture and `slurp` is what picks a
-      # region. They go in the closure and their paths travel to the footer as
-      # variables — see `RONOCTUA_GRIM` below, and the reason
-      # `RONOCTUA_SWAPPY` is read the same way.
+      # its own, so `grim` reads the screen and our own overlay
+      # (`ronoctua-shell capture`) is where the region, the window or the
+      # whole screen is chosen. It goes in the closure and its path travels
+      # to the footer as a variable — see `RONOCTUA_GRIM` below, and the
+      # reason `RONOCTUA_SWAPPY` is read the same way.
       pkgs.grim
-      pkgs.slurp
     ];
 
     # Portals: needed for screenshot, screencast and the file picker of the
@@ -571,7 +571,6 @@ in
         RONOCTUA_XKB_OPTIONS = keyboard.options;
         RONOCTUA_SCREENSHOTS = screenshotDir;
         RONOCTUA_GRIM = "${pkgs.grim}/bin/grim";
-        RONOCTUA_SLURP = "${pkgs.slurp}/bin/slurp";
       };
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
@@ -682,7 +681,6 @@ in
       # closure including the one that has no media at all.
       RONOCTUA_SCREENSHOTS = screenshotDir;
       RONOCTUA_GRIM = "${pkgs.grim}/bin/grim";
-      RONOCTUA_SLURP = "${pkgs.slurp}/bin/slurp";
       NIXOS_OZONE_WL = "1";
       # Section 6.4: the renderer does NOT use fontconfig. But the foreign apps
       # do, and they need to find our .conf.

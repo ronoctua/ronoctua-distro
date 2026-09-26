@@ -227,6 +227,7 @@ mod tests {
             drawer: false,
             hidden: false,
             trailmark: false,
+            rect: None,
         }]));
         e
     }

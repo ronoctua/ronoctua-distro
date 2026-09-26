@@ -302,7 +302,6 @@ pkgs.testers.runNixOSTest {
         # `screen-capture` command echoes "nothing to do" and the scene that
         # photographs the capture's notification photographs an empty band.
         "--setenv=RONOCTUA_GRIM=${pkgs.grim}/bin/grim "
-        "--setenv=RONOCTUA_SLURP=${pkgs.slurp}/bin/slurp "
         "--setenv=RONOCTUA_SCREENSHOTS=${screenshotDir} "
         # AND THE TAG READER, which `nix/modules/media.nix` puts on the footer's
         # unit in production. Without it `ronoctua-inspect` answers

@@ -1,4 +1,11 @@
-//! The line the volume flashes on, above the modeline.
+//! The line the volume — and a screen's brightness — flashes on.
+//!
+//! # Where it goes
+//!
+//! ON THE MINIBUFFER'S LINE when that line is free (no view, no echo, no
+//! leader, no drawer), which costs the footer no height; on the row above the
+//! modeline otherwise. Decided once, when the key is pressed
+//! (`Footer::flash_the_sound`), so a held key never moves the modeline.
 //!
 //! # Why it is the glance's row and not a new one
 //!
@@ -44,8 +51,22 @@ pub struct Said {
     pub percent: u8,
     /// Whether it is silent, in which case the number says nothing.
     pub muted: bool,
-    /// Whether this is about a microphone rather than a speaker.
-    pub listening: bool,
+    /// What the number is about.
+    pub what: Source,
+}
+
+/// What a flashed number is about.
+///
+/// A SCREEN rides the same line: the brightness keys sit beside the volume
+/// keys, are pressed the same way, and answered nowhere until this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// The output, a speaker or a headset.
+    Speaker,
+    /// The input.
+    Microphone,
+    /// A screen's light.
+    Screen,
 }
 
 /// The line, placed and cut.
@@ -61,12 +82,11 @@ pub fn line(
     // under the glyph.
     let budget = columns.saturating_sub(crate::world::PIE_CELLS);
 
-    let glyph = if said.listening {
-        tokens::icon::MICROPHONE
-    } else if said.muted {
-        tokens::icon::VOLUME_MUTE
-    } else {
-        tokens::icon::VOLUME
+    let glyph = match said.what {
+        Source::Microphone => tokens::icon::MICROPHONE,
+        Source::Screen => tokens::icon::BRIGHTNESS,
+        Source::Speaker if said.muted => tokens::icon::VOLUME_MUTE,
+        Source::Speaker => tokens::icon::VOLUME,
     };
     let device = format!("{glyph} {}", said.device);
     let number = if said.muted {
@@ -179,7 +199,7 @@ mod tests {
             device: "Speaker".to_owned(),
             percent,
             muted: false,
-            listening: false,
+            what: Source::Speaker,
         }
     }
 
@@ -259,7 +279,7 @@ mod tests {
         let speaking = line(&speaker(38), 80, None, &texts());
         let listening = line(
             &Said {
-                listening: true,
+                what: Source::Microphone,
                 ..speaker(38)
             },
             80,

@@ -36,6 +36,12 @@ pub enum Hit {
     Read,
     /// Run action `n` of the notification.
     Action(usize),
+    /// Take it off the band and open it WHOLE, in the manager.
+    ///
+    /// The glyph beside the envelope, and the button at the end of a line
+    /// that had to be cut: the band is one line or three, and what it could
+    /// not hold is what the open record exists for.
+    Open,
 }
 
 /// One drawn piece of a band line.
@@ -249,6 +255,20 @@ pub fn lines(
         edge: true,
     });
 
+    // AND BESIDE IT, THE ONE THAT OPENS IT WHOLE, with a cell of air between
+    // the two: two glyphs of one family in touching cells read as one
+    // control.
+    taken += 2;
+    right = crate::chrome::from_the_edge(columns, taken);
+    first.pieces.push(Piece {
+        at: right,
+        text: tokens::icon::NOTIFICATION_OPEN.to_string(),
+        color: tone,
+        hit: Some(Hit::Open),
+        explain: Some(words.texts.t(ronoctua_i18n::key::HINT_NOTIF_OPEN)),
+        edge: true,
+    });
+
     if let Some(f) = fraction {
         // THE SAME CELL SAYS BOTH THINGS: how much time is left, and that the
         // time is not moving. A frozen pie and a running one are the same
@@ -303,18 +323,17 @@ pub fn lines(
 
     // And now the sentence, in whatever is left.
     let room = right.saturating_sub(at).saturating_sub(1);
-    first.pieces.push(Piece {
+    first.pieces.extend(cut_or_whole(
+        &s.notification.line(),
         at,
-        text: layout::elide_end(&s.notification.line(), room),
-        color: if loud {
+        room,
+        if loud {
             tone
         } else {
             tokens::color::TEXT_PRIMARY
         },
-        hit: None,
-        explain: None,
-        edge: false,
-    });
+        words,
+    ));
 
     let mut out = vec![first];
     if n == 1 {
@@ -325,17 +344,18 @@ pub fn lines(
     // hold, which is the whole reason `Show::Full` exists.
     if !s.notification.body.is_empty() {
         let room = columns.saturating_sub(at + 1);
+        // ONE LINE of it. A body with paragraphs belongs to the manager,
+        // which scrolls; the band has a ceiling of three — and a body that
+        // had more than one line was cut too, so it gets the button as well.
+        let body = &s.notification.body;
         out.push(Line {
-            pieces: vec![Piece {
+            pieces: cut_or_whole(
+                &body.replace('\n', " "),
                 at,
-                // ONE LINE of it. A body with paragraphs belongs to the
-                // manager, which scrolls; the band has a ceiling of three.
-                text: layout::elide_end(&s.notification.body.replace('\n', " "), room),
-                color: tokens::color::NOTIFICATION_QUIET,
-                hit: None,
-                explain: None,
-                edge: false,
-            }],
+                room,
+                tokens::color::NOTIFICATION_QUIET,
+                words,
+            ),
         });
     }
 
@@ -440,6 +460,54 @@ pub fn lines(
     out
 }
 
+/// A line of the band, whole when it fits, and cut with a button at its end
+/// when it does not.
+///
+/// THE BUTTON'S CELLS COME OFF THE ROOM FIRST, the rule of the right-hand
+/// cluster: measured after the text, the button would sit on its last word.
+/// It follows the cut text with one cell of air, in the actions' tone,
+/// because it is a thing to press and colour is the only thing that can say
+/// so here (invariant 15).
+fn cut_or_whole(
+    text: &str,
+    at: u16,
+    room: u16,
+    color: tokens::Color,
+    words: &Words<'_>,
+) -> Vec<Piece> {
+    let plain = |t: String| Piece {
+        at,
+        text: t,
+        color,
+        hit: None,
+        explain: None,
+        edge: false,
+    };
+    if layout::width(text) <= room {
+        return vec![plain(text.to_owned())];
+    }
+    let button = words.texts.t(ronoctua_i18n::key::NOTIF_SEE_WHOLE);
+    let wide = layout::width(&button);
+    // A ROOM TOO NARROW FOR BOTH keeps the text: a button with nothing
+    // before it would open a record whose first word nobody saw.
+    let Some(left) = room.checked_sub(wide + 1).filter(|l| *l >= wide) else {
+        return vec![plain(layout::elide_end(text, room))];
+    };
+    let cut = layout::elide_end(text, left);
+    let after = at + layout::width(&cut) + 1;
+    vec![
+        plain(cut),
+        Piece {
+            at: after,
+            text: button,
+            color: tokens::color::NOTIFICATION_ACTS,
+            hit: Some(Hit::Open),
+            explain: Some(words.texts.t(ronoctua_i18n::key::HINT_NOTIF_OPEN)),
+            edge: false,
+        },
+    ]
+}
+
 /// Which piece of the band is at cell `column` of line `row`.
 ///
 /// The pointer's answer comes from what was DRAWN, and not from a second
@@ -526,6 +594,73 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn beside_the_envelope_one_glyph_opens_it_whole() {
+        let t = words();
+        let w = Words { texts: &t };
+        let s = shown(Show::Brief, "", 0);
+        let out = lines(Some(&s), 80, Some(1.0), None, false, false, &w);
+        let read = out[0]
+            .pieces
+            .iter()
+            .find(|p| p.hit == Some(Hit::Read))
+            .unwrap();
+        let open = out[0]
+            .pieces
+            .iter()
+            .find(|p| p.hit == Some(Hit::Open))
+            .expect("the band lost the glyph that opens it whole");
+        assert_eq!(open.text, tokens::icon::NOTIFICATION_OPEN.to_string());
+        assert!(open.edge, "counted from the border, like the envelope");
+        // ONE CELL OF AIR between the two glyphs, and nothing on top of the
+        // other: the envelope is the edge's and this one is to its left.
+        assert_eq!(open.at + 2, read.at, "{open:?} {read:?}");
+        assert!(open.explain.is_some());
+        // AND THE POINTER FINDS IT where it was drawn.
+        let found = at(&out, 0, 0, Some(open.at)).map(|p| p.hit);
+        assert_eq!(found, Some(Some(Hit::Open)));
+    }
+
+    #[test]
+    fn a_cut_line_ends_in_a_button_and_a_whole_one_does_not() {
+        let t = words();
+        let w = Words { texts: &t };
+        let whole = shown(Show::Full, "short", 0);
+        let out = lines(Some(&whole), 80, None, None, false, false, &w);
+        let buttons = |l: &Line| {
+            l.pieces
+                .iter()
+                .filter(|p| p.hit == Some(Hit::Open) && !p.edge)
+                .count()
+        };
+        assert_eq!(buttons(&out[0]), 0, "a line that fits has nothing to open");
+        assert_eq!(buttons(&out[1]), 0);
+
+        let long = shown(Show::Full, &"word ".repeat(60), 0);
+        let out = lines(Some(&long), 80, None, None, false, false, &w);
+        assert_eq!(buttons(&out[1]), 1, "the cut body ends in the button");
+        let button = out[1]
+            .pieces
+            .iter()
+            .find(|p| p.hit == Some(Hit::Open))
+            .unwrap();
+        let text = &out[1].pieces[0];
+        assert!(
+            text.text.ends_with('…'),
+            "the body is cut before the button: {:?}",
+            text.text
+        );
+        assert_eq!(
+            button.at,
+            text.at + layout::width(&text.text) + 1,
+            "one cell of air after the cut text"
+        );
+        assert_eq!(button.color, tokens::color::NOTIFICATION_ACTS);
+        assert!(button.at + layout::width(&button.text) <= 80);
+        let found = at(&out, 1, button.at, None).map(|p| p.hit);
+        assert_eq!(found, Some(Some(Hit::Open)));
     }
 
     #[test]

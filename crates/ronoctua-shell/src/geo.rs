@@ -419,6 +419,17 @@ impl View {
                     Target::Install(n)
                 },
             );
+            // THE LETTERS THE FILTER MATCHED, LIT — the finder's rule: a
+            // filtered list says WHY each row is in it.
+            let here = self.cursor + 1 == b.out.len();
+            if let Some(from) = matched_at(&region.label, &self.filter)
+                && let Some(row) = b.out.last_mut()
+                && let Some(label) = row.fields.first().cloned()
+            {
+                let to = from + self.filter.trim().chars().count();
+                let lit = crate::chrome::lit_letters(&label, &(from..to).collect::<Vec<_>>(), here);
+                row.fields.splice(0..1, lit);
+            }
         }
         b.out
     }
@@ -593,6 +604,24 @@ impl View {
 /// says the filter so they can see why.
 fn fold(s: &str) -> String {
     s.to_lowercase()
+}
+
+/// Where, in CHARACTERS of `label`, the filter matched it — `None` when it
+/// did not, or when the filter is empty.
+///
+/// Folded a character at a time and compared a character at a time, so the
+/// position is one of the label as it is drawn even where lowering a letter
+/// changes how many bytes it takes.
+fn matched_at(label: &str, filter: &str) -> Option<usize> {
+    let want: Vec<char> = fold(filter.trim()).chars().collect();
+    if want.is_empty() {
+        return None;
+    }
+    let have: Vec<char> = label
+        .chars()
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect();
+    have.windows(want.len()).position(|w| w == want.as_slice())
 }
 
 /// Builds the rows. `locale.rs`'s builder, and the same reasons.

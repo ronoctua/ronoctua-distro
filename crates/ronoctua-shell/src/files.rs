@@ -8000,7 +8000,7 @@ impl View {
                     } else {
                         ronoctua_render::layout::elide_end(&shown, *width)
                     };
-                    fields.push(Field {
+                    let name = Field {
                         at: *at,
                         text,
                         color: colour_of(entry, focused),
@@ -8013,7 +8013,22 @@ impl View {
                             args: vec![("name", shown.clone())],
                         }),
                         ink: Ink::Grid,
-                    });
+                    };
+                    // THE LETTERS WHAT WAS TYPED MATCHED, LIT — the finder's
+                    // rule: a filtered listing says WHY each row is in it.
+                    // Not while the name walks: its letters are not where
+                    // they were counted. The cursor here is a BAND and not a
+                    // colour, so the accent reads on it (`state.accent` on
+                    // `surface.selection` is gated).
+                    match (
+                        walking,
+                        crate::minibuffer::match_up(&self.filter, &entry.name),
+                    ) {
+                        (false, Some((_, positions))) if !self.filter.is_empty() => {
+                            fields.extend(crate::chrome::lit_letters(&name, &positions, false));
+                        }
+                        _ => fields.push(name),
+                    }
                 }
                 Column::Perms => {
                     // ONE FIELD PER CHARACTER. Ten facts that look like one

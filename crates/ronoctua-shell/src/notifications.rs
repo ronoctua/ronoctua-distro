@@ -465,6 +465,160 @@ pub struct View {
     /// How far this machine is ahead of UTC, for the dates an open record
     /// shows.
     zone: ronoctua_files::when::Zone,
+    /// Where each half of an OPEN record starts: what it says, and its facts.
+    ///
+    /// TWO, because the halves are two lists side by side and each scrolls on
+    /// its own — the owner's words: the message and the data are isolated,
+    /// each with its own bar. Clamped when written, against the half's total
+    /// and the room (`open_room`).
+    open_offsets: [usize; 2],
+    /// Where each column of the LIST starts — received and filtered out —
+    /// when the two are side by side, each scrolling on its own.
+    list_offsets: [usize; 2],
+    /// Does the keyboard scroll the FACTS, rather than the message?
+    open_facts: bool,
+    /// How many lines the door's region can give the open record, heading
+    /// included — REMEMBERED where the door measured it (`set_room`), never
+    /// asked from here. Zero is "not measured yet", and means no ceiling.
+    ///
+    /// The region's CAPACITY and not the height it is drawn at: a record
+    /// windowed to the height it was last drawn at would never grow again
+    /// (a ratchet), and a height that followed the offsets would move the
+    /// modeline while somebody scrolls.
+    open_room: std::cell::Cell<usize>,
+}
+
+/// Which of two lists side by side (or stacked): an open record's message
+/// and its facts, or the list's "received" and "filtered out".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Half {
+    /// The left one — what a record says, or what was received.
+    First,
+    /// The right one — what the manager knows, or what was filtered out.
+    Second,
+}
+
+impl Half {
+    const fn index(self) -> usize {
+        match self {
+            Self::First => 0,
+            Self::Second => 1,
+        }
+    }
+}
+
+/// One of an open record's bars, where it is drawn and what it scrolls.
+///
+/// ONE ANSWER for the door that paints it and the door that grabs it — the
+/// rule `paint::bar_box` was written for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenBar {
+    /// Which half it scrolls.
+    pub half: Half,
+    /// Its cell, in the rows' own coordinates: a door adds its lead exactly
+    /// as it does to a field's `at`, so the bar sits where the fields put it.
+    pub column: u16,
+    /// Its thumb's arithmetic. `top` is zero: the track starts at [`row`].
+    ///
+    /// [`row`]: OpenBar::row
+    pub scroll: ronoctua_design::Scroll,
+    /// The drawn row the half's lines start on, under its heading.
+    pub row: usize,
+    /// Does the half run to the bottom of the region? Then its track takes
+    /// the leftover under the last line, as every list bar does.
+    pub last: bool,
+}
+
+/// Where one half of an open record is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HalfPlace {
+    /// Which half.
+    pub half: Half,
+    /// The drawn row its lines start on (its heading is the row above).
+    pub row: usize,
+    /// How many of its lines are on screen.
+    pub room: usize,
+    /// How many lines it has.
+    pub total: usize,
+    /// Its first cell, in the rows' own coordinates.
+    pub from: u16,
+    /// One past its last cell, bar included.
+    pub to: u16,
+}
+
+/// How many cells a half of an open record keeps at its right end for its
+/// bar: one of air and the bar's own.
+const HALF_BAR: u16 = 2;
+
+/// An open record's bar in PIXELS — where it is painted and where it is
+/// grabbed, which are the same rectangle because both doors read this.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BarBox {
+    /// Which half it scrolls.
+    pub half: Half,
+    /// The whole track: a press anywhere on it moves the half.
+    pub track: (f32, f32, f32, f32),
+    /// The thumb, which is what is painted.
+    pub thumb: Option<(f32, f32, f32, f32)>,
+    /// What it scrolls, for the drag's inverse.
+    pub scroll: ronoctua_design::Scroll,
+    /// One line, in pixels.
+    pub line: f32,
+}
+
+impl BarBox {
+    /// Is `(x, y)` on the track?
+    #[must_use]
+    pub fn holds(&self, x: f32, y: f32) -> bool {
+        let (tx, ty, tw, th) = self.track;
+        x >= tx && x < tx + tw && y >= ty && y < ty + th
+    }
+
+    /// Where a pointer at height `y` puts the half: the thumb's inverse.
+    #[must_use]
+    pub fn offset_at(&self, y: f32) -> usize {
+        let (_, top, _, tall) = self.track;
+        self.scroll.offset_at(y - top, tall, self.line)
+    }
+}
+
+/// The bars of an open record, placed.
+///
+/// `lead` is what the door adds to a field's `at` to reach its cell, `top`
+/// the pixel where the region's first row (the headings) begins, and
+/// `bottom` the surface's — the last track takes the leftover, as every list
+/// bar does (`Scroll::track`).
+#[must_use]
+pub fn bar_boxes(
+    bars: &[OpenBar],
+    lead: u16,
+    cell: f32,
+    line: f32,
+    top: f32,
+    bottom: f32,
+) -> Vec<BarBox> {
+    bars.iter()
+        .map(|b| {
+            let right = f32::from(lead + b.column + 1) * cell;
+            #[allow(clippy::cast_precision_loss)]
+            let top = top + line * b.row as f32;
+            // A HALF WITH ANOTHER UNDER IT stops at its own last line.
+            #[allow(clippy::cast_precision_loss)]
+            let bottom = if b.last {
+                bottom
+            } else {
+                top + line * b.scroll.lines as f32
+            };
+            let (track, thumb) = crate::chrome::band_bar(b.scroll, right, top, bottom, cell, line);
+            BarBox {
+                half: b.half,
+                track,
+                thumb,
+                scroll: b.scroll,
+                line,
+            }
+        })
+        .collect()
 }
 
 /// Which level of the manager is on screen.
@@ -746,6 +900,19 @@ pub fn extent_of(pane: Pane, columns: u16) -> (u16, u16) {
     }
 }
 
+/// Where a LIST row's text and glyphs go: the pane's extent, less the cells
+/// its own bar takes at the right end when the two columns sit side by side
+/// — so no bar is ever drawn over the bin.
+#[must_use]
+pub fn list_extent(pane: Pane, columns: u16) -> (u16, u16) {
+    let (at, room) = extent_of(pane, columns);
+    if pane != Pane::Catalogue && two_columns(columns) {
+        (at, room.saturating_sub(HALF_BAR))
+    } else {
+        (at, room)
+    }
+}
+
 /// Does the width afford two columns?
 ///
 /// The token is the cut and the arithmetic is here: below it the panes stack,
@@ -795,25 +962,6 @@ impl View {
         self.set_cursor(self.cursor().min(there - 1));
     }
 
-    /// How many cells this column reserves for buttons, on every one of its
-    /// rows.
-    ///
-    /// Measured over the WHOLE column so the sentence starts in the same place
-    /// on every line — see [`buttons_room`], which is the arithmetic. Only the
-    /// records column has buttons: a suppressed one never reached the screen,
-    /// and the catalogue's rows are kinds of notification, not notifications.
-    fn reserved(lists: &Lists<'_>, pane: Pane, columns: u16) -> Buttons {
-        let (_, room) = extent_of(pane, columns);
-        let records = match pane {
-            Pane::Happened => &lists.happened,
-            Pane::Suppressed => &lists.suppressed,
-            Pane::Catalogue => return Buttons { marked: false },
-        };
-        Buttons {
-            marked: buttons_marked(records, room),
-        }
-    }
-
     /// The panes this arrangement draws, in the order it draws them.
     ///
     /// The CATALOGUE is alone on the screen: it is not something that
@@ -860,12 +1008,15 @@ impl View {
             // WIDE: one title, then one row per pair. Which of the two the
             // pointer means is the cell's answer, and the keyboard's is the
             // pane it is already in.
-            let i = row.checked_sub(1)?;
             let pane = match cell {
                 Some(c) if c >= split_at(columns) => Pane::Suppressed,
                 Some(_) => Pane::Happened,
                 None => self.pane,
             };
+            // EACH COLUMN AT ITS OWN OFFSET, so a drawn row is a different
+            // item in each.
+            let k = usize::from(pane == Pane::Suppressed);
+            let i = self.list_offsets_now(lists, columns)[k] + row.checked_sub(1)?;
             return (i < lists.len(pane)).then_some((pane, i));
         }
         match self.plan(lists).get(row)? {
@@ -907,11 +1058,16 @@ impl View {
             // AN OPEN RECORD HAS NO CURSOR — there is nothing to choose. What
             // the arrows move is which of its lines the region keeps on
             // screen, which is what a body that does not fit needs.
+            // SPLIT, the region draws a window of each half under one row
+            // of headings, and the line the arrows moved is in that window
+            // (`open_key` keeps it there) — so the region never scrolls.
+            Level::Open { .. } if self.open_split(columns) => return 0,
             Level::Open { line, .. } => return *line,
             Level::List => {}
         }
         if self.pane != Pane::Catalogue && two_columns(columns) {
-            return self.cursor() + 1;
+            let k = usize::from(self.pane == Pane::Suppressed);
+            return self.cursor() - self.list_offsets_now(lists, columns)[k].min(self.cursor()) + 1;
         }
         self.plan(lists)
             .iter()
@@ -983,6 +1139,9 @@ impl View {
         // adjustment onto a notification kind nobody had opened. The errand
         // was `Nothing`, so nothing on screen said a click had done anything
         // at all.
+        if let Level::Open { at, line } = self.level {
+            return self.open_clicked(at, line, row, cell, lists, columns);
+        }
         if !matches!(self.level, Level::List) {
             return Errand::Nothing;
         }
@@ -1032,6 +1191,45 @@ impl View {
         }
     }
 
+    /// A click on an open record: it SELECTS an action, and the second click
+    /// on the same one runs it — the `RET` of that line (invariant 19). A
+    /// click in a half gives that half the keyboard.
+    fn open_clicked(
+        &mut self,
+        at: RecordKey,
+        line: usize,
+        row: usize,
+        cell: Option<u16>,
+        lists: &Lists<'_>,
+        columns: u16,
+    ) -> Errand {
+        let Some(r) = lists.record(at) else {
+            return Errand::Nothing;
+        };
+        let plan = self.open_plan(r, columns);
+        let half = self
+            .half_at(lists, columns, row, cell.unwrap_or(0))
+            .unwrap_or(Half::First);
+        self.open_facts = half == Half::Second;
+        let [said, _] = self.places_of(r, columns);
+        if half == Half::Second {
+            return Errand::Nothing;
+        }
+        let told = row
+            .checked_sub(said.row)
+            .filter(|i| *i < said.room)
+            .map(|i| self.half_offset(Half::First, lists, columns) + i)
+            .and_then(|n| plan.get(n).map(|t| (n, *t)));
+        match told {
+            Some((n, Told::Act(k))) if n == line => Errand::Act(at, k),
+            Some((n, Told::Act(_))) => {
+                self.level = Level::Open { at, line: n };
+                Errand::Nothing
+            }
+            _ => Errand::Nothing,
+        }
+    }
+
     /// What `RET` opens on the list — and what a CLICK on a row opens.
     ///
     /// One function and not two. The owner's rule is that a click on a row is
@@ -1058,10 +1256,7 @@ impl View {
                 // fit: the body wrapped, every action listed one under the
                 // other, and the facts beside it.
                 Some(r) => {
-                    self.level = Level::Open {
-                        at: r.key(),
-                        line: 0,
-                    };
+                    self.open(r.key());
                     Errand::Nothing
                 }
                 None => Errand::Nothing,
@@ -1111,6 +1306,23 @@ impl View {
             // is drawn whole. Saying nothing is the honest answer.
             Pane::Catalogue => return None,
         };
+        // ON ONE OF THE GLYPHS, what it is for — the owner's ask: three
+        // drawings at a row's end and nothing saying which does what.
+        let (at, room) = list_extent(pane, columns);
+        let drawn = |g: Glyph| match g {
+            Glyph::Read => Self::can_be_read(pane),
+            Glyph::Delete => true,
+        };
+        if let Some(g) = cell
+            .and_then(|c| glyph_at(c, at, room))
+            .filter(|g| drawn(*g))
+        {
+            return Some(texts.t(match g {
+                Glyph::Read if r.read => ronoctua_i18n::key::NOTIF_GLYPH_UNREAD,
+                Glyph::Read => ronoctua_i18n::key::NOTIF_GLYPH_READ,
+                Glyph::Delete => ronoctua_i18n::key::NOTIF_GLYPH_DELETE,
+            }));
+        }
         Some(self.about(r, texts))
     }
 
@@ -1280,6 +1492,361 @@ impl View {
         }
     }
 
+    /// Opens on ONE record, whole — the band's `Hit::Open`.
+    ///
+    /// The cursor goes to its row too, so `Esc` lands on it in the list and
+    /// not on whatever row the manager was last left at. A record the list
+    /// does not have (it aged out between the click and this) leaves the list
+    /// as it is.
+    pub fn open_on(&mut self, at: RecordKey, lists: &Lists<'_>) {
+        let Some(n) = lists.happened.iter().position(|r| r.key() == at) else {
+            return;
+        };
+        self.pane = Pane::Happened;
+        self.set_cursor(n);
+        self.open(at);
+    }
+
+    /// Opens a record at its top, with the keyboard on what it says.
+    fn open(&mut self, at: RecordKey) {
+        self.level = Level::Open { at, line: 0 };
+        self.open_offsets = [0, 0];
+        self.open_facts = false;
+    }
+
+    /// How many lines the door's region can give an open record, heading
+    /// included. See `open_room`.
+    pub fn set_room(&self, lines: usize) {
+        self.open_room.set(lines);
+    }
+
+    /// How many lines the door can give, or no ceiling before it measured.
+    fn capacity(&self) -> usize {
+        match self.open_room.get() {
+            0 => usize::MAX,
+            n => n,
+        }
+    }
+
+    /// Is an open record on screen? Its two halves then scroll on their own
+    /// and the region does not.
+    #[must_use]
+    pub fn open_split(&self, columns: u16) -> bool {
+        match self.level {
+            Level::Open { .. } => true,
+            // THE LIST'S TWO COLUMNS, side by side: received and filtered
+            // out are two lists, each with its own offset and bar.
+            Level::List => self.pane != Pane::Catalogue && two_columns(columns),
+            _ => false,
+        }
+    }
+
+    /// The list's own layout when its two columns sit side by side.
+    fn list_places(&self, lists: &Lists<'_>, columns: u16) -> [HalfPlace; 2] {
+        // UNDER THE ROW OF HEADINGS, as tall as the longer column up to the
+        // room — never a function of the offsets.
+        let room = lists
+            .happened
+            .len()
+            .max(lists.suppressed.len())
+            .max(1)
+            .min(self.capacity().saturating_sub(1).max(1));
+        let place = |half: Half, pane: Pane| {
+            let (from, wide) = extent_of(pane, columns);
+            HalfPlace {
+                half,
+                row: 1,
+                room,
+                total: lists.len(pane).max(1),
+                from,
+                to: from + wide,
+            }
+        };
+        [
+            place(Half::First, Pane::Happened),
+            place(Half::Second, Pane::Suppressed),
+        ]
+    }
+
+    /// The offsets of whichever two lists are on screen.
+    const fn offsets(&self) -> &[usize; 2] {
+        match self.level {
+            Level::List => &self.list_offsets,
+            _ => &self.open_offsets,
+        }
+    }
+
+    /// The same, to write.
+    const fn offsets_mut(&mut self) -> &mut [usize; 2] {
+        match self.level {
+            Level::List => &mut self.list_offsets,
+            _ => &mut self.open_offsets,
+        }
+    }
+
+    /// Each list column's first row as drawn, clamped to what it has.
+    fn list_offsets_now(&self, lists: &Lists<'_>, columns: u16) -> [usize; 2] {
+        let p = self.list_places(lists, columns);
+        [
+            self.list_offsets[0].min(p[0].total.saturating_sub(p[0].room)),
+            self.list_offsets[1].min(p[1].total.saturating_sub(p[1].room)),
+        ]
+    }
+
+    /// The list keeps the cursor inside its own column's window — the region
+    /// does not scroll, the column does.
+    fn follow_list(&mut self, lists: &Lists<'_>, columns: u16) {
+        if !(matches!(self.level, Level::List) && self.open_split(columns)) {
+            return;
+        }
+        let half = if self.pane == Pane::Suppressed {
+            Half::Second
+        } else {
+            Half::First
+        };
+        let p = self.list_places(lists, columns)[half.index()];
+        let now = self.half_offset(half, lists, columns);
+        let c = self.cursor();
+        let to = if c < now {
+            c
+        } else if c >= now + p.room {
+            c + 1 - p.room
+        } else {
+            now
+        };
+        self.open_scroll_to(half, to, lists, columns);
+    }
+
+    /// Where each list's COLUMN divider goes when two sit side by side, and
+    /// whether it is lit — lit when the keyboard is in the SECOND one, which
+    /// is the file manager's own mark (`chrome::divider_lit`).
+    #[must_use]
+    pub fn divider(&self, columns: u16) -> Option<(u16, bool)> {
+        let side_by_side = match self.level {
+            Level::Open { .. } => facts_beside(columns),
+            Level::List => self.open_split(columns),
+            _ => false,
+        };
+        let lit = match self.level {
+            Level::Open { .. } => self.open_facts,
+            _ => self.pane == Pane::Suppressed,
+        };
+        side_by_side.then(|| (split_at(columns).saturating_sub(1), lit))
+    }
+
+    /// The cells a hover band may cover on drawn row `row` under cell
+    /// `column`: the half the pointer is in, side by side — a band across
+    /// both would say the two lists were one — and the whole row otherwise.
+    #[must_use]
+    pub fn hover_span(
+        &self,
+        lists: &Lists<'_>,
+        columns: u16,
+        row: usize,
+        column: u16,
+    ) -> Option<(u16, u16)> {
+        let (split, _) = self.divider(columns)?;
+        let half = self.half_at(lists, columns, row, column)?;
+        let p = self.places(lists, columns)?[half.index()];
+        Some(match half {
+            Half::First => (0, split),
+            Half::Second => (split + 1, p.to.max(split + 1)),
+        })
+    }
+
+    /// Where each half of the open record is drawn: SIDE BY SIDE under one
+    /// row of headings, or STACKED — the message first, the facts under it —
+    /// each under its own. One answer for the drawing, the bars, the wheel,
+    /// the keys and the clicks.
+    #[must_use]
+    pub fn places(&self, lists: &Lists<'_>, columns: u16) -> Option<[HalfPlace; 2]> {
+        match self.level {
+            Level::Open { at, .. } => Some(self.places_of(lists.record(at)?, columns)),
+            Level::List if self.open_split(columns) => Some(self.list_places(lists, columns)),
+            _ => None,
+        }
+    }
+
+    /// [`Self::places`] for a record already in hand.
+    fn places_of(&self, r: &Record, columns: u16) -> [HalfPlace; 2] {
+        let said = self.open_plan(r, columns).len();
+        let (s_from, s_wide) = self.open_extent(columns, false);
+        let (f_from, f_wide) = self.open_extent(columns, true);
+        let capacity = self.capacity();
+        if facts_beside(columns) {
+            // ONE ROW OF HEADINGS, then as many as the taller half, up to the
+            // room — never a function of the offsets, or the region would
+            // shrink under the wheel and move the modeline.
+            let room = said.max(FACTS).min(capacity.max(1));
+            return [
+                HalfPlace {
+                    half: Half::First,
+                    row: 0,
+                    room: room.min(said.max(1)),
+                    total: said,
+                    from: s_from,
+                    to: s_from + s_wide,
+                },
+                HalfPlace {
+                    half: Half::Second,
+                    row: 0,
+                    room: room.min(FACTS),
+                    total: FACTS,
+                    from: f_from,
+                    to: f_from + f_wide,
+                },
+            ];
+        }
+        // STACKED: two headings, and the lines between them shared. The
+        // facts keep what they need when there is room for them, and the
+        // message takes the rest — it is what the record was opened to read.
+        // ONE LINE OF AIR between them, and no titles: the owner's word.
+        let lines = capacity.saturating_sub(1).max(2);
+        let facts_room = if said + FACTS <= lines {
+            FACTS
+        } else {
+            FACTS.min(lines.saturating_sub(3).max(1))
+        };
+        let said_room = said.min(lines.saturating_sub(facts_room)).max(1);
+        [
+            HalfPlace {
+                half: Half::First,
+                row: 0,
+                room: said_room,
+                total: said,
+                from: s_from,
+                to: s_from + s_wide,
+            },
+            HalfPlace {
+                half: Half::Second,
+                row: said_room + 1,
+                room: facts_room,
+                total: FACTS,
+                from: f_from,
+                to: f_from + f_wide,
+            },
+        ]
+    }
+
+    /// Which half of an open record drawn row `row`, cell `column` is in.
+    #[must_use]
+    pub fn half_at(
+        &self,
+        lists: &Lists<'_>,
+        columns: u16,
+        row: usize,
+        column: u16,
+    ) -> Option<Half> {
+        let [_, second] = self.places(lists, columns)?;
+        // SIDE BY SIDE by the column, STACKED by the row — the divider is
+        // the one answer to which of the two it is.
+        Some(if self.divider(columns).is_some() {
+            if column >= split_at(columns) {
+                Half::Second
+            } else {
+                Half::First
+            }
+        } else if row + 1 >= second.row {
+            Half::Second
+        } else {
+            Half::First
+        })
+    }
+
+    /// Where a sweep of text that starts on drawn row `row`, cell `column` of
+    /// an open record may go: the lines of the half it started in, and only
+    /// them — the message and its facts are two texts. `lead` is the cell a
+    /// field's `at` counts from, and `first` the surface line of row 0.
+    /// `None` off an open record, where the door's whole list is the area.
+    #[must_use]
+    pub fn sweep_area(
+        &self,
+        lists: &Lists<'_>,
+        columns: u16,
+        row: usize,
+        column: u16,
+        lead: u16,
+        first: u16,
+    ) -> Option<crate::text_select::Area> {
+        let half = self.half_at(lists, columns, row, column.saturating_sub(lead))?;
+        let p = self.places(lists, columns)?[half.index()];
+        let top = first.saturating_add(u16::try_from(p.row).unwrap_or(u16::MAX));
+        Some(crate::text_select::Area {
+            left: lead + p.from,
+            right: lead + p.to,
+            top,
+            bottom: top.saturating_add(u16::try_from(p.room).unwrap_or(u16::MAX)),
+        })
+    }
+
+    /// Where a half starts, clamped to what it has and what is on screen.
+    fn half_offset(&self, half: Half, lists: &Lists<'_>, columns: u16) -> usize {
+        self.places(lists, columns).map_or(0, |p| {
+            let p = p[half.index()];
+            self.offsets()[half.index()].min(p.total.saturating_sub(p.room))
+        })
+    }
+
+    /// Puts a half's first line at `to`, clamped. The bar's drag.
+    pub fn open_scroll_to(&mut self, half: Half, to: usize, lists: &Lists<'_>, columns: u16) {
+        let Some(p) = self.places(lists, columns) else {
+            return;
+        };
+        let p = p[half.index()];
+        self.offsets_mut()[half.index()] = to.min(p.total.saturating_sub(p.room));
+    }
+
+    /// The wheel over drawn row `row`, cell `column` of an open record: the
+    /// half under the pointer scrolls, and only it. `true` if the wheel was
+    /// the open record's to take.
+    pub fn open_wheel(
+        &mut self,
+        row: usize,
+        column: u16,
+        lines: i64,
+        lists: &Lists<'_>,
+        columns: u16,
+    ) -> bool {
+        let Some(half) = self.half_at(lists, columns, row, column) else {
+            return false;
+        };
+        let now = self.half_offset(half, lists, columns);
+        let to = usize::try_from(
+            i64::try_from(now)
+                .unwrap_or(i64::MAX)
+                .saturating_add(lines)
+                .max(0),
+        )
+        .unwrap_or(0);
+        self.open_scroll_to(half, to, lists, columns);
+        true
+    }
+
+    /// The bars of an open record, one per half that does not fit.
+    #[must_use]
+    pub fn open_bars(&self, lists: &Lists<'_>, columns: u16) -> Vec<OpenBar> {
+        let Some(places) = self.places(lists, columns) else {
+            return Vec::new();
+        };
+        let side_by_side = facts_beside(columns);
+        places
+            .into_iter()
+            .filter(|p| p.total > p.room)
+            .map(|p| OpenBar {
+                half: p.half,
+                column: p.to.saturating_sub(1),
+                scroll: ronoctua_design::Scroll {
+                    total: p.total,
+                    lines: p.room,
+                    offset: self.half_offset(p.half, lists, columns),
+                    top: 0,
+                },
+                row: p.row,
+                last: side_by_side || p.half == Half::Second,
+            })
+            .collect()
+    }
+
     /// Hands it the machine's clock, for the dates an open record shows.
     ///
     /// Carried and not found, which is the rule this repository already
@@ -1297,7 +1864,7 @@ impl View {
     /// "where does this row end" is how a bin comes to be one cell off.
     #[must_use]
     pub fn row_extent(&self, columns: u16) -> (u16, u16) {
-        extent_of(self.pane, columns)
+        list_extent(self.pane, columns)
     }
 
     fn set_cursor(&mut self, n: usize) {
@@ -1432,12 +1999,39 @@ pub const TARGETS: u16 = 4;
 /// reads the same function, so what the pointer hits is what was drawn.
 #[must_use]
 pub fn target_at(column: u16, at: u16, room: u16) -> Option<Hit> {
-    let end = at + room;
-    match end.checked_sub(column) {
-        Some(1) => Some(Hit::Delete),
-        Some(3) => Some(Hit::ToggleRead),
-        _ => None,
+    match glyph_at(column, at, room)? {
+        Glyph::Read => Some(Hit::ToggleRead),
+        Glyph::Delete => Some(Hit::Delete),
     }
+}
+
+/// One of the three glyphs at a row's right end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Glyph {
+    /// The envelope: read, or back to unread.
+    Read,
+    /// The bin: forget it.
+    Delete,
+}
+
+/// Where each of a row's glyphs sits, counted from its right end: the bin at
+/// the edge and the envelope before it.
+///
+/// ONE ANSWER for the drawing, the click and the sentence under the pointer.
+const fn glyph_cell(glyph: Glyph) -> u16 {
+    match glyph {
+        Glyph::Delete => 1,
+        Glyph::Read => 3,
+    }
+}
+
+/// Which glyph is at cell `column` of a row that starts at `at`, `room` wide.
+#[must_use]
+pub fn glyph_at(column: u16, at: u16, room: u16) -> Option<Glyph> {
+    let back = (at + room).checked_sub(column)?;
+    [Glyph::Read, Glyph::Delete]
+        .into_iter()
+        .find(|g| glyph_cell(*g) == back)
 }
 
 /// What a click on a row of the manager does.
@@ -1552,8 +2146,6 @@ enum Told {
     Air,
     /// Action `n`. It is what `RET` runs when the cursor is here.
     Act(usize),
-    /// Fact `n`, when the facts are stacked underneath rather than beside.
-    Fact(usize),
 }
 
 /// How many lines of a body an open record will wrap. A bound on WORK.
@@ -1568,17 +2160,6 @@ pub const SHARED_NOTIFICATIONS: &str = "notifications.json";
 /// How many facts an open record shows. A closed set, and the height of that
 /// column — see [`facts_of`].
 const FACTS: usize = 6;
-
-/// Whether this column reserves the cell that says "there is something to do".
-#[derive(Clone, Copy)]
-struct Buttons {
-    /// Does ANY row of this column carry an action? Then every row of it
-    /// leaves the cell, so the sentences all end in the same place.
-    marked: bool,
-}
-
-/// The cells the mark takes: the glyph and the air before it.
-const MARK: u16 = 2;
 
 /// A record's buttons, as they read: `[k] label`, the band's own shape.
 ///
@@ -1597,19 +2178,6 @@ fn button_texts<'a>(
         };
         (i, label)
     })
-}
-
-/// Does this column need the cell that marks "there is something to do"?
-///
-/// Asked of the WHOLE column, once, and answered the same for every row of it:
-/// a mark that appeared only on the rows that have one would move the end of
-/// every sentence around it. And only while the sentence keeps its floor
-/// (`space.notifications.sentenceFloor`) — below that the mark competes for a
-/// line that has nothing to spare, and the record lists every action anyway
-/// the moment it is opened.
-fn buttons_marked(records: &[&Record], room: u16) -> bool {
-    records.iter().any(|r| !r.notification.actions.is_empty())
-        && room.saturating_sub(2 + TARGETS + MARK) >= tokens::space::NOTIFICATIONS_SENTENCEFLOOR
 }
 
 /// What the manager KNOWS about a record, as label and value.
@@ -1668,14 +2236,25 @@ fn facts_of(
     ]
     .into_iter()
     .map(|(label, value)| {
-        crate::chrome::field_pair(
+        // THE FILE MANAGER'S INFO PANEL'S TONES, which is the other panel of
+        // facts in this system: the label quiet and the value read — the
+        // owner asked for these two to change from the list's fact pair.
+        let mut pair = crate::chrome::field_pair(
             at,
             room,
             &texts.t(label),
             &value,
             crate::chrome::Kind::Fact,
             false,
-        )
+        );
+        for (i, f) in pair.iter_mut().enumerate() {
+            f.color = if i == 0 {
+                tokens::color::TEXT_DIM
+            } else {
+                tokens::color::TEXT_PRIMARY
+            };
+        }
+        pair
     })
     .collect()
 }
@@ -1742,14 +2321,7 @@ fn arrived_secs(r: &Record) -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
 }
 
-fn record_line(
-    r: &Record,
-    at: u16,
-    room: u16,
-    focused: bool,
-    readable: bool,
-    buttons: Buttons,
-) -> Vec<Field> {
+fn record_line(r: &Record, at: u16, room: u16, focused: bool, readable: bool) -> Vec<Field> {
     let tone = if focused {
         tokens::color::STATE_ACCENT
     } else if matches!(r.presentation.show, Show::Hidden) {
@@ -1780,36 +2352,16 @@ fn record_line(
     // filter, with the filter's NAME rather than its id. What is true stayed
     // true — `ARCHITECTURE.md` promises the manager says which rule decided —
     // and only the place changed.
-    let room_for_text = room.saturating_sub(2 + TARGETS + if buttons.marked { MARK } else { 0 });
+    let room_for_text = room.saturating_sub(2 + TARGETS);
     out.push(piece(
         text_at,
         layout::elide_end(&r.notification.line(), room_for_text),
         tone,
     ));
 
-    // AND A MARK SAYING THERE IS SOMETHING TO DO, never the buttons
-    // themselves.
-    //
-    // They were drawn here, and the owner read the screen and said why that
-    // cannot work: a notification may carry several actions with labels that
-    // are sentences, and a row is one line. So the row says only THAT there
-    // are some — one cell — and opening it lists them, one under the other,
-    // with room for their words.
-    //
-    // The cell is reserved for the whole column (`marked`) and not for the
-    // rows that happen to have actions: a sentence that ends at a different
-    // column on every line is a list nobody can scan.
-    if buttons.marked && !r.notification.actions.is_empty() {
-        // THE AIR COMES FIRST, and this is the whole of `MARK`: one cell of it
-        // and then the glyph. Drawn at the start of the pair, the mark landed
-        // on the very cell where the elided sentence ends — the owner
-        // photographed `disconn…⋯`, two ellipses touching.
-        out.push(piece(
-            at + room - TARGETS - MARK + 1,
-            tokens::icon::NOTIFICATION_HAS_ACTIONS.to_string(),
-            tone,
-        ));
-    }
+    // NO MARK SAYING THERE IS SOMETHING TO DO — the owner took the hand
+    // out. What a notification can do is listed when it is opened.
+    let end = at + room;
 
     // AND THE TWO TARGETS, at the row's right end.
     //
@@ -1830,10 +2382,9 @@ fn record_line(
     // envelope was a control the keyboard would not press and the mouse
     // would — and pressing it told the application the person had dismissed
     // something they were never shown.
-    let end = at + room;
     if readable {
         out.push(piece(
-            end.saturating_sub(3),
+            end.saturating_sub(glyph_cell(Glyph::Read)),
             if r.read {
                 tokens::icon::NOTIFICATION_MARK_UNREAD
             } else {
@@ -1844,7 +2395,7 @@ fn record_line(
         ));
     }
     out.push(piece(
-        end.saturating_sub(1),
+        end.saturating_sub(glyph_cell(Glyph::Delete)),
         tokens::icon::NOTIFICATION_DELETE.to_string(),
         tone,
     ));
@@ -1984,7 +2535,7 @@ impl View {
         // happened, it is something that is configured, and it has two columns
         // of its own.
         if self.pane == Pane::Catalogue || !two_columns(columns) {
-            return self.one_column(lists, book, left, room, columns, texts);
+            return self.one_column(lists, book, left, room, texts);
         }
 
         let split = split_at(columns);
@@ -2028,9 +2579,11 @@ impl View {
         // none filtered, the right-hand column was blank, which the owner
         // reported as a column that had lost its "nothing here". An empty
         // region is indistinguishable from a key that did not work.
-        let reserved = |pane| Self::reserved(lists, pane, columns);
-        let tall = lists.happened.len().max(lists.suppressed.len()).max(1);
-        for i in 0..tall {
+        // EACH COLUMN WINDOWED AT ITS OWN OFFSET, the room shared: the two
+        // are two lists, and one scrolling does not move the other.
+        let [first, _] = self.list_places(lists, columns);
+        let from = self.list_offsets_now(lists, columns);
+        for row in 0..first.room {
             let mut fields = Vec::new();
             // THE CURSOR IS IN ONE PANE, and only that pane's half lights up.
             // Lighting the whole row would say the two items were one thing —
@@ -2039,24 +2592,17 @@ impl View {
             // And an empty pane has no row to light: the cursor sits at zero
             // there with nothing under it, and lighting the "nothing here" as
             // if it were an item would promise a key that does nothing.
-            let here = self.cursor() == i && lists.len(self.pane) > i;
-            for pane in [Pane::Happened, Pane::Suppressed] {
-                let (at, room) = extent_of(pane, columns);
+            for (k, pane) in [Pane::Happened, Pane::Suppressed].into_iter().enumerate() {
+                let i = from[k] + row;
+                let (at, room) = list_extent(pane, columns);
                 let record = match pane {
                     Pane::Happened => lists.happened.get(i),
                     _ => lists.suppressed.get(i),
                 };
                 match record {
                     Some(r) => {
-                        let focused = here && self.pane == pane;
-                        fields.extend(record_line(
-                            r,
-                            at,
-                            room,
-                            focused,
-                            View::can_be_read(pane),
-                            reserved(pane),
-                        ));
+                        let focused = self.pane == pane && self.cursor() == i;
+                        fields.extend(record_line(r, at, room, focused, View::can_be_read(pane)));
                     }
                     None if i == 0 => fields.push(piece(
                         at,
@@ -2079,10 +2625,8 @@ impl View {
         book: &Book,
         left: u16,
         room: u16,
-        columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<Row> {
-        let reserved = |pane| Self::reserved(lists, pane, columns);
         let plan = self.plan(lists);
         let several = plan
             .iter()
@@ -2114,7 +2658,6 @@ impl View {
                     )],
                     Place::Item(pane, i) => {
                         let focused = self.pane == pane && self.cursor() == i;
-                        let buttons = reserved(pane);
                         match pane {
                             Pane::Happened => record_line(
                                 lists.happened[i],
@@ -2122,7 +2665,6 @@ impl View {
                                 room,
                                 focused,
                                 Self::can_be_read(Pane::Happened),
-                                buttons,
                             ),
                             Pane::Suppressed => record_line(
                                 lists.suppressed[i],
@@ -2130,7 +2672,6 @@ impl View {
                                 room,
                                 focused,
                                 Self::can_be_read(Pane::Suppressed),
-                                buttons,
                             ),
                             Pane::Catalogue => {
                                 let (id, kind) = &lists.catalogue[i];
@@ -2208,6 +2749,14 @@ impl View {
     /// `columns` is the width the rows were drawn at: an open record's height
     /// depends on it, and the arrows stop at the last line of it.
     pub fn key(&mut self, press: Press, lists: &Lists<'_>, book: &Book, columns: u16) -> Errand {
+        let errand = self.key_here(press, lists, book, columns);
+        // THE COLUMN FOLLOWS THE CURSOR, side by side: the region does not
+        // scroll, so what keeps the cursor on screen is its own column.
+        self.follow_list(lists, columns);
+        errand
+    }
+
+    fn key_here(&mut self, press: Press, lists: &Lists<'_>, book: &Book, columns: u16) -> Errand {
         if let Level::Sheet(knob) = self.level {
             return self.sheet_key(press, lists, book, knob);
         }
@@ -2323,7 +2872,7 @@ impl View {
     /// — for the reason the list's own [`Place`] gives: two answers to "what
     /// is on row n" is how a cursor comes to act on something else.
     fn open_plan(&self, r: &Record, columns: u16) -> Vec<Told> {
-        let (_, room) = self.open_extent(columns, false);
+        let (_, room) = self.text_extent(columns, false);
         let mut out: Vec<Told> = Vec::new();
         let said = layout::wrap(&r.notification.line(), room, BODY_CEILING).len()
             + layout::wrap(&r.notification.body, room, BODY_CEILING).len();
@@ -2337,19 +2886,9 @@ impl View {
         if out.is_empty() {
             out.push(Told::Air);
         }
-        if facts_beside(columns) {
-            // THE FACTS RIDE ON THE SAME ROWS, in the second column, so the
-            // record is as tall as its taller half.
-            while out.len() < FACTS {
-                out.push(Told::Air);
-            }
-        } else {
-            // NARROW: they go underneath, with a blank line between — the same
-            // answer the list gives when its two columns do not fit, and the
-            // same token deciding it.
-            out.push(Told::Air);
-            out.extend((0..FACTS).map(Told::Fact));
-        }
+        // THE FACTS ARE A HALF OF THEIR OWN, beside or under — with their own
+        // offset and bar (`places`). They rode on these rows once, and the two
+        // scrolled as one: a long message took its facts off the screen.
         out
     }
 
@@ -2372,6 +2911,24 @@ impl View {
         )
     }
 
+    /// Where a half's TEXT goes: its extent less the bar's cells at the
+    /// right end, so no bar is ever drawn over a word.
+    fn text_extent(&self, columns: u16, facts: bool) -> (u16, u16) {
+        let (at, room) = self.open_extent(columns, facts);
+        (at, room.saturating_sub(HALF_BAR))
+    }
+
+    /// The facts of an open record, one row each.
+    fn facts_rows(
+        &self,
+        r: &Record,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<Vec<Field>> {
+        let (at, room) = self.text_extent(columns, true);
+        facts_of(r, &self.zone, at, room, texts)
+    }
+
     /// ONE record, whole.
     ///
     /// # Why this level exists
@@ -2382,9 +2939,8 @@ impl View {
     /// — one under the other, with room for their words — and what the manager
     /// knows about the record is a column of facts beside it.
     fn open_rows(&self, r: &Record, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
-        let (left, room) = self.open_extent(columns, false);
-        let (facts_at, facts_room) = self.open_extent(columns, true);
-        let facts = facts_of(r, &self.zone, facts_at, facts_room, texts);
+        let (left, room) = self.text_extent(columns, false);
+        let facts = self.facts_rows(r, columns, texts);
 
         // WHAT IT SAYS. The title carries the tone the row carried, so a loud
         // one is still loud with its body open.
@@ -2403,37 +2959,63 @@ impl View {
                 .map(|line| piece(left, line, tokens::color::TEXT_SECONDARY)),
         );
 
-        let wide = facts_beside(columns);
-        self.open_plan(r, columns)
+        let lines: Vec<Vec<Field>> = self
+            .open_plan(r, columns)
             .into_iter()
             .enumerate()
-            .map(|(n, told)| {
-                let mut fields = match told {
-                    Told::Air => Vec::new(),
-                    Told::Said(i) => said.get(i).cloned().into_iter().collect(),
-                    // AN ACTION IS A ROW, and the cursor lights the one `RET`
-                    // would run. It is the file manager's own answer to the
-                    // same question, and invariant 15 leaves no other.
-                    Told::Act(i) => button_texts(r, texts)
-                        .nth(i)
-                        .map(|(_, text)| {
-                            vec![piece(
-                                left,
-                                text,
-                                // AN ACTION IS A SETTING'S LABEL: a thing a
-                                // click does.
-                                crate::chrome::Kind::Setting.tones(self.open_line() == n).0,
-                            )]
-                        })
-                        .unwrap_or_default(),
-                    Told::Fact(i) => facts.get(i).cloned().unwrap_or_default(),
-                };
-                if wide && let Some(f) = facts.get(n) {
-                    fields.extend(f.iter().cloned());
-                }
-                Row { fields }
+            .map(|(n, told)| match told {
+                Told::Air => Vec::new(),
+                Told::Said(i) => said.get(i).cloned().into_iter().collect(),
+                // AN ACTION IS A ROW, and the cursor lights the one `RET`
+                // would run. It is the file manager's own answer to the
+                // same question, and invariant 15 leaves no other.
+                Told::Act(i) => button_texts(r, texts)
+                    .nth(i)
+                    .map(|(_, text)| {
+                        vec![piece(
+                            left,
+                            text,
+                            // AN ACTION IS A SETTING'S LABEL: a thing a
+                            // click does.
+                            crate::chrome::Kind::Setting
+                                .tones(self.open_line() == n && !self.open_facts)
+                                .0,
+                        )]
+                    })
+                    .unwrap_or_default(),
             })
-            .collect()
+            .collect();
+        let [said_place, facts_place] = self.places_of(r, columns);
+
+        // TWO HALVES, each a list of its own windowed at its own offset, and
+        // NO TITLES — the owner took them out: a message and its facts are
+        // told apart by where they are and how they are drawn.
+        let from = [
+            self.open_offsets[0].min(said_place.total.saturating_sub(said_place.room)),
+            self.open_offsets[1].min(facts_place.total.saturating_sub(facts_place.room)),
+        ];
+        let window = |all: &[Vec<Field>], place: HalfPlace, at: usize| -> Vec<Vec<Field>> {
+            (0..place.room)
+                .map(|i| all.get(at + i).cloned().unwrap_or_default())
+                .collect()
+        };
+        let said_rows = window(&lines, said_place, from[0]);
+        let facts_rows = window(&facts, facts_place, from[1]);
+        if facts_beside(columns) {
+            let mut out = Vec::new();
+            let tall = said_place.room.max(facts_place.room);
+            for i in 0..tall {
+                let mut fields = said_rows.get(i).cloned().unwrap_or_default();
+                fields.extend(facts_rows.get(i).cloned().unwrap_or_default());
+                out.push(Row { fields });
+            }
+            return out;
+        }
+        // STACKED: the message, a line of air, then the facts.
+        let mut out: Vec<Row> = said_rows.into_iter().map(|fields| Row { fields }).collect();
+        out.push(Row { fields: Vec::new() });
+        out.extend(facts_rows.into_iter().map(|fields| Row { fields }));
+        out
     }
 
     /// Which row of an open record the cursor is on.
@@ -2464,9 +3046,32 @@ impl View {
             at,
             line: to.min(plan.len().saturating_sub(1)),
         };
+        let split = facts_beside(columns);
         match press {
             Press::Escape => {
                 self.level = Level::List;
+                Errand::Nothing
+            }
+            // THE KEYBOARD GOES FROM HALF TO HALF: `TAB` round them as it
+            // goes round the list's panes, and — side by side — `←`/`→` to
+            // the one on that side, as the Bluetooth sheet's two halves do.
+            Press::Tab | Press::BackTab => {
+                self.open_facts = !self.open_facts;
+                Errand::Nothing
+            }
+            Press::Left | Press::Right if split => {
+                self.open_facts = press == Press::Right;
+                Errand::Nothing
+            }
+            // THE FACTS HAVE NOTHING TO DO, so the arrows scroll them.
+            Press::Up | Press::Down if self.open_facts => {
+                let now = self.half_offset(Half::Second, lists, columns);
+                let to = if press == Press::Down {
+                    now + 1
+                } else {
+                    now.saturating_sub(1)
+                };
+                self.open_scroll_to(Half::Second, to, lists, columns);
                 Errand::Nothing
             }
             // THE CURSOR STOPS ONLY WHERE THERE IS SOMETHING TO DO.
@@ -2505,6 +3110,28 @@ impl View {
                             .unwrap_or_else(|| acts[acts.len() - 1]),
                     )
                 };
+                // THE HALF FOLLOWS THE LINE, since the region
+                // does not scroll: with actions, the one lit is kept on
+                // screen; without, the line IS the half's first line.
+                if let Level::Open { line, .. } = self.level {
+                    let room = self.places_of(r, columns)[0].room.max(1);
+                    let now = self.half_offset(Half::First, lists, columns);
+                    let to = if acts.is_empty() || line < now {
+                        line
+                    } else if line >= now.saturating_add(room) {
+                        line + 1 - room
+                    } else {
+                        now
+                    };
+                    self.open_scroll_to(Half::First, to, lists, columns);
+                    // AND A LINE PAST THE LAST PAGE COMES BACK TO IT, or
+                    // the way up would take as many presses as went down
+                    // past the end.
+                    if acts.is_empty() {
+                        let top = self.open_offsets[Half::First.index()];
+                        self.level = Level::Open { at, line: top };
+                    }
+                }
                 Errand::Nothing
             }
             // AND `RET` RUNS THE ONE UNDER IT. On any other row there is
@@ -3015,7 +3642,7 @@ mod tests {
         // about the record, and it went where the facts are.
         let mut r = record(1, Show::Hidden, false);
         r.presentation.by = Some("my-rule".into());
-        let fields = record_line(&r, 0, 120, false, true, Buttons { marked: false });
+        let fields = record_line(&r, 0, 120, false, true);
         let text: String = fields.iter().map(|f| f.text.as_str()).collect();
         assert!(!text.contains("my-rule"), "{text}");
         assert!(text.contains("app: r1"), "{text}");
@@ -3812,9 +4439,8 @@ mod tests {
         );
         // AND THE TWO AGES ARE STILL TOLD APART, by tone — which is what made
         // it safe to stop spending POSITION on the difference.
-        let plain = Buttons { marked: false };
-        let read = record_line(lists.happened[0], 0, 80, false, true, plain);
-        let unread = record_line(lists.happened[1], 0, 80, false, true, plain);
+        let read = record_line(lists.happened[0], 0, 80, false, true);
+        let unread = record_line(lists.happened[1], 0, 80, false, true);
         assert_ne!(
             read[0].color, unread[0].color,
             "read and unread are drawn the same, and now nothing tells them apart"
@@ -3885,7 +4511,7 @@ mod tests {
         ];
         let lists = Lists::of(&records, &b);
         let mut v = View::fresh();
-        let (at, room) = extent_of(Pane::Suppressed, 120);
+        let (at, room) = list_extent(Pane::Suppressed, 120);
         // Drawn row 0 is the pair of headings; row 1 holds both columns' first
         // item, and the CELL says which of the two the pointer means.
         assert_eq!(
@@ -4051,11 +4677,23 @@ mod tests {
         assert_eq!(v.key(Press::Enter, &lists, &b, 200), Errand::Nothing);
         assert!(matches!(v.level, Level::Open { .. }), "{:?}", v.level);
 
+        // HALF BY HALF: side by side a drawn row carries a line of each, and
+        // what the message says is read down its own half.
+        let split = split_at(200);
         let said = |rows: &[Row]| -> String {
-            rows.iter()
-                .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
-                .collect::<Vec<_>>()
-                .join(" ")
+            let (left, right): (Vec<String>, Vec<String>) = rows
+                .iter()
+                .flat_map(|r| r.fields.iter())
+                .map(|f| (f.at < split, f.text.clone()))
+                .fold((Vec::new(), Vec::new()), |(mut l, mut r), (is_left, t)| {
+                    if is_left {
+                        l.push(t);
+                    } else {
+                        r.push(t);
+                    }
+                    (l, r)
+                });
+            format!("{} {}", left.join(" "), right.join(" "))
         };
         let rows = v.rows(&lists, &b, 200, &t);
         let text = said(&rows);
@@ -4112,60 +4750,11 @@ mod tests {
     }
 
     #[test]
-    fn the_mark_never_touches_the_sentence() {
-        // THE OWNER PHOTOGRAPHED `disconn…⋯`: the mark landed on the very cell
-        // where the elided sentence ended, so two ellipses ran together and
-        // the row read as one word with six dots in it. There is a cell of air
-        // between them, and this is the arithmetic that keeps it there.
-        let t = texts();
-        let b = Book::distro();
-        let mut r = record(1, Show::Brief, false);
-        r.notification.summary = "a summary far too long for any of these widths".into();
-        r.notification.actions = vec![ronoctua_notify::Action {
-            id: "open".into(),
-            label: ronoctua_notify::Label::Text("open it".into()),
-            doing: ronoctua_notify::Doing::Invoke,
-        }];
-        let records = vec![r];
-        let lists = Lists::of(&records, &b);
-        let v = View::fresh();
-        for columns in [50_u16, 80, 120, 200] {
-            let rows = v.rows(&lists, &b, columns, &t);
-            let row = rows.iter().find(|r| {
-                r.fields
-                    .iter()
-                    .any(|f| f.text == tokens::icon::NOTIFICATION_HAS_ACTIONS.to_string())
-            });
-            let Some(row) = row else {
-                // Too narrow for the sentence to keep its floor: the mark
-                // stands down and the record still lists every action.
-                continue;
-            };
-            let mark = row
-                .fields
-                .iter()
-                .find(|f| f.text == tokens::icon::NOTIFICATION_HAS_ACTIONS.to_string())
-                .expect("the mark");
-            let sentence = row
-                .fields
-                .iter()
-                .find(|f| f.text.contains("a summary"))
-                .expect("the sentence");
-            let ends = sentence.at + ronoctua_render::layout::width(&sentence.text);
-            assert!(
-                mark.at > ends,
-                "at {columns} the mark is at {} and the sentence ends at {ends}",
-                mark.at
-            );
-        }
-    }
-
-    #[test]
-    fn the_row_only_marks_and_the_open_record_lists() {
-        // THE OWNER READ THE SCREEN AND SAID WHY. A notification may carry
-        // several actions with labels that are sentences, and a row is one
-        // line — two of them already crowded it out. So the row says only THAT
-        // there are some, and opening it lists them, one under the other.
+    fn the_row_draws_no_action_and_the_open_record_lists_them() {
+        // A notification may carry several actions with labels that are
+        // sentences, and a row is one line. The row says nothing of them — the
+        // owner took the hand that marked them out — and opening it lists
+        // them, one under the other.
         let t = texts();
         let b = Book::distro();
         let records = vec![wordy()];
@@ -4178,10 +4767,6 @@ mod tests {
             .map(|f| f.text.as_str())
             .collect();
         assert!(!row.contains("open it"), "the row draws a button: {row}");
-        assert!(
-            row.contains(tokens::icon::NOTIFICATION_HAS_ACTIONS),
-            "the row does not say there is anything to do: {row}"
-        );
 
         // OPENED, they are ROWS — one each, and in order.
         assert_eq!(v.key(Press::Enter, &lists, &b, 200), Errand::Nothing);
@@ -4198,7 +4783,8 @@ mod tests {
         assert_eq!(second, first + 1, "the actions are not one under the other");
 
         // AND ONE CURSOR REACHES THEM. It scrolls the record on the way, which
-        // is the other thing a body that does not fit needs.
+        // is the other thing a body that does not fit needs. With no titles,
+        // the drawn row IS the line of the message it shows.
         while !matches!(v.level, Level::Open { line, .. } if line == first) {
             let before = v.level.clone();
             let _ = v.key(Press::Down, &lists, &b, 200);
@@ -4291,6 +4877,275 @@ mod tests {
             "the key changed meaning and kept its colour"
         );
     }
+    /// A record whose message is far taller than a small room.
+    fn long_one() -> Record {
+        let mut r = wordy();
+        r.notification.body = "a line of words that goes on ".repeat(40);
+        r
+    }
+
+    #[test]
+    fn the_two_halves_of_an_open_record_scroll_apart() {
+        // THE OWNER'S ASK: the message and its facts are isolated, each with
+        // its own bar. A long message scrolled its facts off the screen when
+        // the two rode on the same rows.
+        let t = texts();
+        let b = Book::distro();
+        let records = vec![long_one()];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        v.set_room(5);
+        let facts_of_row = |v: &View| -> Vec<String> {
+            v.rows(&lists, &b, 200, &t)
+                .iter()
+                .flat_map(|r| r.fields.iter())
+                .filter(|f| f.at >= split_at(200))
+                .map(|f| f.text.clone())
+                .collect()
+        };
+        let facts_before = facts_of_row(&v);
+        let rows_before = v.rows(&lists, &b, 200, &t).len();
+        assert_eq!(rows_before, 5, "the room, and no titles");
+
+        // THE WHEEL OVER THE MESSAGE moves the message and only it.
+        assert!(v.open_wheel(2, 2, 3, &lists, 200));
+        assert_eq!(
+            facts_of_row(&v),
+            facts_before,
+            "the facts moved with the message"
+        );
+        assert_eq!(
+            v.rows(&lists, &b, 200, &t).len(),
+            rows_before,
+            "the region moved"
+        );
+        let bars = v.open_bars(&lists, 200);
+        let said = bars
+            .iter()
+            .find(|b| b.half == Half::First)
+            .expect("the message's bar");
+        assert_eq!(said.scroll.offset, 3);
+        assert!(
+            said.column < split_at(200),
+            "the message's bar is in its own half"
+        );
+
+        // AND OVER THE FACTS, the facts.
+        assert!(v.open_wheel(2, split_at(200) + 1, 1, &lists, 200));
+        assert_ne!(facts_of_row(&v), facts_before);
+        let facts = v.open_bars(&lists, 200);
+        let facts = facts
+            .iter()
+            .find(|b| b.half == Half::Second)
+            .expect("the facts' bar");
+        assert_eq!(facts.scroll.offset, 1);
+        assert!(facts.column >= split_at(200));
+
+        // NEVER PAST THE LAST PAGE.
+        assert!(v.open_wheel(2, 2, 10_000, &lists, 200));
+        let said = v.open_bars(&lists, 200)[0];
+        assert_eq!(said.scroll.offset, said.scroll.total - said.scroll.lines);
+    }
+
+    #[test]
+    fn a_half_that_fits_has_no_bar_and_no_text_under_one() {
+        let t = texts();
+        let b = Book::distro();
+        let records = vec![wordy()];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        v.set_room(40);
+        assert!(
+            v.open_bars(&lists, 200).is_empty(),
+            "a record that fits has no bar"
+        );
+        // THE BAR'S CELLS ARE KEPT even when there is none, so the day one
+        // appears it lands on air and not on a word.
+        v.set_room(4);
+        for bar in v.open_bars(&lists, 200) {
+            for row in v.rows(&lists, &b, 200, &t) {
+                for f in &row.fields {
+                    let end = f.at + ronoctua_render::layout::width(&f.text);
+                    assert!(
+                        !(f.at <= bar.column && bar.column < end),
+                        "{:?} is drawn under the {:?} bar at {}",
+                        f.text,
+                        bar.half,
+                        bar.column
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_the_halves_are_stacked_and_still_scroll_apart() {
+        // TOO NARROW FOR THE FACTS BESIDE: the message under its title and
+        // the facts under theirs — and each still has its own window and bar.
+        let columns = tokens::space::NOTIFICATIONS_FACTSFROM
+            .saturating_sub(1)
+            .max(40);
+        assert!(!facts_beside(columns));
+        let t = texts();
+        let b = Book::distro();
+        let records = vec![long_one()];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        let _ = v.key(Press::Enter, &lists, &b, columns);
+        v.set_room(12);
+        let rows = v.rows(&lists, &b, columns, &t);
+        assert!(rows.len() <= 12, "{} rows in a room of 12", rows.len());
+        let [said, facts] = v.places(&lists, columns).unwrap();
+        assert_eq!(said.row, 0, "no title above it");
+        assert_eq!(
+            facts.row,
+            said.row + said.room + 1,
+            "a line of air sits between"
+        );
+        assert_eq!(facts.room, FACTS, "the facts keep what they need");
+        assert!(
+            rows[facts.row - 1].fields.is_empty(),
+            "the air is air, not a title"
+        );
+        // THE WHEEL OVER THE MESSAGE moves the message, and the facts stay.
+        let facts_before: Vec<String> = rows[facts.row..]
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect();
+        assert!(v.open_wheel(2, 2, 3, &lists, columns));
+        let rows = v.rows(&lists, &b, columns, &t);
+        let facts_after: Vec<String> = rows[facts.row..]
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect();
+        assert_eq!(facts_before, facts_after);
+        let bars = v.open_bars(&lists, columns);
+        let said_bar = bars
+            .iter()
+            .find(|b| b.half == Half::First)
+            .expect("the message's bar");
+        assert_eq!(said_bar.scroll.offset, 3);
+        assert!(
+            !said_bar.last,
+            "the message's track stops where the facts start"
+        );
+        // AND THE WHEEL OVER THE FACTS is the facts'.
+        assert_eq!(
+            v.half_at(&lists, columns, facts.row + 1, 2),
+            Some(Half::Second)
+        );
+    }
+
+    #[test]
+    fn the_keyboard_goes_from_half_to_half() {
+        let t = texts();
+        let b = Book::distro();
+        let records = vec![long_one()];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        v.set_room(5);
+        let _ = &t;
+        assert!(!v.open_facts, "the message has the keys");
+        let _ = v.key(Press::Tab, &lists, &b, 200);
+        assert!(v.open_facts, "TAB gave them to the facts");
+        // THE ARROWS SCROLL THE FACTS NOW, and the message stays.
+        let _ = v.key(Press::Down, &lists, &b, 200);
+        let bars = v.open_bars(&lists, 200);
+        let facts = bars.iter().find(|b| b.half == Half::Second).unwrap();
+        assert_eq!(facts.scroll.offset, 1);
+        let said = bars.iter().find(|b| b.half == Half::First).unwrap();
+        assert_eq!(said.scroll.offset, 0);
+        let _ = v.key(Press::Left, &lists, &b, 200);
+        assert!(!v.open_facts, "← went back to the message");
+    }
+
+    #[test]
+    fn a_click_selects_an_action_and_the_second_runs_it() {
+        // INVARIANT 19: the click SELECTS, and the second does what `RET` does.
+        let t = texts();
+        let b = Book::distro();
+        let records = vec![wordy()];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        v.set_room(40);
+        let rows = v.rows(&lists, &b, 200, &t);
+        let row = rows
+            .iter()
+            .position(|r| r.fields.iter().any(|f| f.text.contains("copy the path")))
+            .unwrap();
+        assert_eq!(
+            v.clicked(row, Some(2), &lists, &b, 200),
+            Errand::Nothing,
+            "the first selects"
+        );
+        assert_eq!(
+            v.clicked(row, Some(2), &lists, &b, 200),
+            Errand::Act(named(1), 1),
+            "the second runs it"
+        );
+        // AND A CLICK IN THE FACTS GIVES THEM THE KEYBOARD, and runs nothing.
+        assert_eq!(
+            v.clicked(row, Some(split_at(200) + 1), &lists, &b, 200),
+            Errand::Nothing
+        );
+        assert!(v.open_facts);
+    }
+
+    #[test]
+    fn the_facts_wear_the_info_panel_s_tones_and_no_title_is_drawn() {
+        let t = texts();
+        let b = Book::distro();
+        let records = vec![wordy()];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        let rows = v.rows(&lists, &b, 200, &t);
+        let all: Vec<&Field> = rows.iter().flat_map(|r| r.fields.iter()).collect();
+        assert!(
+            !all.iter().any(|f| f.color == tokens::color::TEXT_HEADING),
+            "a title was drawn"
+        );
+        let origin = t.t(ronoctua_i18n::key::NOTIF_FACT_ORIGIN);
+        let label = all
+            .iter()
+            .find(|f| f.text.starts_with(&origin[..3]))
+            .expect("the origin fact");
+        assert_eq!(label.color, tokens::color::TEXT_DIM);
+        let value = all
+            .iter()
+            .find(|f| {
+                f.at > label.at && f.at >= split_at(200) && f.text == records[0].notification.app
+            })
+            .expect("its value");
+        assert_eq!(value.color, tokens::color::TEXT_PRIMARY);
+    }
+
+    #[test]
+    fn the_band_opens_the_record_it_was_showing() {
+        let b = Book::distro();
+        let records = vec![record(1, Show::Brief, false), record(2, Show::Brief, false)];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        let second = records[0].key();
+        v.open_on(second, &lists);
+        assert!(
+            matches!(v.level, Level::Open { at, .. } if at == second),
+            "{:?}",
+            v.level
+        );
+        // AND THE LIST'S CURSOR IS ON IT, so `Esc` lands on it.
+        let row = lists
+            .happened
+            .iter()
+            .position(|r| r.key() == second)
+            .unwrap();
+        assert_eq!(v.cursor(), row);
+    }
+
     #[test]
     fn an_open_record_is_as_tall_as_it_says_it_is() {
         // TWO ANSWERS TO "HOW TALL IS THIS" is how a cursor comes to stop three
@@ -4298,12 +5153,22 @@ mod tests {
         // anything drawn to count, and the drawing has to agree with it.
         let t = texts();
         let records = [wordy(), record(2, Show::Brief, false)];
-        let v = View::fresh();
+        let mut v = View::fresh();
+        v.open(records[0].key());
         for r in [&records[0], &records[1]] {
             for columns in [40_u16, 50, 80, 120, 200] {
+                // SIDE BY SIDE: one row of headings, then as many as the
+                // taller half — the facts are a closed set of their own.
+                // STACKED: each half under its own heading.
+                let said = v.open_plan(r, columns).len();
+                let tall = if facts_beside(columns) {
+                    said.max(FACTS)
+                } else {
+                    said + 1 + FACTS
+                };
                 assert_eq!(
                     v.open_rows(r, columns, &t).len(),
-                    v.open_plan(r, columns).len(),
+                    tall,
                     "at {columns} columns"
                 );
             }

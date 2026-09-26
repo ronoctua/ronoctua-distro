@@ -138,6 +138,14 @@
       text-chroma = 0.36;
       text-shift = 0;
     };
+    # THE CAPTURE'S GUIDES (`capture.guide`): the two lines through the
+    # pointer and every outline on the frozen screen. A colour of their own,
+    # the accent's complement, so they are never the focused window's border.
+    guide = {
+      hue = 78;
+      text-chroma = 0.9;
+      text-shift = 0;
+    };
     alternate = {
       hue = 190;
       text-chroma = 0.34;

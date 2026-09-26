@@ -1630,6 +1630,12 @@ impl Content for Player {
         }
     }
 
+    /// NO SWEEP OF TEXT HERE: a held button is this window's own gesture
+    /// (the timeline and the volume are dragged), and a sweep would take its motion away.
+    fn text_area(&self, _: &Ui, _: u16, _: u16) -> Option<crate::text_select::Area> {
+        None
+    }
+
     fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<PerPointer>, events: &[PointerEvent]) {
         ui.hinted.swap_hand(&mut hand.hint_drag);
         self.pointer_here(ui, hand, events);

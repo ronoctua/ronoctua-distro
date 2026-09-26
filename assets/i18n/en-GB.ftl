@@ -112,11 +112,14 @@ notif-memory-killed-body = An application was closed to keep the machine respons
 notif-action-edit = Edit the image
 notif-action-open = Open the image
 notif-action-folder = Open the folder
+notif-action-copy-image = Copy the image
 notif-action-copy-path = Copy the path
 notif-action-memory-panel = Open the memory panel
 
 # THE FILTERS THE DISTRO SHIPS WITH. The manager lists them by these names.
 notif-rule-important-gets-room = Something important gets room
+notif-rule-bluetooth-connected-is-quiet = A Bluetooth device connecting is said by its mark
+notif-rule-bluetooth-disconnected-is-quiet = A Bluetooth device leaving is said by its mark
 notif-rule-small-things-are-quick = Small things go by quickly
 
 # The manager: three lists, and a heading each.
@@ -248,6 +251,11 @@ hint-notif-bell = { $unread ->
        *[other] { $filtered } filtered out
     } — click opens the manager
 hint-notif-read = mark as read and take it off the screen
+hint-notif-open = take it off the band and open it whole in the manager
+notif-see-whole = see it whole
+notif-glyph-read = Mark it read
+notif-glyph-unread = Mark it unread again
+notif-glyph-delete = Forget it for good
 hint-notif-countdown = how long it has left
 hint-notif-paused = the clock is stopped while the pointer is on it
 hint-notif-action = { $action } — click it, or open the notification
@@ -335,6 +343,19 @@ cmd-workspace-previous = Previous workspace
 cmd-workspace-move-next = Move window to next workspace
 cmd-workspace-move-previous = Move window to previous workspace
 cmd-screen-capture = Screenshot
+capture-drag = drag for a region
+capture-click = click a window
+capture-whole = the whole screen
+about-capture-whole = Keeps the whole of the screen with the focus, as it was when the capture began.
+capture-loupe = the magnifier
+about-capture-loupe = Shows or hides the magnifier beside the pointer: the pixels under it, enlarged, with the one it is on outlined.
+capture-hide-hint = hide this line
+about-capture-hide-hint = Puts this line of shortcuts away, wherever the pointer is; the same key brings it back.
+capture-cancel = cancel
+about-capture-cancel = Gives the capture up and keeps nothing.
+capture-size = { $width } × { $height }
+capture-at = { $x }, { $y }
+echo-capture-failed = The capture could not be taken — the reason is in the log
 group-window = window/buffer
 group-terminal = terminal
 group-workspace = workspace
@@ -843,6 +864,7 @@ clipboard-content = Content
 clipboard-types = Types
 clipboard-size = Size
 echo-copied = Copied
+echo-image-copied = The image is on the clipboard
 echo-copied-value = Copied: { $value }
 echo-copy-failed = Could not copy — see the log
 echo-qr-large = The content is too large for a QR code
@@ -3687,6 +3709,7 @@ display-what-turn = The picture was turned
 display-refused-no-compositor = there is no compositor to ask
 display-refused-no-screen = that screen is not there any more
 display-refused-no-light = this screen's brightness is on its own buttons
+display-no-light-here = No screen's brightness can be moved from here
 display-refused-not-writable = the file belongs to root, and the rule that opens it has not run on this panel
 display-refused-nowhere = there is nowhere to write it down
 display-refused-other = it did not work

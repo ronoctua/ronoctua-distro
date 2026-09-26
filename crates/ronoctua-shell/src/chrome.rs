@@ -2259,6 +2259,30 @@ pub fn list_bar(
     })
 }
 
+/// A rectangle in a surface's logical pixels: `(x, y, width, height)`.
+pub type Rect = (f32, f32, f32, f32);
+
+/// A bar over a BAND of a surface that is not the whole list — its track and
+/// its thumb, from one `Scroll`: the track is where a press grabs it, the
+/// thumb is what is painted. `right` is the pixel the bar's cell ends at,
+/// and the band runs from `top` to `bottom` (the leftover under the last
+/// line goes to the track, as `Scroll::track` decides for every bar).
+#[must_use]
+pub fn band_bar(
+    scroll: ronoctua_design::Scroll,
+    right: f32,
+    top: f32,
+    bottom: f32,
+    cell: f32,
+    line: f32,
+) -> (Rect, Option<Rect>) {
+    let tall = scroll.track(top, bottom, line);
+    (
+        (right - cell, top, cell, tall),
+        scroll.bar(right, top, top + tall, cell, line),
+    )
+}
+
 /// WHERE A LIST'S BAR WAS DRAWN — and so which cells are the BAR'S.
 ///
 /// # Why the bar has a column of its own, and only while it is drawn
@@ -2924,6 +2948,56 @@ pub fn tinted(
         }
     }
     fields
+}
+
+/// A field whose letters at `positions` (counted in CLUSTERS of its text, as
+/// `minibuffer::match_up` gives them) MATCHED a filter, split so those letters
+/// are lit — the finder's rule, for a list whose rows are fields.
+///
+/// On the CURSOR's row the text is already the accent, so the matched letters
+/// take `text.match-here`, the step beside it; elsewhere they take the accent.
+/// Letters the field elided away light nothing.
+#[must_use]
+pub fn lit_letters(
+    field: &crate::files::Field,
+    positions: &[usize],
+    here: bool,
+) -> Vec<crate::files::Field> {
+    let lit_colour = if here {
+        tokens::color::TEXT_MATCH_HERE
+    } else {
+        tokens::color::STATE_ACCENT
+    };
+    let mut out: Vec<crate::files::Field> = Vec::new();
+    let mut run = String::new();
+    let mut run_lit = false;
+    let mut at = field.at;
+    let flush = |run: &mut String, lit: bool, at: &mut u16, out: &mut Vec<crate::files::Field>| {
+        if run.is_empty() {
+            return;
+        }
+        let wide = ronoctua_render::layout::width(run);
+        out.push(crate::files::Field {
+            at: *at,
+            text: std::mem::take(run),
+            color: if lit { lit_colour } else { field.color },
+            ..field.clone()
+        });
+        *at += wide;
+    };
+    for (i, cluster) in ronoctua_render::layout::cells_of(&field.text).enumerate() {
+        let lit = positions.contains(&i);
+        if lit != run_lit {
+            flush(&mut run, run_lit, &mut at, &mut out);
+            run_lit = lit;
+        }
+        run.push_str(cluster);
+    }
+    flush(&mut run, run_lit, &mut at, &mut out);
+    if out.is_empty() {
+        out.push(field.clone());
+    }
+    out
 }
 
 /// The label and the value of one row, placed and cut, in the colours of its

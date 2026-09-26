@@ -11,10 +11,10 @@
 #
 # HOW AN ENTRY IS RECOGNISED
 # --------------------------
-# Not all of ours originate here. The screenshot is sent by the compositor, in
-# English, with the file's path in the icon field — so an entry says how to
-# RECOGNISE a notification and what to make of it, and the same machinery then
-# serves one we raise and one that arrives from outside.
+# Not all of ours originate here: the footer raises most of them with a TAG,
+# and others arrive from outside — so an entry says how to RECOGNISE a
+# notification and what to make of it, and the same machinery then serves one
+# we raise and one that arrives from outside.
 #
 # The ones we raise carry a `tag` equal to their own id, which is why most
 # `when` blocks are one line. That works from INSIDE the shell (the
@@ -53,10 +53,11 @@
     # DISCREETLY, in the band, and it offers to edit what was just captured.
     #
     # THE CAPTURE IS OURS, so the recognition is a TAG. The compositor has no
-    # capture verb at all — the picture is taken by `grim`, which speaks
-    # `wlr-screencopy` and writes a file and nothing else — and the footer
-    # raises the notification itself (`capture_the_screen`), with the summary
-    # and body from our keys and the `file://` URL of what was written.
+    # capture verb at all — the screen is read by `grim`, which speaks
+    # `wlr-screencopy`, and what is kept is chosen on our own overlay
+    # (`ronoctua-shell capture`) — and the footer raises the notification
+    # itself, with the summary and body from our keys and the `file://` URL of
+    # what was written.
     #
     # It used to be recognised by the pair (app, summary), because the sender
     # was somebody else's program and an English sentence was all it gave us.
@@ -117,6 +118,12 @@
           id = "folder";
           run = "open";
           args = [ "folder" ];
+        }
+        # THE PICTURE ITSELF, for pasting — what a capture is taken for more
+        # often than not.
+        {
+          id = "copy-image";
+          copy-image = true;
         }
         {
           id = "copy-path";
@@ -532,10 +539,12 @@
   # The person's own filters are tried BEFORE these — a filter of one's own that
   # could not overrule the distro's would be a suggestion, not a filter.
   #
-  # None of these SUPPRESSES anything. Suppression is a decision about what one
-  # wants not to be told, and the distro is not in a position to make it; the
-  # manager is where it gets made, and the right-hand column is where the result
-  # can be audited.
+  # ONLY TWO SUPPRESS, and they are the owner's decision (2026-09-26): a
+  # Bluetooth device coming and going. Suppression is a decision about what one
+  # wants not to be told, and a device connecting is already on the modeline as
+  # its mark — the sentence said nothing the mark did not. They are still
+  # recorded (the manager's right-hand column), and a filter of one's own that
+  # shows them wins, because it is tried first.
   rules = [
     # SOMETHING IMPORTANT GETS ROOM. A high level with one elided line says
     # there is something and hides what — which is the worst of both.
@@ -550,6 +559,32 @@
       apply = {
         show = "full";
         loud = true;
+      };
+    }
+    # A DEVICE COMING AND GOING IS SAID BY ITS MARK. Above the rule on small
+    # things, because the first rule that catches decides.
+    {
+      id = "bluetooth-connected-is-quiet";
+      when = [
+        {
+          field = "tag";
+          is = "bluetooth-connected";
+        }
+      ];
+      apply = {
+        show = "hidden";
+      };
+    }
+    {
+      id = "bluetooth-disconnected-is-quiet";
+      when = [
+        {
+          field = "tag";
+          is = "bluetooth-disconnected";
+        }
+      ];
+      apply = {
+        show = "hidden";
       };
     }
     # AND SOMETHING UNIMPORTANT DOES NOT HOLD THE SCREEN. The band pushes the

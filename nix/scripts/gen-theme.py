@@ -868,6 +868,9 @@ CONTRAST_GATES = (
     # shift. The title kept that step and the gates came with it.
     ("text.group", ("surface.selection",), 40, 45),
     ("text.key", ("surface.selection",), 40, 45),
+    # THE MATCHED LETTERS ON THE CURSOR ROW: they have to read on the list's
+    # grounds and be told apart from the accent they sit in (distance below).
+    ("text.match-here", (*SIX_GROUNDS[:4],), 60, 65),
     ("text.heading", ("surface.selection",), 45, 50),
     ("text.subtle.strong", ("surface.chrome",), 40, 45),
     ("text.subtle.default", ("surface.chrome",), 18, 20),
@@ -968,6 +971,10 @@ CONTRAST_GATES = (
     # than what the gate reads. The floor is what matters, and it is 15.
     ("text.primary", ("surface.sweep",), 45, 55),
     ("text.dim", ("surface.sweep",), 15, 20),
+    # A SWEEP OF TEXT lies under the letters it chose, and they have to go
+    # on being read through it — the sweep's own floors, for the same reason.
+    ("text.primary", ("surface.text-selection",), 45, 55),
+    ("text.dim", ("surface.text-selection",), 15, 20),
     ("state.error", RAISED_GROUNDS, 45, 45),
     # 36 AND NOT 40 for the same reason as the subtle default above: measured
     # 38,2-39,5 on the header, which is the rung's own cost and not a theme
@@ -1135,6 +1142,8 @@ DISTANCE_GATES = (
     # weight left to help.
     ("text.group", "text.secondary", 0.06, 0.07),
     ("text.key", "text.secondary", 0.06, 0.07),
+    ("text.match-here", "state.accent", 0.06, 0.08),
+    ("text.match-here", "text.here.read", 0.05, 0.06),
     ("text.key", "text.group", 0.06, 0.07),
     ("text.subtle.strong", "text.subtle.default", 0.10, 0.12),
     ("text.subtle.default", "text.subtle.faint", 0.10, 0.11),
@@ -1201,6 +1210,10 @@ DISTANCE_GATES = (
     # THE DRAWER'S MARK sits beside the selection's, and is a quieter green:
     # told from the marks' tone, the accent, the device blue, the camera pink
     # and the selection it could be confused with.
+    # THE CAPTURE'S GUIDES are not the focused window's border, which the
+    # frozen picture carries, nor the accent.
+    ("capture.guide", "border.active", 0.08, 0.10),
+    ("capture.guide", "state.accent", 0.08, 0.10),
     ("modeline.drawer", "text.secondary", 0.04, 0.05),
     ("modeline.drawer", "state.accent", 0.04, 0.05),
     ("modeline.drawer", "modeline.device", 0.06, 0.08),

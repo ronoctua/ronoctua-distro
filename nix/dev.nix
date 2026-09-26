@@ -67,6 +67,7 @@
   emacs30,
   # The screenshot editor, for the notification a capture raises.
   swappy,
+  grim,
   # `wayland-info`, which asks the HOST what it is doing — see `the host's own
   # pixels`. Dev loop only; it reaches no installed profile.
   wayland-utils,
@@ -1167,6 +1168,12 @@ let
       # Without this the action simply is not offered in the nested loop — see
       # `usable_actions` in the shell.
       export RONOCTUA_SWAPPY="${swappy}/bin/swappy"
+      # AND THE CAPTURE ITSELF, which the loop never had: without these two
+      # `LEADER m s` answered "no action" and nothing said why. `grim` reads
+      # the screen for the overlay (`ronoctua-shell capture`) and the folder is
+      # the SAME entry of `nix/user-dirs.nix` the installed system uses.
+      export RONOCTUA_GRIM="${grim}/bin/grim"
+      export RONOCTUA_SCREENSHOTS="${(import ./user-dirs.nix).screenshot}"
       # AND THE FILE MANAGER'S DECODERS, fourth of the same family — with one
       # difference worth writing down: these are NOT out of the compilation
       # because a switch might remove them. They are unconditional on an

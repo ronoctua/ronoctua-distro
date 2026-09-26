@@ -40,7 +40,9 @@ linhas. Scroll como compositor, camada de shell própria em Rust. O porquê de c
     desktop ou popup flutuante. Tray, notificação e expansão são A MESMA superfície crescendo. A
     regra anterior dizia "nenhuma chrome além do rodapé", e o dono a corrigiu ao pedir o player: a
     coluna é permitida, e o que não se permite é ela tomar a largura da modeline, do minibuffer ou
-    da faixa de notificação.
+    da faixa de notificação. **A sobreposição da CAPTURA é a exceção aprovada** (2026-09-26):
+    layer-shell `overlay` que só existe enquanto se escolhe o que capturar, e some antes de o
+    arquivo ser escrito (`capture.rs`).
 15. **Sem sombra e sem elevação.** CARD e LINHA SEPARATÓRIA são PERMITIDOS — a preferência por
     um layout mais limpo é preferência, não proibição, e quem decide é o dono. Também é permitido
     pôr COLUNAS LADO A LADO, cada uma com as suas próprias seleções, e **uma seleção não precisa
@@ -1088,7 +1090,14 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   entre eles leem como UMA frase — *Edit the image Open the image Open the folder* —, e rótulo de
   ação É uma frase, então nada nas palavras diz onde uma acaba. Só ENTRE, nunca antes da primeira,
   e o ponto não é alvo. No registro ABERTO não há ponto nenhum: lá cada ação é uma LINHA, e a linha
-  já é a fronteira.
+  já é a fronteira. **Na LISTA, os glifos do fim da
+  linha são envelope e lixeira** (`glyph_cell`, uma resposta para o desenho, o clique e a frase),
+  e cada um diz sob o ponteiro para que serve (`View::about_at`). **E as duas colunas da lista
+  ("Received" e "Filtered out") são isoladas como as metades do registro**: deslocamento e barra
+  próprios (`list_offsets`, `list_extent` guardando a célula da barra), o cursor seguido pela
+  PRÓPRIA coluna, a faixa de hover presa à metade do ponteiro (`hover_span`, nas duas portas), e
+  entre elas uma régua vertical (`View::divider`) que acende quando o teclado está na segunda —
+  o `divider_lit` do gerenciador. O registro aberto tem a mesma régua.
 - **Um registro se chama `(id, quando chegou)`** (`ronoctua_notify::RecordKey`), nunca só a `id`: o
   contador do barramento nasce em 1 a cada partida e o das nossas nasce em `u32::MAX` e desce,
   enquanto o histórico dura 15 dias — a mesma `id` existe várias vezes em disco, e `replaces_id`
@@ -1100,16 +1109,23 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   de teclas e vai ensinar mais, e uma letra que a notificação possui colide com alguma delas mais
   cedo ou mais tarde — e colide em silêncio, porque a pessoa aperta e outra coisa acontece. A letra
   também só funcionava no GERENCIADOR: a faixa não toma teclado. O que alcança uma ação é o CURSOR
-  no registro aberto. **A linha da lista só MARCA que há ações** (`icon.notification-has-actions`,
-  a mão tocando — três pontinhos era o que a elisão ao lado já dizia, e os dois
-  colavam; a célula é reservada para a coluna inteira, com o AR antes do glifo) — um rótulo de ação é uma frase e uma linha é uma
-  linha —, e abrir lista todas, uma sob a outra. **Ação de comando fecha o gerenciador antes de
+  no registro aberto. **A linha da lista não diz nada das ações** — a mão que as marcava saiu a
+  pedido do dono —, e abrir lista todas, uma sob a outra. **Ação de comando fecha o gerenciador antes de
   rodar**, senão o `region_is_free` recusa e nada acontece; e **a janela ENCAMINHA** o comando pelo
   socket de controle em vez de mandar você ir ao rodapé fazer à mão.
 - **A vista tem QUATRO níveis** (molde do bluetooth: um campo diz onde se está, um `match` em
   `rows()` desenha, `Esc` volta um): a lista, o registro ABERTO (`RET` — corpo quebrado em linhas,
   botões desenhados, e os fatos numa coluna à direita, ou embaixo no estreito, pelo mesmo
-  `two_columns` da lista), a ficha de um tipo e a ficha de um FILTRO. No registro aberto o cursor **só
+  `two_columns` da lista), a ficha de um tipo e a ficha de um FILTRO. **O registro aberto são DUAS
+  METADES isoladas** (`notifications::Half`), lado a lado ou empilhadas no estreito (com uma linha
+  de ar entre elas), SEM TÍTULO — o dono os tirou —, e os fatos nos tons do painel de infos do
+  gerenciador (rótulo `text.dim`, valor `text.primary`); cada uma com deslocamento e barra próprios — UMA resposta diz onde cada uma está (`View::places`), e
+  o desenho, as barras (`open_bars` → `bar_boxes` → `chrome::band_bar`, o mesmo retângulo para
+  pintar e pegar nas duas portas), a roda, as teclas, o clique e a área de varredura
+  (`sweep_area`) a leem; `TAB` (e `←`/`→` lado a lado) passa o teclado de uma para a outra, a roda
+  rola a que está sob o ponteiro, e a região NÃO rola: ela janela as metades no `open_room`, que é
+  a CAPACIDADE lembrada pela porta, nunca a altura desenhada (catraca). **A faixa abre o registro inteiro** (`Hit::Open`,
+  o glifo ao lado do envelope, e o botão `ver inteira` no fim de uma linha cortada). No registro aberto o cursor **só
   para nas AÇÕES** — linha de mensagem não é coisa em que se age, e andar por
   elas uma a uma sem nada acender é o que o dono leu na tela —, e o `RET` roda
   a que estiver sob ele; sem ação nenhuma, aí sim as setas rolam o corpo. **Os
@@ -2271,6 +2287,10 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   — a pizza, a pausa no ponteiro e o prazo são da FILEIRA e não do que está nela, senão seriam dois
   contadores num rodapé que tem um. Na linha estreita cai a barra primeiro (ela repete o número),
   depois o nome do aparelho, e o número nunca — cortado, `38%` vira `3…`, que é um número falso.
+  **Com o minibuffer LIVRE o retorno vai NELE** (nenhuma vista, eco, leader ou gaveta), e não
+  custa altura: decidido UMA vez, na tecla (`sound_on_minibuffer`), senão uma tecla segurada
+  moveria a modeline. **O brilho usa a mesma linha** (`sound::Source::Screen`), e a recusa dele
+  com nenhuma vista aberta vira eco — antes a tecla de brilho não dizia nada.
 - **As teclas de mídia são a segunda família de binds NUS** (`actions::media`, ao lado de
   `emergency`), e são sete: volume, mudo, mudo-do-microfone, play, faixa. Não entram na lista dos
   quatro de resgate porque o argumento daquela é RECUPERAÇÃO; o desta é outro e mais simples —
@@ -2361,6 +2381,36 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 - **Duas instalações, uma opção só.** `ronoctua.profile` = `full` (22,8 GiB) ou `minimal` (6,9);
   `nix/modules/profile.nix` é a tabela, tudo `mkDefault`. **O ISO leva no `storeContents` o que
   nenhum cache tem** (shell, compositor, ghostty-vt, buffers, fontes): o alvo baixa, não compila.
+
+- **TEXTO SE SELECIONA ARRASTANDO, em toda porta** (`text_select.rs`): o rodapé, toda janela e
+  todo buffer (o hospedeiro de buffer é uma porta). A seleção é sobre o que foi DESENHADO — as
+  runs pintadas —, então nenhuma vista aprende nada, e o que se copia é o que estava na tela
+  (reticência inclusive). Um clique continua sendo clique: só um botão segurado que andou UMA
+  CÉLULA vira varredura, nunca sobre uma barra, e nunca onde a janela diz que o arrasto é dela
+  (`Content::text_area` → `None`: arquivos, player, câmera, captura). Duas colunas lado a lado são
+  dois textos, e a varredura fica na metade em que começou. `Ctrl+C` copia e `Esc` solta, só
+  enquanto há uma.
+- **FILTRO QUE CASA ACENDE AS LETRAS, e na linha do cursor elas têm tom próprio**
+  (`text.match-here`, o degrau alto do acento, com portões contra `state.accent` e o fundo): no
+  localizador, no `M-x` e no manual o nome sob o cursor JÁ é o acento, e as letras casadas sumiam
+  nele. Onde a linha é feita de campos, `chrome::lit_letters` parte o campo nas posições do
+  `match_up` — o filtro de regiões e o do gerenciador de arquivos (que não acende no nome que anda,
+  porque as letras dele não estão onde foram contadas).
+- **A CAPTURA É UM COMANDO, e o modo se escolhe NA SOBREPOSIÇÃO** (`ronoctua-shell capture`,
+  `LEADER m s` e `Print`): a tela com foco é lida PRIMEIRO (`grim -o`, PPM) e mostrada CONGELADA;
+  arrastar é região, clicar numa janela é a janela (a MENOR sob o ponteiro, que é a flutuante por
+  cima), `RET` ou clicar no vazio é a tela inteira, `Esc` e o botão direito desistem. Duas guias
+  PONTILHADAS atravessam a tela pelo ponteiro, numa cor SÓ DELAS (`capture.guide`, família
+  `guide` em toda semente: o complemento do acento, com portão contra a borda em foco e o
+  acento, porque a foto congelada já traz essa borda); a lupa nasce DESLIGADA e `z` a liga. A
+  linha de atalhos é da sobreposição e não o cabeçalho da porta, porque ela FOGE: com o ponteiro
+  a `space.capture.hintFlee` linhas do topo ela desce para a última linha, e `h` a esconde onde
+  quer que o ponteiro esteja. Os números dela (tracejado, lupa, limiar do arrasto) são tokens
+  (`space.capture`). O recorte sai dos MESMOS
+  pixels congelados — o que se guarda é exatamente o que estava sob o retângulo. A posição das
+  janelas vem do contrato (`Window::rect`, só enquanto `visible`). O `slurp` saiu; o `.#dev` não
+  exportava `RONOCTUA_GRIM` nem `RONOCTUA_SCREENSHOTS`, e por isso `LEADER m s` "não fazia nada".
+  A notificação ganhou `Copiar a imagem` (`Doing::CopyImage`, `wl-copy --type image/png`).
 
 ## Mapa do repositório
 

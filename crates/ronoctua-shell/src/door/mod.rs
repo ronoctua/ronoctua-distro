@@ -264,6 +264,9 @@ pub struct Hand<H> {
     pub held: bool,
     /// Whether this pointer is dragging the header's drawer bar.
     pub hint_drag: bool,
+    /// A held button that may become — or has become — a sweep of text
+    /// (`crate::text_select`).
+    pub selecting: crate::text_select::Selecting,
     /// What the window keeps of its own for this pointer.
     pub extra: H,
 }
@@ -301,6 +304,14 @@ impl Canvas<'_> {
         if let Some(t) = track {
             self.bars.record(t);
         }
+    }
+
+    /// Puts a picture on the GPU under `key`, whether or not one is there —
+    /// for a picture that CHANGES under the same key (a magnifier following
+    /// the pointer). The texture is reused while the size stays the same.
+    pub fn replace(&mut self, key: &str, rgba: &ronoctua_render::image::Rgba) {
+        self.images
+            .upload_it(&self.gpu.device, &self.gpu.queue, key, rgba);
     }
 
     /// Puts a picture on the GPU under `key`, unless it is already there.
@@ -462,6 +473,23 @@ pub trait Content: Sized + 'static {
         let _ = (ui, row);
     }
 
+    /// Where a sweep of text that starts on `(line, column)` of the surface
+    /// may go — or `None` where a held button there is the window's own
+    /// gesture (a drag of files, a turn of a shape, a film's timeline).
+    ///
+    /// The default is every window's list: the whole width under the header.
+    /// A window of two texts side by side answers the half the cell is in.
+    fn text_area(&self, ui: &Ui, line: u16, column: u16) -> Option<crate::text_select::Area> {
+        let _ = column;
+        let top = ui.first_of_list();
+        (line >= top).then(|| crate::text_select::Area {
+            left: 0,
+            right: ui.columns + 2 * ui.margin,
+            top,
+            bottom: ui.lines,
+        })
+    }
+
     /// Draws one frame. The default is the standard window: the header, the
     /// list under it, the hover of every cursor, and the list's bar.
     fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
@@ -583,6 +611,11 @@ pub struct Door<C: Content> {
     images: Option<ronoctua_render::image::Images>,
     /// Every bar the last frame drew — see `crate::bars`.
     bars: crate::bars::Drawn,
+    /// The text the last frame drew, in cells — what a sweep copies
+    /// (`crate::text_select`).
+    painted: Vec<crate::text_select::Painted>,
+    /// The text swept with the pointer, which `Ctrl+C` copies.
+    selection: Option<crate::text_select::Selection>,
     _watches: Vec<ronoctua_files::notice::Notice>,
     /// The queue, for a window that makes Wayland objects of its own.
     pub qh: QueueHandle<Self>,
@@ -668,6 +701,8 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
         quads: None,
         images: None,
         bars: crate::bars::Drawn::default(),
+        painted: Vec::new(),
+        selection: None,
         _watches: watches,
         qh: qh.clone(),
     };
@@ -927,6 +962,18 @@ impl<C: Content> Door<C> {
             pictures,
             ..
         } = canvas;
+        // WHAT WAS DRAWN, for a sweep to copy — and the sweep itself, over the
+        // letters it covers (`crate::text_select`).
+        self.painted = crate::text_select::painted_of(&spans);
+        if let Some(sel) = &self.selection {
+            let f = self.ui.frame(0);
+            over.extend(crate::text_select::highlight(
+                sel,
+                f.cell(),
+                f.line(),
+                |l| f.y_of(l),
+            ));
+        }
         // THE HEADER'S DRAWER BAR, in every door — the header is the door's.
         self.bars
             .record_opt(self.ui.hinted.drawer_track(self.ui.frame(0)));
@@ -985,6 +1032,25 @@ impl<C: Content> Door<C> {
     /// list follows the cursor, on the EVENT and never in the paint.
     fn typed(&mut self, event: &KeyEvent, mods: Modifiers) {
         self.ui.keyboard_seat = self.keyboards.colour_number_here();
+        // A SWEEP OF TEXT IS THE DOOR'S, and so are the two keys that answer
+        // it: `Ctrl+C` copies it and `Esc` lets it go. Asked before the
+        // window, and only while there is a sweep — every other `Esc` and
+        // every other `C-c` is still the window's.
+        if let Some(sel) = self.selection {
+            if event.keysym == Keysym::Escape {
+                self.selection = None;
+                self.ui.ask_paint();
+                return;
+            }
+            if mods.ctrl && !mods.alt && matches!(event.keysym, Keysym::c | Keysym::C) {
+                let text = sel.extract(&self.painted);
+                if !text.is_empty() {
+                    self.ui.message = Some(crate::chrome::copied(&text, &self.ui.texts));
+                }
+                self.ui.ask_paint();
+                return;
+            }
+        }
         self.content.typed(&mut self.ui, event, mods);
         self.follow();
     }
@@ -1042,6 +1108,51 @@ impl<C: Content> Door<C> {
                 PointerEventKind::Press { .. } => self.here.held = true,
                 PointerEventKind::Release { .. } | PointerEventKind::Leave { .. } => {
                     self.here.held = false;
+                }
+                _ => {}
+            }
+            // A SWEEP OF TEXT: a press ARMS it (and is still the window's
+            // click), a held button a cell away STARTS it, and from then on
+            // the motion is the sweep's and not the window's. Never on a bar,
+            // which is grabbed where it is drawn, and never where the window
+            // says a held button is its own gesture (`Content::text_area`).
+            match e.kind {
+                PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
+                    if self.selection.take().is_some() {
+                        self.ui.ask_paint();
+                    }
+                    self.here.selecting = crate::text_select::Selecting::Idle;
+                    if !self.bars.on(e.position.0, e.position.1)
+                        && let Some((line, cell)) =
+                            crate::text_select::Selecting::cell_of(e.position.0, e.position.1)
+                        && let Some(area) = self.content.text_area(&self.ui, line, cell)
+                        && area.holds(line, cell)
+                    {
+                        self.here.selecting = crate::text_select::Selecting::Pressed {
+                            at: (line, cell),
+                            area,
+                        };
+                    }
+                }
+                PointerEventKind::Motion { .. } if self.here.held => {
+                    if let Some((line, cell)) =
+                        crate::text_select::Selecting::cell_of(e.position.0, e.position.1)
+                        && let Some(sel) = self.here.selecting.moved_to(line, cell)
+                    {
+                        if self.selection != Some(sel) {
+                            self.selection = Some(sel);
+                            self.ui.ask_paint();
+                        }
+                        continue;
+                    }
+                }
+                PointerEventKind::Release { .. } | PointerEventKind::Leave { .. } => {
+                    let swept = self.here.selecting.sweeping();
+                    self.here.selecting = crate::text_select::Selecting::Idle;
+                    // THE RELEASE OF A SWEEP IS NOT A CLICK of the window.
+                    if swept && matches!(e.kind, PointerEventKind::Release { .. }) {
+                        continue;
+                    }
                 }
                 _ => {}
             }

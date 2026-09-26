@@ -125,6 +125,10 @@ struct Pointed {
     /// alone cannot say what the pointer is over — see
     /// `notifications::View::about_at`.
     cell: Option<u16>,
+    /// The half of an open record whose bar this pointer holds.
+    dragging: Option<crate::notifications::Half>,
+    /// Lines of wheel asked for and not yet spent over an open record.
+    owed: f64,
 }
 
 impl Notifications {
@@ -156,7 +160,97 @@ impl Notifications {
 
     fn view_rows(&self, ui: &Ui) -> Vec<crate::notifications::Row> {
         let lists = crate::notifications::Lists::of(&self.records, &self.book);
+        // THE ROOM AN OPEN RECORD WINDOWS ITS HALVES TO: the window's, which
+        // is the most it can be given (`notifications::View::open_room`).
+        self.view.set_room(ui.room_for_rows());
         self.view.rows(&lists, &self.book, ui.columns, &ui.texts)
+    }
+
+    /// The open record's bars, placed — painted and grabbed from here.
+    fn record_bars(&self, ui: &Ui) -> Vec<crate::notifications::BarBox> {
+        let lists = crate::notifications::Lists::of(&self.records, &self.book);
+        self.view.set_room(ui.room_for_rows());
+        let bars = self.view.open_bars(&lists, ui.columns);
+        if bars.is_empty() {
+            return Vec::new();
+        }
+        // FROM ROW 0: each bar says the row its half starts on.
+        let first = ui.first_of_list();
+        let f = ui.frame(first);
+        crate::notifications::bar_boxes(
+            &bars,
+            ui.margin,
+            f.cell(),
+            f.line(),
+            f.y_of(first),
+            f.bottom(),
+        )
+    }
+
+    /// The pointer's part in an open record split in two: the wheel over a
+    /// half and the drag of a half's bar. `true` when it took the events.
+    #[allow(clippy::cast_possible_truncation)]
+    fn record_pointer(
+        &mut self,
+        ui: &mut Ui,
+        hand: &mut Hand<Pointed>,
+        events: &[PointerEvent],
+    ) -> bool {
+        if !self.view.open_split(ui.columns) {
+            hand.extra.dragging = None;
+            return false;
+        }
+        let mut took = false;
+        for e in events {
+            let (x, y) = (e.position.0 as f32, e.position.1 as f32);
+            match e.kind {
+                PointerEventKind::Press { button, .. } if button == crate::door::LEFT_BUTTON => {
+                    if let Some(b) = self.record_bars(ui).into_iter().find(|b| b.holds(x, y)) {
+                        hand.extra.dragging = Some(b.half);
+                        self.scroll_half(ui, b.half, b.offset_at(y));
+                        took = true;
+                    }
+                }
+                PointerEventKind::Motion { .. } => {
+                    if let Some(half) = hand.extra.dragging
+                        && let Some(b) = self.record_bars(ui).into_iter().find(|b| b.half == half)
+                    {
+                        self.scroll_half(ui, half, b.offset_at(y));
+                        took = true;
+                    }
+                }
+                PointerEventKind::Release { .. } | PointerEventKind::Leave { .. } => {
+                    took |= hand.extra.dragging.take().is_some();
+                }
+                PointerEventKind::Axis {
+                    vertical,
+                    horizontal,
+                    ..
+                } => {
+                    crate::surface::wheel_arrived(&mut hand.extra.owed, &vertical, &horizontal);
+                    let by = crate::surface::wheel_lines(&mut hand.extra.owed);
+                    let cell = Self::cell_at(ui, e.position.0).unwrap_or(0);
+                    let row = ui.row_at(e.position.0, e.position.1).unwrap_or(0);
+                    let lists = crate::notifications::Lists::of(&self.records, &self.book);
+                    if by != 0 {
+                        self.view.open_wheel(row, cell, by, &lists, ui.columns);
+                    }
+                    took = true;
+                }
+                _ => {}
+            }
+        }
+        if took {
+            ui.ask_paint();
+        }
+        took
+    }
+
+    /// Puts one half of the open record at `to`.
+    fn scroll_half(&mut self, ui: &mut Ui, half: crate::notifications::Half, to: usize) {
+        let lists = crate::notifications::Lists::of(&self.records, &self.book);
+        self.view.open_scroll_to(half, to, &lists, ui.columns);
+        ui.ask_paint();
     }
 
     /// Keeps the cursor on screen.
@@ -213,8 +307,8 @@ impl Notifications {
     }
 
     /// Whether cell `c` is in the RIGHT column, when there are two.
-    fn on_the_right(ui: &Ui, c: Option<u16>) -> bool {
-        crate::notifications::two_columns(ui.columns)
+    fn on_the_right(&self, ui: &Ui, c: Option<u16>) -> bool {
+        self.view.divider(ui.columns).is_some()
             && c.is_some_and(|c| c >= crate::notifications::split_at(ui.columns))
     }
 
@@ -480,13 +574,37 @@ impl Content for Notifications {
     // every action it offers is one key, and a second meaning for the same
     // target would be chrome nobody asked for.
 
+    /// A SWEEP STAYS IN ITS HALF of an open record: the message and its
+    /// facts are two texts, and a sweep down one must not take the other's
+    /// lines (`notifications::View::sweep_area`).
+    fn text_area(&self, ui: &Ui, line: u16, column: u16) -> Option<crate::text_select::Area> {
+        let top = ui.first_of_list();
+        if line < top {
+            return None;
+        }
+        let lists = crate::notifications::Lists::of(&self.records, &self.book);
+        self.view.set_room(ui.room_for_rows());
+        let row = usize::from(line - top);
+        if self.view.open_split(ui.columns) {
+            return self
+                .view
+                .sweep_area(&lists, ui.columns, row, column, ui.margin, top);
+        }
+        Some(crate::text_select::Area {
+            left: 0,
+            right: ui.columns + 2 * ui.margin,
+            top,
+            bottom: ui.lines,
+        })
+    }
+
     fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<Pointed>, events: &[PointerEvent]) {
         if hand.extra.number == 0 {
             self.hands = self.hands.wrapping_add(1).max(1);
             hand.extra.number = self.hands;
         }
         // THE CELL, from the same events the standard list reads for the row.
-        let side_before = Self::on_the_right(ui, hand.extra.cell);
+        let side_before = self.on_the_right(ui, hand.extra.cell);
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
@@ -500,13 +618,18 @@ impl Content for Notifications {
                 _ => {}
             }
         }
-        crate::door::list::pointer(self, ui, hand, events);
+        // AN OPEN RECORD'S HALVES TAKE THE WHEEL AND THEIR BARS FIRST: the
+        // list's own bar and wheel would move the region, which does not
+        // scroll while the halves do.
+        if !self.record_pointer(ui, hand, events) {
+            crate::door::list::pointer(self, ui, hand, events);
+        }
         let now = (hand.row_under_pointer, hand.extra.cell);
         self.pointers.insert(hand.extra.number, now);
         self.pointed = hand.row_under_pointer.map(|r| (r, hand.extra.cell));
         // AND A NEW COLUMN IS A NEW PICTURE: side by side the band lights the
         // half the pointer is in, and the row alone did not change.
-        if side_before != Self::on_the_right(ui, hand.extra.cell) {
+        if side_before != self.on_the_right(ui, hand.extra.cell) {
             ui.ask_paint();
         }
     }
@@ -571,6 +694,19 @@ impl Content for Notifications {
         canvas.lit = &[];
         crate::door::list::body(ui, canvas, &rows);
         canvas.lit = lit;
+        // AND AN OPEN RECORD'S TWO BARS, one per half that does not fit.
+        for b in self.record_bars(ui) {
+            canvas.bar(Some(crate::bars::Track::of(b.track)));
+            if let Some((x, y, width, height)) = b.thumb {
+                canvas.under.push(ronoctua_render::quad::Quad {
+                    x,
+                    y,
+                    width,
+                    height,
+                    color: tokens::color::RULE_STRONG,
+                });
+            }
+        }
 
         // EVERY CURSOR'S HOVER, in its own colour — see `crate::seats`. Side
         // by side a drawn line is TWO records, one per column, so a band
@@ -579,7 +715,21 @@ impl Content for Notifications {
         // under it.
         let cell = ui.frame(0).cell();
         let split = f32::from(margin + crate::notifications::split_at(columns)) * cell;
-        let two = crate::notifications::two_columns(columns);
+        // SIDE BY SIDE, which the divider answers — for the list and for an
+        // open record alike, and never for a record stacked in a narrow one.
+        let divider = self.view.divider(columns);
+        let two = divider.is_some();
+        // AND THE DIVIDER ITSELF, between the two, lit when the keyboard is in
+        // the second — the file manager's mark (`chrome::divider_lit`).
+        if let Some((at, lit)) = divider {
+            let f = ui.frame(ui.first_of_list());
+            let x = f32::from(margin + at) * cell + cell / 2.0;
+            canvas.under.push(if lit {
+                crate::chrome::divider_lit(x, f.y_of(ui.first_of_list()), f.bottom())
+            } else {
+                crate::chrome::divider(x, f.y_of(ui.first_of_list()), f.bottom())
+            });
+        }
         let width = ui.room.band_width();
         // ONE BAND PER ROW AND HALF, so two cursors on one line but in
         // different columns are two bands, and on the same half the first
@@ -593,7 +743,7 @@ impl Content for Notifications {
                 .pointers
                 .values()
                 .filter(|(r, _)| *r == Some(row))
-                .map(|(_, c)| Self::on_the_right(ui, *c))
+                .map(|(_, c)| self.on_the_right(ui, *c))
                 .collect();
             if halves.is_empty() {
                 halves.push(false);

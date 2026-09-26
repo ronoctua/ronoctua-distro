@@ -10233,7 +10233,9 @@ let
         drawn = set()
     else:
         floor(len(walk), 200, "characters of `laid`")
-        split = scope(walk, r"let runs: Vec<&str> = match p\.register\b")
+        # `p.register` or the local it was resolved into (an unpressable key
+        # is decided `Inert` just above the match).
+        split = scope(walk, r"let runs: Vec<&str> = match (?:p\.)?register\b")
         if split is None:
             bad.append("`laid` no longer splits a key at its modifier")
             drawn = set()
@@ -10688,6 +10690,20 @@ let
 
     HERE = re.compile(r"\bTEXT_HERE_[A-Z]+\b")
 
+    # A VIEW MAY NAME THE CURSOR'S COLOUR THROUGH THE ONE PLACE THAT HOLDS
+    # IT: `chrome::Kind::tones(focused)` answers `text.here.*` when its
+    # argument is true, and `chrome::field_pair` hands its last argument to
+    # that. So a call whose cursor argument is anything but the literal
+    # `false` names the colour — and a call that always says `false` does
+    # not, which is the hole this check exists for.
+    def names_through_tones(code):
+        for m in re.finditer(r"\.tones\(|chrome::field_pair\(", code):
+            args = shut_at(code, m.end()).split(",")
+            last = args[-1].strip() if args[-1].strip() else (args[-2].strip() if len(args) > 1 else "")
+            if last and last != "false":
+                return True
+        return False
+
     # THE MANAGER'S CURSOR IS A BAND, and this is where that is re-measured.
     # `files.rs` is excused from naming a colour only for as long as its two
     # doors go on drawing one.
@@ -10700,7 +10716,9 @@ let
     # `focused: here`, `focused: n == at`. THE SHORTHAND IS NOT A DETAIL — both
     # views the owner reported use it, so a pattern that wanted a colon would
     # have swept every view except the two that were broken.
-    LIVE = re.compile(r"focused\s*(?:,|:\s*(?!false\b))")
+    # A WORD, and not a suffix: `is_focused: true` is a compositor's window
+    # being built, not a row's cursor.
+    LIVE = re.compile(r"\bfocused\s*(?:,|:\s*(?!false\b))")
 
     # AND A VIEW THAT DRAWS `label: value` ROWS IS SWEPT WHETHER OR NOT IT
     # KEEPS THE FLAG.
@@ -10726,7 +10744,7 @@ let
             skipped.append(name)
             continue
         swept.append(name)
-        if HERE.search(code):
+        if HERE.search(code) or names_through_tones(code):
             continue
         if name in EXCUSED:
             # THE REASON IS RE-MEASURED, never taken on trust. If the band and
@@ -17668,36 +17686,37 @@ let
 
     # FILE-WIDE: the offence is a NAME being absent from a whole
     # file, or present in the wrong one. There is no function to narrow to —
-    # `RONOCTUA_GRIM` may be read anywhere in `surface.rs`, and what
+    # `RONOCTUA_GRIM` may be read anywhere in `capture.rs`, and what
     # `nix/rust.nix` must NOT contain it must not contain anywhere. A
     # `body_of` here would pass the day somebody moved the read one function
     # over.
     #
     # PROSE: and the subject IS the words — which name a path arrives under —
     # rather than the shape of any function.
-    rust = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text())
+    capture = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/capture.rs").read_text())
     built = hashless(pathlib.Path("${../nix/rust.nix}").read_text())
     module = hashless(pathlib.Path("${../nix/modules/scroll.nix}").read_text())
-    floor(len(rust), 1000, "characters of surface.rs")
+    floor(len(capture), 1000, "characters of capture.rs")
     floor(len(built), 1000, "characters of nix/rust.nix")
     floor(len(module), 1000, "characters of the compositor's module")
 
     failed = []
 
-    # (a) THE CAPTURE READS ITS PROGRAM FROM THE ENVIRONMENT.
-    if 'std::env::var("RONOCTUA_GRIM")' not in rust:
-        failed.append("surface.rs does not read RONOCTUA_GRIM from the environment")
+    # (a) THE CAPTURE READS ITS PROGRAM FROM THE ENVIRONMENT — in the
+    # overlay, which is where the screen is read now.
+    if 'std::env::var("RONOCTUA_GRIM")' not in capture:
+        failed.append("capture.rs does not read RONOCTUA_GRIM from the environment")
 
     # (b) AND IT IS NOT BAKED IN. `nix/rust.nix` is the compilation's
     # environment: a name there becomes an `option_env!` and a store
     # reference nothing can remove.
-    for baked in ("RONOCTUA_GRIM", "RONOCTUA_SLURP", "RONOCTUA_SWAPPY"):
+    for baked in ("RONOCTUA_GRIM", "RONOCTUA_SWAPPY"):
         if baked in built:
             failed.append(f"{baked} is in nix/rust.nix; it would be compiled in")
 
     # (c) AND THE MODULE PUTS THEM THERE, or the feature is offered and does
     # nothing — which is worse than not being offered.
-    for given in ("RONOCTUA_GRIM", "RONOCTUA_SLURP", "RONOCTUA_SCREENSHOTS"):
+    for given in ("RONOCTUA_GRIM", "RONOCTUA_SCREENSHOTS"):
         if given not in module:
             failed.append(f"{given} is not set by the compositor's module")
 
@@ -17706,7 +17725,7 @@ let
         for f in failed:
             print(f"  {f}", file=sys.stderr)
         sys.exit(1)
-    print("OK: the capture's three programs come from the environment, and the module sets them")
+    print("OK: the capture's programs come from the environment, and the module sets them")
     PY
   '';
 

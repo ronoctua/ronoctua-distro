@@ -99,6 +99,33 @@ pub struct Window {
     /// between, on any workspace.
     #[serde(default)]
     pub trailmark: bool,
+    /// Where it is on the screens, in the compositor's global LOGICAL
+    /// pixels, borders and title included — `None` when nobody can see it
+    /// (another workspace, the drawer). It is what a capture of "the window
+    /// under the pointer" cuts.
+    #[serde(default)]
+    pub rect: Option<Rect>,
+}
+
+/// A rectangle in the compositor's global logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rect {
+    /// Left edge.
+    pub x: i32,
+    /// Top edge.
+    pub y: i32,
+    /// Width.
+    pub width: i32,
+    /// Height.
+    pub height: i32,
+}
+
+impl Rect {
+    /// Does it hold the point?
+    #[must_use]
+    pub const fn holds(&self, x: i32, y: i32) -> bool {
+        x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
+    }
 }
 
 /// The compositor's trails: lists of windows somebody marked to walk between.
@@ -1271,6 +1298,7 @@ mod tests {
             drawer: false,
             hidden: false,
             trailmark: false,
+            rect: None,
         }
     }
 

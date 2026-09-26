@@ -135,7 +135,34 @@ fn window_of(node: &Value) -> Option<Window> {
             .get("trailmark")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        rect: rect_of(node),
     })
+}
+
+/// Where a window is, when it can be seen: `rect` is the container in
+/// global logical pixels, title bar and border in, and `visible` is the
+/// compositor's own word for "on a workspace somebody is looking at".
+fn rect_of(node: &Value) -> Option<ronoctua_compositor::Rect> {
+    if !node
+        .get("visible")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let r = node.get("rect")?;
+    let n = |k: &str| {
+        r.get(k)
+            .and_then(Value::as_i64)
+            .and_then(|v| i32::try_from(v).ok())
+    };
+    let rect = ronoctua_compositor::Rect {
+        x: n("x")?,
+        y: n("y")?,
+        width: n("width")?,
+        height: n("height")?,
+    };
+    (rect.width > 0 && rect.height > 0).then_some(rect)
 }
 
 /// Window `id`'s size in the tree, `(width, height)` of its container.
@@ -541,6 +568,31 @@ mod tests {
 
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_window_says_where_it_is_only_while_it_can_be_seen() {
+        let tree: serde_json::Value = serde_json::from_str(
+            r#"{"type":"root","nodes":[{"type":"workspace","name":"1","nodes":[
+                 {"id":7,"pid":70,"visible":true,"rect":{"x":10,"y":20,"width":300,"height":200}},
+                 {"id":8,"pid":80,"visible":false,"rect":{"x":0,"y":0,"width":300,"height":200}}
+               ]}]}"#,
+        )
+        .unwrap();
+        let ws = super::windows_in(&tree);
+        assert_eq!(
+            ws[0].rect,
+            Some(ronoctua_compositor::Rect {
+                x: 10,
+                y: 20,
+                width: 300,
+                height: 200
+            })
+        );
+        assert_eq!(
+            ws[1].rect, None,
+            "a window nobody can see has no place on the screen"
+        );
+    }
 
     #[test]
     fn a_window_is_a_node_with_a_pid() {

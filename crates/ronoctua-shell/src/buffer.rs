@@ -799,6 +799,51 @@ fn input_of_key(sym: Keysym, utf8: Option<&str>) -> Option<ronoctua_protocol::In
 ///
 /// The binary was not put in the build, did not run, or exited with an error.
 pub fn copy_to_clipboard(text: &str) -> Result<()> {
+    copy_bytes(text.as_bytes(), None)
+}
+
+/// Puts an IMAGE FILE on the system clipboard, as `image/png` — a capture,
+/// pasted straight into a chat or a document.
+///
+/// The same `wl-copy` as [`copy_to_clipboard`], told the type: without it the
+/// bytes would be offered as text, and a paste would be a page of garbage.
+///
+/// # Errors
+///
+/// The file does not read, or `wl-copy` failed as [`copy_to_clipboard`] can.
+pub fn copy_image_to_clipboard(file: &std::path::Path) -> Result<()> {
+    let bytes =
+        std::fs::read(file).with_context(|| format!("could not read {}", file.display()))?;
+    copy_bytes(&bytes, Some("image/png"))
+}
+
+// WHAT THE TESTS "COPIED", in place of the system clipboard: under `cargo
+// test` nothing may reach the clipboard of the session the tests run in — a
+// test that copied left a `wl-copy` serving over the person's own clipboard,
+// and held the pipe of whoever ran the suite open.
+#[cfg(test)]
+thread_local! {
+    pub static COPIED: std::cell::RefCell<Vec<(Option<String>, Vec<u8>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The one way bytes reach `wl-copy`, with or without a type.
+fn copy_bytes(bytes: &[u8], mime: Option<&str>) -> Result<()> {
+    #[cfg(test)]
+    {
+        COPIED.with(|c| {
+            c.borrow_mut()
+                .push((mime.map(ToOwned::to_owned), bytes.to_vec()))
+        });
+        Ok(())
+    }
+    #[cfg(not(test))]
+    copy_bytes_for_real(bytes, mime)
+}
+
+/// [`copy_bytes`], outside the tests.
+#[cfg(not(test))]
+fn copy_bytes_for_real(bytes: &[u8], mime: Option<&str>) -> Result<()> {
     use std::io::Write as _;
 
     // A STORE PATH, never a name: the `PATH` of a systemd scope is
@@ -809,6 +854,9 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
     )?;
 
     let mut cmd = std::process::Command::new(path);
+    if let Some(mime) = mime {
+        cmd.args(["--type", mime]);
+    }
     // ITS PATH, and not ours. See `RONOCTUA_WL_COPY_PATH` in
     // `nix/rust.nix`: `wl-copy` does `exec cat`, and under a systemd
     // unit PATH is minimal. Without this the copy fails with
@@ -837,7 +885,7 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
         .stdin
         .take()
         .context("wl-copy did not open stdin")?
-        .write_all(text.as_bytes())
+        .write_all(bytes)
         .context("could not write to wl-copy")?;
 
     // WAIT FOR THE PARENT, and only it. `wl-copy` forks: the parent exits as soon as the

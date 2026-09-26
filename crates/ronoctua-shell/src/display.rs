@@ -3182,6 +3182,9 @@ mod tests {
 
         let copied = doing(Errand::Copy("1920x1200".to_owned()), &t);
         assert!(copied.said.is_some(), "a fact that copies itself says so");
+        // AND WHAT REACHED THE (test's) CLIPBOARD is the fact itself.
+        let last = crate::buffer::COPIED.with(|c| c.borrow().last().cloned());
+        assert_eq!(last, Some((None, b"1920x1200".to_vec())));
         assert!(copied.order.is_none() && !copied.close && !copied.follow);
 
         let closed = doing(Errand::Close, &t);

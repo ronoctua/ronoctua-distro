@@ -680,6 +680,11 @@ struct Footer {
     /// An `Option` because the `Footer` is also built outside the event loop
     /// (tests), and there there is no channel — nor is there anything to launch.
     launch_sender: Option<calloop::channel::Sender<crate::foreign::Launch>>,
+    /// Where the capture overlay's answer comes back: the file it wrote, or
+    /// why it could not. `None` for a capture given up.
+    capture_sender: Option<calloop::channel::Sender<Result<std::path::PathBuf, String>>>,
+    /// Is the capture overlay up?
+    capturing: bool,
 
     /// Says "the radio has finished a scan" — see [`Self::watch_scans`].
     ///
@@ -944,6 +949,15 @@ struct Footer {
     audio_prefs: ronoctua_audio::prefs::Preferences,
     /// What the line above the modeline is saying about sound, if it is.
     sound: Option<crate::sound::Said>,
+    /// The flash is on the MINIBUFFER's line and not on the row above the
+    /// modeline: decided once, when it was asked for, from whether that line
+    /// was free (`minibuffer_is_free`). Decided once because the row above
+    /// the modeline changes the footer's height, and a flash that moved
+    /// between the two lines would move the modeline with it.
+    sound_on_minibuffer: bool,
+    /// The region's text swept with the pointer, and the screen it was swept
+    /// on — `Ctrl+C` copies it (`crate::text_select`).
+    text_swept: Option<(usize, crate::text_select::Selection)>,
     /// The watch on `audio.json`.
     _audio_watch: Option<ronoctua_files::notice::Notice>,
     /// The last reading of Syncthing — kept with the view closed, because the
@@ -1170,6 +1184,13 @@ struct PerSeat {
     /// keep answering until the button comes up, or the drag would move the
     /// shelf only where the pointer was pressed.
     dragging_shelf: Option<crate::network::Shelf>,
+    /// Which HALF of an open notification has the thumb, when one does —
+    /// the two halves scroll apart, and the drag keeps answering the one it
+    /// started on (`notifications::BarBox`).
+    dragging_record: Option<crate::notifications::Half>,
+    /// A held button that may become — or has become — a sweep of the
+    /// region's text (`crate::text_select`).
+    selecting: crate::text_select::Selecting,
     /// How many LINES the wheel and the touchpad have asked for and not yet
     /// been paid — the same unit the five windows keep.
     ///
@@ -1413,6 +1434,9 @@ struct Screen {
     /// Every bar the last frame drew on this screen, by its track — its column
     /// is the bar's, for the pointer and for every band (`crate::bars`).
     bars: crate::bars::Drawn,
+    /// The region's text as the last frame drew it on this screen, in cells —
+    /// what a sweep of the pointer copies (`crate::text_select`).
+    painted: Vec<crate::text_select::Painted>,
     /// A HEIGHT the footer decided and the compositor has not been told yet —
     /// with its exclusive zone. It travels in the commit that carries the
     /// frame drawn at it (see `Footer::apply_geometry`).
@@ -1479,6 +1503,9 @@ struct ExpansionRow {
     /// Empty when there is no search. With the list filtered by subsequence,
     /// without this it does not say **why** each item is in it.
     highlights: Vec<usize>,
+    /// Is this the CURSOR's row? Its name is the accent there, so the matched
+    /// letters take `text.match-here` instead, or they would vanish into it.
+    here: bool,
     /// Is the key flush RIGHT within its own column?
     ///
     /// For a shortcut, yes: it is what lines the colon up with `RET` and with
@@ -1662,6 +1689,7 @@ impl ExpansionRow {
             key: String::new(),
             text: String::new(),
             highlights: Vec::new(),
+            here: false,
             description: None,
             teaches: None,
             click: None,
@@ -2551,6 +2579,8 @@ pub fn run() -> Result<()> {
         frames_painted: 0,
         // The channels are hooked up later, along with the other sources.
         launch_sender: None,
+        capture_sender: None,
+        capturing: false,
         apps: None,
         network: None,
         network_wire: None,
@@ -2607,6 +2637,8 @@ pub fn run() -> Result<()> {
         audio_listening: None,
         audio_prefs: ronoctua_audio::prefs::store().read(),
         sound: None,
+        sound_on_minibuffer: false,
+        text_swept: None,
         _audio_watch: None,
         syncthing_snapshot: None,
         syncthing_orders: None,
@@ -2726,6 +2758,19 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the launch channel: {e}"))?;
+
+    // WHAT THE CAPTURE OVERLAY WROTE. It is another process (`capture`),
+    // and a thread waits for it — a capture is chosen by a person, which can
+    // take a minute, and the loop that draws cannot wait that long.
+    let (capture_sender, captures) = channel::channel::<Result<std::path::PathBuf, String>>();
+    state.capture_sender = Some(capture_sender);
+    handle
+        .insert_source(captures, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(v) = event {
+                state.captured(v);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the capture channel: {e}"))?;
 
     // WHAT THE FILE MANAGER'S THREADS COME BACK WITH.
     //
@@ -3907,7 +3952,7 @@ pub fn run() -> Result<()> {
 /// The name carries the moment down to the second and has NO SPACE in it: a
 /// second capture inside one minute must not overwrite the first, and a name
 /// with a space is a name that has to be quoted for the rest of its life.
-fn capture_path() -> Option<std::path::PathBuf> {
+pub(crate) fn capture_path() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")?;
     let under = std::env::var("RONOCTUA_SCREENSHOTS").ok()?;
     if under.is_empty() {
@@ -4282,7 +4327,32 @@ impl Footer {
                 self.manager_errand(crate::notifications::Errand::Read(key));
             }
             crate::band::Hit::Action(n) => self.run_notification_action(key, n),
+            crate::band::Hit::Open => self.open_manager_on(key),
         }
+    }
+
+    /// Takes the one on the band off it and opens it WHOLE in the manager.
+    ///
+    /// Read first, through the same errand the envelope sends: it is being
+    /// read now, and the band is what a read one leaves. OPEN, never toggle —
+    /// a manager already open moves to the record instead of closing.
+    fn open_manager_on(&mut self, key: ronoctua_notify::RecordKey) {
+        if !self.notifications_open && !self.region_is_free("notif-open") {
+            return;
+        }
+        self.manager_errand(crate::notifications::Errand::Read(key));
+        if !self.notifications_open {
+            self.notifications_open = true;
+            self.manager = self.manager.reopened(crate::notifications::Pane::Happened);
+        }
+        {
+            let records = self.notifications.history().to_vec();
+            let lists = crate::notifications::Lists::of(&records, &self.book);
+            self.manager.open_on(key, &lists);
+        }
+        self.first_page();
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
     }
 
     /// Which piece of the brain's line is at `(x, y)`.
@@ -6041,6 +6111,22 @@ impl Footer {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     self.here.under_pointer = true;
+                    // A HELD BUTTON A CELL AWAY IS A SWEEP of the region's
+                    // text (`crate::text_select`), and the region repaints.
+                    if let Some((line, cell)) =
+                        crate::text_select::Selecting::cell_of(e.position.0, e.position.1)
+                        && let Some(sel) = self.here.selecting.moved_to(line, cell)
+                    {
+                        let screen = self
+                            .screens
+                            .iter()
+                            .position(|t| t.layer.wl_surface() == &e.surface)
+                            .unwrap_or(0);
+                        if self.text_swept != Some((screen, sel)) {
+                            self.text_swept = Some((screen, sel));
+                            self.ask_paint();
+                        }
+                    }
                     // THE BAR'S COLUMN IS THE BAR'S — every bar this screen
                     // drew, whoever drew it (`crate::bars`): a pointer resting
                     // on a track is on no row and no cell.
@@ -6180,6 +6266,8 @@ impl Footer {
                         self.drag_section_to(pane, axis, e.position.0, e.position.1);
                     } else if let Some(which) = self.here.dragging_shelf {
                         self.drag_shelf_to(which, e.position.1);
+                    } else if let Some(half) = self.here.dragging_record {
+                        self.drag_record_to(half, e.position.1);
                     } else if self.here.dragging {
                         self.drag_to(e.position.1);
                     } else if let (Some(line), Some(cell)) =
@@ -6315,6 +6403,16 @@ impl Footer {
                     // any other is refused by the compositor with nothing said
                     // on this side — see `carry::Carrying::begin`.
                     self.here.pressed_at = serial;
+                    // A PRESS LETS GO OF THE LAST SWEEP and may start the
+                    // next — it is still the click it always was.
+                    if self.text_swept.take().is_some() {
+                        self.ask_paint();
+                    }
+                    self.here.selecting = self
+                        .text_area_at(&e.surface, e.position.0, e.position.1)
+                        .map_or(crate::text_select::Selecting::Idle, |(at, area)| {
+                            crate::text_select::Selecting::Pressed { at, area }
+                        });
                     self.here.row_under_pointer = self.row_at(e.position.0, e.position.1);
                     self.here.cell_under_pointer = self.cell_at(e.position.0);
                     // WHAT THE LISTING'S GESTURE NEEDS, taken before the view
@@ -6416,6 +6514,11 @@ impl Footer {
                     if let Some((pane, axis)) = section {
                         self.here.dragging_section = Some((pane, axis));
                         self.drag_section_to(pane, axis, e.position.0, e.position.1);
+                    } else if let Some(half) = self.record_bar_at(e.position.0, e.position.1) {
+                        // AN OPEN NOTIFICATION'S BARS, one per half, each in
+                        // its own column — see `record_bars`.
+                        self.here.dragging_record = Some(half);
+                        self.drag_record_to(half, e.position.1);
                     } else if let Some(which) = self.shelf_bar_at(e.position.0, e.position.1) {
                         // A SHELF'S BAR FIRST. It is drawn at its container's
                         // right edge and the region's at the surface's, so the
@@ -6481,6 +6584,8 @@ impl Footer {
                     self.here.dragging_section = None;
                     self.here.dragging_globe = None;
                     self.here.dragging_shelf = None;
+                    self.here.dragging_record = None;
+                    self.here.selecting = crate::text_select::Selecting::Idle;
                     self.here.dragging_fold = false;
                     self.here.spinning = None;
                     // AND A PRESS THAT NEVER BECAME A GESTURE IS A CLICK.
@@ -6725,6 +6830,19 @@ impl Footer {
             // paged a whole region at a time — already wrong for the facts, and
             // it would have been wrong for the preview the same way.
             let ceiling = self.expansion_ceiling();
+            // AN OPEN NOTIFICATION'S HALF, under the pointer, and only it.
+            if self.view() == ViewState::Notifications {
+                let records = self.notifications.history().to_vec();
+                let lists = crate::notifications::Lists::of(&records, &self.book);
+                let row = self.here.row_under_pointer.unwrap_or(0);
+                if self
+                    .manager
+                    .open_wheel(row, cell, i64::from(whole), &lists, columns)
+                {
+                    self.owes_paint = true;
+                    return;
+                }
+            }
             let panel_room = if strip > 0 { strip } else { ceiling };
             if let Some(v) = self.files.as_mut() {
                 let which = v.panes(columns).section_at(cell, columns, in_strip);
@@ -6888,6 +7006,7 @@ impl Footer {
             scale: 1,
             scale_told: 1,
             bars: crate::bars::Drawn::default(),
+            painted: Vec::new(),
             size_owed: None,
             overlay: false,
             configured: false,
@@ -7611,16 +7730,7 @@ impl Footer {
             // THE BRIGHTNESS KEYS, on whichever screen has the focus — the
             // meaning `Order::Bright { at: None }` was written for.
             "brightness-up" | "brightness-down" => {
-                if let Some(h) = self.display_orders.as_ref() {
-                    h.send(ronoctua_display::Order::Bright {
-                        at: None,
-                        by: if id == "brightness-up" {
-                            crate::display::STEP
-                        } else {
-                            -crate::display::STEP
-                        },
-                    });
-                }
+                self.brightness_by(id == "brightness-up");
             }
             "locale-window" => {
                 if let Ok(me) = std::env::current_exe() {
@@ -8754,7 +8864,12 @@ impl Footer {
         // THE ROW IS WORKED OUT BEFORE THE BORROW: `above_line_at` reads
         // `self`, and `as_mut` holds it.
         let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
-        let top = f64::from(self.above_line_at()) * line_height;
+        let row = if self.flashing_on_the_minibuffer() {
+            self.minibuffer_line()
+        } else {
+            self.above_line_at()
+        };
+        let top = f64::from(row) * line_height;
         if self.glance.is_none() {
             return false;
         }
@@ -8904,40 +9019,65 @@ impl Footer {
     /// reference no profile switch can remove, and it would put the program
     /// in every closure including the one that has no media at all.
     fn capture_the_screen(&mut self) {
-        let Some(grim) = std::env::var("RONOCTUA_GRIM")
-            .ok()
-            .filter(|p| !p.is_empty())
-        else {
-            let said = self.texts.t(ronoctua_i18n::key::ECHO_NO_ACTION);
-            self.echo_message(said);
+        // ONE CAPTURE AT A TIME: a second press while the overlay is up would
+        // read a screen that has the overlay on it.
+        if self.capturing {
+            return;
+        }
+        let Ok(me) = std::env::current_exe() else {
+            self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_CAPTURE_FAILED));
             return;
         };
-        let at = match capture_path() {
-            Some(path) => path,
-            None => {
-                let said = self.texts.t(ronoctua_i18n::key::ECHO_NO_ACTION);
-                self.echo_message(said);
+        let Some(sender) = self.capture_sender.clone() else {
+            return;
+        };
+        let child = std::process::Command::new(me)
+            .arg("capture")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn();
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "the capture could not be started");
+                self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_CAPTURE_FAILED));
                 return;
             }
         };
-        if let Some(parent) = at.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match std::process::Command::new(&grim).arg(&at).status() {
-            Ok(s) if s.success() => {
+        self.capturing = true;
+        std::thread::spawn(move || {
+            use std::io::Read as _;
+            let mut said = String::new();
+            if let Some(mut out) = child.stdout.take() {
+                let _ = out.read_to_string(&mut said);
+            }
+            let _ = child.wait();
+            let answer = said.lines().find_map(|l| {
+                l.strip_prefix("saved ")
+                    .map(|p| Ok(std::path::PathBuf::from(p)))
+                    .or_else(|| l.strip_prefix("failed ").map(|w| Err(w.to_owned())))
+            });
+            // NOTHING SAID IS A CAPTURE GIVEN UP, which still ends it.
+            let _ = sender.send(answer.unwrap_or_else(|| Err(String::new())));
+        });
+    }
+
+    /// The capture overlay is gone: a file to announce, a reason to log, or
+    /// a capture somebody gave up.
+    fn captured(&mut self, answer: Result<std::path::PathBuf, String>) {
+        self.capturing = false;
+        match answer {
+            Ok(at) => {
                 tracing::info!(at = %at.display(), "the screen was captured");
                 let n = self.capture_notification(&at);
                 self.arrived(n, std::time::Instant::now());
             }
-            Ok(s) => {
-                tracing::warn!(status = ?s.code(), "the capture failed");
-                let said = self.texts.t(ronoctua_i18n::key::ECHO_NO_ACTION);
-                self.echo_message(said);
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "the capture could not be started");
-                let said = self.texts.t(ronoctua_i18n::key::ECHO_NO_ACTION);
-                self.echo_message(said);
+            Err(why) if why.is_empty() => {}
+            Err(why) => {
+                tracing::warn!(why = %why, "the capture failed");
+                self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_CAPTURE_FAILED));
+                self.draw_and_paint();
             }
         }
     }
@@ -10673,6 +10813,33 @@ impl Footer {
             return;
         };
 
+        // A SWEEP OF THE REGION'S TEXT answers two keys before anything
+        // else: `Ctrl+C` copies it and `Esc` lets it go. Only while there is
+        // one — every other `C-c` and `Esc` is still the view's.
+        if let Some((screen, sel)) = self.text_swept {
+            if matches!(key.sym, ronoctua_keymap::Sym::Esc) {
+                self.text_swept = None;
+                self.draw_and_paint();
+                return;
+            }
+            if key.mods.ctrl
+                && !key.mods.alt
+                && matches!(key.sym, ronoctua_keymap::Sym::Char('c' | 'C'))
+            {
+                let text = self
+                    .screens
+                    .get(screen)
+                    .map(|t| sel.extract(&t.painted))
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    let said = crate::chrome::copied(&text, &self.texts);
+                    self.echo_message(said);
+                }
+                self.draw_and_paint();
+                return;
+            }
+        }
+
         // AND `Esc` CLOSES THE OPENED LINE FIRST.
         //
         // It is above every view because that is what the key means here: the
@@ -12068,6 +12235,18 @@ impl Footer {
                     }
                 }
             }
+            ronoctua_notify::Doing::CopyImage => {
+                let Some(f) = file else { return };
+                match crate::buffer::copy_image_to_clipboard(&f) {
+                    Ok(()) => {
+                        self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_IMAGE_COPIED))
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "copying the image FAILED");
+                        self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_COPY_FAILED));
+                    }
+                }
+            }
             ronoctua_notify::Doing::Run { program, args } => {
                 let Some(path) = crate::actions::notification_program(*program) else {
                     // It should not get here: an action whose program is
@@ -12328,7 +12507,25 @@ impl Footer {
     /// file, a second thing outside the expansion's budget, and a second
     /// countdown for a person to tell apart.
     fn above_rows(&self) -> u16 {
-        crate::world::rows(self.glance.is_some())
+        crate::world::rows(above_row_taken(
+            self.glance.is_some(),
+            self.sound.is_some(),
+            self.sound_on_minibuffer,
+        ))
+    }
+
+    /// Is the volume or brightness flash drawn on the minibuffer's line?
+    const fn flashing_on_the_minibuffer(&self) -> bool {
+        self.sound_on_minibuffer && self.sound.is_some()
+    }
+
+    /// Is the minibuffer's line showing nothing but its resting sentence?
+    ///
+    /// Asked when a flash is asked for, to decide where it goes. A view, the
+    /// leader, a finder or a question each own the line; an echo is the
+    /// shell answering somebody; the open drawer is the line grown.
+    fn minibuffer_is_free(&self) -> bool {
+        minibuffer_free(self.view(), self.echo.is_some(), self.fold.open)
     }
 
     /// Which line of the surface that row is on, when it is up.
@@ -12788,6 +12985,7 @@ impl Footer {
                 // takes the accent where the keyboard is.
                 let here = i == self.manual_cursor;
                 rows.push(ExpansionRow {
+                    here,
                     highlights: crate::minibuffer::match_up(
                         &self.manual_query.to_lowercase(),
                         &name,
@@ -14385,6 +14583,7 @@ impl Footer {
                     // THE HIGHLIGHT IS OVER THE NAME, and not over the folded key:
                     // the folding is 1:1 in characters precisely so the positions
                     // hold in both. See `ronoctua_apps::fold`.
+                    here: i == l.cursor(),
                     highlights: crate::minibuffer::match_up(&query, &e.key)
                         .map(|(_, p)| p)
                         .unwrap_or_default(),
@@ -14518,6 +14717,7 @@ impl Footer {
                     // jagged left margin; here the useful alignment is that of
                     // the start of the name.
                     key_flush_right: false,
+                    here: i == self.mx.cursor(),
                     highlights: crate::minibuffer::match_up(&self.mx.normalized_query(), &item.id)
                         .map(|(_, p)| p)
                         .unwrap_or_default(),
@@ -14817,6 +15017,10 @@ impl Footer {
         let width = self.screen_columns();
         let records = self.notifications.history();
         let lists = crate::notifications::Lists::of(records, &self.book);
+        // THE ROOM AN OPEN RECORD WINDOWS ITS HALVES TO: the region's
+        // ceiling, which is the most it can be given — never the height it
+        // was last drawn at (`notifications::View::open_room`).
+        self.manager.set_room(self.expansion_ceiling());
         self.manager
             .rows(&lists, &self.book, width, &self.texts)
             .into_iter()
@@ -15275,6 +15479,149 @@ impl Footer {
             view.put_shelf(which, at);
             self.owes_paint = true;
         }
+    }
+
+    /// Where a sweep of text pressed at `(x, y)` may go, and the cell it
+    /// starts on — `None` off the region, on a bar, and in the views whose
+    /// held button is their own gesture.
+    ///
+    /// THE REGION, and no line of the footer's chrome: the modeline, the
+    /// minibuffer and the band are controls. Side by side, an open
+    /// notification is two texts, and the sweep stays in its half.
+    fn text_area_at(
+        &self,
+        surface: &wl_surface::WlSurface,
+        x: f64,
+        y: f64,
+    ) -> Option<((u16, u16), crate::text_select::Area)> {
+        if matches!(
+            self.view(),
+            ViewState::NoneOf | ViewState::Files | ViewState::Player | ViewState::Camera
+        ) || self.on_a_drawn_bar(surface, x, y)
+        {
+            return None;
+        }
+        let (line, cell) = crate::text_select::Selecting::cell_of(x, y)?;
+        let (width, _) = self.pointer_screen()?;
+        let columns = tokens::metrics::columns(width, tokens::text::size());
+        let top = self.first_of_expansion();
+        let whole = crate::text_select::Area {
+            left: 0,
+            right: columns,
+            top,
+            bottom: top.saturating_add(u16::try_from(self.grid().lines).unwrap_or(u16::MAX)),
+        };
+        // AN OPEN NOTIFICATION IS TWO TEXTS, and the sweep stays in its half.
+        let area = if self.view() == ViewState::Notifications {
+            let records = self.notifications.history();
+            let lists = crate::notifications::Lists::of(records, &self.book);
+            let row = usize::from(line.saturating_sub(top));
+            self.manager
+                .sweep_area(&lists, columns, row, cell, crate::chrome::FIELDS_LEAD, top)
+                .unwrap_or(whole)
+        } else {
+            whole
+        };
+        area.holds(line, cell).then_some(((line, cell), area))
+    }
+
+    /// The open notification's bars, placed in pixels — the ones painted and
+    /// the ones grabbed, from the same call (`notifications::bar_boxes`).
+    fn record_bars(&self, width: f32, bottom: f32) -> Vec<crate::notifications::BarBox> {
+        if self.view() != ViewState::Notifications {
+            return Vec::new();
+        }
+        let columns = tokens::metrics::columns(width, tokens::text::size());
+        let records = self.notifications.history();
+        let lists = crate::notifications::Lists::of(records, &self.book);
+        let bars = self.manager.open_bars(&lists, columns);
+        if bars.is_empty() {
+            return Vec::new();
+        }
+        // FROM ROW 0: each bar says the row its half starts on.
+        let first = self.first_of_expansion();
+        let f = crate::chrome::Frame::of(width, bottom, first);
+        crate::notifications::bar_boxes(
+            &bars,
+            crate::chrome::FIELDS_LEAD,
+            f.cell(),
+            f.line(),
+            f.y_of(first),
+            f.bottom(),
+        )
+    }
+
+    /// The rule between the notifications' two halves, lit while the second
+    /// has the keyboard — the file manager's focus mark.
+    fn notification_divider(&self, width: f32, bottom: f32) -> Option<ronoctua_render::quad::Quad> {
+        if self.view() != ViewState::Notifications {
+            return None;
+        }
+        let columns = tokens::metrics::columns(width, tokens::text::size());
+        let (at, lit) = self.manager.divider(columns)?;
+        let first = self.first_of_expansion();
+        let f = crate::chrome::Frame::of(width, bottom, first);
+        let x = f32::from(crate::chrome::FIELDS_LEAD + at) * f.cell() + f.cell() / 2.0;
+        Some(if lit {
+            crate::chrome::divider_lit(x, f.y_of(first), f.bottom())
+        } else {
+            crate::chrome::divider(x, f.y_of(first), f.bottom())
+        })
+    }
+
+    /// The hover band's cells inside ONE notification half, so it never
+    /// crosses the rule into the other.
+    fn notification_hover_px(
+        &self,
+        columns: u16,
+        row: usize,
+        cell: u16,
+        cell_px: f32,
+    ) -> Option<(f32, f32)> {
+        if self.view() != ViewState::Notifications {
+            return None;
+        }
+        let records = self.notifications.history();
+        let lists = crate::notifications::Lists::of(records, &self.book);
+        let (from, to) = self.manager.hover_span(&lists, columns, row, cell)?;
+        let lead = crate::chrome::FIELDS_LEAD;
+        Some((
+            f32::from(lead + from) * cell_px,
+            f32::from(to.saturating_sub(from)) * cell_px,
+        ))
+    }
+
+    /// The open notification's half whose bar is under `(x, y)`.
+    fn record_bar_at(&self, x: f64, y: f64) -> Option<crate::notifications::Half> {
+        let (w, h) = self.pointer_screen()?;
+        #[allow(clippy::cast_possible_truncation)]
+        let (px, py) = (x as f32, y as f32);
+        self.record_bars(w, h)
+            .into_iter()
+            .find(|b| b.holds(px, py))
+            .map(|b| b.half)
+    }
+
+    /// Scrolls one half of the open notification from a drag of its bar.
+    fn drag_record_to(&mut self, half: crate::notifications::Half, y: f64) {
+        let Some((w, h)) = self.pointer_screen() else {
+            return;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let py = y as f32;
+        let Some(to) = self
+            .record_bars(w, h)
+            .into_iter()
+            .find(|b| b.half == half)
+            .map(|b| b.offset_at(py))
+        else {
+            return;
+        };
+        let columns = tokens::metrics::columns(w, tokens::text::size());
+        let records = self.notifications.history().to_vec();
+        let lists = crate::notifications::Lists::of(&records, &self.book);
+        self.manager.open_scroll_to(half, to, &lists, columns);
+        self.owes_paint = true;
     }
 
     /// Puts the top of what is seen where the pointer is, dragging the bar.
@@ -18199,7 +18546,7 @@ impl Footer {
             // is one, and clicking it does nothing. What the pointer does ask
             // about is the LINE: resting anywhere on it stops the clock, the
             // way resting on the notification band does.
-            if self.glance.is_some() {
+            if self.glance.is_some() && !self.flashing_on_the_minibuffer() {
                 // WHICHEVER OF THE TWO ASKED LAST. `sound` being set is what
                 // says the volume holds the row; the countdown, the pause and
                 // the pie are the same either way, because they belong to the
@@ -18384,6 +18731,10 @@ impl Footer {
                 out
             } else if let Some(p) = &pending {
                 vec![crate::chrome::Piece::pending(p.clone())]
+            } else if self.flashing_on_the_minibuffer() && self.glance.is_some() {
+                // THE FLASH IS DRAWN BELOW, placed by `sound::line` — the
+                // same drawing the row above the modeline carries.
+                Vec::new()
             } else {
                 vec![crate::chrome::Piece::said(mini_at_rest.clone())]
             };
@@ -18463,6 +18814,24 @@ impl Footer {
                     mini_line,
                     mini_room,
                 ));
+            }
+
+            // THE VOLUME OR THE BRIGHTNESS, on this line when it was free.
+            if line_pieces.is_empty()
+                && at_rest
+                && self.glance.is_some()
+                && let Some(said) = self.sound.as_ref().filter(|_| self.sound_on_minibuffer)
+            {
+                let drawn = crate::sound::line(said, columns, self.glance, &self.texts);
+                for piece in drawn.pieces {
+                    spans.extend(glyph_and_text(
+                        &piece.text,
+                        piece.at,
+                        mini_line,
+                        piece.color,
+                        piece.edge,
+                    ));
+                }
             }
 
             // THE CONTROL, flush against the right edge. No box and no border
@@ -18766,10 +19135,10 @@ impl Footer {
                             text,
                             column: column + relative_column,
                             line: y,
-                            color: if matched {
-                                tokens::color::STATE_ACCENT
-                            } else {
-                                line.key_color
+                            color: match (matched, line.here) {
+                                (true, true) => tokens::color::TEXT_MATCH_HERE,
+                                (true, false) => tokens::color::STATE_ACCENT,
+                                (false, _) => line.key_color,
                             },
                             edge: false,
                             foot: false,
@@ -19211,6 +19580,18 @@ impl Footer {
                     ));
                 }
             }
+            // AND A SWEEP OF THE REGION'S TEXT, over the letters it covers
+            // and translucent, on the screen it was swept on.
+            if let Some((on, sel)) = self.text_swept
+                && on == index
+            {
+                transport_now.extend(crate::text_select::highlight(
+                    &sel,
+                    cell,
+                    line_height,
+                    |l| f32::from(l) * line_height,
+                ));
+            }
             // EVERY BAR THIS SCREEN DRAWS, by its track — see `crate::bars`.
             let mut bars_drawn = crate::bars::Drawn::default();
             let mut backgrounds = vec![ronoctua_render::quad::Quad {
@@ -19469,6 +19850,11 @@ impl Footer {
                     .and_then(|(v, line)| {
                         v.band_cells_at(columns, grid.lines, line, cell_p.unwrap_or(0))
                             .map(|c| crate::files::band_px(c, crate::chrome::FIELDS_LEAD, cell))
+                    })
+                    .unwrap_or((band_at, band_wide));
+                let (band_at, band_wide) = row_p
+                    .and_then(|line| {
+                        self.notification_hover_px(columns, line, cell_p.unwrap_or(0), cell)
                     })
                     .unwrap_or((band_at, band_wide));
                 #[allow(clippy::cast_precision_loss)]
@@ -19741,6 +20127,25 @@ impl Footer {
                 }
             }
 
+            // AND AN OPEN NOTIFICATION'S TWO HALVES, a bar each — two lists
+            // side by side, each saying where its own is, from the same
+            // `Scroll::bar` every other bar asks.
+            if let Some(rule) = self.notification_divider(width as f32, bottom) {
+                backgrounds.push(rule);
+            }
+            for b in self.record_bars(width as f32, bottom) {
+                bars_drawn.record(crate::bars::Track::of(b.track));
+                if let Some((bx, by, bw, bh)) = b.thumb {
+                    backgrounds.push(ronoctua_render::quad::Quad {
+                        x: bx,
+                        y: by,
+                        width: bw,
+                        height: bh,
+                        color: tokens::color::RULE_STRONG,
+                    });
+                }
+            }
+
             // AND THE OPENED LINE'S OWN BAR, in its own band.
             //
             // A SECOND bar on screen, and it is not what `one-scrollbar`
@@ -19774,6 +20179,18 @@ impl Footer {
                 continue;
             };
             screen.bars = bars_drawn;
+            // THE REGION'S TEXT, as drawn — what a sweep copies.
+            {
+                let (top, bottom) = (
+                    first_of_expansion,
+                    first_of_expansion
+                        .saturating_add(u16::try_from(grid.lines).unwrap_or(u16::MAX)),
+                );
+                screen.painted = crate::text_select::painted_of(&spans)
+                    .into_iter()
+                    .filter(|p| p.line >= top && p.line < bottom)
+                    .collect();
+            }
             // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
             // `set_buffer_scale` has to travel in the commit `Gpu::frame`
             // makes. See `crate::hidpi::told_before_present`.
@@ -19996,6 +20413,22 @@ fn region_track_of(
         f.cell(),
         bar.track(top, f.bottom(), f.line()),
     )
+}
+
+/// Is the minibuffer's line showing nothing but its resting sentence — so a
+/// flash of the volume or the brightness may take it, at no height?
+///
+/// A view, the leader, a finder or a question each own the line (all of them
+/// are `view()`); an echo is the shell answering somebody; the open drawer is
+/// the line grown.
+const fn minibuffer_free(view: ViewState, echo: bool, drawer_open: bool) -> bool {
+    matches!(view, ViewState::NoneOf) && !echo && !drawer_open
+}
+
+/// Does the row above the modeline hold anything? The glance does; the flash
+/// does only when it was NOT put on the minibuffer's line.
+const fn above_row_taken(glance: bool, sound: bool, sound_on_minibuffer: bool) -> bool {
+    glance && !(sound && sound_on_minibuffer)
 }
 
 fn expansion_ceiling(screen_height: Option<u32>, fixed: usize) -> usize {
@@ -20221,6 +20654,12 @@ fn usable_actions(
                         }))
             }
             ronoctua_notify::Doing::CopyPath => file.is_some(),
+            // AN IMAGE ONLY WHEN IT IS ONE: the button on a capture, and on
+            // nothing that carries a file that is not a picture.
+            ronoctua_notify::Doing::CopyImage => file
+                .as_ref()
+                .and_then(|f| f.extension())
+                .is_some_and(|e| e.eq_ignore_ascii_case("png")),
             ronoctua_notify::Doing::Command(_) | ronoctua_notify::Doing::Invoke => true,
         })
         .cloned()
@@ -21421,7 +21860,46 @@ impl Footer {
             device: description,
             percent: wanted,
             muted,
-            listening: false,
+            what: crate::sound::Source::Speaker,
+        });
+    }
+
+    /// Move the focused screen's light a step, and flash where it went.
+    ///
+    /// THE LINE SHOWS WHAT WAS ASKED FOR, the volume's rule: the reading
+    /// comes back after the write, and the number would jump in front of
+    /// somebody's eyes. The step is the view's own (`display::STEP`), so the
+    /// key and the arrow arrive at the same numbers.
+    fn brightness_by(&mut self, up: bool) {
+        let step = if up {
+            crate::display::STEP
+        } else {
+            -crate::display::STEP
+        };
+        let Some(h) = self.display_orders.as_ref() else {
+            // NO READER, NO LIGHT: a key that did nothing and a machine whose
+            // screens cannot be dimmed from here look the same from outside.
+            let said = self.texts.t(ronoctua_i18n::key::DISPLAY_NO_LIGHT_HERE);
+            self.echo_message(said);
+            self.draw_and_paint();
+            return;
+        };
+        h.send(ronoctua_display::Order::Bright { at: None, by: step });
+        let Some((device, percent)) = self.display_snapshot.focused_screen().and_then(|s| {
+            s.light
+                .as_ref()
+                .map(|l| (s.description.clone(), l.percent()))
+        }) else {
+            // THE REFUSAL SAYS WHY, when the thread answers — see
+            // `display_event`.
+            return;
+        };
+        let wanted = u8::try_from((i16::from(percent) + step).clamp(0, 100)).unwrap_or(percent);
+        self.flash_the_sound(crate::sound::Said {
+            device,
+            percent: wanted,
+            muted: false,
+            what: crate::sound::Source::Screen,
         });
     }
 
@@ -21451,7 +21929,11 @@ impl Footer {
             device: description,
             percent,
             muted: !muted,
-            listening: kind == ronoctua_audio::Kind::Source,
+            what: if kind == ronoctua_audio::Kind::Source {
+                crate::sound::Source::Microphone
+            } else {
+                crate::sound::Source::Speaker
+            },
         });
     }
 
@@ -21469,6 +21951,13 @@ impl Footer {
             .unwrap_or_default()
             .how_long();
         let was = self.above_rows();
+        // THE MINIBUFFER'S LINE WHEN IT IS FREE, the owner's rule: a flash
+        // there costs no height, where the row above the modeline pushes
+        // every window up for as long as it lives. Asked again while a flash
+        // is up, it stays where it is, so a held key never moves it.
+        if self.sound.is_none() || self.glance.is_none() {
+            self.sound_on_minibuffer = self.minibuffer_is_free();
+        }
         self.sound = Some(said);
         // ASKING AGAIN RESTARTS THE CLOCK, which is what pressing the key
         // again means — the glance's rule, and the same `Showing`.
@@ -23502,6 +23991,31 @@ impl Footer {
                 self.settle_region();
             }
             ronoctua_display::Event::Done { order, refused } => {
+                // A BRIGHTNESS KEY REFUSED WITH NO VIEW OPEN says so on the
+                // message line: the key has no view to put the sentence in,
+                // and a key that does nothing reads as a broken key.
+                if let (Some(why), ronoctua_display::Order::Bright { .. }, None) =
+                    (&refused, &order, self.display.as_ref())
+                {
+                    let said = crate::display_words::refused(why, &self.texts);
+                    // THE FLASH GOES WITH IT: it showed a number that never
+                    // landed.
+                    if self
+                        .sound
+                        .as_ref()
+                        .is_some_and(|s| s.what == crate::sound::Source::Screen)
+                    {
+                        let was = self.above_rows();
+                        self.sound = None;
+                        self.glance = None;
+                        if self.above_rows() != was {
+                            self.apply_geometry(self.interactivity());
+                        }
+                    }
+                    self.echo_message(said);
+                    self.draw_and_paint();
+                    return;
+                }
                 // WHETHER A QUESTION CAME DOWN, which is whether the page has
                 // any reason to move. Set inside the `Try` arm and read after
                 // the message line, because the geometry for both is one call.
@@ -23867,6 +24381,39 @@ mod tests {
     /// FAILS IF: a device's mark loses its own colour, the alarm stops
     /// winning over it, or the current workspace stops being told from the
     /// others.
+    /// FAILS IF: the volume or brightness flash takes a line that is in use,
+    /// or grows the footer while the minibuffer's line was free for it.
+    #[test]
+    fn a_flash_goes_on_the_free_minibuffer_and_nowhere_else() {
+        use super::{ViewState, above_row_taken, minibuffer_free};
+        assert!(minibuffer_free(ViewState::NoneOf, false, false));
+        assert!(
+            !minibuffer_free(ViewState::Leader, false, false),
+            "the leader owns the line"
+        );
+        assert!(
+            !minibuffer_free(ViewState::Notifications, false, false),
+            "a view owns it"
+        );
+        assert!(
+            !minibuffer_free(ViewState::NoneOf, true, false),
+            "an echo is on it"
+        );
+        assert!(
+            !minibuffer_free(ViewState::NoneOf, false, true),
+            "the drawer is open"
+        );
+        // ON THE MINIBUFFER, the row above the modeline stays shut — no height.
+        assert!(!above_row_taken(true, true, true));
+        // OFF IT, the flash takes the row, as the glance does.
+        assert!(above_row_taken(true, true, false));
+        assert!(
+            above_row_taken(true, false, true),
+            "the glance keeps its row"
+        );
+        assert!(!above_row_taken(false, false, false));
+    }
+
     #[test]
     fn a_device_has_its_colour_and_the_alarm_wins() {
         use ronoctua_tokens::color;

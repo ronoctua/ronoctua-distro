@@ -194,6 +194,18 @@
       alpha = 0.34;
     };
 
+    # TEXT BEING SELECTED WITH THE POINTER, in any view, window or buffer.
+    #
+    # Drawn OVER the letters (the order is rectangle, image, text, and the
+    # selection goes with the rectangles, so the letters stay on top), which
+    # is why it is translucent: what is selected has to stay readable while it
+    # is chosen. The accent, because chosen is what the accent means; lower
+    # than the sweep, because a sweep is over pictures and this is over text.
+    text-selection = {
+      of = "accent.element";
+      alpha = 0.45;
+    };
+
     # THE ON-SCREEN KEYBOARD'S KEYS (`LEADER m k`), grounds under a legend.
     #
     # A key has to read as a KEY with nothing but its ground — no border, no
@@ -477,6 +489,19 @@
     key = {
       of = "accent.text";
       chroma = 2.4;
+    };
+    # THE LETTERS A QUERY MATCHED, ON THE ROW THE CURSOR IS ON.
+    #
+    # Off the cursor the matched letters are `state.accent` over a quieter
+    # name, and they stand out. On the cursor row the name itself becomes the
+    # accent (the cursor is a colour), so the letters that said WHY the row is
+    # in the list vanished into it — the owner read it on the finder, the
+    # manual list and the app locator. The accent's own top text rung: the
+    # same hue, so it still reads as "this is the match", and a step lighter,
+    # so it is not the name it sits in.
+    match-here = {
+      of = "accent.text-loud";
+      chroma = 1.8;
     };
     # THE DISCREET REGISTER: interface text that is ABOUT the screen rather
     # than being the screen's content, in three weights and a variant.
@@ -1022,6 +1047,27 @@
         of = "neutral.chrome";
         alpha = 0.85;
       };
+    };
+  };
+
+  # THE SCREEN CAPTURE'S OVERLAY (`ronoctua-shell capture`), drawn over a
+  # frozen picture of the screen whose colours are anybody's.
+  #
+  # `dim` darkens what would NOT be kept, so the rectangle or the window a
+  # click would take is the bright part — the page's own ground, translucent,
+  # because what is dimmed still has to be seen to be chosen from. `guide` is
+  # the two lines through the pointer and every outline: a family of its own
+  # (`guide`, the accent's complement in every seed), so it is never the
+  # focused window's border the frozen picture already carries, and bright
+  # enough that a dotted line one pixel wide still reads over a photograph.
+  capture = {
+    dim = {
+      of = "neutral.ground";
+      alpha = 0.55;
+    };
+    guide = {
+      of = "guide.text-loud";
+      chroma = 1.9;
     };
   };
 

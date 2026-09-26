@@ -73,6 +73,29 @@ fn what_was_typed_narrows_the_list() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// FAILS IF: a row the filter kept does not say why — the letters that
+/// matched come out lit, like the finder's.
+#[test]
+fn the_letters_the_filter_matched_are_lit() {
+    let (mut v, dir) = view("lit");
+    v.took_a_filter("zil", DECIDING_WIDTH);
+    let rows = v.rows(96, &texts());
+    let lit: Vec<&str> = rows
+        .iter()
+        .flat_map(|r| r.fields.iter())
+        .filter(|f| {
+            f.color == ronoctua_tokens::color::STATE_ACCENT
+                || f.color == ronoctua_tokens::color::TEXT_MATCH_HERE
+        })
+        .map(|f| f.text.as_str())
+        .collect();
+    assert!(
+        lit.iter().any(|t| t.eq_ignore_ascii_case("zil")),
+        "no row lit the letters it matched: {lit:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// FAILS IF: `d` on a row that is not an installed region removes something,
 /// or says nothing.
 #[test]

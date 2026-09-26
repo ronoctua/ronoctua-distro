@@ -2056,6 +2056,12 @@ impl Content for Files {
     /// own bar and its own wheel, a drawer on line 0 that no section owns, a
     /// shape and a globe that turn under the hand, and a drag that leaves for
     /// other programs. The standard list pointer knows one list.
+    /// NO SWEEP OF TEXT HERE: a held button is this window's own gesture
+    /// (files carried out, a rubber band over the listing, a shape turned), and a sweep would take its motion away.
+    fn text_area(&self, _: &Ui, _: u16, _: u16) -> Option<crate::text_select::Area> {
+        None
+    }
+
     fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<PerSeat>, events: &[PointerEvent]) {
         self.held = ui.pointer_mods;
         // THE CHEVRON LIGHTS UNDER THE POINTER, like every header's control.

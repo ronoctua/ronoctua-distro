@@ -1014,6 +1014,7 @@ pub fn leader_bindings() -> &'static Leader {
                 drawer: floating,
                 hidden: false,
                 trailmark: false,
+                rect: None,
             };
             w.sticky = false;
             let mut selection = Selection::default();
@@ -1141,6 +1142,7 @@ mod tests {
             drawer: false,
             hidden: false,
             trailmark: false,
+            rect: None,
         }
     }
 

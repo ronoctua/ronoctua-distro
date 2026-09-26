@@ -1041,6 +1041,12 @@ impl Content for CameraWindow {
 
     /// THE CAMERA'S OWN POINTER: buttons, menus, the sound drawer, layers a
     /// hand drags and a wheel that resizes them — none of it a list.
+    /// NO SWEEP OF TEXT HERE: a held button is this window's own gesture
+    /// (the picture and its menus answer the pointer), and a sweep would take its motion away.
+    fn text_area(&self, _: &Ui, _: u16, _: u16) -> Option<crate::text_select::Area> {
+        None
+    }
+
     fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<PerSeat>, events: &[PointerEvent]) {
         ui.hinted.swap_hand(&mut hand.hint_drag);
         self.pointer_here(ui, hand, events);

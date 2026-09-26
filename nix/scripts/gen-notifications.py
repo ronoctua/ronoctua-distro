@@ -218,6 +218,8 @@ def read_actions(where: str, raw: list, keys: set[str]) -> str:
             doing = f"Doing::Command({rust_str(a['command'])}.to_owned())"
         elif "copy-path" in a:
             doing = "Doing::CopyPath"
+        elif "copy-image" in a:
+            doing = "Doing::CopyImage"
         elif "run" in a:
             program = a["run"]
             if program not in PROGRAMS:
@@ -234,7 +236,7 @@ def read_actions(where: str, raw: list, keys: set[str]) -> str:
                 f"args: vec![{', '.join(args)}] }}"
             )
         else:
-            complain(at, "needs `command`, `run` or `copy-path`")
+            complain(at, "needs `command`, `run`, `copy-path` or `copy-image`")
             continue
         keys.add(f"notif-action-{ident}")
         parts.append(
