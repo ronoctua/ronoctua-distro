@@ -17098,7 +17098,6 @@ let
           "tests/checks.nix"
           "flake.nix"
           "AGENTS.md"
-          "CLAUDE.md"
           "README.md"
         ]
       )
@@ -17110,7 +17109,7 @@ let
         echo "ERROR: .gitignore is swallowing $f" >&2
         failed=1
       fi
-    done < <(find assets nix docs tests -type f 2>/dev/null; ls flake.nix AGENTS.md CLAUDE.md README.md)
+    done < <(find assets nix docs tests -type f 2>/dev/null; ls flake.nix AGENTS.md README.md)
     [ $failed -eq 0 ] || exit 1
     echo "OK: no versioned source is ignored"
 
@@ -22655,17 +22654,12 @@ let
     echo "OK: the ISO came out whole (no ceiling: it is written with dd)"
   '';
 
-  # THE SIX DOCUMENTS EXIST, AND THE POINTER FINDS THEM.
+  # THE SIX DOCUMENTS EXIST.
   #
-  # Six documents and SEVEN files: `AGENTS.md` holds the content, and
-  # `CLAUDE.md` is one line that imports it. The owner asked for that split so
-  # the rules reach every agent and not only this one — the name of the file an
-  # assistant reads on its own is the assistant's, and the rules are not.
-  #
-  # The pointer is checked and not assumed. A `CLAUDE.md` naming a file that is
-  # gone, or renamed, loses EVERY rule in one stroke and says nothing at all:
-  # an import that resolves to nothing reads exactly like a project with no
-  # instructions.
+  # `AGENTS.md` is the one file of instructions for agents. There used to be a
+  # `CLAUDE.md` holding a single `@AGENTS.md` import, checked here so a broken
+  # import could not drop every rule in silence; the assistant now reads
+  # `AGENTS.md` by that name, so the pointer and its check are gone (2026-09-26).
   #
   # There WAS a 150-line ceiling on the `AGENTS.md`, on the reasoning that it is
   # the only file that goes into every agent's context on its own, and that
@@ -22691,24 +22685,6 @@ let
 
     echo "AGENTS.md: $(wc -l < ${../AGENTS.md}) lines"
 
-    # THE POINTER, AND WHAT IT POINTS AT. `@<file>` is the import; the file it
-    # names has to be the one holding the content, and the pointer has to hold
-    # nothing else — a second rule written there is a rule only one assistant
-    # would ever read.
-    pointer=${../CLAUDE.md}
-    test -s "$pointer" || { echo "ERROR: CLAUDE.md is missing or empty" >&2; exit 1; }
-    named=$(grep -oE '^@[A-Za-z0-9_.-]+' "$pointer" | head -1 | cut -c2-)
-    if [ "$named" != "AGENTS.md" ]; then
-      echo "ERROR: CLAUDE.md imports '$named', and the content is in AGENTS.md" >&2
-      exit 1
-    fi
-    if [ "$(grep -cvE '^ *(@[A-Za-z0-9_.-]+)? *$' "$pointer")" != "0" ]; then
-      echo "ERROR: CLAUDE.md carries more than the import." >&2
-      echo "      Everything an agent has to read belongs in AGENTS.md, which" >&2
-      echo "      every assistant reads; this file only forwards." >&2
-      exit 1
-    fi
-
     # The PENDING.md must not become a changelog. Its rule is "on finishing,
     # remove it"; a struck-through or done-marked item is the start of the rot.
     # Anchored on a LIST ITEM: the rule at the top itself cites the markers in
@@ -22719,7 +22695,7 @@ let
       exit 1
     fi
 
-    echo "OK: the six documents exist, the pointer finds them, and PENDING did not become a changelog"
+    echo "OK: the six documents exist, and PENDING did not become a changelog"
   '';
 
   architecture-sections = mkCheck "architecture-sections" [ pkgs.python3 ] ''

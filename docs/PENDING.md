@@ -180,9 +180,10 @@ inteiro é não ter relógio em repouso.
 
 ## Regra de manutenção — leia antes de mexer
 
-**Ao concluir um item daqui, remova-o.** Se ele mudar *como o sistema funciona*, escreva uma linha
-no `AGENTS.md` (se todo agente precisa saber) ou no `docs/ARCHITECTURE.md` (se é o porquê de uma
-decisão). Se não mudar nada de fundo — é só trabalho feito —, **apenas apague**.
+**Ao concluir um item daqui, remova-o.** Se ele mudar *como o sistema funciona*, registre o porquê
+no `docs/ARCHITECTURE.md`. O `AGENTS.md` só recebe o que vale para qualquer trabalho — um
+invariante, uma regra transversal, uma armadilha —, nunca o detalhe de uma feature. Se não mudar
+nada de fundo — é só trabalho feito —, **apenas apague**.
 
 Esta lista não guarda histórico. Item riscado, marcado como pronto ou mantido "para registro" a
 transforma em changelog — e aí ninguém mais confia que o que está escrito ainda falta. Há um check
