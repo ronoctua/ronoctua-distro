@@ -865,6 +865,10 @@
   # `syntax.keyword` and `text.group` already have.
   border = {
     active = "accent.border";
+    # A SELECTED WINDOW'S OUTLINE (the compositor's `client.selected`), which
+    # was the compositor's own fixed green in every theme: the theme's green
+    # now, at the rung the focused outline wears.
+    selected = "success.solid";
     inactive = {
       of = "accent.element";
       chroma = 0.20;
@@ -1170,5 +1174,13 @@
     # blue: the same quietness, another KIND of thing. Not the danger red,
     # which is the RECORDING mark's: looking is not yet keeping.
     watching = "watching.text";
+    # THE SELECTION — windows marked to be acted on together. The green of
+    # their outline (`border.selected`), at the rung every other mark reads
+    # at: the mark and the windows it counts are told apart by nothing else.
+    selection = "success.solid";
+    # THE DRAWER, while it holds a window — a family of its own (`drawer`, in
+    # every seed): a faded green at the device's rung, the owner's request.
+    # Not the selection's green, which is the outline's and louder.
+    drawer = "drawer.text";
   };
 }

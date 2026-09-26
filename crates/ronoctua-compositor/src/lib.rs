@@ -73,6 +73,48 @@ pub struct Window {
     pub pid: Option<i32>,
     /// Whether it is the focused window. There are zero or one.
     pub is_focused: bool,
+    /// Whether it floats over the layout instead of being laid out in it.
+    ///
+    /// These three came in with the window menu (the modeline's app name,
+    /// clicked): an item that only applies to one side of a toggle is drawn
+    /// only on that side, and a toggle cannot be asked which side it is on.
+    #[serde(default)]
+    pub floating: bool,
+    /// Whether it covers its screen. The footer is under it then, and shrinks
+    /// to the edge that brings it back.
+    #[serde(default)]
+    pub fullscreen: bool,
+    /// Whether it follows every workspace.
+    #[serde(default)]
+    pub sticky: bool,
+    /// Whether it belongs to the drawer (the compositor's scratchpad) —
+    /// hidden there, or taken out and floating over a workspace.
+    #[serde(default)]
+    pub drawer: bool,
+    /// Whether it is put away in the drawer right now: no workspace shows it,
+    /// no focus reaches it, and only the drawer can bring it back.
+    #[serde(default)]
+    pub hidden: bool,
+    /// Whether it is on the ACTIVE trail — the windows somebody marked to walk
+    /// between, on any workspace.
+    #[serde(default)]
+    pub trailmark: bool,
+}
+
+/// The compositor's trails: lists of windows somebody marked to walk between.
+///
+/// The whole of what the compositor says about them — how many there are,
+/// which is in use, and how many windows that one holds. Which windows those
+/// are is said per window ([`Window::trailmark`]), and only for the active one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Trails {
+    /// How many trails exist.
+    pub count: u32,
+    /// Which one is in use, counted from ZERO — the compositor's own
+    /// `trail number` counts that way too. `None` with no trail.
+    pub active: Option<u32>,
+    /// How many windows the active one holds.
+    pub marked: u32,
 }
 
 /// A workspace, reduced to what the modeline draws of it.
@@ -568,6 +610,9 @@ pub enum Event {
     /// EVERY workspace is not this, and no compositor event says it: it is
     /// kept by whoever turns it on.
     Scaled(bool),
+    /// The trails, whole, sent again whenever one is made, chosen, emptied,
+    /// deleted, or a window is put on one or taken off.
+    Trails(Trails),
     /// Any other event. See the comment at the top of the module.
     Ignored,
 }
@@ -650,6 +695,16 @@ pub trait Compositor: Send {
     /// and refuses one that is not the shape [`Arity`] names.
     fn deed(&mut self, deed: &Deed, argument: Option<&str>) -> Result<()>;
 
+    /// Do a deed on THIS window, whatever has the focus.
+    ///
+    /// A deed with no window named acts on whatever was focused last, and the
+    /// focus moves — with the pointer, when the focus follows it, or with any
+    /// window that opens — between a menu being opened about a window and one
+    /// of its items being clicked. Naming the window makes the deed the
+    /// menu's. A key MODE is the exception the adapter makes: its keys go to
+    /// the focused window, so that one focuses it.
+    fn deed_on(&mut self, window: u64, deed: &Deed, argument: Option<&str>) -> Result<()>;
+
     /// Re-read the configuration.
     ///
     /// It drops every [`Self::ask`] made since the last read, which is the
@@ -712,6 +767,12 @@ pub trait Compositor: Send {
 
     /// Put a window floated by [`Self::float_in_corner`] back in the layout.
     fn back_in_the_layout(&mut self, id: u64) -> Result<()>;
+
+    /// Take THIS window out of the drawer, over the workspace in front.
+    ///
+    /// By id, because the drawer holds several and the pointer chose one of
+    /// them; the command without one shows whichever the compositor picks.
+    fn take_out(&mut self, id: u64) -> Result<()>;
 
     /// End the session.
     fn leave(&mut self) -> Result<()>;
@@ -781,6 +842,9 @@ impl Compositor for Absent {
     fn deed(&mut self, _deed: &Deed, _argument: Option<&str>) -> Result<()> {
         Self::nothing_there()
     }
+    fn deed_on(&mut self, _window: u64, _deed: &Deed, _argument: Option<&str>) -> Result<()> {
+        Self::nothing_there()
+    }
     fn reread(&mut self) -> Result<()> {
         Self::nothing_there()
     }
@@ -812,6 +876,9 @@ impl Compositor for Absent {
         Self::nothing_there()
     }
     fn back_in_the_layout(&mut self, _id: u64) -> Result<()> {
+        Self::nothing_there()
+    }
+    fn take_out(&mut self, _id: u64) -> Result<()> {
         Self::nothing_there()
     }
     fn leave(&mut self) -> Result<()> {
@@ -883,6 +950,8 @@ pub enum Said {
     Cornered(u64, Corner),
     /// A window was put back in the layout.
     Laid(u64),
+    /// A window was taken out of the drawer.
+    TakenOut(u64),
     /// The session was ended.
     Left,
 }
@@ -933,6 +1002,13 @@ impl Compositor for Scripted {
     fn ask(&mut self, at: &str, ask: Ask) -> Result<()> {
         self.allowed()?;
         self.told.push(Said::Ask(at.to_owned(), ask));
+        Ok(())
+    }
+    fn deed_on(&mut self, window: u64, deed: &Deed, argument: Option<&str>) -> Result<()> {
+        self.allowed()?;
+        self.told.push(Said::Focused(window));
+        self.told
+            .push(Said::Deed(deed.id, argument.map(ToOwned::to_owned)));
         Ok(())
     }
     fn deed(&mut self, deed: &Deed, argument: Option<&str>) -> Result<()> {
@@ -1010,6 +1086,11 @@ impl Compositor for Scripted {
         self.told.push(Said::Laid(id));
         Ok(())
     }
+    fn take_out(&mut self, id: u64) -> Result<()> {
+        self.allowed()?;
+        self.told.push(Said::TakenOut(id));
+        Ok(())
+    }
     fn leave(&mut self) -> Result<()> {
         self.allowed()?;
         self.told.push(Said::Left);
@@ -1048,6 +1129,7 @@ pub struct State {
     focus: Option<u64>,
     workspaces: Vec<Workspace>,
     scaled: bool,
+    trails: Trails,
 }
 
 impl State {
@@ -1062,7 +1144,12 @@ impl State {
             }
             Event::WindowChanged(j) => {
                 if let Some(existing) = self.windows.iter_mut().find(|x| x.id == j.id) {
+                    // WHETHER IT IS PUT AWAY is the one thing a single window
+                    // cannot say — only the whole tree does, and every change
+                    // that could move it in or out of the drawer re-reads that.
+                    let hidden = existing.hidden;
                     *existing = j.clone();
+                    existing.hidden = hidden;
                 } else {
                     self.windows.push(j.clone());
                 }
@@ -1087,6 +1174,7 @@ impl State {
             Event::FocusChanged(id) => self.focus = *id,
             Event::Workspaces(all) => self.workspaces = all.clone(),
             Event::Scaled(on) => self.scaled = *on,
+            Event::Trails(t) => self.trails = *t,
             // A MONITOR MOVING SAYS NOTHING ABOUT THE WINDOWS, and neither
             // does the session ending: both are listened to elsewhere, and
             // here they have to be as inert as an unknown event.
@@ -1113,6 +1201,12 @@ impl State {
     #[must_use]
     pub fn all_windows(&self) -> &[Window] {
         &self.windows
+    }
+
+    /// The trails, as the compositor last said them.
+    #[must_use]
+    pub const fn trails(&self) -> Trails {
+        self.trails
     }
 
     /// Every workspace, in the compositor's order.
@@ -1171,6 +1265,12 @@ mod tests {
             app_id: Some("br.ronoctua.test".to_owned()),
             pid: Some(1000 + i32::try_from(id).unwrap()),
             is_focused: focused,
+            floating: false,
+            fullscreen: false,
+            sticky: false,
+            drawer: false,
+            hidden: false,
+            trailmark: false,
         }
     }
 

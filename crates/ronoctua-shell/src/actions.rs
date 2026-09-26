@@ -76,7 +76,12 @@ pub fn deed_of(id: &str) -> Option<&'static ronoctua_scroll::deeds::Spoken> {
 /// list here that would age the day a command grew or lost an argument.
 #[must_use]
 pub fn with_argument(id: &str) -> Option<&'static str> {
+    // THE COMPOSITOR'S OWN IDS TOO (`wm-…`), and not only ours: asked only of
+    // ours, `wm-trail-number` answered "no argument", so `LEADER :` ran it
+    // without asking which trail and the leader's generated `o y 1` was
+    // refused as a binding.
     deed_of(id)
+        .or_else(|| ronoctua_scroll::deeds::spoken_of(id))
         .filter(|s| s.deed.argument.is_some())
         .map(|s| s.deed.id)
 }
@@ -226,14 +231,14 @@ fn range_of(shows: &'static str, command: &'static str, prefix: &str) -> Chord {
     Chord {
         shows,
         command,
-        // TEN, and the tenth is on `0` — the compositor's own configuration
-        // puts workspace 10 there, which is the keyboard's convention.
-        binds: (1..=10)
+        // NINE, the owner's rule: `0` is not a tenth workspace here but every
+        // workspace at once, bound on its own beside the band.
+        binds: (1..=9)
             .map(|n| {
                 let said =
                     ronoctua_scroll::wire::spoken(&spoken.deed, spoken.text, Some(&n.to_string()))
                         .unwrap_or_else(|e| panic!("the band `{shows}` cannot say {n}: {e}"));
-                (format!("{prefix}{}", n % 10), said)
+                (format!("{prefix}{n}"), said)
             })
             .collect(),
         nested: None,
@@ -262,19 +267,25 @@ fn of_deed_with(shows: &'static str, key: &str, deed: &'static str, n: Option<&s
     }
 }
 
-/// A band of digits onto a deed with a number, `1…0` meaning 1 to 10.
+/// A band of digits onto a deed with a number: `1…9`, and `0` for the ninth.
+///
+/// NINE WORKSPACES, the owner's rule. The shipped file puts a tenth on `0`,
+/// which would create a workspace nobody else here can reach, so `0` names the
+/// last of the nine — the way `TAB 0` and `TAB m 0` already do.
 fn digits_of(shows: &'static str, deed: &'static str, prefix: &str) -> Chord {
     let spoken = ronoctua_scroll::deeds::spoken_of(deed)
         .unwrap_or_else(|| panic!("the band `{shows}` points at `{deed}`, which is not declared"));
     Chord {
         shows,
         command: spoken.deed.id,
-        binds: (1..=10)
-            .map(|n| {
+        binds: (1..=9)
+            .map(|n| (n, n))
+            .chain([(0, 9)])
+            .map(|(key, n)| {
                 let said =
                     ronoctua_scroll::wire::spoken(&spoken.deed, spoken.text, Some(&n.to_string()))
                         .unwrap_or_else(|e| panic!("the band `{shows}` cannot say {n}: {e}"));
-                (format!("{prefix}{}", n % 10), said)
+                (format!("{prefix}{key}"), said)
             })
             .collect(),
         nested: None,
@@ -322,8 +333,15 @@ pub fn chords() -> Vec<Chord> {
         of_command("t", "T", "window-float"),
         // --- workspaces ---
         of_command("g", "G", "workspace-overview"),
-        range_of("1…0", "workspace-go", ""),
-        range_of("S-1…0", "workspace-move", "Shift+"),
+        range_of("1…9", "workspace-go", ""),
+        range_of("S-1…9", "workspace-move", "Shift+"),
+        // NINE WORKSPACES, the owner's rule, and `0` is every one of them at
+        // once — the `LEADER 0` of the sequence, through our binary for the
+        // reason `S-TAB` gives below. The shipped file puts workspace 10 on
+        // it; `S-0` keeps moving the window, to the last of the nine, as
+        // `TAB m 0` does.
+        through_shell("0", "0", "workspace-all"),
+        of_deed_with("S-0", "Shift+0", "wm-workspace-move", Some("9")),
         of_command(",", "Comma", "window-consume"),
         of_command(".", "Period", "window-expel"),
         // THE MOUSE WHEEL is a chord too: with the leader held, scrolling
@@ -472,11 +490,17 @@ fn scroll_chords() -> Vec<Chord> {
         d("a", "a", "wm-pin-beginning"),
         d("S-a", "Shift+a", "wm-pin-end"),
         // --- the selection ---
-        d("INS", "Insert", "wm-select"),
-        d("C-INS", "Ctrl+Insert", "wm-select-none"),
-        d("S-INS", "Shift+Insert", "wm-select-move"),
-        d("C-S-INS", "Ctrl+Shift+Insert", "wm-select-workspace"),
-        d("M-INS", "Alt+Insert", "wm-select-to-trail").nested("C-S-DEL", "Ctrl+Shift+Delete"),
+        //
+        // THROUGH OUR BINARY, all five: the compositor says what is selected
+        // in no reply and no event, so the footer keeps its own copy
+        // (`crate::selection`), and a key that went straight to the compositor
+        // would change the selection behind that copy's back.
+        through_shell("INS", "Insert", "wm-select"),
+        through_shell("C-INS", "Ctrl+Insert", "wm-select-none"),
+        through_shell("S-INS", "Shift+Insert", "wm-select-move"),
+        through_shell("C-S-INS", "Ctrl+Shift+Insert", "wm-select-workspace"),
+        through_shell("M-INS", "Alt+Insert", "wm-select-to-trail")
+            .nested("C-S-DEL", "Ctrl+Shift+Delete"),
         // --- the scratchpad ---
         d("S-z", "Shift+z", "wm-scratchpad-put"),
         d("z", "z", "wm-scratchpad-show"),
@@ -565,9 +589,16 @@ fn mode_key(shows: &str, key: &str, deed: &'static str, n: Option<&str>, leaves:
     }
 }
 
+/// How many pixels a step of the resize mode takes — and a step of the window
+/// menu's, which is the same gesture spelt with the pointer.
+pub const RESIZE_STEP: &str = "100";
+/// How many pixels a floating window moves per step of the floating mode, and
+/// of the window menu.
+pub const NUDGE_STEP: &str = "50";
+
 /// The fractions the size modes offer, on `1` to `0`, `-` and `=` — the
-/// shipped file's own numbers.
-const FRACTIONS: [(&str, &str, &str); 12] = [
+/// shipped file's own numbers. The window menu offers the same twelve.
+pub const FRACTIONS: [(&str, &str, &str); 12] = [
     ("1", "1", "0.125"),
     ("2", "2", "0.1666666667"),
     ("3", "3", "0.25"),
@@ -788,14 +819,14 @@ pub fn modes() -> Vec<Mode> {
             "wm-mode-resize",
             "S-r",
             "Shift+r",
-            resize("100", false),
+            resize(RESIZE_STEP, false),
         ),
         mode(
             "floating",
             "wm-mode-floating",
             "C-r",
             "Ctrl+r",
-            resize("50", true),
+            resize(NUDGE_STEP, true),
         ),
         mode("toggle-width", "wm-mode-toggle-width", "C-t", "Ctrl+t", {
             let mut v = fractions("wm-toggle-size-width");

@@ -199,6 +199,14 @@ impl Compositor for Scroll {
         self.run(&command)
     }
 
+    fn deed_on(&mut self, window: u64, deed: &Deed, argument: Option<&str>) -> Result<()> {
+        let Some(spoken) = deeds::spoken_of(deed.id) else {
+            bail!("`{}` is not a deed this compositor was given", deed.id);
+        };
+        let command = wire::spoken(deed, spoken.text, argument)?;
+        self.run(&wire::on_the_window(window, &command))
+    }
+
     fn reread(&mut self) -> Result<()> {
         // IT DROPS EVERY TRANSIENT `ask` MADE SINCE THE LAST READ, which is
         // the whole of undo: `load_main_config` frees `config->output_configs`
@@ -276,6 +284,23 @@ impl Compositor for Scroll {
         self.run(&wire::laid_command(id))
     }
 
+    fn take_out(&mut self, id: u64) -> Result<()> {
+        self.run(&wire::taken_out_command(id))?;
+        // AND INSIDE THE ROOM WINDOWS HAVE. The compositor fits a window it
+        // takes out of the drawer into the whole OUTPUT (`root_scratchpad_show`
+        // → `floating_fix_coordinates` with the output's box), and the footer
+        // is part of the output: the window came out with its bottom under the
+        // modeline. The workspace's room already leaves the footer out, so the
+        // window is shrunk to it when bigger, and centred in it.
+        let said = self.request(wire::Kind::Workspaces, "")?;
+        let Some(room) = read::room_in(&said) else {
+            return Ok(());
+        };
+        let tree = self.request(wire::Kind::Tree, "")?;
+        let size = read::size_in(&tree, id);
+        self.run(&wire::fitted_command(id, room, size))
+    }
+
     fn leave(&mut self) -> Result<()> {
         self.run("exit")
     }
@@ -321,7 +346,7 @@ impl Watching {
             // says; `workspace` is how the modeline knows which of them hold
             // something, and `scroller` whether the one in front is zoomed out
             // to its overview.
-            r#"["window","output","shutdown","input","mode","workspace","scroller"]"#,
+            r#"["window","output","shutdown","input","mode","workspace","scroller","trails"]"#,
         )?;
         let mut waiting = std::collections::VecDeque::new();
         // The subscribe's own reply, and anything that raced it.
@@ -359,6 +384,11 @@ impl Watching {
         let (raced, said) = asked(&mut stream, wire::Kind::Scroller)?;
         all.extend(raced);
         all.extend(scaled_in(&said));
+        // AND THE TRAILS, which a footer starting after one was made would
+        // otherwise not know exist until the next one changed.
+        let (raced, said) = asked(&mut stream, wire::Kind::Trails)?;
+        all.extend(raced);
+        all.extend(read::trails_in(&said).map(Event::Trails));
         Ok(Self {
             stream,
             waiting: all,
@@ -390,7 +420,9 @@ impl Watching {
                 }
             };
             let e = event_of(kind, &body);
-            if !moves_a_workspace(kind, &body) {
+            let workspaces = moves_a_workspace(kind, &body);
+            let drawer = may_cross_the_drawer(kind, &body);
+            if !workspaces && !drawer {
                 if let Some(e) = e {
                     return Ok(Some(e));
                 }
@@ -403,10 +435,21 @@ impl Watching {
                 self.stream.set_read_timeout(None)?;
                 self.deadline = false;
             }
-            let (raced, workspaces) = workspaces_now(&mut self.stream)?;
             self.waiting.extend(e);
-            self.waiting.extend(raced);
-            self.waiting.push_back(workspaces);
+            // THE WHOLE LIST AGAIN when a window may have gone into the
+            // drawer or come out of it: the event's container does not say
+            // which workspace it is on, and only the tree says the drawer's.
+            if drawer {
+                let (raced, tree) = asked(&mut self.stream, wire::Kind::Tree)?;
+                self.waiting.extend(raced);
+                self.waiting
+                    .push_back(Event::Windows(read::windows_in(&tree)));
+            }
+            if workspaces {
+                let (raced, workspaces) = workspaces_now(&mut self.stream)?;
+                self.waiting.extend(raced);
+                self.waiting.push_back(workspaces);
+            }
         }
     }
 }
@@ -431,6 +474,27 @@ fn moves_a_workspace(kind: u32, body: &str) -> bool {
             .is_some_and(|change| matches!(change.as_str(), "new" | "close" | "move")),
         _ => false,
     }
+}
+
+/// Whether an event may have put a window in the drawer or taken one out —
+/// putting away is a `move`, taking out makes it float — or changed which
+/// windows are on the trail in use. Only these re-read the tree: a title
+/// changing never does.
+fn may_cross_the_drawer(kind: u32, body: &str) -> bool {
+    // A TRAIL EVENT TOO: which windows are on the trail in use is said per
+    // window (`trailmark`), and a trail chosen or changed changes it — the
+    // footer takes a drawer window off the trail it would crash the
+    // compositor to walk onto.
+    kind == wire::EVENT_TRAILS
+        || (kind == wire::EVENT_WINDOW
+            && serde_json::from_str::<Value>(body)
+                .ok()
+                .and_then(|said| {
+                    said.get("change")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
+                .is_some_and(|change| matches!(change.as_str(), "move" | "floating")))
 }
 
 /// Asks for the workspaces on a subscribed socket.
@@ -504,6 +568,8 @@ fn event_of(kind: u32, body: &str) -> Option<Event> {
             Some("overview" | "workspace") => scaled_in(&said),
             _ => Some(Event::Ignored),
         },
+        // THE TRAILS, whole — the event carries what `get_trails` answers.
+        wire::EVENT_TRAILS => read::trails_in(&said).map(Event::Trails),
         // `default` is the absence of a mode, and is said as one.
         wire::EVENT_MODE => {
             let name = said.get("change").and_then(Value::as_str)?;

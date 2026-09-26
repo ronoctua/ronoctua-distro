@@ -150,11 +150,77 @@
   float = {
     text = "floating toggle";
   };
+  float-off = {
+    text = "floating disable";
+  };
+  float-centre = {
+    text = "move position center";
+  };
   stick = {
     text = "sticky toggle";
   };
   calm = {
     text = "urgent disable";
+  };
+  # WHAT THE WINDOW MENU NEEDED and the table did not have — the audit of
+  # every runtime command of the pinned compositor, against this file.
+  workspace-send = {
+    text = "move container to workspace number {n}";
+    argument = "number";
+  };
+  opacity-more = {
+    text = "opacity plus 0.1";
+  };
+  opacity-less = {
+    text = "opacity minus 0.1";
+  };
+  opacity-full = {
+    text = "opacity set 1";
+  };
+  awake-visible = {
+    text = "inhibit_idle visible";
+  };
+  awake-focus = {
+    text = "inhibit_idle focus";
+  };
+  awake-fullscreen = {
+    text = "inhibit_idle fullscreen";
+  };
+  awake-open = {
+    text = "inhibit_idle open";
+  };
+  awake-none = {
+    text = "inhibit_idle none";
+  };
+  tearing-on = {
+    text = "allow_tearing yes";
+  };
+  tearing-off = {
+    text = "allow_tearing no";
+  };
+  border-none = {
+    text = "border none";
+  };
+  border-pixel = {
+    text = "border pixel";
+  };
+  border-normal = {
+    text = "border normal";
+  };
+  border-csd = {
+    text = "border csd";
+  };
+  shadow-on = {
+    text = "decoration shadow true";
+  };
+  shadow-off = {
+    text = "decoration shadow false";
+  };
+  dim-on = {
+    text = "decoration dim true";
+  };
+  dim-off = {
+    text = "decoration dim false";
   };
 
   # --- THE SCROLLING LAYOUT, which is why this compositor and not another --

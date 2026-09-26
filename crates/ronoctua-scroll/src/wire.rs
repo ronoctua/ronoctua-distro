@@ -45,6 +45,8 @@ pub enum Kind {
     Seats = 101,
     /// How the focused workspace is laid out: its scale, its overview.
     Scroller = 120,
+    /// The trails: how many, which one is in use, how many windows it holds.
+    Trails = 121,
 }
 
 /// An event's kind, as it comes back.
@@ -68,6 +70,9 @@ pub const EVENT_WORKSPACE: u32 = EVENT_BIT;
 /// Something about how a workspace is laid out changed — its overview among
 /// them.
 pub const EVENT_SCROLLER: u32 = EVENT_BIT | 30;
+/// A trail was made, chosen, emptied or deleted, or a window was put on one or
+/// taken off.
+pub const EVENT_TRAILS: u32 = EVENT_BIT | 31;
 
 /// Writes one message.
 pub fn send(to: &mut UnixStream, kind: Kind, payload: &str) -> Result<()> {
@@ -198,6 +203,55 @@ pub fn corner_command(id: u64, corner: Corner, room: Room, decoration: (i64, i64
 #[must_use]
 pub fn laid_command(id: u64) -> String {
     format!("[con_id={id}] sticky disable, floating disable")
+}
+
+/// A command made to act on one window, by CRITERIA and not by focus.
+///
+/// # Why not focus it first
+///
+/// That was the first form (`[con_id=N] focus; fullscreen`), and it put a
+/// window into fullscreen at the place it had been drawn: focusing a column
+/// ANIMATES the layout towards it, a fullscreen window is placed by its
+/// animation (`transaction.c`, `fs->animation.xt`), and the second command
+/// landed in the middle of the first one's. The owner photographed a
+/// fullscreen window hanging off the right edge. Every command the window menu
+/// sends reads its target from the criteria (`config->handler_context`), so
+/// nothing needs the focus to move — except a key MODE, whose keys go to
+/// whatever is focused, which is the one case focused first.
+///
+/// A criteria binds the first command of a `;` list; the second of the one
+/// deed with two (move and follow) is `workspace number N`, which needs no
+/// window.
+#[must_use]
+pub fn on_the_window(window: u64, command: &str) -> String {
+    if command.starts_with("mode ") {
+        format!("[con_id={window}] focus; {command}")
+    } else {
+        format!("[con_id={window}] {command}")
+    }
+}
+
+/// The commands that keep a window taken out of the drawer inside `room`:
+/// shrunk to it when it is bigger, then centred in it.
+#[must_use]
+pub fn fitted_command(id: u64, room: Room, size: Option<(i64, i64)>) -> String {
+    match size {
+        Some((w, h)) if w > room.width || h > room.height => format!(
+            "[con_id={id}] resize set width {} px height {} px, move position center",
+            w.min(room.width),
+            h.min(room.height)
+        ),
+        _ => format!("[con_id={id}] move position center"),
+    }
+}
+
+/// The command that takes one window out of the drawer.
+///
+/// `scratchpad show` with criteria shows the windows that MATCH, and a
+/// `con_id` matches one — the one the pointer chose.
+#[must_use]
+pub fn taken_out_command(id: u64) -> String {
+    format!("[con_id={id}] scratchpad show")
 }
 
 /// The one word a transform is written with.
@@ -701,6 +755,57 @@ mod tests {
         assert_eq!(
             laid_command(7),
             "[con_id=7] sticky disable, floating disable"
+        );
+    }
+
+    /// One window out of the drawer, the one named — and one command, so
+    /// nothing after it rides along.
+    #[test]
+    fn taking_out_names_the_window() {
+        assert_eq!(taken_out_command(9), "[con_id=9] scratchpad show");
+        assert!(!taken_out_command(9).contains(';'));
+    }
+
+    /// A window out of the drawer is kept in the room windows have: centred,
+    /// and shrunk first only when it is bigger.
+    #[test]
+    fn a_window_out_of_the_drawer_fits_the_room() {
+        let room = Room {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1000,
+        };
+        assert_eq!(
+            fitted_command(4, room, Some((800, 600))),
+            "[con_id=4] move position center"
+        );
+        assert_eq!(
+            fitted_command(4, room, Some((800, 1080))),
+            "[con_id=4] resize set width 800 px height 1000 px, move position center"
+        );
+        assert_eq!(
+            fitted_command(4, room, None),
+            "[con_id=4] move position center"
+        );
+    }
+
+    /// A deed on one window names it by criteria and does not move the focus
+    /// — focusing animated the layout under a fullscreen — except a key mode,
+    /// whose keys go to the focused window.
+    #[test]
+    fn a_deed_on_a_window_names_it_and_focuses_only_for_a_mode() {
+        assert_eq!(on_the_window(7, "fullscreen"), "[con_id=7] fullscreen");
+        assert_eq!(
+            on_the_window(
+                7,
+                "move container to workspace number 3; workspace number 3"
+            ),
+            "[con_id=7] move container to workspace number 3; workspace number 3"
+        );
+        assert_eq!(
+            on_the_window(7, r#"mode "resize""#),
+            r#"[con_id=7] focus; mode "resize""#
         );
     }
 }

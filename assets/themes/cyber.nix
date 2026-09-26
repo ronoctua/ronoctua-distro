@@ -130,6 +130,13 @@
       text-chroma = 0.36;
       text-shift = 0;
     };
+    # THE DRAWER'S MARK (`modeline.drawer`): a faded green, the device blue's
+    # quietness in another hue — a place windows are kept, not an alarm.
+    drawer = {
+      hue = 150;
+      text-chroma = 0.36;
+      text-shift = 0;
+    };
     alternate = {
       hue = 180;
       text-chroma = 0.34;

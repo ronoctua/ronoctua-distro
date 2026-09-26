@@ -466,6 +466,45 @@ impl Tree {
         v
     }
 
+    /// Every sequence that runs `command` — with `argument`, when the
+    /// command takes one — shortest first.
+    ///
+    /// For a place that TEACHES a key beside the thing it does (the window
+    /// menu's cells): the sequences are read from the tree the leader walks,
+    /// so what is taught is what works, and a rebinding moves it too.
+    #[must_use]
+    pub fn sequences_of(&self, command: &str, argument: Option<&str>) -> Vec<Vec<Key>> {
+        fn walk(
+            no: &Node,
+            path: &mut Vec<Key>,
+            command: &str,
+            argument: Option<&str>,
+            found: &mut Vec<Vec<Key>>,
+        ) {
+            if let Some((id, _, arg)) = no.command
+                && id == command
+                && arg == argument
+            {
+                found.push(path.clone());
+            }
+            for (k, child) in &no.children {
+                path.push(*k);
+                walk(child, path, command, argument, found);
+                path.pop();
+            }
+        }
+        let mut found = Vec::new();
+        walk(&self.root, &mut Vec::new(), command, argument, &mut found);
+        found.sort_by_key(Vec::len);
+        found
+    }
+
+    /// The shortest of [`Self::sequences_of`].
+    #[must_use]
+    pub fn sequence_of(&self, command: &str, argument: Option<&str>) -> Option<Vec<Key>> {
+        self.sequences_of(command, argument).into_iter().next()
+    }
+
     /// How many bindings the tree has. Used by the checks.
     #[must_use]
     pub fn amount(&self) -> usize {

@@ -17,13 +17,13 @@
 use ronoctua_compositor::Workspace;
 use ronoctua_tokens as tokens;
 
-/// The ten marks the modeline can carry at once, one per numbered workspace.
+/// The nine marks the modeline can carry at once, one per numbered workspace.
 ///
-/// TEN literals and not a `format!`: `layout::Segment::id` is a `&'static
-/// str`. Ten is what the compositor's own keys reach — `1` to `9`, and `0` is
-/// the tenth.
-pub const POOL: [&str; 10] = [
-    "ws-1", "ws-2", "ws-3", "ws-4", "ws-5", "ws-6", "ws-7", "ws-8", "ws-9", "ws-10",
+/// NINE literals and not a `format!`: `layout::Segment::id` is a `&'static
+/// str`. Nine is the owner's rule — `1` to `9`, and `0` is every workspace at
+/// once, never a tenth.
+pub const POOL: [&str; 9] = [
+    "ws-1", "ws-2", "ws-3", "ws-4", "ws-5", "ws-6", "ws-7", "ws-8", "ws-9",
 ];
 
 /// One number to draw: which workspace, and whether it is the one in front.
@@ -145,11 +145,11 @@ mod tests {
     /// inverse — the click would go to a workspace other than the one drawn.
     #[test]
     fn the_pool_and_the_numbers_are_each_others_inverse() {
-        for n in 1..=10 {
+        for n in 1..=9 {
             assert_eq!(number_of(id_of(n).unwrap()), Some(n));
         }
         assert_eq!(id_of(0), None);
-        assert_eq!(id_of(11), None);
+        assert_eq!(id_of(10), None, "nine workspaces, the owner's rule");
         assert_eq!(number_of("bt-1"), None);
         // Beyond the pool is left out rather than drawn with no way to click.
         assert!(shown(&[at(Some(12), false, true), at(Some(1), true, true)]).is_empty());

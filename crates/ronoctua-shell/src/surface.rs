@@ -867,6 +867,19 @@ struct Footer {
     power_orders: Option<ronoctua_power::Handle>,
     /// The power view, when open — `LEADER s p p`.
     power: Option<crate::power::View>,
+    /// The window menu, when open — the modeline's app name, clicked, or
+    /// `LEADER w o`.
+    window_menu: Option<crate::window_menu::View>,
+    /// The screen a fullscreen window covers, while one does — see [`Edge`].
+    edge: Option<Edge>,
+    /// What is selected, as far as this footer knows — see `crate::selection`.
+    selection: crate::selection::Selection,
+    /// The view the last geometry was asked for — the opened line closes when
+    /// it changes (`apply_geometry`).
+    view_before: ViewState,
+    /// Drawer windows asked OFF the trail and not yet confirmed off — see
+    /// [`Footer::untrail_the_drawer`].
+    untrailing: std::collections::BTreeSet<u64>,
     /// The last reading of the machine's sound — kept with the view closed,
     /// because the modeline draws its two marks from it and the volume keys
     /// act without a view.
@@ -1297,6 +1310,9 @@ enum ViewState {
     /// three panes and a sheet, and a cursor nobody can move is a view only the
     /// mouse reaches.
     Notifications,
+    /// What can be done to the focused window — the modeline's app name,
+    /// clicked. A grid of cells, the leader's, with submenus.
+    WindowMenu,
     /// The region is closed.
     NoneOf,
 }
@@ -1326,6 +1342,39 @@ impl ViewState {
 /// lives in the `Footer`, which is the daemon: if the focused output vanishes
 /// in the middle of a prompt, the state migrates without losing what was
 /// typed. Keeping it here would mean losing the prompt along with the monitor.
+/// THE FOOTER OF A SCREEN A FULLSCREEN WINDOW COVERS, shrunk to its bottom
+/// edge.
+///
+/// # Why
+///
+/// A fullscreen window is drawn over the `top` layer the footer lives on, so
+/// the modeline — and every click the footer answers — was gone for as long as
+/// the window stayed fullscreen, and the only way out was a key. The owner
+/// chose the edge: while the focused window covers a screen, that screen's
+/// footer moves to the `overlay` layer at ONE pixel high, and a pointer that
+/// touches the bottom of the screen grows it back to the whole footer, over the
+/// window. Clicking the app's name there opens the window menu, whose first
+/// item is leaving fullscreen.
+///
+/// It is the SAME surface growing (invariant 14), by layer-shell alone
+/// (invariant 3), and the zone it reserves does not change — a fullscreen
+/// window ignores zones, and the windows behind it do not reflow twice.
+///
+/// # What it cannot see
+///
+/// The compositor reports the fullscreen that covers a screen and not its
+/// `layout` or `application` kinds (measured in the pinned source:
+/// `ipc-json.c` writes `fullscreen_mode` alone), and those two leave the
+/// footer visible anyway. And it follows the FOCUSED window: a fullscreen
+/// window that lost the focus to another on its workspace is not seen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Edge {
+    /// The connector of the screen covered.
+    output: String,
+    /// Whether a pointer is over the footer there — which is what grows it.
+    inside: bool,
+}
+
 struct Screen {
     /// The output this surface covers. Kept so we know which one to remove when
     /// the compositor takes it away.
@@ -1368,6 +1417,9 @@ struct Screen {
     /// with its exclusive zone. It travels in the commit that carries the
     /// frame drawn at it (see `Footer::apply_geometry`).
     size_owed: Option<(u32, i32)>,
+    /// Whether this screen's footer is on the `overlay` layer, over a
+    /// fullscreen window — see [`Edge`].
+    overlay: bool,
     configured: bool,
     /// Assembled on the first `configure`, when there is a size. They stay `None`
     /// if there is no usable GPU — the footer still resolves the layout and logs,
@@ -1415,6 +1467,10 @@ struct ExpansionRow {
     /// The list shows the command; the description stays here, and shows up in
     /// the minibuffer under the cursor. It is the Doom split: the list is to be
     /// swept with the eye, and the whole sentence only when asked for.
+    /// The key that does the same thing outside this list, drawn after the
+    /// description in the quiet explaining grey — the window menu's cells,
+    /// whose every item is also a key somewhere else (`window_menu::taught`).
+    teaches: Option<String>,
     description: Option<String>,
     /// What a click on this line does. `None` = line is not clickable.
     click: Option<Click>,
@@ -1561,6 +1617,9 @@ enum Click {
     Theme(usize),
     /// A row of the power view: the cursor goes there, `RET` acts.
     Power(usize),
+    /// A cell of the window menu: it runs, or opens its submenu — the leader's
+    /// grammar, where a cell is a key and a click is that key.
+    WindowMenu(usize),
     /// A row of the sound view: the cursor goes there, `RET` acts.
     Audio(usize),
     /// A row of the pointers view: the cursor goes there, `RET` acts.
@@ -1604,6 +1663,7 @@ impl ExpansionRow {
             text: String::new(),
             highlights: Vec::new(),
             description: None,
+            teaches: None,
             click: None,
             key_flush_right: true,
             separator: true,
@@ -2087,6 +2147,9 @@ pub const BAND_CEILING: u16 = 3;
 const LEFT_BUTTON: u32 = 0x110;
 /// `BTN_RIGHT`. It opens the file manager's menu, and nothing else.
 const RIGHT_BUTTON: u32 = 0x111;
+/// `BTN_SIDE`, the mouse's Back button. Over the footer with a view open it
+/// is `Esc`: the pointer's way back, beside the `ESC` the hint line teaches.
+const BACK_BUTTON: u32 = 0x113;
 
 /// How many lines a wheel detent steps where there is scrolling.
 ///
@@ -2558,6 +2621,11 @@ pub fn run() -> Result<()> {
         power_snapshot: None,
         power_orders: None,
         power: None,
+        window_menu: None,
+        edge: None,
+        selection: crate::selection::Selection::default(),
+        view_before: ViewState::NoneOf,
+        untrailing: std::collections::BTreeSet::new(),
         display: None,
         display_snapshot: ronoctua_display::Snapshot::default(),
         display_orders: None,
@@ -2956,7 +3024,12 @@ pub fn run() -> Result<()> {
                 ) {
                     state.every_workspace = false;
                 }
+                if let ronoctua_compositor::Event::WindowClosed(id) = &e {
+                    state.selection.closed(*id);
+                }
                 state.windows.apply_to(&e);
+                state.fullscreen_follows();
+                state.untrail_the_drawer();
                 state.states_arrived();
                 // Redrawing on every event is cheap because the layout is integer
                 // arithmetic (section 4.1) and the text only changes when focus changes.
@@ -3940,6 +4013,9 @@ impl Footer {
                 gestures: self.gestures.is_some(),
                 player: self.player.as_ref().and_then(crate::player::mark),
                 workspaces: &workspaces,
+                drawer: self.in_the_drawer().len(),
+                selection: self.selection.any().then(|| self.selection.count()),
+                trails: self.windows.trails(),
                 compositor_mode: mode.as_deref(),
                 // SYNCTHING, and it is the only mark that may draw while all
                 // is WELL. That is the owner's choice and it is theirs to
@@ -4282,6 +4358,39 @@ impl Footer {
             self.run_command("notif-open");
             return;
         }
+        // THE APP'S NAME OPENS WHAT CAN BE DONE TO ITS WINDOW. The title, one
+        // segment to the left, stays what it is; the name is the segment that
+        // says WHICH program, and the menu is about that program's window.
+        if id == "mode" {
+            self.run_command("window-menu");
+            return;
+        }
+        // THE DRAWER: the left button shows what it holds, the right one takes
+        // the next window out — the chord's own meaning, one gesture away.
+        // THE SELECTION AND THE TRAILS open their level of the window menu; a
+        // trail's NUMBER puts that trail in use, which the compositor counts
+        // from zero.
+        if id == "selection" {
+            self.run_command("selection-open");
+            return;
+        }
+        if id == "trail" {
+            self.run_command("trail-open");
+            return;
+        }
+        if let Some(n) = crate::trails::number_of(id) {
+            let index = crate::trails::index_of(n).to_string();
+            self.run_with("wm-trail-number", Some(&index));
+            return;
+        }
+        if id == "drawer" {
+            self.run_command(if forward {
+                "drawer-open"
+            } else {
+                "wm-scratchpad-show"
+            });
+            return;
+        }
         // THE UPDATE'S MARK OPENS THE WINDOW THAT WATCHES IT.
         //
         // It is the one thing on this line that appears without anybody having
@@ -4509,6 +4618,48 @@ impl Footer {
                     }),
             ),
             "airplane" => Some(self.texts.t(ronoctua_i18n::key::HINT_AIRPLANE)),
+            "mode" => Some(self.texts.t(ronoctua_i18n::key::HINT_WINDOW_MENU)),
+            "selection" => Some(match self.selection.count() {
+                Some(n) => self.texts.t_args(
+                    ronoctua_i18n::key::HINT_SELECTION,
+                    &[(
+                        "count",
+                        ronoctua_i18n::Arg::Number(i64::try_from(n).unwrap_or(0)),
+                    )],
+                ),
+                None => self.texts.t(ronoctua_i18n::key::HINT_SELECTION_UNCOUNTED),
+            }),
+            "trail" => {
+                let t = self.windows.trails();
+                Some(self.texts.t_args(
+                    ronoctua_i18n::key::HINT_TRAIL,
+                    &[
+                        ("trails", ronoctua_i18n::Arg::Number(i64::from(t.count))),
+                        ("windows", ronoctua_i18n::Arg::Number(i64::from(t.marked))),
+                    ],
+                ))
+            }
+            other if crate::trails::number_of(other).is_some() => {
+                let n = crate::trails::number_of(other)?;
+                let t = self.windows.trails();
+                Some(self.texts.t_args(
+                    if t.active.map(|a| a + 1) == Some(n) {
+                        ronoctua_i18n::key::HINT_TRAIL_CURRENT
+                    } else {
+                        ronoctua_i18n::key::HINT_TRAIL_NUMBER
+                    },
+                    &[("number", ronoctua_i18n::Arg::Number(i64::from(n)))],
+                ))
+            }
+            "drawer" => Some(self.texts.t_args(
+                ronoctua_i18n::key::HINT_DRAWER,
+                &[(
+                    "count",
+                    ronoctua_i18n::Arg::Number(
+                        i64::try_from(self.in_the_drawer().len()).unwrap_or(0),
+                    ),
+                )],
+            )),
             "tailscale" => {
                 let t = self.tunnels.tailscale.as_ref()?;
                 let name = if t.tailnet.is_empty() {
@@ -5645,6 +5796,7 @@ impl PointerHandler for Footer {
         for serial in crate::cursor_shape::enters(events) {
             self.shapes.entered(self.pointers.seat_of(pointer), serial);
         }
+        self.edge_follows_the_pointer(events);
         self.pointers.switch_to(pointer, &mut self.here);
         // THE KEYBOARD FIRST: a press on a key is the key's, and never reaches
         // the rows above it.
@@ -5844,6 +5996,8 @@ impl Footer {
         let segment_before = self.here.segment_under_pointer;
         let mut clicked = None;
         let mut menu = false;
+        // THE BACK BUTTON, pressed in this frame over an open view.
+        let mut back = false;
         // THE MODELINE'S OWN TWO CLICKS, kept apart from `clicked` and `menu`
         // above: those two are about a ROW of the expanded region, and the
         // modeline has no rows. Folding them together is how the right button
@@ -6108,6 +6262,14 @@ impl Footer {
                 //
                 // The middle button still does nothing: pasting text into a
                 // list of commands would be a command run by mistake.
+                // THE BACK BUTTON IS `Esc`, and only with a view open: at rest
+                // the footer has nothing to go back from, and the compositor's
+                // own `button8` bind asks for the prefix, so the two never meet.
+                PointerEventKind::Press { button, .. }
+                    if button == BACK_BUTTON && self.view() != ViewState::NoneOf =>
+                {
+                    back = true;
+                }
                 PointerEventKind::Press { button, .. } if button == RIGHT_BUTTON => {
                     self.here.row_under_pointer = self.row_at(e.position.0, e.position.1);
                     self.here.cell_under_pointer = self.cell_at(e.position.0);
@@ -6465,6 +6627,12 @@ impl Footer {
             self.open_files_menu();
             return;
         }
+        // THE WAY BACK, down the keyboard's own path — each view keeps
+        // deciding what its `Esc` means.
+        if back && let Ok(esc) = ronoctua_keymap::Key::parse("ESC") {
+            self.hint_clicked(crate::chrome::Act::Key(esc));
+            return;
+        }
         // A SHAPE TURNED, which is neither a drag along a track nor a click:
         // it has already changed the view, so all that is left is to draw it
         // and to tell the stage.
@@ -6721,6 +6889,7 @@ impl Footer {
             scale_told: 1,
             bars: crate::bars::Drawn::default(),
             size_owed: None,
+            overlay: false,
             configured: false,
             gpu: None,
             text: None,
@@ -6947,7 +7116,18 @@ impl Footer {
         if let Some(spoken) = ronoctua_scroll::deeds::spoken_of(id) {
             let done = open_the_compositor().and_then(|mut wm| wm.deed(&spoken.deed, argument));
             match done {
-                Ok(()) => tracing::info!(deed = id, argument, "a deed of the compositor"),
+                Ok(()) => {
+                    tracing::info!(deed = id, argument, "a deed of the compositor");
+                    // THE SELECTION'S COPY, which only these deeds write: the
+                    // compositor says what is selected nowhere.
+                    if crate::selection::Selection::follows(id) {
+                        let focused = self.windows.focused().map(|w| w.id);
+                        self.selection.deed(id, focused);
+                    }
+                    // WHETHER A WINDOW NOW COVERS THE FOOTER, asked before
+                    // anything is painted — see `fullscreen_asked_now`.
+                    self.fullscreen_asked_now();
+                }
                 Err(e) => {
                     // THE COMPOSITOR'S OWN TEXT, and not one of ours: it is
                     // the only clue to why the deed was refused, and swapping
@@ -7094,6 +7274,10 @@ impl Footer {
             "display-forget" => self.display_press(crate::display::Press::Forget),
             "display-arrange" => self.display_press(crate::display::Press::Arrange),
             "power-open" => self.open_power(None, None),
+            "window-menu" => self.open_window_menu(),
+            "drawer-open" => self.open_drawer(),
+            "trail-open" => self.open_window_menu_at(crate::window_menu::Level::Trail),
+            "selection-open" => self.open_window_menu_at(crate::window_menu::Level::Selection),
             // SYNCTHING. The view has two doors and the page has one key;
             // the four commands that were here before opened a browser and
             // echoed one line, which was the whole of it.
@@ -8282,6 +8466,7 @@ impl Footer {
                     // refused.
                     let argument = argument.map(ToOwned::to_owned);
                     self.compositor_action(move |wm| wm.deed(&spoken.deed, argument.as_deref()));
+                    self.fullscreen_asked_now();
                     return;
                 }
                 // NOT just a `warn` in the log. A command that shows up in
@@ -10851,6 +11036,31 @@ impl Footer {
             return;
         }
 
+        // THE WINDOW MENU: every cell is a key, as in the leader, and `Esc`
+        // goes up one level. The key is read as its NOTATION with shift left
+        // in the letter (`K` is its own cell) and `Ctrl` kept (`C-h` nudges),
+        // which is how the cells spell it.
+        if self.view() == ViewState::WindowMenu {
+            use ronoctua_keymap::Sym;
+            let errand = match (key.sym, self.window_menu.as_mut()) {
+                (_, None) => return,
+                (Sym::Esc | Sym::Backspace, Some(v)) => v.back(),
+                (sym, Some(v)) => {
+                    let notation = ronoctua_keymap::Key {
+                        mods: ronoctua_keymap::Mods {
+                            ctrl: key.mods.ctrl,
+                            ..ronoctua_keymap::Mods::default()
+                        },
+                        sym,
+                    }
+                    .notation();
+                    v.pressed(&notation, &self.texts)
+                }
+            };
+            self.window_menu_errand(errand);
+            return;
+        }
+
         // THE POWER VIEW: five gestures, all of them the view's — see
         // `power::OF_THE_VIEW`. A key outside the table is swallowed, as every
         // modal swallows the keyboard it holds.
@@ -12052,6 +12262,11 @@ impl Footer {
             // which permission draws in the manager's own region and answers
             // there. Two pickers would be two behaviours for one gesture.
             ViewState::Files
+        } else if self.window_menu.is_some() {
+            // ABOVE THE FINDER AND THE LEADER, which it can only be opened
+            // from: the region is free when it opens (`region_is_free`), so
+            // what it outranks is what is left behind it.
+            ViewState::WindowMenu
         } else if self.mx.active() {
             ViewState::Commands
         } else if self.leader.active_one() {
@@ -13345,7 +13560,8 @@ impl Footer {
     /// say where you are.
     const fn navigation(&self) -> Navigation {
         match self.view() {
-            ViewState::Leader => Navigation::Page,
+            // THE WINDOW MENU IS THE LEADER'S GRID, and pages like it.
+            ViewState::Leader | ViewState::WindowMenu => Navigation::Page,
             _ => Navigation::Scroll,
         }
     }
@@ -14176,6 +14392,7 @@ impl Footer {
                     // THE DESCRIPTION IS ALREADY ON THE LINE. Repeating it in the
                     // message area on hover would show the same text twice; what
                     // helps there is the command that is going to run.
+                    teaches: None,
                     description: Some(e.command.0.clone()),
                     key_color: if i == l.cursor() {
                         tokens::color::STATE_ACCENT
@@ -14305,6 +14522,7 @@ impl Footer {
                         .map(|(_, p)| p)
                         .unwrap_or_default(),
                     click: Some(Click::Candidate(i)),
+                    teaches: None,
                     description: None,
                     icon: None,
                     pixmap: None,
@@ -14359,6 +14577,38 @@ impl Footer {
                         tokens::color::TEXT_SECONDARY
                     },
                     ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+        if self.view() == ViewState::WindowMenu
+            && let Some(v) = self.window_menu.as_ref()
+        {
+            // THE LEADER'S CELL: the key, the short label, and the registry's
+            // whole sentence for the pointer resting on it. A group wears the
+            // `+` and the group's tone, as the leader's do.
+            return v
+                .entries(&self.texts)
+                .into_iter()
+                .enumerate()
+                .map(|(n, e)| {
+                    let group = e.is_group();
+                    ExpansionRow {
+                        key: e.key.to_owned(),
+                        text: if group {
+                            format!("{GROUP_MARK}{}", e.label)
+                        } else {
+                            e.label
+                        },
+                        teaches: crate::window_menu::taught(&self.tree, &e.does),
+                        description: e.about,
+                        click: Some(Click::WindowMenu(n)),
+                        text_color: if group {
+                            tokens::color::TEXT_GROUP
+                        } else {
+                            tokens::color::TEXT_SECONDARY
+                        },
+                        ..ExpansionRow::empty_one()
+                    }
                 })
                 .collect();
         }
@@ -16246,6 +16496,16 @@ impl Footer {
                     self.draw_and_paint();
                 }
             }
+            Some(Click::WindowMenu(n)) => {
+                // ONE CLICK RUNS IT, as a cell of the leader does: the grid has
+                // no cursor to select with, and what a cell does is written on
+                // it. What cannot be undone opens a question instead.
+                let errand = match self.window_menu.as_mut() {
+                    Some(v) => v.choose(n, &self.texts),
+                    None => return,
+                };
+                self.window_menu_errand(errand);
+            }
             Some(Click::Power(n)) => {
                 // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19: a
                 // click on the row the cursor is already on is that row's `RET`.
@@ -16672,6 +16932,15 @@ impl Footer {
     /// The **exclusive zone follows the height**: expanding pushes the buffers
     /// up. See the top of the module.
     fn apply_geometry(&mut self, keyboard: KeyboardInteractivity) {
+        // THE OPENED LINE BELONGS TO THE VIEW IT WAS OPENED ON. It holds the
+        // rows its sentence wrapped to (`Fold::held`), and a view that closed
+        // with it open left those rows standing with nothing in them — the
+        // owner saw the minibuffer stay tall and empty after `Esc`.
+        let now = self.view();
+        if now != self.view_before {
+            self.fold.close();
+            self.view_before = now;
+        }
         // IN INDEPENDENT MODE THE FOOTER NEVER TAKES THE WAYLAND KEYBOARD: an
         // exclusive layer would take every seat's (`crate::keys_link`), and
         // the keyboard that opened the region arrives over the socket instead.
@@ -16713,10 +16982,50 @@ impl Footer {
         // screen with nothing drawn yet commits the size alone, as before: it
         // has no old frame to show.
         let mut drawn_again = false;
+        // THE COVERED SCREEN, and whether its footer is out: a pointer over it
+        // or a region holding the keyboard (the leader opened by key over a
+        // fullscreen window has to be seen too).
+        let grabbing = self.grabbing();
+        let edge = self
+            .edge
+            .as_ref()
+            .map(|e| (e.output.clone(), e.inside || grabbing));
         for i in 0..self.screens.len() {
             let t = &self.screens[i];
+            let covered = edge.as_ref().filter(|(name, _)| {
+                self.outputs
+                    .info(&t.output)
+                    .and_then(|o| o.name)
+                    .is_some_and(|n| &n == name)
+            });
+            // OVERLAY ONLY WHILE COVERED: above a fullscreen window, and never
+            // otherwise — the lock sits over every layer, but a footer that
+            // needs no overlay has no business asking for it.
+            let wants_overlay = covered.is_some();
+            t.layer.set_layer(if wants_overlay {
+                Layer::Overlay
+            } else {
+                Layer::Top
+            });
+            let height = match covered {
+                Some((_, false)) => 1,
+                _ => height,
+            };
             t.layer.set_keyboard_interactivity(keyboard);
-            let grows = t.configured && t.gpu.is_some() && t.asked.1 != height;
+            // A LAYER THAT MOVES IS COMMITTED NOW, and never with a frame.
+            //
+            // Going to the overlay means the footer is UNDER a fullscreen
+            // window at that instant, and the compositor sends no frame
+            // callback to a surface nobody sees — the driver waited for one
+            // with no deadline, the commit carrying the new layer never left,
+            // and the footer froze: no leader, no menu, no emergency binds,
+            // until the window left fullscreen some other way. Measured in the
+            // VM: the journal stopped, the main thread sat in the driver's
+            // poll, and the photograph had no footer at the bottom at all.
+            let moves = t.overlay != wants_overlay;
+            let grows = !moves && t.configured && t.gpu.is_some() && t.asked.1 != height;
+            self.screens[i].overlay = wants_overlay;
+            let t = &self.screens[i];
             if !grows {
                 t.layer.set_size(0, height);
                 t.layer.set_exclusive_zone(exclusive);
@@ -17212,6 +17521,7 @@ impl Footer {
         // closure below borrows and cannot reach back into `self`.
         let (records, book) = (self.notifications.history(), &self.book);
         let power = &self.power;
+        let window_menu = &self.window_menu;
         let audio = &self.audio;
         let pointer_view = &self.pointer_view;
         let pointer_snapshot = self.pointer_snapshot.as_ref();
@@ -17284,6 +17594,17 @@ impl Footer {
                     )
                 }),
                 ViewState::Power => power.as_ref().map(|v| v.hint(texts)),
+                // THE WINDOW MENU names the window it is about: its cells are
+                // their own keys, so the line has nothing else to teach, and
+                // the way back goes in front of the name.
+                ViewState::WindowMenu => window_menu.as_ref().map(|v| {
+                    v.window
+                        .as_ref()
+                        .and_then(|w| w.title.clone().or_else(|| w.app_id.clone()))
+                        .map(crate::chrome::Piece::prose)
+                        .into_iter()
+                        .collect()
+                }),
                 // SOUND: the keys it teaches depend on the row, so a cursor
                 // on a setting is not told about `m`.
                 ViewState::Audio => audio.as_ref().map(|v| v.hint(sound, hint_columns, texts)),
@@ -17347,6 +17668,17 @@ impl Footer {
                     .or_else(|| Self::overview_hint(every_workspace, scaled, texts)),
                 _ => None,
             }
+            // THE WAY BACK, in front of every view's keys. The leader and the
+            // finder are not views of the region: their line is what is being
+            // typed, and `NoneOf` has nothing to go back from.
+            // THE LEADER TOO, where the line is the sequence being typed: the
+            // way back goes after it (see where the line is built), and `Esc`
+            // there ends the whole sequence, as the leader's rule has it.
+            .or_else(|| (showing == ViewState::Leader).then(Vec::new))
+            .map(|h| match showing {
+                ViewState::NoneOf | ViewState::Commands => h,
+                _ => crate::chrome::with_the_way_back(h, texts),
+            })
             .filter(|h| !h.is_empty())
         };
 
@@ -17466,8 +17798,21 @@ impl Footer {
                 self.here
                     .row_under_pointer
                     .and_then(|i| visible.get(i))
-                    .and_then(|l| l.description.clone())
-                    .map(|t| vec![crate::chrome::Piece::said(t)])
+                    .and_then(|l| l.description.clone().map(|t| (t, l.teaches.clone())))
+                    .map(|(t, keys)| {
+                        let mut line = vec![crate::chrome::Piece::said(t)];
+                        // THE KEY FOR OUTSIDE, after the sentence and quieter
+                        // than it: what the cell does, then where else it is.
+                        if let Some(keys) = keys {
+                            line.push(crate::chrome::Piece {
+                                text: format!("  {keys}"),
+                                register: crate::chrome::Register::Explain,
+                                id: None,
+                                press: None,
+                            });
+                        }
+                        line
+                    })
             })
             // AND WHAT THE MANAGER'S ROW UNDER THE POINTER HAS TO ADD.
             //
@@ -18013,7 +18358,18 @@ impl Footer {
             } else if let Some(p) = &prompt_mx {
                 vec![crate::chrome::Piece::said(p.clone())]
             } else if let Some(h) = &held_pieces {
-                let mut out = h.clone();
+                // THE SEQUENCE BEING TYPED STAYS FIRST, when there is one: the
+                // leader's line is what was pressed, and the way back follows.
+                let mut out = pending
+                    .as_ref()
+                    .map(|p| {
+                        vec![
+                            crate::chrome::Piece::pending(p.clone()),
+                            crate::chrome::Piece::prose("  ".to_owned()),
+                        ]
+                    })
+                    .unwrap_or_default();
+                out.extend(h.iter().cloned());
                 // A SPACE BEFORE THE DOT when the hint ends on a word: the
                 // sentence below starts with `·` and was glued to it
                 // (`back to the normal view· RCtrl`, photographed).
@@ -20582,6 +20938,399 @@ impl Footer {
     }
 
     /// Opens the power view — on a row, armed, or plainly.
+    /// Whether the focused window covers its screen now, and the footer there
+    /// shrinks to the edge or comes back — see [`Edge`].
+    ///
+    /// The screen is ASKED for once, when the window goes fullscreen: the
+    /// window does not say where it is, and the focused output is where a
+    /// window that just took the focus went fullscreen.
+    fn fullscreen_follows(&mut self) {
+        let full = self.windows.focused().is_some_and(|w| w.fullscreen);
+        match (full, self.edge.is_some()) {
+            (true, false) => {
+                let Some(output) = open_the_compositor()
+                    .and_then(|mut wm| wm.focused_output())
+                    .map_err(|e| tracing::warn!(error = %e, "the focused screen could not be read"))
+                    .ok()
+                    .flatten()
+                    .map(|o| o.name)
+                else {
+                    return;
+                };
+                tracing::info!(
+                    output,
+                    "a fullscreen window covers a screen; its footer goes to the edge"
+                );
+                // A NAME NO SCREEN OF OURS HAS would arm an edge nobody draws.
+                let ours: Vec<String> = self
+                    .screens
+                    .iter()
+                    .filter_map(|t| self.outputs.info(&t.output).and_then(|o| o.name))
+                    .collect();
+                if !ours.contains(&output) {
+                    tracing::warn!(output, ?ours, "the covered screen is none of the footer's");
+                }
+                self.edge = Some(Edge {
+                    output,
+                    inside: false,
+                });
+                self.apply_geometry(self.interactivity());
+            }
+            (false, true) => {
+                tracing::info!("no fullscreen window any more; the footer comes back");
+                self.edge = None;
+                self.apply_geometry(self.interactivity());
+            }
+            _ => {}
+        }
+    }
+
+    /// The focused window's state, ASKED of the compositor rather than waited
+    /// for on the event stream, and the edge made to follow it.
+    ///
+    /// # Why after EVERY deed, and not only the menu's
+    ///
+    /// Because any deed can leave a fullscreen window over the footer — the
+    /// fullscreen itself, and a workspace that holds one — and the event that
+    /// says so is read AFTER whatever paints next: the leader fires its
+    /// command and then closes, the menu acts and then closes, and both
+    /// repaint the footer. A footer painted while covered waits for a frame
+    /// the compositor does not send to a surface nobody sees; the owner's
+    /// froze for thirty-six seconds after the menu and fourteen after
+    /// `LEADER w f`, the event unread in its queue until the window left
+    /// fullscreen by a key.
+    fn fullscreen_asked_now(&mut self) {
+        match open_the_compositor().and_then(|mut wm| wm.focused_window()) {
+            Ok(Some(w)) => {
+                self.windows
+                    .apply_to(&ronoctua_compositor::Event::WindowChanged(w));
+                self.fullscreen_follows();
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!(error = %e, "the focused window could not be read"),
+        }
+    }
+
+    /// Takes every window put away in the drawer off the trail in use.
+    ///
+    /// # Why
+    ///
+    /// Because walking a trail onto a window in the drawer CRASHES the
+    /// compositor — measured, a core dump in the owner's session:
+    /// `cmd_trailmark` → `trails_focus_view` → `seat_set_focus` →
+    /// `arrange_workspace` on the drawer window's workspace, which is none.
+    /// The whole session went with it. Invariant 3 forbids the patch, so the
+    /// state that leads there is not allowed to exist: a window that cannot be
+    /// visited leaves the list of windows to visit, whichever way it got into
+    /// the drawer (the menu, a chord, a script), and whichever trail is the
+    /// one in use (a trail event re-reads the windows).
+    ///
+    /// # ONCE per window, until the compositor says it is done
+    ///
+    /// The deed is a TOGGLE, and the events queued behind it still say the
+    /// window is on the trail: asked again on each, it was sent twenty-three
+    /// times in seven tenths of a second in the VM, and an even count would
+    /// have put the window back. A window asked is not asked again until the
+    /// state shows it off the trail, or gone.
+    fn untrail_the_drawer(&mut self) {
+        let on_the_trail: std::collections::BTreeSet<u64> = self
+            .windows
+            .all_windows()
+            .iter()
+            .filter(|w| w.hidden && w.trailmark)
+            .map(|w| w.id)
+            .collect();
+        // CONFIRMED OFF, or closed: no longer being asked about.
+        self.untrailing.retain(|id| on_the_trail.contains(id));
+        let hidden: Vec<u64> = on_the_trail
+            .into_iter()
+            .filter(|id| !self.untrailing.contains(id))
+            .collect();
+        if hidden.is_empty() {
+            return;
+        }
+        let Some(toggle) = ronoctua_scroll::deeds::spoken_of("wm-trailmark") else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let mut raised = false;
+        for id in hidden {
+            self.untrailing.insert(id);
+            tracing::info!(window = id, "a window in the drawer leaves the trail");
+            match open_the_compositor().and_then(|mut wm| wm.deed_on(id, &toggle.deed, None)) {
+                // AND IT SAYS SO, every time — the owner's request: a window
+                // missing from a trail somebody built reads as the trail
+                // losing it, unless something says who took it and why.
+                Ok(()) => {
+                    let n = self.trail_drawer_notification(id);
+                    self.arrived(n, now);
+                    raised = true;
+                }
+                Err(e) => {
+                    tracing::warn!(window = id, error = %e, "the drawer window stayed on the trail");
+                }
+            }
+        }
+        if raised {
+            self.after_the_queue_moved();
+        }
+    }
+
+    /// The notice that window `id` was taken off the trail, naming it — the
+    /// shape the catalogue recognises by its tag (`trail-drawer`).
+    fn trail_drawer_notification(&self, id: u64) -> ronoctua_notify::Notification {
+        let window = self
+            .windows
+            .all_windows()
+            .iter()
+            .find(|w| w.id == id)
+            .and_then(|w| w.title.clone().or_else(|| w.app_id.clone()))
+            .unwrap_or_else(|| id.to_string());
+        let number = id.to_string();
+        let args = [("window", window.as_str()), ("id", number.as_str())];
+        let mut n = ronoctua_notify::Notification::fresh_one(
+            0,
+            self.texts.t(ronoctua_i18n::key::NOTIF_OOM_APP),
+            None,
+            self.texts
+                .t_with(ronoctua_i18n::key::NOTIF_TRAIL_DRAWER_SUMMARY, &args),
+            self.texts
+                .t_with(ronoctua_i18n::key::NOTIF_TRAIL_DRAWER_BODY, &args),
+            ronoctua_notify::Urgency::Normal,
+        );
+        n.tags = vec!["trail-drawer".to_owned()];
+        n
+    }
+
+    /// A pointer entering or leaving the covered screen's footer grows it to
+    /// the whole footer or shrinks it back to the edge.
+    fn edge_follows_the_pointer(&mut self, events: &[PointerEvent]) {
+        let Some(name) = self.edge.as_ref().map(|e| e.output.clone()) else {
+            return;
+        };
+        let mut inside = None;
+        for e in events {
+            let ours = self
+                .screens
+                .iter()
+                .find(|t| t.layer.wl_surface() == &e.surface)
+                .and_then(|t| self.outputs.info(&t.output))
+                .and_then(|o| o.name)
+                .is_some_and(|n| n == name);
+            if !ours {
+                continue;
+            }
+            match e.kind {
+                PointerEventKind::Enter { .. } => inside = Some(true),
+                PointerEventKind::Leave { .. } => inside = Some(false),
+                _ => {}
+            }
+        }
+        if let (Some(now), Some(edge)) = (inside, self.edge.as_mut())
+            && edge.inside != now
+        {
+            tracing::info!(inside = now, "the pointer at the fullscreen edge");
+            edge.inside = now;
+            self.apply_geometry(self.interactivity());
+        }
+    }
+
+    /// Opens the window menu about the focused window — or closes it, when it
+    /// is the menu the click came from.
+    ///
+    /// The window is ASKED for, and not taken from the kept state: sticking is
+    /// a toggle the compositor sends no event about, and an item drawn on the
+    /// wrong side of a toggle does the opposite of what it says.
+    fn open_window_menu(&mut self) {
+        // CLOSED HERE, and not through `window_menu_errand`: that one runs
+        // commands, and a command that opens this menu would close a cycle
+        // among the footer's methods (`the-footer-does-not-ask-itself`).
+        if self.window_menu.take().is_some() {
+            self.first_page();
+            self.apply_geometry(self.interactivity());
+            self.draw_and_paint();
+            return;
+        }
+        let asked = open_the_compositor()
+            .and_then(|mut wm| wm.focused_window())
+            .map_err(|e| tracing::warn!(error = %e, "the focused window could not be read"))
+            .ok()
+            .flatten()
+            .or_else(|| self.windows.focused().cloned());
+        let drawer = self.in_the_drawer();
+        // NOTHING FOCUSED, BUT SOMETHING PUT AWAY: the drawer is the one part
+        // of the menu that needs no window, and it is probably what was wanted
+        // — putting the last window away leaves nothing focused.
+        let Some(window) = asked else {
+            if drawer.is_empty() {
+                let m = self.texts.t(ronoctua_i18n::key::WINDOW_MENU_NONE);
+                self.echo_message(m);
+            } else {
+                self.open_drawer();
+            }
+            return;
+        };
+        if !self.region_is_free("window-menu") {
+            return;
+        }
+        let screens = self.screens.iter().filter(|t| t.configured).count();
+        self.window_menu = Some(
+            crate::window_menu::View::fresh(window, self.windows.workspaces().to_vec(), screens)
+                .with_drawer(drawer)
+                .with_trails(self.windows.trails())
+                .with_selection(self.selection.clone()),
+        );
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// Runs a command of the window menu — on its window when it names one.
+    ///
+    /// ON THE MENU'S WINDOW, NAMED (`Compositor::deed_on`): a deed with no
+    /// window named acts on whatever was focused last, and the focus moves
+    /// between the menu opening and an item being clicked — with the pointer,
+    /// when the focus follows it. That is how fullscreen and close reached
+    /// another window, or none, while the one whose name was clicked stayed as
+    /// it was.
+    fn run_on(&mut self, id: &'static str, arg: Option<&str>, on: Option<u64>) {
+        let spoken = ronoctua_scroll::deeds::spoken_of(id).or_else(|| crate::actions::deed_of(id));
+        let (Some(window), Some(spoken)) = (on, spoken) else {
+            self.run_with(id, arg);
+            return;
+        };
+        match open_the_compositor().and_then(|mut wm| wm.deed_on(window, &spoken.deed, arg)) {
+            Ok(()) => {
+                tracing::info!(deed = id, window, arg, "a deed on the menu's window");
+                if crate::selection::Selection::follows(spoken.deed.id) {
+                    self.selection.deed(spoken.deed.id, Some(window));
+                }
+            }
+            Err(e) => {
+                let m = format!("{e:#}");
+                tracing::warn!(deed = id, window, error = %m, "the compositor refused");
+                self.echo_message(m);
+            }
+        }
+    }
+
+    /// Opens the window menu straight at `level` — the trails' or the
+    /// selection's mark, clicked. About the focused window when there is one
+    /// (both levels have an item for "this window"), and alone when there is
+    /// not.
+    fn open_window_menu_at(&mut self, level: crate::window_menu::Level) {
+        if self.window_menu.is_none() {
+            let focused = self.windows.focused().is_some();
+            if focused {
+                self.open_window_menu();
+            } else if self.region_is_free("window-menu") {
+                self.window_menu = Some(
+                    crate::window_menu::View::alone(level)
+                        .with_trails(self.windows.trails())
+                        .with_selection(self.selection.clone()),
+                );
+            }
+        }
+        if let Some(v) = self.window_menu.as_mut() {
+            v.level = level;
+            self.first_page();
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+        }
+    }
+
+    /// The windows of the drawer — put away in it, or let out and still its —
+    /// as the compositor last listed them.
+    ///
+    /// Both, because a window taken out still BELONGS to the drawer: the next
+    /// `put back` returns it there, and the mark going away the moment one
+    /// came out read as the drawer having forgotten it.
+    fn in_the_drawer(&self) -> Vec<ronoctua_compositor::Window> {
+        self.windows
+            .all_windows()
+            .iter()
+            .filter(|w| w.drawer)
+            .cloned()
+            .collect()
+    }
+
+    /// Opens the window menu at the drawer, with no window to be about — the
+    /// drawer's mark, clicked, or `LEADER w g`.
+    fn open_drawer(&mut self) {
+        let drawer = self.in_the_drawer();
+        if drawer.is_empty() {
+            let m = self.texts.t(ronoctua_i18n::key::WINDOW_MENU_DRAWER_EMPTY);
+            self.echo_message(m);
+            return;
+        }
+        if self.window_menu.is_some() || !self.region_is_free("drawer-open") {
+            return;
+        }
+        self.window_menu = Some(crate::window_menu::View::of_the_drawer(drawer));
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// What the window menu asked for.
+    ///
+    /// # THE DEED FIRST, AND THE MENU CLOSES AFTER IT
+    ///
+    /// The other way round was a race in the compositor, measured in the VM:
+    /// closing the menu shrinks the footer — the room windows have changes —
+    /// and a `fullscreen` that arrived while that change was being taken in
+    /// kept the column's OLD x, the screen's size hanging off its right edge
+    /// until the next event. Fullscreen first and the footer shrinking after
+    /// put it at 0, every time; so did the same two with no menu at all, in
+    /// that order, and the failure came back in the other order with no menu
+    /// either. Three guesses before this — the focus, an animation, a layout
+    /// not sent — were wrong, and are not in the code.
+    fn window_menu_errand(&mut self, errand: crate::window_menu::Errand) {
+        use crate::window_menu::Errand;
+        if matches!(errand, Errand::Redraw) {
+            // A NEW LEVEL starts on its first page.
+            self.first_page();
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+            return;
+        }
+        let stays = matches!(errand, Errand::Run { stays: true, .. });
+        match errand {
+            Errand::Redraw | Errand::Close => {}
+            Errand::Run { id, arg, on, .. } => self.run_on(id, arg.as_deref(), on),
+            Errand::TakeOut(id) => self.compositor_action(|wm| wm.take_out(id)),
+            // THE PROCESS, by the pid the compositor gave for this window. A
+            // `KILL` is the one signal a frozen program cannot refuse, which is
+            // why a person reaches for it — and why it asked first.
+            Errand::Kill(pid) => {
+                let sent = rustix::process::Pid::from_raw(pid).is_some_and(|p| {
+                    rustix::process::kill_process(p, rustix::process::Signal::KILL).is_ok()
+                });
+                if !sent {
+                    tracing::warn!(pid, "the window's process could not be killed");
+                    let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_WINDOW);
+                    self.echo_message(m);
+                }
+            }
+        }
+        // AND THE WINDOW'S STATE NOW, before anything is painted: a deed that
+        // put the window in fullscreen has it OVER the footer already, and
+        // the footer painted while covered waits for a frame the compositor
+        // does not send to a surface nobody sees — the owner's footer froze
+        // for thirty-six seconds, the fullscreen event unread in its queue
+        // until the window left fullscreen by a key. Asked here, the edge is
+        // armed and the footer is on the overlay layer (committed without a
+        // frame) before the paint below.
+        self.fullscreen_asked_now();
+        // A STEP LEAVES THE MENU UP — the next click is the next step.
+        if !stays {
+            self.window_menu = None;
+            self.first_page();
+            self.apply_geometry(self.interactivity());
+        }
+        self.draw_and_paint();
+    }
+
     fn open_power(
         &mut self,
         at: Option<crate::power::Target>,
@@ -23004,6 +23753,15 @@ fn segment_color(
         _ if crate::workspaces::number_of(id).is_some() => {
             crate::workspaces::colour_of(current_workspace == Some(id))
         }
+        // THE TRAILS, glyph and numbers, in the drawer's faded green — the
+        // owner's request: the two are places windows are kept.
+        "trail" => tokens::color::MODELINE_DRAWER,
+        _ if crate::trails::number_of(id).is_some() => tokens::color::MODELINE_DRAWER,
+        // THE SELECTION, in the green of the selected outline.
+        "selection" => tokens::color::MODELINE_SELECTION,
+        // THE DRAWER, in a faded green of its own — quieter than the
+        // selection's, the owner's request.
+        "drawer" => tokens::color::MODELINE_DRAWER,
         // A DEVICE'S BATTERY AT THE DANGER LEVEL, by the same rule and the
         // same number as the machine's own: the drawing has already changed,
         // and the colour is what is seen before the drawing is read.
@@ -23117,6 +23875,8 @@ mod tests {
         };
         assert_eq!(paint("bt-2", &[], None), color::MODELINE_DEVICE);
         assert_eq!(paint("camera", &[], None), color::MODELINE_WATCHING);
+        assert_eq!(paint("drawer", &[], None), color::MODELINE_DRAWER);
+        assert_eq!(paint("selection", &[], None), color::MODELINE_SELECTION);
         assert_eq!(paint("gestures", &[], None), color::MODELINE_WATCHING);
         assert_eq!(paint("bt-2", &["bt-2"], None), color::STATE_ERROR);
         assert_eq!(paint("vpn", &[], None), color::TEXT_SECONDARY);

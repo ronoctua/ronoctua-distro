@@ -570,11 +570,30 @@ let
                   ("5%-", "brightness-down"), ("5%+", "brightness-up")]
       # Left out, and why: a deed with criteria names one program.
       LEFT_OUT = {'jump criteria [app_id="firefox"]'}
+      # THE SAME KEY, ANOTHER MEANING, and why: NINE workspaces, the owner's
+      # rule. The shipped file puts a tenth on `0`; here `0` is every workspace
+      # at once (the `LEADER 0` of the sequence), and the bands that move or
+      # swap name the ninth, as `TAB 0` and `TAB m 0` do.
+      INSTEAD = {
+          "super+0": ["command workspace-all"],
+          "shift+super+0": steps(
+              "move container to workspace number 9; workspace number 9"
+          ),
+          "ctrl+super+0": steps("workspace swap number 9"),
+          "ctrl+shift+super+0": steps("workspace swap number 9 name_only"),
+      }
 
       # A DEED OF THEIRS THAT GOES THROUGH OUR BINARY, and why: every
       # workspace at once is said by no reply and no event, so the footer —
       # which shows the key back out of it — turns it on itself.
-      THROUGH_US = {"scale_workspaces toggle": "workspace-all"}
+      THROUGH_US = {"scale_workspaces toggle": "workspace-all",
+                    # THE SELECTION, which no reply and no event says either:
+                    # the footer keeps its own copy (`crate::selection`).
+                    "selection toggle": "wm-select",
+                    "selection reset": "wm-select-none",
+                    "selection move": "wm-select-move",
+                    "selection workspace": "wm-select-workspace",
+                    "selection to_trail": "wm-select-to-trail"}
 
       def ours_as(command):
           if command in THROUGH_US:
@@ -613,6 +632,10 @@ let
               continue
           if not mode and key in RELOCATED and any(
               matches(wanted, c) for c in by_key.get((None, RELOCATED[key]), [])
+          ):
+              continue
+          if not mode and key in INSTEAD and any(
+              matches(INSTEAD[key], c) for c in by_key.get((None, key), [])
           ):
               continue
           if not mode and key in ELSEWHERE and any(

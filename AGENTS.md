@@ -1707,6 +1707,114 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   moldura — título, teclas — é chave nos dois idiomas. O nível tem tom (`Role::Danger`, o novo
   `Role::Warning` → `state.warning`, o corpo, e o `Dim` para detalhe), e o rodapé da página traz a
   linha INTEIRA, quebrada, que a fileira corta na largura.
+- **O NOME DO APP NA MODELINE É O MENU DA JANELA** (`window_menu.rs`, `LEADER w o`, e `LEADER w` inteiro é o menu por teclado): clicar no
+  SEGUNDO segmento (`"mode"`; o primeiro, o título, fica como está) abre na região a grade da
+  leader com tudo o que dá para fazer com a janela em foco — e é TUDO: a lista saiu de uma auditoria
+  de todo comando de tempo de execução do compositor pinado (`command_handlers` do `commands.c`)
+  contra `assets/compositor-deeds.nix`, e o que faltava virou deed (enviar ao espaço SEM seguir,
+  opacidade, `inhibit_idle`, tearing, borda, sombra, escurecer fora de foco). Grupo abre submenu
+  (enviar, levar, mover, alinhar, tamanho com largura e altura em frações, zoom do conteúdo,
+  aparência, comportamento, os três tipos de fullscreen) e `Esc` sobe UM nível. **Toggle é
+  desenhado do lado para onde vai**, e por isso o contrato ganhou `floating`, `fullscreen` e
+  `sticky` na `Window` — e a janela é PERGUNTADA ao abrir (`focused_window`), porque `sticky` não
+  tem evento. O que não se desfaz PERGUNTA, com o `não` primeiro: forçar o fechamento (`KILL` no
+  pid) e fechar as outras. **O que fica de fora, e por quê**: `swap`, `mark` e `title_format`
+  precisam de um alvo ou de texto que só existe em tempo de execução — a regra de entrada do
+  arquivo de deeds; e o `fullscreen layout` e o `application` são desenhados como interruptores
+  ("ou sair"), porque o IPC não relata esses dois estados (só a API Lua os lê).
+  **TODO ITEM AGE NA JANELA DO MENU, POR CRITÉRIO** (`Compositor::deed_on`, `[con_id=N] …`):
+  sem alvo o compositor age na última janela focada (`seat_get_focus_inactive`), e o foco anda entre
+  abrir o menu e clicar — com o ponteiro, quando o foco o segue. Foi assim que fullscreen e fechar
+  caíram em outra janela ou em nenhuma. **Critério, e não foco**: a primeira forma focava antes
+  (`focus; fullscreen`), e focar uma coluna ANIMA o layout — a janela em tela cheia é posta pela
+  animação (`fs->animation.xt`) e ficou pendurada fora da tela, fotografada pelo dono. Todo comando
+  do menu lê o alvo do critério; só um MODO de tecla foca antes, porque as teclas dele vão ao foco. **Passo não fecha o menu** (`Entry::stays`:
+  tamanho, zoom, opacidade, mover, deslocar, andar pela trilha); andar pela trilha é `loose`, porque
+  focar a janela do menu antes andaria sempre do mesmo lugar. **Janela flutuante só vê o que
+  funciona nela** — medido: `fit_size`, `align`, `pin` e mover ao começo/fim a recusam, e mover
+  para os lados vira deslocar —, e toda janela que sai da gaveta flutua. **Sair da gaveta cabe na
+  área das janelas**: o compositor a encaixa na SAÍDA inteira (`floating_fix_coordinates`), com o
+  rodapé dentro; `take_out` a encolhe à área do espaço quando maior e a centraliza nela.
+  **A GAVETA É ALCANÇÁVEL PELO PONTEIRO** (o *scratchpad*; `LEADER w g`, e a marca `drawer` na
+  modeline, num verde desbotado próprio — família `drawer` em toda semente —, enquanto a gaveta
+  tiver alguma janela, guardada OU fora dela): uma janela guardada não tem foco nem nome, então nada clicável
+  a trazia de volta. O `get_tree` a lista sob o espaço `__i3_scratch` (é o `hidden` da `Window`), e
+  toda janela da gaveta, escondida ou não, diz `scratchpad_state: fresh` (o `drawer`) — por isso o
+  adaptador RELÊ A ÁRVORE nos eventos `move` e `floating`, os dois que a atravessam. Cada janela
+  guardada é uma célula (`Compositor::take_out`, `[con_id=N] scratchpad show`); a que saiu dela
+  ganha "Guardar de volta" e "Tirar da gaveta de vez" (`wm-float-off`, porque o compositor solta
+  da gaveta a janela que para de flutuar).
+  **AS TRILHAS SÃO NÚMEROS NA MODELINE** (`trails.rs`, `LEADER w y`): o glifo com quantas janelas a
+  trilha em uso tem e, a partir de DUAS trilhas, um número por trilha, a em uso mais clara (a regra
+  dos espaços). O compositor as diz inteiras (`get_trails`, 121, e o evento `trails`) e CONTA DE
+  ZERO — `trail number 0` é a primeira —, então a conversão mora num lugar só (`trails::index_of`).
+  Glifo e números no verde desbotado da gaveta (`modeline.drawer`, pedido do dono). **ANDAR PELA
+  TRILHA ATÉ UMA JANELA DA GAVETA DERRUBA O COMPOSITOR** (core dump na sessão do dono:
+  `cmd_trailmark` → `trails_focus_view` → `arrange_workspace` num espaço que não existe) — e o
+  inv. 3 proíbe o patch. Então o estado que leva lá não pode existir: toda janela guardada é tirada
+  da trilha em uso (`untrail_the_drawer`), venha de onde vier — menu, acorde, leader, script —,
+  porque o rodapé olha o ESTADO: o adaptador relê as janelas a cada `move`, `floating` e evento
+  `trails`. Uma vez por janela até o compositor confirmar: o feito é um toggle, e perguntado a
+  cada evento da fila ele saiu 23 vezes em 0,7 s na VM. E toda vez DIZ, por notificação
+  (`trail-drawer` no catálogo, com id e nome da janela e o motivo), a pedido do dono.
+  **`LEADER w` É O MENU DA JANELA INTEIRO, GERADO DELE** (`window_menu::leader_bindings`), a pedido
+  do dono: um grupo só para janela, e não dois. A raiz do menu ADOTOU as letras que o `w` já tinha
+  (`f t m c d`, `H L K J`) e o que o menu acrescenta tomou letras livres (`u`/`U` gaveta, `S` fixar,
+  `C` centro da flutuante, `R` modo flutuante, `X` forçar o fechamento, `D` fechar as outras; grupos
+  `p`/`P` enviar e levar, `M` mover, `A` alinhar, `z` tamanho, `i` conteúdo, `x` aparência, `b`
+  comportamento, `F` tela cheia, `g` gaveta, `y` trilha, `v` seleção). `h l k j`, `a e`, `w n s o`
+  são do grupo e nunca de célula. Cada célula é uma sequência, cada submenu um grupo, os dois estados
+  (layout e flutuante) percorridos — então nenhuma tecla dá dois feitos entre estados
+  (`a_key_means_one_deed_in_every_state`) e toda célula tem sequência
+  (`every_cell_has_a_leader_sequence`); o que o `w` já liga ao MESMO comando não é ligado de novo.
+  Pergunta vira o "sim" direto; forçar o fechamento não tem sequência, porque não é feito do
+  compositor. **Cada célula do menu ensina a tecla de
+  fora dele** (`window_menu::taught`, `Tree::sequences_of`): a sequência mais curta da leader, e o
+  acorde só onde não há sequência, no cinza frio do `Register::Explain`.
+  **A SELEÇÃO NÃO É DITA EM LUGAR NENHUM** (`container->selected` não sai em resposta, evento nem
+  na API Lua — medido na fonte pinada), então o rodapé guarda uma CÓPIA (`selection.rs`), escrita
+  pelos deeds ao passarem por `run_with`; os cinco acordes `Insert` passam pelo nosso binário
+  (`THROUGH_US`) para não mudarem a seleção pelas costas da cópia. Ela não vê seleção feita por
+  script nem a coluna que o compositor marca no lugar da janela em alguns modos. A marca e a borda
+  selecionada usam o verde do tema (`modeline.selection`, `border.selected` → `client.selected`,
+  que era o verde fixo do compositor).
+- **NOVE ESPAÇOS, e o `0` é TODOS eles** (regra do dono): `LEADER 0` e `Super+0` abrem a vista de
+  todos os espaços; as faixas que movem ou trocam de espaço (`Super+Shift+0`, `Ctrl+Super+0`) dão o
+  nono, como `TAB 0` e `TAB m 0`. O arquivo que o Scroll traz põe um décimo espaço no `0`, e o
+  `every-compositor-shortcut-is-bound` diz a troca por escrito (`INSTEAD`).
+- **FULLSCREEN ENCOLHE O RODAPÉ PARA A BORDA** (`surface::Edge`): uma janela em tela cheia é
+  desenhada acima da camada `top`, e o mouse perdia a modeline inteira. Enquanto a janela em FOCO
+  cobre uma tela, o rodapé DAQUELA tela vai para `overlay` com 1 px de altura — uma linha fina do
+  tom do chrome, que é também o sinal de que a borda existe —, e o ponteiro que encosta nela o
+  cresce inteiro por cima da janela; a leader aberta pelo teclado também. A zona exclusiva não
+  muda, e o que está atrás não reflui. Mesma superfície crescendo (inv. 14), só layer-shell
+  (inv. 3). **O bloqueio continua por cima**, e isso foi LIDO na fonte pinada (`tree/root.c`): a
+  cena é `top` < `fullscreen` < `fullscreen_global` < `overlay` < `session_lock`. Não vê o
+  fullscreen de uma janela que perdeu o foco para outra no mesmo espaço. **E TODO feito pergunta
+  se deixou uma janela em tela cheia** (`run_with` → `fullscreen_asked_now`): a leader dispara e
+  depois fecha, e repintava o rodapé já coberto — 14 s congelado depois de `LEADER w f`. **A TROCA DE CAMADA É
+  CONFIRMADA NA HORA, nunca com um quadro** (`Screen::overlay`): pedida junto com o próximo quadro,
+  ela saía de um rodapé que ainda estava por BAIXO da tela cheia, o compositor não manda callback
+  de quadro a superfície que ninguém vê, o driver esperava sem prazo, e o rodapé CONGELAVA — sem
+  leader, sem menu, sem os binds de emergência, que era o "sair da tela cheia e fechar não
+  funcionam". Medido na VM (`.#shot`): journal parado, a thread principal no `ppoll` do driver, e
+  nenhum rodapé na foto. **E o menu PERGUNTA o estado da janela antes de repintar**
+  (`fullscreen_asked_now`): o aviso de tela cheia chega pelo fio de eventos DEPOIS do fechamento do
+  menu, que repintava o rodapé já coberto — no `.#dev` do dono ele ficou 36 s congelado, com o
+  aviso na fila. Na VM (renderização por software) essa pintura não prendia, e a cena passou.
+  **E O MENU AGE ANTES DE FECHAR** (`window_menu_errand`): um `fullscreen` que chega enquanto o
+  rodapé encolhe fica com o X ANTIGO da coluna — reproduzido na VM sem menu nenhum, só na ordem
+  (rodapé encolhe → tela cheia: `x` 256; tela cheia → rodapé encolhe: `x` 0). Três palpites antes
+  disso (foco, animação, arranjo não enviado, e a espera pelo `leave` do teclado) eram errados e
+  não estão no código.
+- **A LINHA ABERTA FECHA QUANDO A VISTA MUDA** (`apply_geometry`, `view_before`): ela guarda as
+  linhas em que a frase da vista quebrou, e uma vista que fechava com ela aberta deixava essas linhas
+  de pé e vazias — o minibuffer alto sem nada dentro.
+- **TODA VISTA DA REGIÃO ENSINA `ESC` PRIMEIRO, e ele é um clique** (`chrome::with_the_way_back`,
+  aplicado UMA vez no despacho das dicas): o mouse não tinha caminho de volta em vista nenhuma. A
+  vista que já ensina `Esc` fica com o dela; o localizador fica de fora, porque a linha dele é o que
+  se digita. Na LEADER ele vem DEPOIS da sequência digitada e encerra a sequência inteira, que é a
+  regra dela. O **botão Voltar do mouse** (`BTN_SIDE`) sobre o rodapé é o mesmo `Esc`.
 - **O EMACS TEM UMA VIGIA, e ela é a primeira tarefa que só OLHA** (`tasks/emacs.rs`). Três perguntas:
   o daemon responde (`emacsclient -e`, um processo, e `run` é o único método impuro), há um Emacs
   que NÃO é cliente (`ronoctua_memory::emacs`, porque o `/proc` tem uma fronteira só), e o daemon é

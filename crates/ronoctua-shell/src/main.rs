@@ -135,9 +135,12 @@ mod theme_chooser;
 // THE FILE MANAGER'S THUMBNAILS: the workers that make them and what has been
 // made. A pool and not the preview's single thread, because a grid wants every
 // answer and the panel wants only the newest.
+mod selection;
 mod thumbs;
 mod toolkits;
+mod trails;
 mod transfers;
+mod window_menu;
 mod workspaces;
 mod world;
 // `LEADER s u`, the animated mark on the modeline, and the window that watches
@@ -759,6 +762,13 @@ pub struct Marks<'a> {
     /// The numbered workspaces that hold something — empty when fewer than
     /// two do (`workspaces::shown`, where the owner's rule lives).
     pub workspaces: &'a [crate::workspaces::Shown],
+    /// How many windows the drawer holds — zero draws nothing.
+    pub drawer: usize,
+    /// The selection, when something is selected: how many windows, when
+    /// that can be counted (`crate::selection`).
+    pub selection: Option<Option<usize>>,
+    /// The compositor's trails.
+    pub trails: ronoctua_compositor::Trails,
     /// The compositor's key mode, by its name, while one is on.
     pub compositor_mode: Option<&'a str>,
     /// SYNCTHING, and it is the only mark whose very existence is a choice.
@@ -1046,6 +1056,72 @@ pub fn segments(
     // keeps the order of declaration from the edge inwards, so the highest
     // number is the one against the player and they read `1 3 4`. They are
     // the first to go on a narrow screen — each is also `LEADER 1`…`9`.
+    // THE DRAWER, while it holds something: the windows put away have no
+    // focus and no number, and this is where the pointer finds them. The
+    // numbers' rung, pushed before them so it sits between the numbers and
+    // the player — it is about windows too.
+    if marks.drawer > 0 {
+        out.push(Segment {
+            id: "drawer",
+            text: tokens::icon::DRAWER.to_string(),
+            priority: 17,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // PUSHED FROM THE EDGE INWARDS, all on the numbers' rung, so they read
+    // left to right: the workspace numbers, the trails, the selection, the
+    // drawer — then the player. Each is about windows, as the numbers are.
+    //
+    // THE SELECTION, while something is selected, in the green of the
+    // selected outline, with how many when this footer can count them.
+    if let Some(count) = marks.selection {
+        out.push(Segment {
+            id: "selection",
+            text: match count {
+                Some(n) => format!("{} {n}", tokens::icon::WINDOWS_SELECTED),
+                None => tokens::icon::WINDOWS_SELECTED.to_string(),
+            },
+            priority: 17,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // THE TRAILS, while one exists: the glyph with how many windows the one
+    // in use holds, then — from two trails on, as the workspaces from two —
+    // one number per trail, the one in use drawn brighter. Pushed from the
+    // last, so they read `1 2 3` against the glyph.
+    if marks.trails.count > 1 {
+        for n in (1..=marks.trails.count).rev() {
+            let Some(id) = crate::trails::id_of(n) else {
+                continue;
+            };
+            out.push(Segment {
+                id,
+                text: n.to_string(),
+                priority: 17,
+                min_cols: 1,
+                side: Side::Right,
+                shrink: Shrink::Cut,
+                removable: true,
+            });
+        }
+    }
+    if marks.trails.count > 0 {
+        out.push(Segment {
+            id: "trail",
+            text: format!("{} {}", tokens::icon::TRAIL, marks.trails.marked),
+            priority: 17,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
     for shown in marks.workspaces.iter().rev() {
         let Some(id) = crate::workspaces::id_of(shown.number) else {
             continue;
@@ -1421,6 +1497,15 @@ mod tests {
                         tailscale: true,
                         tor: true,
                         workspaces: &[],
+                        // AND THE DRAWER HOLDING SOMETHING, a selection and
+                        // three trails: more marks the fullest line carries.
+                        drawer: 3,
+                        selection: Some(Some(2)),
+                        trails: ronoctua_compositor::Trails {
+                            count: 3,
+                            active: Some(0),
+                            marked: 4,
+                        },
                     },
                 ),
             ) {

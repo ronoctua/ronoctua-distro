@@ -21,18 +21,29 @@ use serde_json::Value;
 #[must_use]
 pub fn windows_in(tree: &Value) -> Vec<Window> {
     let mut found = Vec::new();
-    walk(tree, &mut found);
+    walk(tree, false, &mut found);
     found
 }
 
-fn walk(node: &Value, into: &mut Vec<Window>) {
-    if let Some(w) = window_of(node) {
+/// The workspace the compositor keeps the drawer's HIDDEN windows in — under
+/// an output of its own named `__i3`, and nowhere a person can switch to.
+/// A window shown out of the drawer lives on a real workspace instead, and
+/// says it belongs to the drawer by its own `scratchpad_state`.
+const DRAWER_WORKSPACE: &str = "__i3_scratch";
+
+fn walk(node: &Value, in_drawer: bool, into: &mut Vec<Window>) {
+    let in_drawer = in_drawer
+        || (node.get("type").and_then(Value::as_str) == Some("workspace")
+            && node.get("name").and_then(Value::as_str) == Some(DRAWER_WORKSPACE));
+    if let Some(mut w) = window_of(node) {
+        w.hidden = in_drawer;
+        w.drawer |= in_drawer;
         into.push(w);
     }
     for kind in ["nodes", "floating_nodes"] {
         if let Some(kids) = node.get(kind).and_then(Value::as_array) {
             for kid in kids {
-                walk(kid, into);
+                walk(kid, in_drawer, into);
             }
         }
     }
@@ -100,6 +111,69 @@ fn window_of(node: &Value) -> Option<Window> {
             .get("focused")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        // A FLOATING WINDOW IS A `floating_con`, and that is all the node
+        // says about it: the same node under `nodes` is a `con`. The event's
+        // container carries its own type, so the answer does not depend on
+        // having walked in through `floating_nodes`.
+        floating: node.get("type").and_then(Value::as_str) == Some("floating_con"),
+        // `fullscreen_mode` is 0 for none and 1 or 2 for the screen or every
+        // screen; anything but 0 covers the footer.
+        fullscreen: node
+            .get("fullscreen_mode")
+            .and_then(Value::as_u64)
+            .is_some_and(|m| m != 0),
+        sticky: node.get("sticky").and_then(Value::as_bool).unwrap_or(false),
+        // `none` for a window the drawer never took; `fresh` for one it holds,
+        // hidden or shown (`ipc-json.c` writes nothing else).
+        drawer: node
+            .get("scratchpad_state")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s != "none"),
+        // Only the walk knows: a node does not say which workspace it is on.
+        hidden: false,
+        trailmark: node
+            .get("trailmark")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+/// Window `id`'s size in the tree, `(width, height)` of its container.
+#[must_use]
+pub fn size_in(tree: &Value, id: u64) -> Option<(i64, i64)> {
+    fn find(node: &Value, id: u64) -> Option<&Value> {
+        if node.get("id").and_then(Value::as_u64) == Some(id) {
+            return Some(node);
+        }
+        ["nodes", "floating_nodes"]
+            .iter()
+            .filter_map(|kind| node.get(kind).and_then(Value::as_array))
+            .flatten()
+            .find_map(|kid| find(kid, id))
+    }
+    let rect = find(tree, id)?.get("rect")?;
+    Some((
+        rect.get("width").and_then(Value::as_i64)?,
+        rect.get("height").and_then(Value::as_i64)?,
+    ))
+}
+
+/// The trails, from the answer to `get_trails` or from a `trails` event —
+/// both carry the same object under `trails`.
+#[must_use]
+pub fn trails_in(said: &Value) -> Option<ronoctua_compositor::Trails> {
+    let t = said.get("trails")?;
+    let number = |k: &str| {
+        t.get(k)
+            .and_then(Value::as_i64)
+            .and_then(|n| u32::try_from(n).ok())
+    };
+    let count = number("length")?;
+    Some(ronoctua_compositor::Trails {
+        count,
+        // `active` is 0 with no trail at all, which is not a trail in use.
+        active: number("active").filter(|_| count > 0),
+        marked: number("trail_length").unwrap_or(0),
     })
 }
 
@@ -494,6 +568,79 @@ mod tests {
         assert_eq!(ws[0].app_id.as_deref(), Some("br.ronoctua.term"));
         assert!(ws[0].is_focused);
         assert_eq!(ws[1].id, 9, "and it walks all the way down");
+    }
+
+    /// The window menu draws one side of a toggle, so the tree's three flags
+    /// have to arrive: a floating node, a fullscreen one and a sticky one.
+    #[test]
+    fn a_window_says_whether_it_floats_covers_the_screen_or_sticks() {
+        let tree = json!({ "type": "workspace", "name": "1",
+            "nodes": [
+                { "type": "con", "id": 1, "pid": 10, "fullscreen_mode": 1 },
+                { "type": "con", "id": 2, "pid": 11, "fullscreen_mode": 0 }
+            ],
+            "floating_nodes": [
+                { "type": "floating_con", "id": 3, "pid": 12, "sticky": true }
+            ]
+        });
+        let ws = windows_in(&tree);
+        assert!(ws[0].fullscreen && !ws[0].floating && !ws[0].sticky);
+        assert!(!ws[1].fullscreen && !ws[1].floating);
+        assert!(ws[2].floating && ws[2].sticky && !ws[2].fullscreen);
+    }
+
+    /// A window put away is under the drawer's own workspace; one taken out
+    /// is on a real workspace and still says it belongs to the drawer.
+    #[test]
+    fn the_drawer_holds_what_is_hidden_and_marks_what_it_let_out() {
+        let tree = json!({ "type": "root", "nodes": [
+            { "type": "output", "name": "__i3", "nodes": [
+                { "type": "workspace", "name": "__i3_scratch", "nodes": [],
+                  "floating_nodes": [
+                    { "type": "floating_con", "id": 5, "pid": 50,
+                      "scratchpad_state": "fresh" }
+                  ] }
+            ] },
+            { "type": "output", "name": "eDP-1", "nodes": [
+                { "type": "workspace", "name": "1", "nodes": [
+                    { "type": "con", "id": 6, "pid": 60, "scratchpad_state": "none" }
+                  ],
+                  "floating_nodes": [
+                    { "type": "floating_con", "id": 7, "pid": 70,
+                      "scratchpad_state": "fresh" }
+                  ] }
+            ] }
+        ]});
+        let ws = windows_in(&tree);
+        let of = |id: u64| ws.iter().find(|w| w.id == id).expect("listed");
+        assert!(of(5).hidden && of(5).drawer, "put away");
+        assert!(!of(6).hidden && !of(6).drawer, "never in the drawer");
+        assert!(
+            !of(7).hidden && of(7).drawer,
+            "taken out, still the drawer's"
+        );
+    }
+
+    /// The trails say how many, which (from zero), and how many windows; and
+    /// no trail at all is no trail in use.
+    #[test]
+    fn the_trails_are_read_whole() {
+        let t = trails_in(&json!({ "trails": { "length": 3, "active": 1, "trail_length": 4 } }))
+            .expect("read");
+        assert_eq!(
+            t,
+            ronoctua_compositor::Trails {
+                count: 3,
+                active: Some(1),
+                marked: 4
+            }
+        );
+        let none = trails_in(&json!({ "trails": { "length": 0, "active": 0, "trail_length": 0 } }))
+            .expect("read");
+        assert_eq!(none.active, None);
+        assert!(trails_in(&json!({})).is_none());
+        let w = windows_in(&json!({ "type": "con", "id": 1, "pid": 2, "trailmark": true }));
+        assert!(w[0].trailmark);
     }
 
     #[test]

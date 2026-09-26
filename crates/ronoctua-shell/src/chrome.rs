@@ -711,6 +711,41 @@ pub fn lit(pieces: &[Piece], id: Option<&str>) -> Vec<Piece> {
         .collect()
 }
 
+/// The one key every view of the footer's region teaches first: `Esc`, the
+/// way back.
+///
+/// # Why it is on the line at all
+///
+/// Because a view opened in the region had no way back for the POINTER. `Esc`
+/// goes up one level or closes, and nothing on screen was a control that did
+/// that — the owner asked for it by name. A key on a hint line is a click
+/// (`Piece::pressing`), so the way back is this row of a table and nothing
+/// else: the click travels the keyboard's own path, and each view keeps
+/// deciding what its `Esc` means.
+pub const OF_THE_WAY_BACK: &[(&str, &str)] = &[("ESC", "view-back")];
+
+/// A view's hint with the way back in front of it — unless the view already
+/// teaches `Esc` itself, which then stays where the view put it.
+///
+/// FIRST, because the line is elided at the far end: the way out is the one
+/// key that must never be the part cut off.
+#[must_use]
+pub fn with_the_way_back(hint: Vec<Piece>, texts: &ronoctua_i18n::Texts) -> Vec<Piece> {
+    let esc = ronoctua_keymap::Key::parse("ESC").ok();
+    if hint
+        .iter()
+        .any(|p| matches!(p.press, Some(Act::Key(k)) if Some(k) == esc))
+    {
+        return hint;
+    }
+    let mut out = hint_of(OF_THE_WAY_BACK, texts);
+    if !hint.is_empty() {
+        out.push(Piece::separator());
+        out.extend(hint);
+    }
+    out
+}
+
 /// A hint line GENERATED from a view's key table, in the table's order.
 ///
 /// The file manager's `View::hint` wrote this loop first, and its header says
@@ -4037,5 +4072,25 @@ mod tests {
             pieces.iter().any(|p| p.register == Register::Prose),
             "the words around it lost their own register"
         );
+    }
+
+    /// THE WAY BACK IS THE FIRST KEY, and a click on it is `Esc` — unless the
+    /// view already teaches `Esc`, which then is not taught twice.
+    #[test]
+    fn the_way_back_leads_every_view_and_is_never_doubled() {
+        use super::{Act, with_the_way_back};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let esc = ronoctua_keymap::Key::parse("ESC").expect("parses");
+        let plain = hint_of(&[("C-w", "network-window")], &t);
+        let led = with_the_way_back(plain.clone(), &t);
+        assert_eq!(led[0].press, Some(Act::Key(esc)), "Esc is not first");
+        assert_eq!(
+            led.len(),
+            2 + 1 + plain.len(),
+            "the key, its words, a dot, the rest"
+        );
+        let again = with_the_way_back(led.clone(), &t);
+        assert_eq!(again, led, "Esc was taught twice");
+        assert_eq!(with_the_way_back(Vec::new(), &t).len(), 2);
     }
 }

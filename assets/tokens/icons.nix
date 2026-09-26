@@ -713,6 +713,15 @@
   # are noise at one cell, nor `md-gesture_tap`, the notification's "has
   # actions".
   gestures = "md-hand_back_right";
+  # THE DRAWER HOLDS SOMETHING: windows put away (the compositor's
+  # scratchpad), which no workspace shows and no focus reaches — this mark is
+  # where the pointer finds them. Present or absent, like every mark here.
+  drawer = "md-archive";
+  # A TRAIL EXISTS: lists of windows somebody marked to walk between. A path
+  # of stops, which is what a trail is.
+  trail = "md-map_marker_path";
+  # WINDOWS ARE SELECTED, to be acted on together: a set of boxes ticked.
+  windows-selected = "md-checkbox_multiple_marked_outline";
 
   # THE PLAYER (`LEADER p`, the column on the right, the modeline's mark).
   #

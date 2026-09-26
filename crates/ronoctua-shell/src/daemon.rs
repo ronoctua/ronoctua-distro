@@ -221,6 +221,12 @@ mod tests {
             app_id: app_id.map(ToOwned::to_owned),
             pid: Some(7),
             is_focused: true,
+            floating: false,
+            fullscreen: false,
+            sticky: false,
+            drawer: false,
+            hidden: false,
+            trailmark: false,
         }]));
         e
     }

@@ -238,6 +238,37 @@
       ];
     };
 
+    # A WINDOW LEFT THE TRAIL because it went into the drawer. Walking a trail
+    # onto a window in the drawer crashes the compositor (measured: a core
+    # dump in `arrange_workspace`), and a patch is not ours to make
+    # (invariant 3) — so the footer takes it off the trail, and says so every
+    # time: a window quietly missing from a trail somebody built by hand would
+    # read as the trail losing it.
+    trail-drawer = {
+      when = [
+        {
+          field = "tag";
+          is = "trail-drawer";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "long";
+      loud = false;
+      level = 50;
+      icon = "trail";
+      tags = [
+        "trail-drawer"
+        "system"
+      ];
+      actions = [
+        {
+          id = "trail-panel";
+          command = "trail-open";
+        }
+      ];
+    };
+
     # THE OTHER SIDE IS ASKING, and the view could not open to say so —
     # another view is in the footer holding something somebody built by hand.
     # The question is the one thing here another machine is waiting on, so it

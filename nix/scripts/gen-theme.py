@@ -986,6 +986,10 @@ CONTRAST_GATES = (
     ("modeline.device", ("modeline.background",), 40, 45),
     # AND THE CAMERA'S, at the same rung.
     ("modeline.watching", ("modeline.background",), 40, 45),
+    # AND THE SELECTION'S, at the same rung.
+    ("modeline.selection", ("modeline.background",), 40, 45),
+    # AND THE DRAWER'S.
+    ("modeline.drawer", ("modeline.background",), 40, 45),
     ("notification.quiet", ("notification.background",), 43, 45),
     ("notification.loud", ("notification.background",), 45, 60),
     ("notification.countdown", ("notification.background",), 15, 20),
@@ -1186,6 +1190,25 @@ DISTANCE_GATES = (
     ("modeline.watching", "state.accent", 0.04, 0.05),
     ("modeline.watching", "modeline.device", 0.06, 0.08),
     ("modeline.watching", "state.error", 0.06, 0.08),
+    # THE SELECTION'S MARK, among the same marks: told from their tone, the
+    # accent, the device blue, the camera pink, and the state's green that
+    # sits on the same line and means something else.
+    ("modeline.selection", "text.secondary", 0.04, 0.05),
+    ("modeline.selection", "state.accent", 0.04, 0.05),
+    ("modeline.selection", "modeline.device", 0.06, 0.08),
+    ("modeline.selection", "modeline.watching", 0.06, 0.08),
+    ("modeline.selection", "state.error", 0.06, 0.08),
+    # THE DRAWER'S MARK sits beside the selection's, and is a quieter green:
+    # told from the marks' tone, the accent, the device blue, the camera pink
+    # and the selection it could be confused with.
+    ("modeline.drawer", "text.secondary", 0.04, 0.05),
+    ("modeline.drawer", "state.accent", 0.04, 0.05),
+    ("modeline.drawer", "modeline.device", 0.06, 0.08),
+    ("modeline.drawer", "modeline.watching", 0.06, 0.08),
+    ("modeline.drawer", "modeline.selection", 0.04, 0.05),
+    # A SELECTED OUTLINE beside the focused one: a window can be both.
+    ("border.selected", "border.active", 0.05, 0.06),
+    ("border.selected", "border.inactive", 0.05, 0.06),
     ("state.error", "state.critical", 0.04, 0.05),
     # THE MESSAGE AND THE BUTTON UNDER IT. They are drawn one line apart on the
     # same ground and they are not the same kind of thing — one is read, the
@@ -1552,6 +1575,12 @@ def write_fragments(directory: pathlib.Path, theme_id: str, mode: str, tokens: d
             f'{hexes["border.inactive"]} {hexes["border.inactive"]} {hexes["border.inactive"]}\n'
             f'client.unfocused {hexes["border.inactive"]} {hexes["border.inactive"]} '
             f'{hexes["border.inactive"]} {hexes["border.inactive"]} {hexes["border.inactive"]}\n'
+            # THE SELECTED OUTLINE, the compositor's fixed green until now —
+            # focused or not, the same colour: what it says is "marked".
+            f'client.selected {hexes["border.selected"]} {hexes["border.selected"]} '
+            f'{hexes["border.selected"]} {hexes["border.selected"]} {hexes["border.selected"]}\n'
+            f'client.selected_focused {hexes["border.selected"]} {hexes["border.selected"]} '
+            f'{hexes["border.selected"]} {hexes["border.selected"]} {hexes["border.selected"]}\n'
             f"output * bg {desk} solid_color\n"
         )
     lines = [

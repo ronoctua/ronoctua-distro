@@ -682,6 +682,11 @@ pub const BRAIN_PROCEED_KEYS: &str = ", p";
 /// It is a LIST OF NAMES and not a prefix on purpose: `brain-` as a prefix
 /// would exempt the next brain command somebody forgets to bind.
 pub const BY_NAME_ONLY: &[&str] = &[
+    // THE WINDOW MENU OPENED AT ONE LEVEL: the modeline's marks run these,
+    // and under the leader the same levels ARE groups (`w g`, `w y`, `w v`).
+    "drawer-open",
+    "trail-open",
+    "selection-open",
     "brain-abort",
     "brain-proceed",
     "brain-start-emacs",
@@ -1709,6 +1714,22 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             label: key::CMD_WINDOW_FLOAT,
         },
         Command {
+            id: "window-menu",
+            label: key::CMD_WINDOW_MENU,
+        },
+        Command {
+            id: "drawer-open",
+            label: key::CMD_DRAWER_OPEN,
+        },
+        Command {
+            id: "trail-open",
+            label: key::CMD_TRAIL_OPEN,
+        },
+        Command {
+            id: "selection-open",
+            label: key::CMD_SELECTION_OPEN,
+        },
+        Command {
             id: "workspace-go",
             label: key::CMD_WORKSPACE_GO,
         },
@@ -2370,6 +2391,9 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("w a", "window-consume", None),
         ("w e", "window-expel", None),
         ("w t", "window-float", None),
+        // THE WINDOW MENU, which is what the modeline's app name opens: `o`
+        // for OPTIONS, the whole of `w` in one grid for whoever holds a mouse.
+        ("w o", "window-menu", None),
         // AND THE BUFFER'S OWN, under the same letter, by the owner's
         // decision: a buffer IS a window of the compositor (invariant 4), and
         // "buffer" and "window" were two groups for one thing. `w w` switches
@@ -2826,7 +2850,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
     // creates the one it names — see `nix/modules/scroll.nix` — so the last
     // one is the ninth.
     const LAST: &str = "9";
-    let ranges: Vec<(String, &str, &'static str)> = (1..=9)
+    let ranges = (1..=9)
         .map(|n| (format!("TAB {n}"), "workspace-go", DIGITS[n - 1]))
         // AND AT THE TOP LEVEL, one key shorter — the owner's `LEADER 1`…`9`,
         // the same numbers the modeline draws for the workspaces that hold
@@ -2836,15 +2860,25 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         .chain([
             ("TAB 0".to_owned(), "workspace-go", LAST),
             ("TAB m 0".to_owned(), "workspace-move", LAST),
-        ])
-        .collect();
+        ]);
 
-    let mut bindings = Vec::with_capacity(BINDINGS.len() + ranges.len());
-    for (seq, command, argument) in BINDINGS
+    // AND THE WINDOW MENU'S, generated from the menu itself — see
+    // `window_menu::leader_bindings`: every item it offers, on its own key,
+    // under `w`. What `w` already binds to the SAME command is the menu
+    // adopting the group's key, and is not bound twice; a key the two gave
+    // different commands is a collision, which the tree refuses below.
+    let (menu_bindings, menu_groups) = crate::window_menu::leader_bindings();
+    let written: Vec<(String, &str, Option<&str>)> = BINDINGS
         .iter()
         .map(|(s, c, a)| ((*s).to_owned(), *c, *a))
-        .chain(ranges.into_iter().map(|(s, c, a)| (s, c, Some(a))))
-    {
+        .chain(ranges.map(|(s, c, a)| (s, c, Some(a))))
+        .collect();
+    let generated = menu_bindings
+        .iter()
+        .filter(|g| !written.contains(g))
+        .cloned();
+    let mut bindings = Vec::with_capacity(written.len() + menu_bindings.len());
+    for (seq, command, argument) in written.iter().cloned().chain(generated) {
         let cmd = registry.search(command).ok_or_else(|| {
             anyhow::anyhow!(
                 "the binding `{seq}` points at the command `{command}`, which does not exist"
@@ -2867,6 +2901,12 @@ pub fn default_of() -> Result<(Tree, Registry)> {
 
     let groups: Result<Vec<_>, _> = GROUPS
         .iter()
+        .map(|(seq, label)| (*seq, *label))
+        .chain(
+            menu_groups
+                .iter()
+                .map(|(seq, label)| (seq.as_str(), *label)),
+        )
         .map(|(seq, label)| parse_sequence(seq).map(|sequence| GroupNode { sequence, label }))
         .collect();
 
@@ -4005,6 +4045,10 @@ mod tests {
             "syncthing-forget",
             "syncthing-add-device",
             "syncthing-add-folder",
+            "window-menu",
+            "drawer-open",
+            "trail-open",
+            "selection-open",
         ];
         let (tree, registry) = default_of().unwrap();
         for id in super::reachable(&tree) {
