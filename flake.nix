@@ -797,6 +797,18 @@
       gateApp = pkgs.callPackage ./nix/gate.nix {
         inherit system keepSources;
         prefetch = "${prefetchApp}/bin/ronoctua-prefetch";
+        inherit heavy;
+        targets = builtins.attrNames self.checks.${system};
+        alone = slowNames;
+      };
+
+      # THE DERIVATIONS THAT COMPILE THE WHOLE WORKSPACE, which both batteries
+      # build one at a time before anything else. The `loop` one is reached
+      # through `.#dev` by three checks.
+      heavy = {
+        inherit (self.checks.${system}) rust-tests rust-clippy;
+        ronoctua-shell = rust.shell;
+        ronoctua-loop = rust.loopWorkspace;
       };
 
       # THE MIDDLE BATTERY, derived and not hand-written.
@@ -813,6 +825,7 @@
         inherit system keepSources;
         name = "ronoctua-most";
         what = "targets";
+        inherit heavy;
         targets = lib.subtractLists slowNames (builtins.attrNames self.checks.${system});
         left = slowNames;
       };
@@ -1380,8 +1393,10 @@
         # `nix flake check` on its own is not enough on a machine with an
         # `earlyoom`: it kills `rustc` with SIGTERM and no diagnostic, and
         # `--max-jobs` does not save it. This one measures first, caps the
-        # product of jobs and cores, builds the three heavy derivations one at a
-        # time, and — if `rustc` dies anyway — says who killed it.
+        # product of jobs and cores, evaluates before it builds and never while,
+        # builds the heavy derivations one at a time, runs the VM tests in a
+        # phase of their own, packed by the memory they declare, and — if
+        # something dies anyway — says who killed it.
         gate = {
           type = "app";
           program = "${gateApp}/bin/ronoctua-gate";

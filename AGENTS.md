@@ -101,7 +101,7 @@ nix run .#png                desenha um buffer em PNG em ~0,2 s, sem VM
 nix run .#shot -- <cena.py>  fotografa numa VM (veja "Como trabalhar"); --apps é o palco do Flatpak
 nix run .#quick              dez checks escolhidos (tests/quick.nix), ~1 min
 nix run .#most               tudo menos o que constrói uma instalação, ~16 min
-nix run .#gate               tudo; dimensiona pela RAM; é o único que fecha o inv. 7
+nix run .#gate               tudo; dimensiona pela RAM (e as VMs pelo que declaram); fecha o inv. 7
 nix run .#vm                 VM completa (-- --pointers --keyboards passa mouses e teclados)
 nix run .#iso                imagem do instalador
 nix run .#install            instala no disco (sem --execute, só ensaia)
@@ -442,7 +442,11 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 - `cannot download … from any mirror` não é arquivo removido: o `fetchurl` repete sem retomar. Os
   arquivos grandes são baixados pelo `nix/prefetch.nix`, que o gate roda antes de compilar.
 - `rustc` morto por `signal: 15` sem diagnóstico é o `earlyoom` do host: o que estoura é jobs ×
-  cores, e o gate limita o produto.
+  cores, e o gate limita o produto. Teste de VM segura a memória que declara
+  (`virtualisation.memorySize`) enquanto roda, e as baterias o rodam numa fase própria, somando o
+  declarado. Avaliar também custa: cada teste de VM avaliado segura ~260 MiB até o avaliador sair,
+  e o `nix build` da bateria inteira segurava 8 GiB durante todo o build. As baterias avaliam
+  antes e constroem pelos `.drv` (`nix/gate.nix`).
 - `teste && comando` como última instrução do corpo de um laço derruba o script inteiro sob
   `errexit` + `pipefail` (que o `writeShellApplication` liga); um `ls` sem correspondência faz o
   mesmo. Use um `if` sem `else`. O check de um laço que varre diretório tem de plantar arquivos,
@@ -588,6 +592,11 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   `--apps` troca o palco pelo `nix/shot-apps.nix`: sem rodapé, com Flatpak, o portal, uma rota para
   a internet e 16 GiB de disco — é onde se vê um app do Flathub. O disco da VM vai para o cache e
   não para o `XDG_RUNTIME_DIR`, que é tmpfs: cada byte de um runtime Flatpak seria RAM.
+- **Uma coisa pesada por vez.** Pesado é compilar o workspace (no `cargo` ou no Nix), um teste de
+  VM e uma bateria. A jaula não alcança o `nix build`, que roda no daemon: um `nix build` avulso
+  leva `--max-jobs 1 --option cores 4` (o workspace `release` chega a ~8 GB assim, e o `rustc` do
+  `ronoctua-shell` sozinho a 5 GB), e nenhum `cargo` roda enquanto o Nix compila. Entre agentes vale
+  o mesmo: um compila e o outro espera, e ninguém compila durante o `.#most`.
 - **Itere no `cargo`, não no Nix.** Tocar o `crates/ronoctua-protocol` reconstrói o workspace
   inteiro no Nix. Lógica nova nasce com `#[cfg(test)]` e roda com `cargo test -p <crate>`; vá ao
   Nix uma vez, para provar a travessia do WIT e o pixel.

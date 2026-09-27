@@ -469,6 +469,41 @@ falha DIZENDO QUAL, em vez de virar linha morta que não exclui nada. É a forma
 Sem isso o `most` mataria o `rustc` pelo `earlyoom` exatamente como o gate matava antes dela existir.
 Ao terminar, cada bateria **diz o que não verificou, com os nomes**.
 
+**Uma VM não é um compilador** (2026-09-27). A aritmética dividia a memória por um pico de `rustc`
+(1792 MiB) e dava a todo derivado o mesmo `--max-jobs`. Os testes de VM não cabem nessa conta: cada
+um segura o que os nós declaram (`virtualisation.memorySize`, de 1 a 4 GiB por teste) enquanto o
+roteiro roda, e quatro lado a lado são de 8 a 16 GiB numa máquina de 14. Uma rodada passava quando
+os pequenos coincidiam e outra morria no meio das VMs. Por isso as VMs viraram uma fase própria, em
+quatro passos: as três pesadas; **o que as VMs bootam** (o `driver` de cada teste, que é o sistema
+dele), dimensionado como compilação; **as VMs**, empacotadas pela memória declarada mais 256 MiB de
+QEMU por nó e 128 MiB de driver por teste, e pelos núcleos que declaram; e o resto. Cada VM roda como
+`nix build <o .drv dela>` com tudo já no store, então nada compila ao lado de uma VM.
+
+**O declarado é o teto, não o típico.** Medido pelo `VmRSS` do QEMU no pico: `footer-vm` declara
+2048 MiB e tocou 582; `camera-vm`, 3072 e 965; `oom-vm`, dois nós e 3072, tocou 910;
+`player-remote-vm`, dois nós e 4096, tocou 1064. Mesmo assim se planeja pelo declarado, porque é o
+que o convidado tem direito de alcançar, e um número medido envelhece a cada teste que muda. Baixar
+o `memorySize` dos testes para ganhar paralelismo não compensa: mudaria o que `oom-vm` e
+`memory-vm` medem, e a fase já cabe três de 2 GiB por vez numa máquina com 10 GiB livres.
+
+**E o `rustc` do shell não se divide.** As pesadas recebiam `--cores` = memória ÷ 1792 MiB, como se
+todo compilador fosse igual. Sob `release` o `ronoctua-shell` é uma unidade de código só, com LTO
+fino: um processo que mediu 5120 MiB sozinho, enquanto o workspace inteiro, com `--cores 4`, fez
+pico de 7658 MiB. O shell se paga uma vez, e cada núcleo a mais paga o que se mediu ao lado dele
+(846 MiB); o gate usa 5632 e 1024 MiB, com margem. E eram quatro pesadas, não três: o workspace
+`loop`, que três checks alcançam pelo `.#dev`, compilava na última fase, quatro de cada vez.
+
+**E avaliar também não é de graça.** Um teste de VM é um sistema NixOS, e avaliá-lo segura ~260 MiB
+até o avaliador sair. O `nix build` da bateria avaliava as 31 VMs num processo só — 8,2 GiB de RSS,
+medido — e esse processo vivia o build inteiro, ao lado de cada compilador e de cada VM, sem entrar
+em conta nenhuma. Agora nada se avalia enquanto algo constrói: a fase 0 pede o `.drv` de cada alvo
+em lotes cujos avaliadores cabem no orçamento, um depois do outro, e as fases seguintes constroem
+esses caminhos, o que não precisa de avaliador. A exceção é o último passo do gate, o
+`nix flake check`, que avalia tudo de uma vez por definição — e a essa altura não tem mais nada para
+construir. A medição achou também um acoplamento: o check que lê o script do gate avaliava o app, e
+um app que avaliasse as VMs no próprio texto custaria 8 GiB a esse check. Por isso os fatos das VMs
+são perguntados em tempo de execução, e não escritos no script.
+
 #### E o gate ainda não fechava — por 1,37 GB que o `fetchurl` não sabe retomar
 
 Com as três baterias de pé, o gate morreu de novo, e não por nada deste repositório. A mensagem era

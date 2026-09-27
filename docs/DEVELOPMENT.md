@@ -146,7 +146,14 @@ não envelheça, e um check novo entra no `most` sozinho.
 O **`gate`** roda o `nix flake check` depois de **medir a memória livre**: ele limita quantas
 compilações correm juntas e constrói as três pesadas uma de cada vez. Sem isso, numa máquina com
 `earlyoom`, o `rustc` morre com `signal: 15` **sem diagnóstico nenhum** — parece defeito de compilação
-e é falta de RAM. Se acontecer mesmo assim, ele diz que foi o `earlyoom`.
+e é falta de RAM. Se acontecer mesmo assim, ele diz quem o `earlyoom` matou.
+
+As duas baterias andam em fases: **0** avalia o `.drv` de cada alvo em lotes, antes de construir
+qualquer coisa (um teste de VM avaliado custa ~260 MiB, e todos juntos passam de 8 GiB); **1** as
+quatro pesadas, uma de cada vez; **2** o que as VMs bootam; **3** as VMs, sozinhas, tantas ao mesmo
+tempo quanto cabe na **memória que declaram** (`virtualisation.memorySize`, somada por nó) — cada
+uma aparece com `->` ao começar e `<-` ao acabar; **4** o resto. O gate termina no
+`nix flake check`.
 
 > **`nix flake check` sem `-L` não mostra log** — silêncio não é sintoma.
 
