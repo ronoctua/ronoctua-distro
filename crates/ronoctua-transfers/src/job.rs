@@ -38,18 +38,26 @@ pub enum Engine {
     /// need a second scheduler, and the half-way state (a zip on disk that is
     /// nobody's) would be a thing this queue promises not to leave.
     Atlas,
+    /// The person's own programs: the software center's CLI, as a child.
+    ///
+    /// The same shape as [`Engine::Media`] — a program in its own process
+    /// group, read line by line — and for the same reason the queue does not
+    /// do the work itself: that program links a TLS stack and image decoders,
+    /// and this daemon runs for as long as the machine is on.
+    Software,
 }
 
 impl Engine {
     /// Every one of them, for the check that demands a text and an icon per
     /// engine. A `match` would compile with one missing; a list is what can be
     /// compared against the `.ftl`.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Local,
         Self::Fetch,
         Self::Media,
         Self::Torrent,
         Self::Atlas,
+        Self::Software,
     ];
 
     /// The stem of its text key and of its icon token.
@@ -65,7 +73,25 @@ impl Engine {
             Self::Media => "media",
             Self::Torrent => "torrent",
             Self::Atlas => "atlas",
+            Self::Software => "software",
         }
+    }
+
+    /// Whether it honours PAUSE. Cancel is honoured by every engine.
+    ///
+    /// Data and not a second code path, which is what this module's header
+    /// promises: the socket asks it before flipping a row to held, and a screen
+    /// asks it before offering the key.
+    ///
+    /// The software engine does not pause, and it cannot be made to honestly.
+    /// What it runs is `nix`, `flatpak` and `waydroid` in the middle of a
+    /// transaction and under a LANE lock (`ronoctua_software::lock`), and a
+    /// `SIGSTOP` would freeze them holding it — so the update run, which takes
+    /// the same lane, would wait behind a row somebody forgot was held. A key
+    /// that says no is better than a held row quietly blocking the machine.
+    #[must_use]
+    pub const fn pauses(self) -> bool {
+        !matches!(self, Self::Software)
     }
 }
 
@@ -286,6 +312,23 @@ pub enum Work {
         #[serde(with = "crate::wire::path")]
         into: PathBuf,
     },
+    /// Something asked of the person's programs: install, remove, upgrade,
+    /// try, a web app — the software center's ONE order type, carried whole.
+    ///
+    /// The order is the crate's own enum and not a copy of it: the screen that
+    /// builds it, this queue that carries it and the CLI that runs it are then
+    /// one type, and a variant nobody handles does not compile.
+    Software {
+        /// What to do, as the CLI receives it on its standard input.
+        ///
+        /// BOXED: an order carries a web app's whole spec, and inline it made
+        /// every `Work` — and every `Ask` and `Job` around one — four times the
+        /// size of the largest other variant. The wire does not see the box.
+        order: Box<ronoctua_software::Order>,
+        /// The name to show — `GIMP`, not `org.gimp.GIMP`. Data, not a key:
+        /// it is a program's name and it does not get translated.
+        label: String,
+    },
 }
 
 /// Whose session a download is made with.
@@ -350,11 +393,12 @@ impl Work {
             } => "subtitles",
             Self::Torrent { .. } => "torrent",
             Self::Atlas { .. } => "region",
+            Self::Software { .. } => "software",
         }
     }
 
     /// Every stem, for the check that demands a text per kind of work.
-    pub const WORDS: [&'static str; 15] = [
+    pub const WORDS: [&'static str; 16] = [
         "copy",
         "move",
         "delete",
@@ -370,6 +414,7 @@ impl Work {
         "subtitles",
         "torrent",
         "region",
+        "software",
     ];
 
     /// Who does it.
@@ -385,6 +430,7 @@ impl Work {
             Self::Media { .. } => Engine::Media,
             Self::Torrent { .. } => Engine::Torrent,
             Self::Atlas { .. } => Engine::Atlas,
+            Self::Software { .. } => Engine::Software,
             Self::Paste { .. }
             | Self::Delete { .. }
             | Self::Shred { .. }
@@ -417,6 +463,10 @@ impl Work {
             | Self::Restore { .. }
             | Self::Compress { .. }
             | Self::Extract { .. } => Measure::Items,
+            // WHERE IT STARTS, and not where it stays: the measure of a
+            // software job follows its PHASE (`software::measure_of`) — bytes
+            // while something downloads, things otherwise.
+            Self::Software { .. } => Measure::Items,
         }
     }
 
@@ -441,7 +491,12 @@ impl Work {
             | Self::Atlas { into, .. } => Some(into),
             Self::Trash { root, .. } | Self::Restore { root, .. } => Some(root),
             Self::Compress { archive, .. } => Some(archive),
-            Self::Delete { .. } | Self::Shred { .. } | Self::Measure { .. } => None,
+            // A program lands in the person's profile, in Flatpak's tree, in
+            // `~/Applications` or inside Android — nowhere one path says.
+            Self::Delete { .. }
+            | Self::Shred { .. }
+            | Self::Measure { .. }
+            | Self::Software { .. } => None,
         }
     }
 
@@ -462,6 +517,8 @@ impl Work {
             // what they chose is a place with a name. The URL is in the
             // catalogue and nobody typed it.
             Self::Atlas { label, .. } => Paths::Text(label),
+            // The same rule: the program's name, not the attribute or the id.
+            Self::Software { label, .. } => Paths::Text(label),
         }
     }
 
@@ -512,6 +569,24 @@ pub struct Job {
     /// job that is 0% of the way through 40 GiB, which is not a thing that was
     /// ever happening.
     pub answer: Option<u64>,
+    /// What a software job is doing right now — downloading, building,
+    /// installing — for the row's sentence (`software-phase-<word>`).
+    ///
+    /// A field of the JOB and not a new [`Stage`]: the stage is what every
+    /// engine shares and what the switches act on, and a phase is one engine's
+    /// account of where inside `Running` it is. `None` for every other engine,
+    /// and cleared when the job ends. `default` so a message from before it
+    /// existed still parses.
+    #[serde(default)]
+    pub phase: Option<ronoctua_software::progress::Phase>,
+    /// What a finished software order left: the program, the launcher entries
+    /// it made (so "open" can be offered), how much a tidy freed.
+    #[serde(default)]
+    pub outcome: Option<ronoctua_software::Outcome>,
+    /// Why a software order was not done, as the closed set the screen has a
+    /// SENTENCE for. [`Job::trouble`] keeps the program's own words beside it.
+    #[serde(default)]
+    pub refusal: Option<ronoctua_software::Refusal>,
 }
 
 impl Job {
@@ -529,6 +604,9 @@ impl Job {
             now: String::new(),
             trouble: None,
             answer: None,
+            phase: None,
+            outcome: None,
+            refusal: None,
         }
     }
 
@@ -557,5 +635,62 @@ impl Job {
     #[must_use]
     pub const fn afoot(&self) -> bool {
         self.stage.afoot()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ronoctua_software::AppKey;
+    use ronoctua_software::order::{Consent, Order};
+
+    fn software() -> Work {
+        Work::Software {
+            order: Box::new(Order::Install {
+                key: AppKey::Flatpak {
+                    id: "org.gnome.Calculator".into(),
+                },
+                consent: Consent::default(),
+            }),
+            label: "Calculator".into(),
+        }
+    }
+
+    #[test]
+    fn a_software_order_crosses_the_wire_whole() {
+        // The order travels INSIDE the work, with its own tag beside the
+        // work's: the two are different fields and neither may eat the other.
+        let work = software();
+        let text = serde_json::to_string(&work).unwrap();
+        assert!(
+            text.starts_with(r#"{"work":"software","order":{"order":"install""#),
+            "{text}"
+        );
+        assert_eq!(serde_json::from_str::<Work>(&text).unwrap(), work);
+        assert_eq!(work.word(), "software");
+        assert!(Work::WORDS.contains(&work.word()));
+        assert_eq!(work.engine(), Engine::Software);
+        // The row names the PROGRAM, not its id.
+        assert_eq!(work.subjects().first(), "Calculator");
+        assert_eq!(work.landing(), None);
+    }
+
+    #[test]
+    fn only_the_software_engine_refuses_a_pause() {
+        for engine in Engine::ALL {
+            assert_eq!(engine.pauses(), engine != Engine::Software, "{engine:?}");
+        }
+    }
+
+    #[test]
+    fn a_row_from_before_the_software_fields_still_parses() {
+        // A client and a daemon of two builds meet every time the queue
+        // outlives a rebuild; the new fields default rather than refuse.
+        let old = r#"{"id":3,"engine":"local","work":{"work":"measure","path":"/x"},
+            "stage":"done","measure":"items","done":1,"total":1,"now":"",
+            "trouble":null,"answer":7}"#;
+        let job: Job = serde_json::from_str(old).unwrap();
+        assert_eq!((job.phase, job.outcome, job.refusal), (None, None, None));
+        assert_eq!(job.answer, Some(7));
     }
 }

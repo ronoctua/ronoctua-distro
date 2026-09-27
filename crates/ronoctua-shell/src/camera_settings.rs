@@ -16,11 +16,17 @@
 //! `VIDIOC_QUERYCTRL`, so a screen for this camera shows this camera's knobs —
 //! on any camera, not the one it was written on.
 //!
-//! # What is typed, is typed in the footer
+//! # What is typed, is typed in either door
 //!
-//! A stream address, its key, a scene's new name and a script: the row runs a
-//! command that asks the minibuffer (`ask-<id>`), and a window says so rather
-//! than pretending it can take the letters (the network view's rule).
+//! A stream address, its key, a scene's new name and a script: the row's key
+//! is a [`Question`] (`Errand::Ask`), and the door asks it where the view is
+//! open — the footer on its minibuffer, a window on its own line
+//! (`door::Ui::ask`) — with the view still on screen and the cursor on its
+//! row. Both answer into [`answered`], so a name, a script or a key typed in
+//! one door does exactly what it does in the other. THE KEY IS A SECRET:
+//! masked on the line, left out of the log, and written by the process that
+//! typed it to its `0600` file — it never goes down a socket or into an
+//! `argv`.
 
 use std::path::PathBuf;
 
@@ -179,6 +185,69 @@ pub struct Row {
     pub spot: String,
 }
 
+/// A question the view asks: the command that asks it — whose `ask-<id>` is
+/// the sentence, and under whose id the answer comes back — and whether what
+/// is typed is hidden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Question {
+    /// The command, and the id the answer comes back under.
+    pub id: &'static str,
+    /// Masked on the line and left out of the log: the stream's key.
+    pub secret: bool,
+}
+
+/// A new scene's name.
+pub const SCENE_ADD: &str = "camera-scene-add";
+/// The scene on air's new name.
+pub const SCENE_RENAME: &str = "camera-scene-rename";
+/// A new script, as it is typed (`studio::scene::parse_script`).
+pub const SCRIPT_ADD: &str = "camera-script-add";
+/// The stream's address.
+pub const STREAM_URL: &str = "camera-stream-url";
+/// The stream's key — a secret.
+pub const STREAM_KEY: &str = "camera-stream-key";
+
+/// Every question this view asks — the commands `M-x` reaches them by, too.
+pub const QUESTIONS: [Question; 5] = [
+    Question {
+        id: SCENE_ADD,
+        secret: false,
+    },
+    Question {
+        id: SCENE_RENAME,
+        secret: false,
+    },
+    Question {
+        id: SCRIPT_ADD,
+        secret: false,
+    },
+    Question {
+        id: STREAM_URL,
+        secret: false,
+    },
+    Question {
+        id: STREAM_KEY,
+        secret: true,
+    },
+];
+
+/// The question a command asks, when it is one of this view's.
+#[must_use]
+pub fn question(id: &str) -> Option<Question> {
+    QUESTIONS.into_iter().find(|q| q.id == id)
+}
+
+/// The stream's key, as typed: its `Debug` never prints it, so no log line
+/// and no test failure carries it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StreamKey(String);
+
+impl std::fmt::Debug for StreamKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StreamKey(•••)")
+    }
+}
+
 /// What the door has to do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Errand {
@@ -188,8 +257,18 @@ pub enum Errand {
     Copy(String),
     /// Shut the view.
     Close,
-    /// Run a command of the registry (a question in the footer, or a door).
+    /// Run a command of the registry — the camera app's door.
     Run(&'static str),
+    /// Ask this, where the view is open, and keep the view on screen: the
+    /// answer comes back into [`answered`].
+    Ask(Question),
+    /// Write the stream's address, and tell the studio to reread it.
+    StreamUrl(String),
+    /// Write the stream's key to its `0600` file.
+    StreamKey(StreamKey),
+    /// Add the script as it was typed — read against the scene book when it
+    /// is carried out, and refused with a sentence when it will not parse.
+    Script(String),
     /// Tell the studio.
     Tell(Ask),
     /// Write the studio's settings, and tell it to reread them.
@@ -482,6 +561,7 @@ impl View {
             };
         }
         let forward = press != Press::Less;
+        let ask = |id: &str| question(id).map_or(Errand::Nothing, Errand::Ask);
         let mut p = snap.prefs.clone();
         let studio = |p: Preferences| Errand::Studio(Box::new(p));
         let state = snap.state.as_ref();
@@ -656,8 +736,8 @@ impl View {
                 muted: None,
             }),
             Target::Scene(name) => Errand::Tell(Ask::Scene { name }),
-            Target::SceneAdd => Errand::Run("camera-scene-add"),
-            Target::SceneRename => Errand::Run("camera-scene-rename"),
+            Target::SceneAdd => ask(SCENE_ADD),
+            Target::SceneRename => ask(SCENE_RENAME),
             Target::Script(name) => {
                 let running = state
                     .and_then(|s| s.running.as_ref())
@@ -666,9 +746,9 @@ impl View {
                     name: (!running).then_some(name),
                 })
             }
-            Target::ScriptAdd => Errand::Run("camera-script-add"),
-            Target::StreamUrl => Errand::Run("camera-stream-url"),
-            Target::StreamKey => Errand::Run("camera-stream-key"),
+            Target::ScriptAdd => ask(SCRIPT_ADD),
+            Target::StreamUrl => ask(STREAM_URL),
+            Target::StreamKey => ask(STREAM_KEY),
             Target::Stream => Errand::Tell(Ask::Stream {
                 on: Some(state.is_none_or(|s| s.streaming.is_none())),
             }),
@@ -887,14 +967,44 @@ impl View {
     }
 }
 
+/// What was typed for one of this view's questions, as the errand both doors
+/// carry out — the footer's minibuffer and a window's line answer here.
+///
+/// NOTHING TYPED IS NEVER MIND: an empty answer changes nothing, in either
+/// door. It used to ask again in the footer, which made a question that could
+/// only be left with `Esc`. An id that is not one of [`QUESTIONS`] is nothing
+/// too: an answer is never taken for a question nobody asked.
+#[must_use]
+pub fn answered(id: &str, said: &str, state: Option<&State>) -> Errand {
+    let said = said.trim();
+    if said.is_empty() {
+        return Errand::Nothing;
+    }
+    match id {
+        SCENE_ADD => Errand::Tell(Ask::SceneAdd {
+            name: said.to_owned(),
+        }),
+        // THE SCENE ON AIR NOW, which is the one the row names.
+        SCENE_RENAME => Errand::Tell(Ask::SceneRename {
+            from: state.map(|s| s.scene.clone()).unwrap_or_default(),
+            to: said.to_owned(),
+        }),
+        SCRIPT_ADD => Errand::Script(said.to_owned()),
+        STREAM_URL => Errand::StreamUrl(said.to_owned()),
+        STREAM_KEY => Errand::StreamKey(StreamKey(said.to_owned())),
+        _ => Errand::Nothing,
+    }
+}
+
 /// Carries out the errands that are the same through both doors — the studio,
-/// the two files, a camera's control, the clipboard — and gives back what the
-/// door should say, if anything. `Run` and `Close` are the door's own, and
-/// come back untouched as `Err`.
+/// the two files, a camera's control, the clipboard, what was typed — and
+/// gives back what the door should say, if anything. `Run`, `Ask` and `Close`
+/// are the door's own, and come back untouched as `Err`.
 ///
 /// # Errors
 ///
-/// The errand is one the DOOR carries out: a command to run, or closing.
+/// The errand is one the DOOR carries out: a command to run, a question to
+/// ask, or closing.
 pub fn carry_out(
     errand: Errand,
     snap: &Snapshot,
@@ -907,7 +1017,33 @@ pub fn carry_out(
     match errand {
         Errand::Nothing => Ok(None),
         Errand::Copy(text) => Ok(Some(crate::chrome::copied(&text, texts))),
-        Errand::Run(_) | Errand::Close => Err(errand),
+        Errand::Run(_) | Errand::Ask(_) | Errand::Close => Err(errand),
+        // THE ADDRESS IS WRITTEN OVER WHAT THE FILE SAYS NOW, not over this
+        // door's copy: the other door may have turned a ring since.
+        Errand::StreamUrl(url) => {
+            let store = prefs::store();
+            let mut p = store.read();
+            p.stream_url = Some(url);
+            Ok(match prefs::keep(&store, &p) {
+                Ok(()) => {
+                    reload();
+                    None
+                }
+                Err(e) => Some(texts.t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())])),
+            })
+        }
+        // THE KEY, BY THIS PROCESS, to its `0600` file — never down a socket,
+        // never into an `argv` (`stream-key-is-never-an-argument`).
+        Errand::StreamKey(StreamKey(secret)) => Ok(prefs::set_stream_key(&secret)
+            .err()
+            .map(|e| texts.t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())]))),
+        Errand::Script(text) => {
+            let book = prefs::book().read();
+            match ronoctua_studio::scene::parse_script(&text, &book) {
+                Some(script) => carry_out(Errand::Tell(Ask::ScriptAdd { script }), snap, texts),
+                None => Ok(Some(texts.t(key::CAMERA_SCRIPT_BAD))),
+            }
+        }
         Errand::Tell(ask) => Ok(match ronoctua_studio::client::ask(&ask) {
             Ok(ronoctua_studio::wire::Say::Refused(t)) => {
                 Some(crate::camera::trouble_sentence(&t, texts))
@@ -1251,6 +1387,26 @@ pub fn press_of(id: &str) -> Option<Press> {
     })
 }
 
+/// A key, as the view's press — the ONE reader both doors call: the window
+/// with `door::keys::key_of`, the footer with the key its own reader built.
+///
+/// `Esc` is every level's way back, and the arrows and `RET` are read by their
+/// symbol whatever is held, as both doors always read them. A LETTER is read
+/// by its whole notation: `C-d` is not `d`. The footer used to
+/// drop every modifier (`Key::simple`) and answer a letter held with `Ctrl` or
+/// `Alt` as the bare letter, while the window read xkb's control character
+/// and answered nothing — one key, two answers.
+#[must_use]
+pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
+    use ronoctua_keymap::{Key, Sym};
+    let notation = match key.sym {
+        Sym::Esc => return Some(Press::Escape),
+        Sym::Char(_) => key.notation(),
+        other => Key::simple(other).notation(),
+    };
+    pressed(&notation)
+}
+
 /// Which press a notation is, through [`OF_THE_VIEW`].
 #[must_use]
 pub fn pressed(notation: &str) -> Option<Press> {
@@ -1554,6 +1710,78 @@ mod tests {
             v.key(Press::Enter, &s, 100, &tx),
             Errand::Run("camera-open")
         );
+    }
+
+    /// WHAT IS TYPED IS THE SAME ERRAND FROM EITHER DOOR: the footer's
+    /// minibuffer and a window's line both answer into `answered`, and
+    /// nothing typed — or an answer to a question nobody asked — is nothing.
+    #[test]
+    fn what_is_typed_is_one_errand_whichever_door_typed_it() {
+        let s = snap();
+        let state = s.state.as_ref();
+        assert_eq!(
+            answered(SCENE_ADD, "  interview ", state),
+            Errand::Tell(Ask::SceneAdd {
+                name: "interview".into()
+            })
+        );
+        assert_eq!(
+            answered(SCENE_RENAME, "desk", state),
+            Errand::Tell(Ask::SceneRename {
+                from: "camera".into(),
+                to: "desk".into()
+            }),
+            "the scene renamed is the one on air"
+        );
+        assert_eq!(
+            answered(SCRIPT_ADD, "talk: camera 30, screen", state),
+            Errand::Script("talk: camera 30, screen".into())
+        );
+        assert_eq!(
+            answered(STREAM_URL, "rtmp://example.org/live\n", state),
+            Errand::StreamUrl("rtmp://example.org/live".into())
+        );
+        assert!(matches!(
+            answered(STREAM_KEY, "k", state),
+            Errand::StreamKey(_)
+        ));
+        for q in QUESTIONS {
+            assert_eq!(answered(q.id, "   ", state), Errand::Nothing, "{}", q.id);
+        }
+        assert_eq!(answered("camera-open", "x", state), Errand::Nothing);
+    }
+
+    /// EVERY ROW THAT TYPES ASKS — and keeps the view: the errand is a
+    /// question, never a command the door would run somewhere else. Only the
+    /// stream's key is a secret.
+    #[test]
+    fn every_row_that_types_asks_its_own_question() {
+        let tx = texts();
+        let s = snap();
+        let mut v = View::fresh();
+        let rows = v.rows(&s, 100, &tx);
+        for (spot, id) in [
+            ("scene-add", SCENE_ADD),
+            ("scene-rename", SCENE_RENAME),
+            ("script-add", SCRIPT_ADD),
+            ("stream-url", STREAM_URL),
+            ("stream-key", STREAM_KEY),
+        ] {
+            let at = rows.iter().position(|r| r.spot == spot).expect(spot);
+            v.clicked(at, &rows);
+            assert_eq!(
+                v.key(Press::Enter, &s, 100, &tx),
+                Errand::Ask(Question {
+                    id,
+                    secret: id == STREAM_KEY
+                }),
+                "{spot}"
+            );
+            assert_eq!(v.cursor(), at, "{spot}: asking moved the cursor");
+        }
+        // AND THE DOOR'S OWN ERRANDS COME BACK TO IT untouched.
+        let ask = Errand::Ask(QUESTIONS[0]);
+        assert_eq!(carry_out(ask.clone(), &s, &tx), Err(ask));
     }
 
     #[test]

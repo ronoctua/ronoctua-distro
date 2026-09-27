@@ -57,6 +57,9 @@
   poppler-utils,
   catdoc,
   playerTools,
+  # The software centre's programs, from `nix/software-tools.nix` — the table
+  # the installed system's units read.
+  softwareTools,
   graphicsHost,
   reloadApp,
   singleFooter,
@@ -1209,6 +1212,44 @@ let
         in
         lib.concatStringsSep ":" (map nameOf (import ./files-sidebar.nix))
       }"
+
+      # AND THE SOFTWARE CENTRE'S, from the SAME table the installed system's
+      # units read (`nix/software-tools.nix`), for the reason the rest of this
+      # block gives: the footer started here has no unit to read them from.
+      #
+      # REHEARSING, and that line is the one that matters. This loop runs on
+      # the owner's own machine, inside the owner's own session: an install,
+      # an update or a removal pressed here prints what it would run and runs
+      # nothing, so trying the screen never touches the host's Nix profile,
+      # its Flatpaks or its Android. Searching and reading stay real.
+      #
+      # `RONOCTUA_SOFTWARE` is the loop's own CLI, beside the footer in the
+      # same build — the wrapper the system installs is per machine, and there
+      # is no machine here. `RONOCTUA_SHELL` is this loop's footer, because the
+      # host's `/run/current-system` is not ours (and may not exist at all).
+      # `RONOCTUA_ICONS` is not repeated: it is exported above, once.
+      #
+      # AND NO APPIMAGE AND NO ANDROID HERE. `appimage-run` is an FHS
+      # environment of 1.53 GB and Waydroid 0.72 GB (`nix path-info -S`),
+      # realised on the HOST the first time the loop starts — for a loop that
+      # only rehearses. Without them the screen says those two sources are not
+      # on this machine, which is the truth about the host; the photograph
+      # stage keeps both, so every level can still be looked at.
+      export RONOCTUA_SOFTWARE_REHEARSE=1
+      ${lib.concatStringsSep "\n" (
+        lib.mapAttrsToList (name: value: "export ${name}=${lib.escapeShellArg value}") (
+          removeAttrs softwareTools [
+            "RONOCTUA_ICONS"
+            "RONOCTUA_APPIMAGE_RUN"
+            "RONOCTUA_UNSQUASHFS"
+            "RONOCTUA_WAYDROID"
+          ]
+          // {
+            RONOCTUA_SHELL = "${ronoctua-shell}/bin/ronoctua-shell";
+            RONOCTUA_SOFTWARE = "${ronoctua-shell}/bin/ronoctua-software";
+          }
+        )
+      )}
 
       # Which binary: the store's until the first recompilation, yours after that.
       # That way startup is instant and does not need `cargo` just to have a look.

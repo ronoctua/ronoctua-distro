@@ -1,0 +1,61 @@
+[package]
+name = "ronoctua-software"
+description = "The person's own programs: search, install, try, update and remove them, for this user only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ONE BORDER, ONE CRATE. What this one owns is everything that talks to a
+# package manager on the person's behalf: `nix profile`, `nix build` for a
+# trial, `flatpak --user`, `appimage-run`/`unsquashfs`, `waydroid`, and the
+# web apps' `.desktop` files. Nothing else in the tree names those programs
+# (`one-software-boundary`).
+#
+# It is a LIBRARY and a CLI. The queue (`ronoctua-transfers`) runs the CLI as a
+# child, the same way it runs yt-dlp, so the queue never links a TLS stack or a
+# decoder; the shell links the library for the search and the previews, on its
+# own threads. There is no daemon of its own: the queue already is one.
+[features]
+default = []
+# The network: Flathub, F-Droid, AppImageHub, GitHub releases, dashboardicons
+# and a web app's own page, all through the one framer (`one-http-writer`).
+net = [ "dep:ronoctua-http", "ronoctua-http/tls" ]
+# Pixels: decoding a site's icon (PNG, ICO, JPEG, GIF, WebP, SVG) and writing
+# the square PNGs a launcher reads.
+draw = [ "dep:image", "dep:resvg" ]
+
+[dependencies]
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-store = { path = "../ronoctua-store" }
+# The `.desktop` reader and the `Exec=` grammar — one parser for what we write
+# and what the launcher reads, so the two can never disagree about a quote.
+ronoctua-apps = { path = "../ronoctua-apps" }
+# F-Droid's `entry.jar` is a zip, and so is an APK.
+ronoctua-zip = { path = "../ronoctua-zip" }
+ronoctua-http = { path = "../ronoctua-http", optional = true }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+# Process groups (cancel kills the whole tree) and `flock` (one lane per
+# source, shared by the screen and the update run).
+rustix.workspace = true
+# SHA-256 for every integrity check, and the RSA signature of F-Droid's index.
+ring.workspace = true
+# Already in the lock through the TLS stack; named so a URL is parsed by a
+# grammar and never by `split('/')`.
+url = "2.5"
+# The appstream XML is 50 MB; a streaming reader keeps it out of memory.
+quick-xml = "0.41"
+image = { workspace = true, optional = true, features = [ "ico" ] }
+resvg = { workspace = true, optional = true }
+
+[[bin]]
+name = "ronoctua-software"
+path = "src/bin/cli.rs"
+required-features = [ "net", "draw" ]
+
+[lints]
+workspace = true

@@ -367,18 +367,23 @@ pub enum Errand {
     /// question stands, and an answer queued behind it would wait for the
     /// order that is waiting for the answer.
     Answer(bool),
-    /// The other side wants digits typed here — a PIN, a passkey. The
-    /// minibuffer asks, and the answer comes back as the same command's
-    /// argument, the network password's path.
+    /// The other side wants digits typed here — a PIN, a passkey. The door
+    /// asks on its own line, masked ([`ACCEPT`]): the footer's minibuffer,
+    /// or the window's header (`Ui::ask`). The digits reach the agent as
+    /// `bluetooth-accept`'s argument, in the footer's process.
     Type,
-    /// Ask for a name in the minibuffer, for the device at this path.
+    /// A name is to be typed for the device at this path — or for this
+    /// MACHINE, when the path is empty. The door asks on its own line
+    /// ([`RENAME`]), starting from the name it has now
+    /// ([`View::name_being_changed`]), and hands the answer back to
+    /// [`View::renamed`].
     Rename(String),
     /// Run a command of the registry, by id, with an argument when it takes
     /// one.
     ///
-    /// The footer runs it; the window SENDS it, over the control socket the
-    /// notification manager already forwards through. A second implementation
-    /// in the second door is the second door disagreeing with the first.
+    /// The footer runs it; the window SENDS it down the control socket
+    /// (`Ui::tell_the_footer`). A second implementation in the second door is
+    /// the second door disagreeing with the first.
     Run(&'static str, String),
     /// Set a sink's volume — PipeWire's NODE id, and the percentage.
     ///
@@ -449,6 +454,114 @@ pub struct View {
     /// has to know it and does not have the scene. Without it `TAB` would be
     /// taught on a thermometer's page.
     settings: bool,
+    /// WHOSE NAME is being typed, while a door's line asks for it: a device's
+    /// path, or empty for this machine.
+    ///
+    /// The VIEW keeps it, and not either door: the answer comes back as text
+    /// alone, and both doors hand it to [`View::renamed`], which is what says
+    /// what the text becomes. The next key that reaches the view lets it go —
+    /// while a line asks, every key is the line's, in both doors.
+    renaming: Option<String>,
+}
+
+/// The line a door opens for a new name — the command whose argument it is.
+pub const RENAME: &str = "bluetooth-rename";
+
+/// The line a door opens for a PIN or a passkey, masked — and the command
+/// that says yes to the pairing, with the digits as its argument.
+pub const ACCEPT: &str = "bluetooth-accept";
+
+/// The command that says no to the pairing.
+pub const REFUSE: &str = "bluetooth-refuse";
+
+/// What [`ACCEPT`] and [`REFUSE`] carry as their argument.
+///
+/// # An answer from a window NAMES ITS QUESTION
+///
+/// The window hears the question through a file and answers it down a
+/// socket, and the footer's agent answers whatever is waiting when the order
+/// arrives. Between the two, the question can end and another take its
+/// place — the other side cancels, another device asks — and a PIN typed for
+/// one device, or a yes pressed for it, confirmed the next one. So the
+/// window's answer says which question it was given for: the device's path
+/// and what was asked ([`standing::asked_word`]), before the digits. The
+/// footer answers only when that is still the question standing
+/// ([`Answer::fits`]), and the agent only when it is still the one waiting
+/// (`Questions::answer`).
+///
+/// THE FOOTER'S OWN ANSWERS NAME NOTHING: its line, its keys and its card
+/// answer the question the footer holds, in the process that holds it, and
+/// its line is let go the moment that question ends. They are the plain
+/// form — no argument, or the digits alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer<'a> {
+    /// The question the footer holds now: the digits, or nothing typed.
+    Plain(&'a str),
+    /// The question named — its device and what it asked — and the digits.
+    For {
+        /// The device's object path.
+        device: &'a str,
+        /// What was asked, by [`standing::asked_word`].
+        asked: &'a str,
+        /// What was typed for it; empty for a yes or a no.
+        typed: &'a str,
+    },
+}
+
+impl<'a> Answer<'a> {
+    /// The argument as the footer reads it.
+    ///
+    /// A DEVICE'S PATH STARTS WITH `/`, and that is the mark: digits typed on
+    /// the footer's own line are the plain form. A PIN that itself began with
+    /// `/` would be read as a named answer and refused for naming nothing —
+    /// the safe way to be wrong about it.
+    #[must_use]
+    pub fn read(argument: Option<&'a str>) -> Self {
+        let argument = argument.unwrap_or_default();
+        if !argument.starts_with('/') {
+            return Self::Plain(argument);
+        }
+        let mut words = argument.splitn(3, ' ');
+        let device = words.next().unwrap_or_default();
+        let asked = words.next().unwrap_or_default();
+        let typed = words.next().unwrap_or_default();
+        Self::For {
+            device,
+            asked,
+            typed,
+        }
+    }
+
+    /// The argument a window sends for `question`, with what was typed for
+    /// it — the digits never in an argv or a log: down the control socket.
+    #[must_use]
+    pub fn named(question: &ronoctua_bluetooth::agent::Question, typed: Option<&str>) -> String {
+        let asked = standing::asked_word(&question.asked);
+        match typed {
+            Some(t) => format!("{} {asked} {t}", question.device),
+            None => format!("{} {asked}", question.device),
+        }
+    }
+
+    /// Whether this answer is for `standing` — the question the footer holds.
+    /// A plain answer is, by construction; a named one only when it names it.
+    #[must_use]
+    pub fn fits(&self, standing: &ronoctua_bluetooth::agent::Question) -> bool {
+        match self {
+            Self::Plain(_) => true,
+            Self::For { device, asked, .. } => {
+                *device == standing.device && *asked == standing::asked_word(&standing.asked)
+            }
+        }
+    }
+
+    /// What was typed.
+    #[must_use]
+    pub const fn typed(&self) -> &'a str {
+        match self {
+            Self::Plain(typed) | Self::For { typed, .. } => typed,
+        }
+    }
 }
 
 /// The two halves of a device's page.
@@ -806,6 +919,9 @@ impl View {
         // fixed eighty columns, which was sound while every screen was one
         // column — the rows really were the same things at every width.
         let width = columns.max(1);
+        // A NAME NOBODY TYPED is let go by the next key: while a line asks,
+        // no key reaches the view, so a key here means the line is gone.
+        self.renaming = None;
         let rows = self.rows(scene, width, texts);
         self.settle(&rows);
         let target = rows
@@ -942,10 +1058,9 @@ impl View {
                     Errand::Mute(node, on)
                 }
                 Target::Audio(card, profile) => Errand::Audio(card, profile),
-                // THE MACHINE'S OWN NAME is typed in the minibuffer, the same
-                // path a device's is — `Errand::Rename` with no path means
-                // this machine.
-                Target::Rename => Errand::Rename(String::new()),
+                // THE MACHINE'S OWN NAME is typed the way a device's is —
+                // `Errand::Rename` with no path means this machine.
+                Target::Rename => self.rename(String::new()),
                 Target::Answer(_) => Errand::Nothing,
                 Target::Scan(on) => Errand::Order(Ask::Scan(on)),
                 Target::Profile { device, uuid, on } => {
@@ -1094,7 +1209,7 @@ impl View {
                     Press::Forget => Errand::Nothing,
                     Press::Trust => Errand::Order(Ask::Trust(at, !d.trusted)),
                     Press::Block => Errand::Order(Ask::Block(at, !d.blocked)),
-                    _ => Errand::Rename(at),
+                    _ => self.rename(at),
                 }
             }
         }
@@ -1104,6 +1219,55 @@ impl View {
     fn answer(&mut self, yes: bool) -> Errand {
         self.question = None;
         Errand::Answer(yes)
+    }
+
+    /// A name is to be typed for `at` — remembered here, so the answer can
+    /// be told what it names.
+    fn rename(&mut self, at: String) -> Errand {
+        self.renaming = Some(at.clone());
+        Errand::Rename(at)
+    }
+
+    /// The name the thing being renamed has NOW — what the door's line
+    /// starts from, in both doors.
+    ///
+    /// The alias first, then its own name: `label` falls back to the address,
+    /// and an address is not a name anybody would keep four letters of.
+    #[must_use]
+    pub fn name_being_changed(&self, scene: &Scene) -> Option<String> {
+        let at = self.renaming.as_deref()?;
+        let (alias, name) = if at.is_empty() {
+            let a = scene.adapter()?;
+            (a.alias.as_str(), a.name.as_str())
+        } else {
+            let d = scene.device(at)?;
+            (d.alias.as_str(), d.name.as_str())
+        };
+        [alias, name]
+            .into_iter()
+            .find(|s| !s.trim().is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    /// What a typed name becomes — the one answer both doors carry out.
+    ///
+    /// An EMPTY name is a no: the line was left with nothing on it, and a
+    /// device keeps the name it had. A name nobody asked for (no rename under
+    /// way) is nothing too: `bluetooth-rename <name>` from `LEADER :` with the
+    /// view on another screen must not rename whatever was last in mind.
+    pub fn renamed(&mut self, name: &str) -> Errand {
+        let Some(at) = self.renaming.take() else {
+            return Errand::Nothing;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            return Errand::Nothing;
+        }
+        if at.is_empty() {
+            Errand::Order(Ask::AdapterAlias(name.to_owned()))
+        } else {
+            Errand::Order(Ask::Rename(at, name.to_owned()))
+        }
     }
 
     /// Forgets the question — the door calls this when the digits have been
@@ -2197,6 +2361,197 @@ impl Builder<'_> {
             disabled,
             description: self.said.take(),
         });
+    }
+}
+
+/// THE STANDING QUESTION, where the window can read it.
+///
+/// # Why a file
+///
+/// The agent is the footer's: bluetoothd asks the DEFAULT agent, only one
+/// door may register it (`ronoctua_bluetooth::watch`), and the footer is the
+/// process that outlives every window. So a question arrives in the footer's
+/// process — and the window has to show it and answer it all the same (the
+/// owner's rule: the two doors do the same things). What carries it across
+/// is the rule every other pair of doors here keeps: the file is the
+/// broadcast. The footer writes it when a question arrives and takes it away
+/// when the question ends; the window watches it by inotify.
+///
+/// The ANSWER travels the other way, down the control socket
+/// (`bluetooth-accept`, `bluetooth-refuse`) — never in an argv — and names
+/// the question it was given for ([`Answer`]).
+///
+/// # What is in it
+///
+/// The device's path, what is asked, and the code to compare or to type on
+/// the other thing — the digits the footer's own screen and its card already
+/// show. A PIN typed HERE is never in it. It is written `0600`, in the
+/// runtime directory, named per display beside the control socket.
+///
+/// # A file whose writer is gone is no question
+///
+/// A footer that died with a question up leaves the file behind, and its
+/// agent went with it: the question is over. So the file carries the footer's
+/// pid, and a reader whose writer is not alive reads nothing. The next footer
+/// also clears it as it starts.
+pub mod standing {
+    use ronoctua_bluetooth::agent::{Asked, Question};
+
+    /// The file's name, after the instance and the display.
+    const LEAF: &str = "bluetooth-question.json";
+
+    /// What the file holds — [`Question`] and its writer, in words a reader
+    /// refuses when it does not know them.
+    #[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    struct Written {
+        /// The footer that wrote it.
+        pid: u32,
+        /// The device's object path.
+        device: String,
+        /// What is asked, by name.
+        asked: String,
+        /// The code or the service, when the question carries one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    }
+
+    /// `$XDG_RUNTIME_DIR/<name>-<display>-bluetooth-question.json`: per
+    /// display, as the control socket is, because a question belongs to the
+    /// footer of one display.
+    #[must_use]
+    pub fn path() -> Option<std::path::PathBuf> {
+        let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".into());
+        ronoctua_xdg::runtime_file(&format!("{display}-{LEAF}"))
+    }
+
+    /// What is asked, as one word — the file's, and the one a window's
+    /// answer names its question by (`bluetooth::Answer`).
+    #[must_use]
+    pub const fn asked_word(asked: &Asked) -> &'static str {
+        match asked {
+            Asked::Confirm(_) => "confirm",
+            Asked::Passkey(_) => "passkey",
+            Asked::Pin => "pin",
+            Asked::Typed => "typed",
+            Asked::Authorize => "authorize",
+            Asked::Service(_) => "service",
+        }
+    }
+
+    /// The question as the file says it, written by `pid`.
+    #[must_use]
+    pub fn written(question: &Question, pid: u32) -> String {
+        let detail = match &question.asked {
+            Asked::Confirm(code) | Asked::Passkey(code) => Some(code.clone()),
+            Asked::Service(uuid) => Some(uuid.clone()),
+            Asked::Pin | Asked::Typed | Asked::Authorize => None,
+        };
+        serde_json::to_string(&Written {
+            pid,
+            device: question.device.clone(),
+            asked: asked_word(&question.asked).to_owned(),
+            detail,
+        })
+        .unwrap_or_default()
+    }
+
+    /// The question in `text`, and who wrote it.
+    ///
+    /// A word this does not know is NO QUESTION, never a plausible one: a
+    /// yes/no drawn for a question that wanted digits would send the other
+    /// side an empty PIN.
+    #[must_use]
+    pub fn read_from(text: &str) -> Option<(u32, Question)> {
+        let w: Written = serde_json::from_str(text).ok()?;
+        let asked = match (w.asked.as_str(), w.detail) {
+            ("confirm", Some(code)) => Asked::Confirm(code),
+            ("passkey", Some(code)) => Asked::Passkey(code),
+            ("pin", None) => Asked::Pin,
+            ("typed", None) => Asked::Typed,
+            ("authorize", None) => Asked::Authorize,
+            ("service", Some(uuid)) => Asked::Service(uuid),
+            _ => return None,
+        };
+        (!w.device.is_empty()).then_some((
+            w.pid,
+            Question {
+                device: w.device,
+                asked,
+            },
+        ))
+    }
+
+    /// Writes the question that stands — or takes the file away when none
+    /// does. Written beside and renamed over, so a reader never sees half of
+    /// it; `0600`, because the code is the other thing's.
+    pub fn publish(question: Option<&Question>) {
+        let Some(path) = path() else {
+            return;
+        };
+        let Some(question) = question else {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "the pairing question could not be taken back")
+                }
+            }
+            return;
+        };
+        if let Err(e) = write(&path, &written(question, std::process::id())) {
+            tracing::warn!(error = %e, "the pairing question could not be written for the window");
+        }
+    }
+
+    /// `text` into `path`, whole, owner-only.
+    fn write(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let draft = path.with_extension(format!("json.{}", std::process::id()));
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&draft)?;
+        f.write_all(text.as_bytes())?;
+        drop(f);
+        std::fs::rename(&draft, path)
+    }
+
+    /// The question standing now, when its footer is alive to be answered.
+    #[must_use]
+    pub fn read() -> Option<Question> {
+        let text = std::fs::read_to_string(path()?).ok()?;
+        let (pid, question) = read_from(&text)?;
+        let pid = rustix::process::Pid::from_raw(i32::try_from(pid).ok()?)?;
+        rustix::process::test_kill_process(pid).ok()?;
+        Some(question)
+    }
+
+    /// Watches the file, calling `stir` when it is written or taken away.
+    ///
+    /// At once, and not coalesced: a question is something somebody is
+    /// waiting on, and a quarter of a second of hold-off is a quarter of a
+    /// second of a device waiting for a yes.
+    #[must_use]
+    pub fn watch(
+        stir: impl Fn() -> bool + Send + 'static,
+    ) -> Option<ronoctua_files::notice::Notice> {
+        let path = path()?;
+        let (dir, name) = (path.parent()?, path.file_name()?.to_str()?);
+        match ronoctua_files::notice::Notice::on_file(
+            dir,
+            name,
+            ronoctua_files::notice::Pace::AtOnce,
+            stir,
+        ) {
+            Ok(n) => Some(n),
+            Err(e) => {
+                tracing::warn!(error = %e, "the pairing question will not reach this window");
+                None
+            }
+        }
     }
 }
 
@@ -3310,6 +3665,17 @@ mod tests {
             v.key(Press::Enter, &scene, DECIDING_WIDTH, &t),
             Errand::Rename(String::new())
         );
+        // THE LINE STARTS FROM THE NAME IT HAS, and the answer is the
+        // machine's alias — the same two calls in both doors.
+        assert_eq!(
+            v.name_being_changed(&scene).as_deref(),
+            Some("this machine")
+        );
+        assert_eq!(
+            v.renamed("  the desk  "),
+            Errand::Order(Ask::AdapterAlias("the desk".to_owned()))
+        );
+        assert_eq!(v.renamed("again"), Errand::Nothing, "one answer, once");
 
         let rows = v.rows(&scene, 80, &t);
         let timeout = rows
@@ -3327,6 +3693,75 @@ mod tests {
         assert_eq!(next_timeout(600), 3600);
         assert_eq!(next_timeout(3600), 0);
         assert_eq!(next_timeout(0), 180);
+    }
+
+    /// A DEVICE'S NAME is typed from the one it has, and the answer renames
+    /// THAT device — an empty answer, or one nobody asked for, renames
+    /// nothing; and the next key lets an unanswered rename go.
+    #[test]
+    fn a_devices_new_name_is_what_the_line_answered() {
+        let t = texts();
+        let mut scene = a_scene();
+        scene.devices[0].alias = "the old headset".to_owned();
+        let mut v = View::fresh_at("/d/1");
+        assert_eq!(v.renamed("nobody asked"), Errand::Nothing);
+        assert_eq!(
+            v.key(Press::Rename, &scene, DECIDING_WIDTH, &t),
+            Errand::Rename("/d/1".to_owned())
+        );
+        assert_eq!(
+            v.name_being_changed(&scene).as_deref(),
+            Some("the old headset")
+        );
+        assert_eq!(
+            v.renamed("desk"),
+            Errand::Order(Ask::Rename("/d/1".to_owned(), "desk".to_owned()))
+        );
+        // AN EMPTY LINE KEEPS THE NAME.
+        let _ = v.key(Press::Rename, &scene, DECIDING_WIDTH, &t);
+        assert_eq!(v.renamed("   "), Errand::Nothing);
+        // A LINE LET GO: the next key reaches the view, and the rename is over.
+        let _ = v.key(Press::Rename, &scene, DECIDING_WIDTH, &t);
+        let _ = v.key(Press::Down, &scene, DECIDING_WIDTH, &t);
+        assert_eq!(v.renamed("late"), Errand::Nothing);
+        assert_eq!(v.name_being_changed(&scene), None);
+    }
+
+    /// THE STANDING QUESTION CROSSES INTACT, every kind of it, with the pid
+    /// of the footer that wrote it — and a word the reader does not know is
+    /// no question, never a yes/no drawn for one that wanted digits.
+    #[test]
+    fn the_standing_question_is_read_back_as_it_was_written() {
+        use agent::{Asked, Question};
+        for asked in [
+            Asked::Confirm("012345".to_owned()),
+            Asked::Passkey("000042".to_owned()),
+            Asked::Pin,
+            Asked::Typed,
+            Asked::Authorize,
+            Asked::Service("0000110b-0000-1000-8000-00805f9b34fb".to_owned()),
+        ] {
+            let q = Question {
+                device: "/org/bluez/hci0/dev_X".to_owned(),
+                asked,
+            };
+            let text = standing::written(&q, 4242);
+            assert_eq!(
+                standing::read_from(&text),
+                Some((4242, q.clone())),
+                "{text}"
+            );
+        }
+        for wrong in [
+            r#"{"pid":1,"device":"/d","asked":"pin","detail":"0000"}"#,
+            r#"{"pid":1,"device":"/d","asked":"confirm"}"#,
+            r#"{"pid":1,"device":"/d","asked":"yes-please"}"#,
+            r#"{"pid":1,"device":"","asked":"pin"}"#,
+            "",
+            "{",
+        ] {
+            assert_eq!(standing::read_from(wrong), None, "{wrong}");
+        }
     }
 
     #[test]

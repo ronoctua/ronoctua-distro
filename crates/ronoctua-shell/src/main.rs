@@ -86,6 +86,7 @@ mod keyboard;
 mod keys_link;
 mod language;
 mod leader;
+mod line;
 // THE LINE THAT OUTLIVES THE FOOTER — raised by systemd when it fails.
 mod lifeline;
 mod locale;
@@ -111,8 +112,10 @@ mod notifications;
 mod notifications_window;
 mod osk;
 mod paint;
+mod pasting;
 mod player;
 mod player_browse;
+mod player_picture;
 mod player_stage;
 mod player_window;
 mod pointers;
@@ -124,6 +127,11 @@ mod right_column;
 mod seats;
 // A NAME TOO LONG FOR ITS COLUMN, walking sideways a cell at a time.
 mod slide;
+mod software;
+mod software_feed;
+mod software_pictures;
+mod software_window;
+mod software_words;
 mod sound;
 mod stage;
 mod surface;
@@ -144,8 +152,9 @@ mod transfers;
 mod window_menu;
 mod workspaces;
 mod world;
-// `LEADER s u`, the animated mark on the modeline, and the window that watches
-// a run happen. It knows no step: the sequence is `assets/updates.nix`.
+// `LEADER s u`: the animated mark on the modeline, the door that starts a
+// run, and the view that watches it happen — in the footer and in a window.
+// It knows no step: the sequence is `assets/updates.nix`.
 mod cursor_shape;
 mod text_select;
 mod update_window;
@@ -322,7 +331,7 @@ fn main() -> Result<()> {
         // compositor's config, and a string written at both ends drifts. The
         // two configs (`nix/modules/scroll.nix` and `nix/dev.nix`) take this in.
         Some("export-window-rules") => {
-            print!("{}", terminal::floating_rules());
+            print!("{}", terminal::window_rules());
             return Ok(());
         }
         // A terminal in a window of its own. With no argument it starts `$SHELL`;
@@ -363,16 +372,58 @@ fn main() -> Result<()> {
         Some("history") => {
             return history_window::host_it();
         }
-        // A MANUAL in a window: the list `LEADER h` opens hands the word.
+        // THE MANUALS in a window: `ronoctua-shell manual` opens on their
+        // list, as `LEADER h` does, and `manual <word>` on one of them — the
+        // word the footer's `C-w` hands. A word that names no manual is
+        // refused, never taken for the shortcuts'.
         Some("manual") => {
-            let which = std::env::args()
-                .nth(2)
-                .and_then(|w| manual::Which::of_word(&w))
-                .unwrap_or(manual::Which::Shortcuts);
-            return manual_window::host_it(which).context("host a manual");
+            let which = match std::env::args().nth(2) {
+                None => None,
+                Some(word) => match manual::Which::of_word(&word) {
+                    Some(which) => Some(which),
+                    None => anyhow::bail!(
+                        "no manual is called `{word}`; the words are {}",
+                        manual::Which::ALL.map(manual::Which::word).join(", ")
+                    ),
+                },
+            };
+            return manual_window::host_it(which).context("host the manuals");
         }
         Some("syncthing") => {
             return syncthing_window::host_it().context("host the syncthing view");
+        }
+        // `ronoctua-shell software [level | search <words> | web <address>]`
+        // — the person's own programs in a window of their own, the SAME
+        // `software::View` the footer draws from: on the first page, on the
+        // level named, on what a search for the words finds, or on a new web
+        // app's editor for the address.
+        Some("software") => {
+            let said: Vec<String> = std::env::args().skip(2).collect();
+            let opening = if said.is_empty() {
+                software::Opening::Home
+            } else {
+                software_window::opening_of(&said.join(" ")).with_context(|| {
+                    format!(
+                        "usage: ronoctua-shell software [{} | {} <words> | {} <address>]",
+                        software_window::LEVEL_WORDS.join(" | "),
+                        software_window::SEARCH_WORD,
+                        software_window::WEB_WORD
+                    )
+                })?
+            };
+            return software_window::host_it(opening).context("host the software view");
+        }
+        // WHAT THE `br.ronoctua.software.desktop` ENTRY RUNS for a double
+        // click on an `.AppImage`, an `.apk` or a `.flatpakref`: the window,
+        // with the question to install that file up.
+        Some("software-file") => {
+            let path = std::env::args()
+                .nth(2)
+                .context("usage: ronoctua-shell software-file <path>")?;
+            return software_window::host_it(software_window::file_opening(std::path::Path::new(
+                &path,
+            )))
+            .context("host the software view");
         }
         Some("audio") => {
             return audio_window::host_it().context("host the sound view");
@@ -448,9 +499,10 @@ fn main() -> Result<()> {
             return geo_window::host_it().context("host the regions' view");
         }
         // `ronoctua-shell network` — the network in a window of its own. The
-        // SAME `network::View` the footer draws from; what it cannot do here
-        // is ask for a password, because a window has no minibuffer, and the
-        // row says so rather than pretending.
+        // SAME `network::View` the footer draws from, and it asks what the
+        // footer asks — a password masked, a tunnel's path, a Tor value — on
+        // its own header's line (`Ui::ask`), where the footer asks on its
+        // minibuffer; both answers reach `network::View::answered`.
         Some("network") => {
             return network_window::host_it().context("host the network view");
         }

@@ -1,0 +1,282 @@
+{
+ "8311": {
+  "aliases": [
+   "8311 community"
+  ],
+  "base": "svg",
+  "categories": [
+   "network",
+   "monitoring"
+  ]
+ },
+ "apple": {
+  "aliases": [],
+  "base": "svg",
+  "categories": [],
+  "colors": {
+   "dark": "apple-light",
+   "light": "apple"
+  }
+ },
+ "chatgpt": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "deepl": {
+  "aliases": [],
+  "base": "svg",
+  "categories": [],
+  "colors": {
+   "dark": "deepl-dark",
+   "light": "deepl"
+  }
+ },
+ "discord": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "element": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "figma": {
+  "aliases": [],
+  "base": "svg",
+  "categories": [
+   "Design"
+  ]
+ },
+ "github": {
+  "aliases": [
+   "git-hosting",
+   "code-repository"
+  ],
+  "base": "svg",
+  "categories": [
+   "Version-Control-Systems",
+   "Developer-Tools"
+  ],
+  "colors": {
+   "dark": "github",
+   "light": "github-light"
+  }
+ },
+ "gmail": {
+  "aliases": [
+   "google-mail",
+   "webmail-service"
+  ],
+  "base": "svg",
+  "categories": [
+   "Email-Providers"
+  ]
+ },
+ "google": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "google-drive": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "home-assistant": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "jellyfin": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "linkedin": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "mastodon": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "matrix": {
+  "aliases": [],
+  "base": "svg",
+  "categories": [],
+  "colors": {
+   "dark": "matrix",
+   "light": "matrix-light"
+  }
+ },
+ "microsoft-teams": {
+  "aliases": [
+   "Teams2025",
+   "Teams2026",
+   "MicrosoftTeams2025",
+   "MicrosoftTeams2026",
+   "microsoftteams",
+   "teams"
+  ],
+  "base": "svg",
+  "categories": []
+ },
+ "netflix": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "nextcloud": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "notion": {
+  "aliases": [],
+  "base": "svg",
+  "categories": [],
+  "colors": {
+   "dark": "notion",
+   "light": "notion-light"
+  }
+ },
+ "ntopng": {
+  "aliases": [
+   "network-analyzer",
+   "traffic-sniffer"
+  ],
+  "base": "png",
+  "categories": [
+   "Monitoring-Tools",
+   "Networking-Tools"
+  ]
+ },
+ "proton-calendar": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "proton-drive": {
+  "aliases": [
+   "Cloud Storage"
+  ],
+  "base": "svg",
+  "categories": [
+   "Cloud-Computing",
+   "File-Sharing-&-Sync",
+   "Security"
+  ]
+ },
+ "proton-mail": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "reddit": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "serviio": {
+  "aliases": [
+   "Media Server"
+  ],
+  "base": "svg",
+  "categories": [
+   "Media-Servers",
+   "Home-Automation"
+  ],
+  "colors": {
+   "dark": "serviio",
+   "light": "serviio-light"
+  }
+ },
+ "signal": {
+  "aliases": [
+   "Messaging App"
+  ],
+  "base": "svg",
+  "categories": [
+   "Social-Media",
+   "Security"
+  ]
+ },
+ "slack": {
+  "aliases": [
+   "Team Communication"
+  ],
+  "base": "svg",
+  "categories": [
+   "Communication",
+   "Office-Suites"
+  ]
+ },
+ "spotify": {
+  "aliases": [],
+  "base": "svg",
+  "categories": [
+   "media"
+  ],
+  "colors": {
+   "dark": "spotify-dark",
+   "light": "spotify-light"
+  },
+  "wordmark": {
+   "dark": "spotify-wordmark-dark",
+   "light": "spotify-wordmark-light"
+  }
+ },
+ "telegram": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "todoist": {
+  "aliases": [],
+  "base": "svg",
+  "categories": [],
+  "colors": {
+   "dark": "todoist-dark",
+   "light": "todoist"
+  }
+ },
+ "twitter": {
+  "aliases": [
+   "x-platform",
+   "microblogging"
+  ],
+  "base": "svg",
+  "categories": [
+   "Social-Media"
+  ]
+ },
+ "whatsapp": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ },
+ "x": {
+  "aliases": [],
+  "base": "png",
+  "categories": []
+ },
+ "youtube": {
+  "aliases": [
+   "video-sharing-site",
+   "google-video"
+  ],
+  "base": "svg",
+  "categories": [
+   "Video-Streaming"
+  ]
+ },
+ "youtube-music": {
+  "aliases": [],
+  "base": "svg",
+  "categories": []
+ }
+}

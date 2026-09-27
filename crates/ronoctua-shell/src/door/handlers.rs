@@ -35,6 +35,10 @@ impl<C: Content> Door<C> {
     /// A size from the compositor: kept as ASKED, then made what the buffer
     /// can show — see [`crate::hidpi`].
     fn configured(&mut self, width: Option<u32>, height: Option<u32>) {
+        // FROM NOW ON A FRAME MAY GO OUT: the toolkit acked this configure
+        // before calling here, so the commit a frame makes comes after the
+        // ack (`Ui::may_draw`).
+        self.ui.configured = true;
         // WHAT THE COMPOSITOR SAID IS KEPT SEPARATELY, and taken from the
         // CONFIGURE and nothing else: built out of the door's own fields it
         // would be the size `resized` last answered, which can only shrink.

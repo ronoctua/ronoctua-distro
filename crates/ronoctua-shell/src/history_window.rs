@@ -16,17 +16,19 @@
 //! second history — which is the exact defect `ronoctua-clipcascade` exists to
 //! avoid, one process over. See `docs/PENDING.md`.
 //!
-//! # The one thing this door CANNOT do
+//! # It types what the footer types
 //!
-//! **Type.** The only place anything is typed in this system is the footer's
-//! minibuffer, and this window has none — so a row that needs a value says so
-//! and points at `LEADER s h h`.
+//! The login — server, account, password, key — and a setting's value are
+//! asked on this window's own line (`Ui::ask`), the password and the key
+//! hidden, and answered through the same `View::answered` the footer's
+//! minibuffer reaches. The order goes to this process's own Atuin thread; the
+//! password goes nowhere else.
 
 use crate::door::{Content, Door, Ui};
 use anyhow::Result;
 use smithay_client_toolkit::{
     reexports::calloop::channel,
-    seat::keyboard::{KeyEvent, Keysym, Modifiers},
+    seat::keyboard::{KeyEvent, Modifiers},
 };
 
 /// The window's `app_id`.
@@ -136,12 +138,12 @@ impl HistoryWindow {
                 self.view.took_the_key(key);
                 ui.ask_paint();
             }
-            ronoctua_atuin::Event::Done { refused, .. } => {
-                if let Some(reason) = refused {
-                    ui.message = Some(ui.texts.t_with(
-                        ronoctua_i18n::key::ECHO_ATUIN_REFUSED,
-                        &[("reason", &reason)],
-                    ));
+            // WHAT THE FOOTER SAYS, from the same function.
+            ronoctua_atuin::Event::Done { order, refused } => {
+                if let Some(said) =
+                    crate::history::said_when_done(&order, refused.as_deref(), &ui.texts)
+                {
+                    ui.message = Some(said);
                     ui.ask_paint();
                 }
             }
@@ -175,19 +177,17 @@ impl HistoryWindow {
                     ));
                 }
             },
-            // THE ONE THING THIS DOOR CANNOT DO IS TYPE. The minibuffer is the
-            // footer's, and this window has none — so it says where to go,
-            // which is what every other window of this system does for a
-            // password, a path and a zone.
-            Errand::AskServer | Errand::Edit(_) => {
-                ui.message = Some(ui.texts.t(ronoctua_i18n::key::ATUIN_TYPED_IN_THE_FOOTER));
+            // ON THIS WINDOW'S OWN LINE, hidden when the view says so; the
+            // answer comes back to `answered`.
+            Errand::Ask(question) => {
+                ui.ask(crate::line::Line::new(question.id, question.secret, None));
             }
         }
         ui.ask_paint();
     }
 
-    /// What one press means — from the keyboard, or `RET` from a click. The
-    /// key clears the last order's message; the click never did.
+    /// What one press means — from the keyboard, or `RET` from a second
+    /// click.
     fn pressed(&mut self, ui: &mut Ui, press: crate::history::Press) {
         let facts = crate::history::Facts {
             shot: &self.snapshot,
@@ -208,11 +208,31 @@ impl Content for HistoryWindow {
         format!("*{}*", texts.t(ronoctua_i18n::key::ATUIN_TITLE))
     }
 
-    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, _: Modifiers) {
-        if let Some(press) = press_of(event) {
+    /// A key, read by its whole notation through the one reader the footer
+    /// calls too (`history::press_of_key`) — which is what makes `S-<right>`
+    /// and `S-<left>` reach the view, from the keyboard and from the hint.
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+        if let Some(press) =
+            crate::door::keys::key_of(event, mods).and_then(crate::history::press_of_key)
+        {
             ui.message = None;
             self.pressed(ui, press);
         }
+    }
+
+    /// What was typed on this window's line: the same `View::answered` the
+    /// footer's minibuffer reaches — the login's next question, or the order.
+    fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
+        ui.message = None;
+        let errand = self.view.answered(id, text);
+        self.apply(ui, errand);
+    }
+
+    /// The line was let go, and the view forgets the question — and a
+    /// password typed for the login.
+    fn unanswered(&mut self, ui: &mut Ui, _: &'static str) {
+        self.view.let_go();
+        ui.ask_paint();
     }
 
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
@@ -236,44 +256,209 @@ impl Content for HistoryWindow {
         Some(self.view.cursor())
     }
 
-    /// THE MOUSE AIMS, THE KEYS ACT — by the same `Enter` as the keyboard,
-    /// which is what the footer does with `Click::History`: the click puts
-    /// the cursor on the row, and `RET` is what applies, arms and confirms.
-    /// Nothing here may be reachable only by the mouse, nor behave
-    /// differently depending on how one got to it.
+    /// THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19, and what
+    /// the footer does with `Click::History`: a click puts the cursor on the
+    /// row, and a click on the row it is already on is that row's `RET`,
+    /// through the same `pressed` a key goes through.
     fn clicked(&mut self, ui: &mut Ui, row: usize) {
-        self.view.clicked(row);
-        self.pressed(ui, crate::history::Press::Enter);
+        let facts = crate::history::Facts {
+            shot: &self.snapshot,
+        };
+        if self.view.clicked(row, &facts, ui.columns, &ui.texts) {
+            self.pressed(ui, crate::history::Press::Enter);
+        } else {
+            ui.ask_paint();
+        }
     }
 }
 
-/// A `KeyEvent` as the view sees it — the same mapping the footer does.
-///
-/// BOTH DOORS GO THROUGH `history::OF_THE_VIEW`. This one turns SCTK's keysym
-/// into the table's notation and asks the view; the footer turns its own
-/// `Key` into the same notation and asks the same question. A key written in
-/// only one of the two would be a key one door answers and the other does
-/// not, which is the defect `bluetooth-keys-reach-both-doors` was written for.
-fn press_of(event: &KeyEvent) -> Option<crate::history::Press> {
-    let notation = match event.keysym {
-        // ESCAPE IS NOT IN THE TABLE, and deliberately: every view of this
-        // shape leaves one level on it, and the hint line does not teach a
-        // key that is the same everywhere.
-        Keysym::Escape => return Some(crate::history::Press::Escape),
-        Keysym::Return | Keysym::KP_Enter => "RET",
-        Keysym::Up => "<up>",
-        Keysym::Down => "<down>",
-        Keysym::Left => "<left>",
-        Keysym::Right => "<right>",
-        // AND THE BARE LETTERS, by the character SCTK hands this door. The
-        // footer matches `Key::simple(sym).notation()`, which is what ITS
-        // toolkit hands it; the two expressions agree on exactly the
-        // unmodified lowercase letters the table holds, which is why the
-        // table is the only place a letter is written.
-        _ => event.utf8.as_deref()?,
-    };
-    crate::history::OF_THE_VIEW
-        .iter()
-        .find(|(t, _)| *t == notation)
-        .and_then(|(_, id)| crate::history::press_of(id))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::history::{Press, Question};
+
+    /// A window with no Atuin thread behind it: every order it gives is
+    /// answered with "atuin is not installed" on its own line — which is what
+    /// a test of the wiring can see — and nothing reaches the footer.
+    fn a_window(logged_in: bool) -> (HistoryWindow, Ui) {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let me = HistoryWindow {
+            view: crate::history::View::fresh(),
+            snapshot: ronoctua_atuin::Snapshot {
+                present: true,
+                logged_in,
+                syncing: logged_in,
+                address: "https://history.example.org".to_owned(),
+                username: "someone".to_owned(),
+                ..ronoctua_atuin::Snapshot::default()
+            },
+            atuin: None,
+            _watch: None,
+        };
+        (me, Ui::for_tests(texts))
+    }
+
+    /// Where the row carrying `wanted` is, as this window draws it.
+    fn row_carrying(w: &HistoryWindow, ui: &Ui, wanted: &str) -> usize {
+        let rows = w.rows(ui);
+        rows.iter()
+            .position(|r| r.iter().any(|f| f.text == wanted))
+            .unwrap_or_else(|| panic!("no row says `{wanted}`"))
+    }
+
+    /// The sentence an order gets here with no Atuin thread: the order left
+    /// for this window's own thread.
+    fn ordered(ui: &Ui) -> bool {
+        ui.message.as_deref() == Some(ui.texts.t(ronoctua_i18n::key::ATUIN_ABSENT).as_str())
+    }
+
+    /// Answers the line that is open, as the door does: the line leaves
+    /// `ui.asking` first, and the window hears the text under its id.
+    fn answer(w: &mut HistoryWindow, ui: &mut Ui, text: &str) {
+        let line = ui.asking.take().expect("no line is open");
+        w.answered(ui, line.id, text);
+    }
+
+    /// THE LOGIN IS TYPED IN THE WINDOW — four questions on its own line, the
+    /// password and the key hidden — and the order is this window's: nothing
+    /// goes to the footer, and the password is on no line.
+    #[test]
+    fn the_login_is_typed_on_the_windows_own_line() {
+        let (mut w, mut ui) = a_window(false);
+        let log_in = row_carrying(&w, &ui, &ui.texts.t(ronoctua_i18n::key::ATUIN_LOG_IN));
+        w.clicked(&mut ui, log_in);
+        w.clicked(&mut ui, log_in);
+        let mut asked = Vec::new();
+        for said in ["https://history.example.org", "someone", "s3nh4", "one two"] {
+            let line = ui
+                .asking
+                .as_ref()
+                .expect("the next question is not asked here");
+            asked.push((line.id, line.secret));
+            answer(&mut w, &mut ui, said);
+            assert!(ui.orders().is_empty(), "the login went to the footer");
+            assert!(!ui.message.clone().unwrap_or_default().contains("s3nh4"));
+        }
+        assert_eq!(
+            asked,
+            [
+                (Question::SERVER.id, false),
+                (Question::ACCOUNT.id, false),
+                (Question::PASSWORD.id, true),
+                (Question::KEY.id, true),
+            ]
+        );
+        assert!(ui.asking.is_none());
+        assert!(ordered(&ui), "the login was not ordered: {:?}", ui.message);
+        assert_eq!(w.view.question(), None);
+    }
+
+    /// A VALUE THAT IS TYPED is asked and answered here too; nothing typed
+    /// orders nothing.
+    #[test]
+    fn a_typed_setting_is_asked_and_answered_in_the_window() {
+        let (mut w, mut ui) = a_window(true);
+        let label = ui.texts.t(ronoctua_i18n::key::ATUIN_OPT_HISTORY_FILTER);
+        let filter = row_carrying(&w, &ui, &label);
+        w.clicked(&mut ui, filter);
+        assert!(ui.asking.is_none(), "the first click acted");
+        w.clicked(&mut ui, filter);
+        assert_eq!(
+            ui.asking.as_ref().map(|l| (l.id, l.secret)),
+            Some((Question::SETTING.id, false))
+        );
+        answer(&mut w, &mut ui, "   ");
+        assert!(ui.message.is_none(), "{:?}", ui.message);
+        w.pressed(&mut ui, Press::Enter);
+        answer(&mut w, &mut ui, "^secret");
+        assert!(ordered(&ui), "{:?}", ui.message);
+        assert!(ui.orders().is_empty());
+    }
+
+    /// A QUESTION LET GO HERE is let go by the view, and the password with
+    /// it: the key typed afterwards orders nothing.
+    #[test]
+    fn a_question_let_go_in_the_window_takes_the_password_with_it() {
+        let (mut w, mut ui) = a_window(false);
+        let log_in = row_carrying(&w, &ui, &ui.texts.t(ronoctua_i18n::key::ATUIN_LOG_IN));
+        w.clicked(&mut ui, log_in);
+        w.clicked(&mut ui, log_in);
+        answer(&mut w, &mut ui, "https://history.example.org");
+        answer(&mut w, &mut ui, "someone");
+        answer(&mut w, &mut ui, "s3nh4");
+        let line = ui.asking.take().expect("the key is asked");
+        w.unanswered(&mut ui, line.id);
+        assert_eq!(w.view.question(), None);
+        w.answered(&mut ui, Question::KEY.id, "one two");
+        assert!(ui.message.is_none(), "{:?}", ui.message);
+    }
+
+    /// `S-<right>` AND `S-<left>` TURN A VALUE in the window — the same event
+    /// a click on the hint sends — and a bare arrow does not.
+    #[test]
+    fn shifted_arrows_turn_a_value_in_the_window() {
+        let (mut w, mut ui) = a_window(true);
+        let mark = row_carrying(&w, &ui, &ui.texts.t(ronoctua_i18n::key::ATUIN_MARK));
+        w.clicked(&mut ui, mark);
+        let press = |w: &mut HistoryWindow, ui: &mut Ui, notation: &str| {
+            ui.message = None;
+            let (event, mods) =
+                crate::door::keys::event_of(ronoctua_keymap::Key::parse(notation).unwrap());
+            w.typed(ui, &event, mods);
+        };
+        press(&mut w, &mut ui, "<right>");
+        assert!(ui.message.is_none(), "a bare arrow turned the ring");
+        press(&mut w, &mut ui, "S-<right>");
+        assert!(ordered(&ui), "S-<right> did not turn the ring");
+        press(&mut w, &mut ui, "S-<left>");
+        assert!(ordered(&ui), "S-<left> did not turn the ring");
+    }
+
+    /// THE FIRST CLICK SELECTS, AND THE SECOND ACTS — invariant 19.
+    #[test]
+    fn the_first_click_selects_and_the_second_acts() {
+        let (mut w, mut ui) = a_window(true);
+        let sync = row_carrying(&w, &ui, &ui.texts.t(ronoctua_i18n::key::ATUIN_SYNC_NOW));
+        w.clicked(&mut ui, sync);
+        assert!(ui.message.is_none(), "the first click synced");
+        assert_eq!(w.cursor(), Some(sync));
+        w.clicked(&mut ui, sync);
+        assert!(ordered(&ui), "the second click did not sync");
+    }
+
+    /// WHAT A FINISHED ORDER SAYS HERE is what the footer says: a sync, by
+    /// name — it used to be nothing — and a refusal.
+    #[test]
+    fn a_finished_order_says_here_what_it_says_in_the_footer() {
+        use ronoctua_atuin::{Event, Order};
+        let (mut w, mut ui) = a_window(true);
+        w.atuin_event(
+            &mut ui,
+            Event::Done {
+                order: Order::Sync,
+                refused: None,
+            },
+        );
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(ui.texts.t(ronoctua_i18n::key::ECHO_ATUIN_SYNCED).as_str())
+        );
+        ui.message = None;
+        w.atuin_event(
+            &mut ui,
+            Event::Done {
+                order: Order::Mark(ronoctua_atuin::prefs::Mark::Never),
+                refused: None,
+            },
+        );
+        assert!(ui.message.is_none(), "{:?}", ui.message);
+        w.atuin_event(
+            &mut ui,
+            Event::Done {
+                order: Order::Sync,
+                refused: Some("no route".to_owned()),
+            },
+        );
+        assert!(ui.message.clone().unwrap_or_default().contains("no route"));
+    }
 }

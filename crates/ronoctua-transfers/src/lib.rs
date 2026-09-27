@@ -47,6 +47,7 @@ pub mod ledger;
 pub mod local;
 pub mod media;
 pub mod serve;
+pub mod software;
 pub mod torrent;
 pub mod where_to;
 pub mod wire;

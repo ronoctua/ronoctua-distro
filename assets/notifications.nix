@@ -525,6 +525,193 @@
       ];
       actions = [ ];
     };
+
+    # THE PERSON'S OWN PROGRAMS (`LEADER i`), raised by the footer when a job of
+    # the queue's software engine ENDS — the same diff of two lists the file
+    # manager's reports come from (`transfers::ended`), so "this job is over"
+    # has one definition. Only the ends worth a sentence: the rest the view's
+    # own line said when the order went out. A trial that closed is read from
+    # its unit, not from the queue (`software_feed::Running`).
+
+    # INSTALLED: `full`, because it offers to open what was installed, and
+    # an action nobody can see is an action nobody knows about.
+    software-installed = {
+      when = [
+        {
+          field = "tag";
+          is = "software-installed";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 30;
+      icon = "software";
+      tags = [
+        "software-installed"
+        "software"
+      ];
+      actions = [
+        {
+          id = "software-launch-latest";
+          command = "software-launch-latest";
+        }
+      ];
+    };
+
+    # A WEB APP MADE, the same shape and the same offer.
+    software-web-created = {
+      when = [
+        {
+          field = "tag";
+          is = "software-web-created";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 30;
+      icon = "software-source-web";
+      tags = [
+        "software-web-created"
+        "software"
+      ];
+      actions = [
+        {
+          id = "software-launch-latest";
+          command = "software-launch-latest";
+        }
+      ];
+    };
+
+    # REMOVED: it confirms what was asked for, and nothing more.
+    software-removed = {
+      when = [
+        {
+          field = "tag";
+          is = "software-removed";
+        }
+      ];
+      rewrite = false;
+      show = "brief";
+      life = "quick";
+      loud = false;
+      level = 10;
+      icon = "software";
+      tags = [
+        "software-removed"
+        "software"
+      ];
+      actions = [ ];
+    };
+
+    # UPDATED, with the way to the rest of the updates.
+    software-updated = {
+      when = [
+        {
+          field = "tag";
+          is = "software-updated";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 25;
+      icon = "software";
+      tags = [
+        "software-updated"
+        "software"
+      ];
+      actions = [
+        {
+          id = "software-maintenance";
+          command = "software-maintenance";
+        }
+      ];
+    };
+
+    # IT DID NOT WORK: loud and long, with the refusal's sentence as the body
+    # and the queue, which keeps the program's own words, one action away.
+    software-failed = {
+      when = [
+        {
+          field = "tag";
+          is = "software-failed";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "long";
+      loud = true;
+      level = 70;
+      icon = "software";
+      tags = [
+        "software-failed"
+        "software"
+      ];
+      actions = [
+        {
+          id = "transfers-panel";
+          command = "transfers-open";
+        }
+      ];
+    };
+
+    # A TRIAL CLOSED: nothing of it stays, and the trials are one action away.
+    software-trial-ended = {
+      when = [
+        {
+          field = "tag";
+          is = "software-trial-ended";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 30;
+      icon = "software-trial";
+      tags = [
+        "software-trial-ended"
+        "software"
+      ];
+      actions = [
+        {
+          id = "software-trials";
+          command = "software-trials";
+        }
+      ];
+    };
+
+    # ANDROID'S IMAGE IS READY: it took a gigabyte and minutes, and the next
+    # thing to do is on its page.
+    software-android-ready = {
+      when = [
+        {
+          field = "tag";
+          is = "software-android-ready";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 50;
+      icon = "software-android";
+      tags = [
+        "software-android-ready"
+        "software"
+      ];
+      actions = [
+        {
+          id = "software-android";
+          command = "software-android";
+        }
+      ];
+    };
   };
 
   # ===================================================================

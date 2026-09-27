@@ -8,6 +8,13 @@ fn texts() -> ronoctua_i18n::Texts {
 
 const WIDE: u16 = 80;
 
+/// Puts the cursor on row `at`, as a key walking there would — the row's
+/// identity with it.
+fn aim(v: &mut View, at: usize) {
+    v.cursor = at;
+    v.on = None;
+}
+
 fn shot(logged_in: bool) -> ronoctua_atuin::Snapshot {
     ronoctua_atuin::Snapshot {
         present: true,
@@ -100,7 +107,7 @@ fn the_key_is_behind_a_question_that_opens_on_no() {
         .iter()
         .position(|(_, target)| matches!(target, Target::Key))
         .expect("no row shows the key");
-    v.clicked(at);
+    aim(&mut v, at);
     // THE FIRST PRESS ONLY ASKS.
     assert_eq!(v.key(Press::Enter, &facts, WIDE, &t), Errand::Nothing);
     assert!(v.asking());
@@ -110,7 +117,7 @@ fn the_key_is_behind_a_question_that_opens_on_no() {
         .iter()
         .position(|(_, target)| matches!(target, Target::Key))
         .expect("the question has no yes");
-    v.clicked(again);
+    aim(&mut v, again);
     assert_eq!(v.key(Press::Enter, &facts, WIDE, &t), Errand::ShowKey);
     // AND `Esc` PUTS IT AWAY BEFORE IT CLOSES THE VIEW: a recovery phrase on
     // screen is a thing that is open.
@@ -147,7 +154,7 @@ fn what_the_flake_owns_refuses_rather_than_lying_about_its_value() {
         .iter()
         .position(|(_, target)| matches!(target, Target::Setting("update-check")))
         .expect("update-check is not drawn");
-    v.clicked(at);
+    aim(&mut v, at);
     // IT IS REACHABLE AND IT REFUSES — the disabled XFS row's shape.
     assert_eq!(v.key(Press::Enter, &facts, WIDE, &t), Errand::Nothing);
     assert_eq!(v.key(Press::More, &facts, WIDE, &t), Errand::Nothing);
@@ -169,7 +176,7 @@ fn a_ring_turns_into_an_order_and_a_text_asks_to_be_typed() {
         .iter()
         .position(|(_, target)| matches!(target, Target::Setting("search-mode")))
         .expect("search-mode is not drawn");
-    v.clicked(ring);
+    aim(&mut v, ring);
     let Errand::Order(ronoctua_atuin::Order::Set { key, value, .. }) =
         v.key(Press::More, &facts, WIDE, &t)
     else {
@@ -184,11 +191,12 @@ fn a_ring_turns_into_an_order_and_a_text_asks_to_be_typed() {
         .iter()
         .position(|(_, target)| matches!(target, Target::Setting("history-filter")))
         .expect("history-filter is not drawn");
-    v.clicked(typed);
+    aim(&mut v, typed);
     assert_eq!(
         v.key(Press::Enter, &facts, WIDE, &t),
-        Errand::Edit("history-filter")
+        Errand::Ask(Question::SETTING)
     );
+    assert_eq!(v.question(), Some(Question::SETTING));
 }
 
 #[test]
@@ -303,10 +311,10 @@ fn a_switch_says_on_or_off_and_never_what_the_service_is_doing() {
     // IS whether the history is syncing. What may not carry them is a
     // DECLARED SETTING, so only those rows are read.
     let rows = v.rows(&facts, WIDE, &t);
+    let built = v.build(&facts, WIDE, &t);
     let mut switches = 0;
-    for (n, row) in rows.iter().enumerate() {
-        v.clicked(n);
-        let Target::Setting(id) = v.target_at(&facts, WIDE, &t) else {
+    for (row, (_, target)) in rows.iter().zip(&built) {
+        let Target::Setting(id) = *target else {
             continue;
         };
         let Some(setting) = crate::history::options::SETTINGS
@@ -441,4 +449,294 @@ fn a_row_the_flake_owns_keeps_saying_so_under_the_cursor() {
         }
     }
     panic!("the flake-owned row was never reached, drawer open");
+}
+
+/// Where the first row carrying `target` is.
+fn row_of(v: &View, facts: &Facts<'_>, target: &Target) -> usize {
+    v.build(facts, WIDE, &texts())
+        .iter()
+        .position(|(_, t)| t == target)
+        .unwrap_or_else(|| panic!("no row carries {target:?}"))
+}
+
+/// THE LOGIN IS FOUR QUESTIONS AND ONE ORDER, asked by the view in either
+/// door: the address and the account in the clear, the password and the key
+/// hidden — and the order carries all four.
+#[test]
+fn a_login_is_four_questions_and_one_order() {
+    let t = texts();
+    let s = shot(false);
+    let facts = Facts { shot: &s };
+    let mut v = View::fresh();
+    let login = row_of(&v, &facts, &Target::LogIn);
+    aim(&mut v, login);
+    assert_eq!(
+        v.key(Press::Enter, &facts, WIDE, &t),
+        Errand::Ask(Question::SERVER)
+    );
+    assert_eq!(
+        v.answered("atuin-server", "  https://history.example.org "),
+        Errand::Ask(Question::ACCOUNT)
+    );
+    assert_eq!(
+        v.answered("atuin-account", " someone "),
+        Errand::Ask(Question::PASSWORD)
+    );
+    // HIDDEN: the password and the key, and nothing else.
+    let hidden: Vec<&str> = Question::ALL
+        .iter()
+        .filter(|q| q.secret)
+        .map(|q| q.id)
+        .collect();
+    assert_eq!(hidden, ["atuin-password", "atuin-key"]);
+    assert_eq!(
+        v.answered("atuin-password", " s3nh4 "),
+        Errand::Ask(Question::KEY)
+    );
+    assert_eq!(
+        v.answered("atuin-key", " one two three "),
+        Errand::Order(ronoctua_atuin::Order::LogIn {
+            address: "https://history.example.org".to_owned(),
+            username: "someone".to_owned(),
+            // AS TYPED: a space is a password's own.
+            password: " s3nh4 ".to_owned(),
+            key: "one two three".to_owned(),
+        })
+    );
+    assert_eq!(v.question(), None, "the login outlived its order");
+    // AND EVERY QUESTION HAS ITS WORDS, in every language.
+    for language in ronoctua_i18n::LANGUAGES {
+        let texts = ronoctua_i18n::Texts::fresh(language).expect(language);
+        for q in Question::ALL {
+            let key = format!("ask-{}", q.id);
+            assert!(!texts.t(&key).starts_with('['), "`{key}` in {language}");
+        }
+    }
+}
+
+/// `RET` ON NOTHING ENDS A LOGIN, and an answer nobody is waiting for — a
+/// question let go, or another question's id — is nothing: never a path
+/// typed into a password.
+#[test]
+fn an_empty_or_stray_answer_is_nothing() {
+    let t = texts();
+    let s = shot(false);
+    let facts = Facts { shot: &s };
+    let mut v = View::fresh();
+    let login = row_of(&v, &facts, &Target::LogIn);
+
+    aim(&mut v, login);
+    let _ = v.key(Press::Enter, &facts, WIDE, &t);
+    assert_eq!(v.answered("atuin-server", "   "), Errand::Nothing);
+    assert_eq!(v.question(), None);
+
+    aim(&mut v, login);
+    let _ = v.key(Press::Enter, &facts, WIDE, &t);
+    let _ = v.answered("atuin-server", "https://h.example.org");
+    assert_eq!(v.answered("atuin-account", ""), Errand::Nothing);
+    assert_eq!(v.question(), None);
+
+    // ANOTHER QUESTION'S ID is not this one's answer, and it ends it.
+    aim(&mut v, login);
+    let _ = v.key(Press::Enter, &facts, WIDE, &t);
+    assert_eq!(v.answered("atuin-setting", "x"), Errand::Nothing);
+    assert_eq!(v.answered("atuin-server", "h"), Errand::Nothing);
+
+    // NOTHING ASKED, nothing taken.
+    assert_eq!(v.answered("atuin-key", "k"), Errand::Nothing);
+}
+
+/// A QUESTION LET GO TAKES THE PASSWORD WITH IT — by the line (`Esc`), or by
+/// a key reaching the view, which in either door means the line is gone.
+/// And while it waits for the key, the password is in no `Debug`.
+#[test]
+fn a_question_let_go_takes_the_password_with_it() {
+    let t = texts();
+    let s = shot(false);
+    let facts = Facts { shot: &s };
+    let to_the_key = |v: &mut View| {
+        let login = row_of(v, &facts, &Target::LogIn);
+        aim(v, login);
+        let _ = v.key(Press::Enter, &facts, WIDE, &t);
+        let _ = v.answered("atuin-server", "https://h.example.org");
+        let _ = v.answered("atuin-account", "someone");
+        let _ = v.answered("atuin-password", "s3nh4-secreta");
+        assert_eq!(v.question(), Some(Question::KEY));
+    };
+
+    let mut v = View::fresh();
+    to_the_key(&mut v);
+    let printed = format!("{v:?}");
+    assert!(
+        !printed.contains("s3nh4"),
+        "the password reached Debug: {printed}"
+    );
+    v.let_go();
+    assert_eq!(v.question(), None);
+    assert_eq!(v.answered("atuin-key", "k"), Errand::Nothing);
+
+    let mut v = View::fresh();
+    to_the_key(&mut v);
+    let _ = v.key(Press::Down, &facts, WIDE, &t);
+    assert_eq!(v.question(), None, "a key left the login standing");
+    assert_eq!(v.answered("atuin-key", "k"), Errand::Nothing);
+}
+
+/// A TYPED VALUE IS THE SETTING'S, in TOML's spelling — and nothing typed
+/// writes nothing: `key = ` is not TOML, and Atuin then drops EVERY setting.
+#[test]
+fn a_typed_value_is_the_settings_and_nothing_typed_writes_nothing() {
+    let t = texts();
+    let s = shot(true);
+    let facts = Facts { shot: &s };
+    let mut v = View::fresh();
+    let filter = row_of(&v, &facts, &Target::Setting("history-filter"));
+    aim(&mut v, filter);
+    assert_eq!(
+        v.key(Press::Enter, &facts, WIDE, &t),
+        Errand::Ask(Question::SETTING)
+    );
+    let Errand::Order(ronoctua_atuin::Order::Set { key, value, .. }) =
+        v.answered("atuin-setting", r#"["^ ", "^secret"]"#)
+    else {
+        panic!("a typed value became no order");
+    };
+    assert_eq!(key, "history_filter");
+    assert_eq!(value, r#"["^ ", "^secret"]"#);
+
+    aim(&mut v, filter);
+    let _ = v.key(Press::Enter, &facts, WIDE, &t);
+    assert_eq!(v.answered("atuin-setting", "   "), Errand::Nothing);
+}
+
+/// THE DEFECT: the key's question grows a sentence ABOVE its row, the cursor
+/// was left on the sentence, and the second `RET` — "yes, show it" — turned
+/// the modeline's ring at the top of the page. The cursor keeps the row it
+/// was on, through all three of its states.
+#[test]
+fn the_second_ret_on_the_key_answers_its_question_where_the_cursor_stands() {
+    let t = texts();
+    let s = shot(true);
+    let facts = Facts { shot: &s };
+    let mut v = View::fresh();
+    let key_row = row_of(&v, &facts, &Target::Key);
+    // BY KEYS ONLY, walking down to it.
+    for _ in 0..200 {
+        if v.target_at(&facts, WIDE, &t) == Target::Key {
+            break;
+        }
+        let _ = v.key(Press::Down, &facts, WIDE, &t);
+    }
+    assert_eq!(v.cursor(), key_row);
+    assert_eq!(v.key(Press::Enter, &facts, WIDE, &t), Errand::Nothing);
+    assert_eq!(v.target_at(&facts, WIDE, &t), Target::Key);
+    assert_eq!(v.key(Press::Enter, &facts, WIDE, &t), Errand::ShowKey);
+    v.took_the_key("one two three".to_owned());
+    assert_eq!(v.target_at(&facts, WIDE, &t), Target::Key);
+    let shown: String = v
+        .rows(&facts, WIDE, &t)
+        .iter()
+        .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+        .collect();
+    assert!(shown.contains("one two three"), "{shown}");
+    // `RET` ON THE SHOWN KEY PUTS IT AWAY, as `Esc` does, and the cursor is
+    // back on the row that asks.
+    assert_eq!(v.key(Press::Enter, &facts, WIDE, &t), Errand::Nothing);
+    assert_eq!(v.target_at(&facts, WIDE, &t), Target::Key);
+    assert_eq!(v.cursor(), key_row);
+    // `Esc` FROM THE QUESTION leaves the cursor on the key's row too, and not
+    // on the row below it — which is "log out".
+    let _ = v.key(Press::Enter, &facts, WIDE, &t);
+    assert_eq!(v.key(Press::Escape, &facts, WIDE, &t), Errand::Nothing);
+    assert_eq!(v.target_at(&facts, WIDE, &t), Target::Key);
+}
+
+/// A ROW THAT GOES AWAY leaves the cursor NEAR it: logged in, "log in to a
+/// server" is gone, and the cursor lands in the account's own section — not
+/// on the modeline's ring at the top of the page, where a `RET` turned it.
+#[test]
+fn a_row_that_goes_away_leaves_the_cursor_near_where_it_was() {
+    let t = texts();
+    let out = shot(false);
+    let mut v = View::fresh();
+    let login = row_of(&v, &Facts { shot: &out }, &Target::LogIn);
+    aim(&mut v, login);
+    let _ = v.key(Press::Enter, &Facts { shot: &out }, WIDE, &t);
+    v.let_go();
+    let inside = shot(true);
+    assert_eq!(
+        v.target_at(&Facts { shot: &inside }, WIDE, &t),
+        Target::Sync
+    );
+}
+
+/// INVARIANT 19: the first click selects, and a click on the row the cursor
+/// is already on is its `RET`. A heading or a fact takes no click — it went
+/// through `settle` to the first row that acts, the modeline's ring.
+#[test]
+fn the_first_click_selects_and_the_second_acts() {
+    let t = texts();
+    let s = shot(true);
+    let facts = Facts { shot: &s };
+    let mut v = View::fresh();
+    let sync = row_of(&v, &facts, &Target::Sync);
+    assert!(!v.clicked(sync, &facts, WIDE, &t), "the first click acted");
+    assert_eq!(v.target_at(&facts, WIDE, &t), Target::Sync);
+    assert!(
+        v.clicked(sync, &facts, WIDE, &t),
+        "the second click did not"
+    );
+    // A HEADING: row zero.
+    assert!(!v.clicked(0, &facts, WIDE, &t));
+    assert_eq!(v.target_at(&facts, WIDE, &t), Target::Sync);
+    // AND A ROW PAST THE END.
+    assert!(!v.clicked(10_000, &facts, WIDE, &t));
+    assert_eq!(v.target_at(&facts, WIDE, &t), Target::Sync);
+}
+
+/// ONE READER FOR BOTH DOORS, by the whole notation: the shifted arrows are
+/// the value keys, a bare arrow is not, and a chord is not the letter under
+/// it.
+#[test]
+fn a_key_is_read_by_its_whole_notation() {
+    let read = |notation: &str| press_of_key(ronoctua_keymap::Key::parse(notation).unwrap());
+    assert_eq!(read("S-<right>"), Some(Press::More));
+    assert_eq!(read("S-<left>"), Some(Press::Less));
+    assert_eq!(read("<right>"), None);
+    assert_eq!(read("<down>"), Some(Press::Down));
+    assert_eq!(read("RET"), Some(Press::Enter));
+    assert_eq!(read("s"), Some(Press::Sync));
+    assert_eq!(read("C-s"), None);
+    assert_eq!(read("ESC"), Some(Press::Escape));
+    // EVERY KEY THE HINT TEACHES reads back as its own press.
+    for (notation, id) in OF_THE_VIEW {
+        assert_eq!(read(notation), press_of(id), "`{notation}`");
+    }
+}
+
+/// WHAT A FINISHED ORDER SAYS, one answer for both doors: a refusal always,
+/// a sync and a log-out by name, and nothing over rows that show it.
+#[test]
+fn a_finished_order_says_what_it_did_and_only_that() {
+    use ronoctua_atuin::Order;
+    let t = texts();
+    assert_eq!(
+        said_when_done(&Order::Sync, None, &t),
+        Some(t.t(ronoctua_i18n::key::ECHO_ATUIN_SYNCED))
+    );
+    assert_eq!(
+        said_when_done(&Order::LogOut, None, &t),
+        Some(t.t(ronoctua_i18n::key::ECHO_ATUIN_LOGGED_OUT))
+    );
+    assert_eq!(
+        said_when_done(&Order::Mark(ronoctua_atuin::prefs::Mark::Never), None, &t),
+        None
+    );
+    let refused = said_when_done(
+        &Order::Mark(ronoctua_atuin::prefs::Mark::Never),
+        Some("no room"),
+        &t,
+    )
+    .expect("a refusal is a sentence");
+    assert!(refused.contains("no room"), "{refused}");
 }

@@ -491,6 +491,59 @@ pub fn tell(what: &ronoctua_brain::Ask) -> Result<(), anyhow::Error> {
     ronoctua_brain::client::tell(what)
 }
 
+/// The countdown's two answers — the band's buttons, `LEADER :`'s commands
+/// and the update's view in either door all come here: sends what answers
+/// it, and gives back the sentence to say.
+///
+/// # Why the refusal is spoken and not swallowed
+///
+/// Because `brain-abort` with nothing about to happen is a key that appears
+/// in which-key and does nothing — indistinguishable from a key that did not
+/// register, which is how five mute commands went unnoticed once already.
+#[must_use]
+pub fn answer(mind: Option<&Mind>, proceeding: bool) -> &'static str {
+    let Some(ask) = answer_of(mind, proceeding) else {
+        return ronoctua_i18n::key::ECHO_BRAIN_IDLE;
+    };
+    match tell(&ask) {
+        Ok(()) => {
+            tracing::info!(?ask, "answer to the brain");
+            if proceeding {
+                ronoctua_i18n::key::ECHO_BRAIN_PROCEEDING
+            } else {
+                ronoctua_i18n::key::ECHO_BRAIN_POSTPONED
+            }
+        }
+        // LOUD, and said on screen. A countdown that goes on running after
+        // somebody pressed "not now" is the one failure here that must
+        // never be silent.
+        Err(e) => {
+            tracing::error!(error = %e, ?ask, "the brain did not get the answer");
+            ronoctua_i18n::key::ECHO_BRAIN_UNREACHABLE
+        }
+    }
+}
+
+/// What answers the countdown, or `None` when there is nothing to answer.
+///
+/// PROCEED IS THE DEADLINE MOVED and not a second way to start something:
+/// with nothing announced there is no deadline to move, and starting one here
+/// would be a path into a run that the brain's own queue never saw. STOP is
+/// [`abort`]'s choice between the two asks that actually stop it.
+#[must_use]
+pub fn answer_of(mind: Option<&Mind>, proceeding: bool) -> Option<ronoctua_brain::Ask> {
+    let m = mind?;
+    if proceeding {
+        m.announcement
+            .as_ref()
+            .map(|_| ronoctua_brain::Ask::Proceed)
+    } else if m.announcement.is_some() || !m.running.is_empty() {
+        Some(abort(m))
+    } else {
+        None
+    }
+}
+
 /// What the band's `not now` sends.
 ///
 /// # Why `postpone` and not `abort`, and why the two are one command
@@ -558,6 +611,35 @@ pub(crate) use crate::mind_wire::{mind_of, part_back};
 
 #[cfg(test)]
 mod tests {
+    /// THE COUNTDOWN'S TWO ANSWERS, one decision for every door: nothing to
+    /// answer with no brain or nothing about to happen; proceed only over an
+    /// announcement; stop as a postpone while it is announced and an abort
+    /// once it runs.
+    #[test]
+    fn the_countdown_is_answered_one_way_from_every_door() {
+        use ronoctua_brain::Ask;
+        assert_eq!(super::answer_of(None, true), None);
+        assert_eq!(super::answer_of(None, false), None);
+        let idle = Mind::default();
+        assert_eq!(super::answer_of(Some(&idle), true), None);
+        assert_eq!(super::answer_of(Some(&idle), false), None);
+        assert_eq!(
+            super::answer(Some(&idle), false),
+            ronoctua_i18n::key::ECHO_BRAIN_IDLE
+        );
+        let running = Mind {
+            running: "system-update".to_owned(),
+            ..Mind::default()
+        };
+        assert_eq!(super::answer_of(Some(&running), true), None);
+        assert_eq!(
+            super::answer_of(Some(&running), false),
+            Some(Ask::Abort {
+                task: "system-update".to_owned()
+            })
+        );
+    }
+
     use super::*;
 
     fn words() -> ronoctua_i18n::Texts {

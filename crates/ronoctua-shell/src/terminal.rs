@@ -122,6 +122,47 @@ pub fn floating_rules() -> String {
     .collect()
 }
 
+/// The prefix of the `app_id` Chrome gives a window it opens with `--app=`.
+///
+/// `chrome-<host>_<path>-<profile>`, which is what a web app's `.desktop`
+/// declares in `StartupWMClass=`. The browser's own windows are
+/// `google-chrome`, so this matches the app windows and nothing else of it.
+pub const CHROME_APP_PREFIX: &str = "chrome-";
+
+/// Every window rule the compositor takes from the shell — what
+/// `export-window-rules` prints.
+///
+/// The floating ones and the inhibitor's, one text: the two configs include
+/// one file, and a second export would be a second thing each of them has to
+/// remember to include.
+#[must_use]
+pub fn window_rules() -> String {
+    floating_rules() + &inhibitor_rules()
+}
+
+/// The rule that keeps a web app from swallowing the leader.
+///
+/// # What it stops
+///
+/// A Wayland client can ask for `zwp_keyboard_shortcuts_inhibitor_v1`, and
+/// while it holds one the compositor hands it EVERY key, its own bindings
+/// included. It is meant for a virtual machine or a remote desktop; Chrome's
+/// `--app=` windows were reported asking for it, and this compositor grants it
+/// unless told otherwise. Granted, the leader (`Super`, or `Ctrl+Alt+Space` in
+/// the nested loop) goes to the page, and so does every other binding the
+/// compositor holds — and the leader is how everything else here is reached,
+/// so a web app in focus would be a screen with no way out but the mouse.
+///
+/// `disable` for those windows only: a virtual machine opened in a window of
+/// its own keeps the inhibitor it asks for.
+///
+/// No `$`: the rest of the `app_id` is the site's address and the profile's
+/// name, and the prefix is the whole of what identifies an app window.
+#[must_use]
+pub fn inhibitor_rules() -> String {
+    format!("for_window [app_id=\"^{CHROME_APP_PREFIX}\"] shortcuts_inhibitor disable\n")
+}
+
 /// It builds the engine INSIDE the VT thread — see `ronoctua_term::terminal`.
 fn engine(columns: u16, lines: u16) -> Box<dyn ronoctua_term::Engine> {
     Box::new(ronoctua_term::alacritty::Alacritty::fresh(columns, lines))
@@ -417,6 +458,13 @@ impl Content for TerminalWindow {
         // that only shows up when one types fast.
     }
 
+    /// A TERMINAL TYPES TEXT, and there Caps Lock is capitals: what reaches
+    /// the program is what the keyboard typed. A chord is still read without
+    /// the Lock (`door::keys::as_read`).
+    fn types_capitals(&self) -> bool {
+        true
+    }
+
     /// THE HEADER'S KEYS ARE THE PROGRAM'S. This window draws no header, and
     /// the right `Ctrl` and `Esc` it would take are keys a program running
     /// here is owed — `Esc` above all, which is half of what vim is.
@@ -458,6 +506,14 @@ impl Content for TerminalWindow {
             self.columns,
             self.lines,
         ));
+        // THE FRAME, said out loud — the line `buffer.rs` says for a buffer.
+        // It went with the terminal's own `paint` when the terminal became a
+        // door, and `terminal-vm` waits for it: without it the test cannot
+        // tell a terminal that drew from one that never did.
+        tracing::info!(
+            spans = canvas.spans.len(),
+            "terminal drawn on the xdg_toplevel"
+        );
     }
 }
 
@@ -487,6 +543,34 @@ mod tests {
         assert!(rule.contains("ppt"), "the size has no unit:\n{rule}");
         // AND IT IS CENTRED, because a new floating window is not.
         assert!(rule.contains("move position center"), "{rule}");
+    }
+
+    /// A web app never takes the leader: the rule is exactly the compositor's
+    /// grammar, it names the app windows by their prefix, and it reaches the
+    /// export beside the floating ones.
+    #[test]
+    fn a_chrome_app_window_cannot_inhibit_the_shortcuts() {
+        let rule = super::inhibitor_rules();
+        assert_eq!(
+            rule,
+            "for_window [app_id=\"^chrome-\"] shortcuts_inhibitor disable\n"
+        );
+        // The browser's own window is `google-chrome`, which the anchored
+        // prefix does not match; an app window's does.
+        assert!(!"google-chrome".starts_with(super::CHROME_APP_PREFIX));
+        assert!("chrome-web.whatsapp.com__-Default".starts_with(super::CHROME_APP_PREFIX));
+
+        let all = super::window_rules();
+        assert!(
+            all.contains(&rule),
+            "the export lost the inhibitor rule:\n{all}"
+        );
+        assert!(
+            all.contains(&super::floating_rules()),
+            "the export lost the floating rules:\n{all}"
+        );
+        // One rule per line: the compositor reads the file line by line.
+        assert!(all.lines().all(|l| l.starts_with("for_window [")), "{all}");
     }
 
     #[test]

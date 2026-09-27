@@ -42,6 +42,10 @@ __pycache__/
 glyphs.bin
 /crates/ronoctua-protocol/wit/deps/
 icons.rs
+# The software center's icon pipeline is SOURCE, not an output: the bare
+# `icons.rs` above is a generated table's name, and it would hide this one
+# from git — and so from the flake, which then builds without it.
+!/crates/ronoctua-software/src/icons.rs
 coverage.md
 manifest.json
 

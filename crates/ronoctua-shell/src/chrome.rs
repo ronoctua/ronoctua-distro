@@ -2719,7 +2719,7 @@ pub fn copied(text: &str, texts: &ronoctua_i18n::Texts) -> String {
 /// Because both of them subtract something that is true of a KEY and false of
 /// a click. `Footer::Inheritance::discount` takes away the modifiers that were
 /// already down when the leader's sequence began — a fact about a sequence,
-/// and a pointer is in none. `files_window::key_of` refuses to count `Shift`
+/// and a pointer is in none. `door::keys::key_of` refuses to count `Shift`
 /// for a character, because xkb has already applied it in producing that
 /// character — and a click produces no character.
 ///

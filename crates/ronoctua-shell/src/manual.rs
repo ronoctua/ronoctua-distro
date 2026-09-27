@@ -18,22 +18,25 @@
 //! of opening: changing a shortcut changes the manual, with no intermediate
 //! step. It is the same reason the compositor's binds are generated.
 //!
-//! # Why it is not a buffer
+//! # Two doors, one [`View`]
 //!
-//! It opens **in place of the shortcut list**, in the footer's expanded region
-//! — the fourth use of the same surface, beside which-key, the `M-x` and the
-//! history. There is no second surface anywhere in the system (invariant 14),
-//! and a manual that is only read needs no window: it needs scrolling, which
-//! the region already has.
+//! The list opens **in place of the shortcut list**, in the footer's expanded
+//! region — the fourth use of the same surface, beside which-key, the `M-x`
+//! and the history — and in a window of its own (`ronoctua-shell manual`,
+//! `manual_window.rs`). Both doors drive the same [`View`]: the list with its
+//! filter typed in place, a manual opened from it, `Esc` one level up, and
+//! the same keys and clicks on each level. A manual opened in the footer is
+//! taken into a window with `C-w`.
 //!
-//! It is read-only by construction, and not by a lock: there is no input path
-//! that writes to it.
+//! A manual is read-only by construction, and not by a lock: what is typed
+//! narrows the LIST, and there is no input path that writes to a manual.
 
 use ronoctua_i18n::{Texts, key};
+use ronoctua_keymap::{Key, Sym};
 
 /// The manuals there are — the list `LEADER h` opens. A manual has NO key
 /// of its own (the owner's rule): it is chosen from this list, where `RET`
-/// opens it in the footer and `w` in a window of its own.
+/// opens it where the list is and `C-w` in a window of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Which {
     /// The shortcuts: the chords, the compositor's modes, the emergency and
@@ -106,6 +109,237 @@ pub const OF_A_MANUAL: &[(&str, &str)] = &[
     ("<up>", "manual-up"),
     ("C-w", "manual-window"),
 ];
+
+/// The command id of `C-w`: a manual taken out of the footer into a window.
+/// A window has no row of it — it is already the window.
+pub const TO_A_WINDOW: &str = "manual-window";
+
+/// Where the manuals are: their list, or one of them open — the view both
+/// doors drive. What each door keeps is its own page offset and nothing
+/// about the manuals.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct View {
+    /// The manual open, or `None` for the list.
+    which: Option<Which>,
+    /// The list's cursor, in what the filter left.
+    cursor: usize,
+    /// What has been typed to filter the list.
+    query: String,
+}
+
+/// How an open manual moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scroll {
+    /// So many lines — the arrows.
+    Lines(i32),
+    /// So many pages — `SPC`, `<next>` and `<prior>`.
+    Pages(i32),
+    /// To the first line — `<home>`.
+    Top,
+    /// To the last — `<end>`.
+    Bottom,
+}
+
+/// What a key or a click asks of the door.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Errand {
+    /// Nothing changed.
+    Nothing,
+    /// The list changed — its filter or its cursor: draw it again.
+    Changed,
+    /// The level changed — a manual opened, or the list came back: the page
+    /// goes back to its top.
+    Level,
+    /// The open manual moves.
+    Scroll(Scroll),
+    /// This manual, in a window of its own (`C-w`).
+    Window(Which),
+    /// The clipboard's text is wanted for the filter (`C-v`, `C-y`).
+    Paste,
+    /// The view closes.
+    Close,
+}
+
+impl View {
+    /// The list, with nothing typed.
+    #[must_use]
+    pub fn fresh() -> Self {
+        Self::default()
+    }
+
+    /// A manual already open — `ronoctua-shell manual <word>`, and the
+    /// footer's `C-w`. `Esc` goes up to the list, as it does in the footer.
+    #[must_use]
+    pub fn on(which: Which) -> Self {
+        Self {
+            which: Some(which),
+            ..Self::default()
+        }
+    }
+
+    /// The manual open, or `None` for the list.
+    #[must_use]
+    pub const fn which(&self) -> Option<Which> {
+        self.which
+    }
+
+    /// The list's cursor, in what the filter left.
+    #[must_use]
+    pub const fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// What has been typed to filter the list.
+    #[must_use]
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// The keys this level teaches.
+    #[must_use]
+    pub const fn taught(&self) -> &'static [(&'static str, &'static str)] {
+        if self.which.is_some() {
+            OF_A_MANUAL
+        } else {
+            OF_THE_LIST
+        }
+    }
+
+    /// The manuals the query leaves, best first.
+    #[must_use]
+    pub fn found(&self, texts: &Texts) -> Vec<Which> {
+        let names: Vec<String> = Which::ALL.iter().map(|w| texts.t(w.name())).collect();
+        let keys: Vec<[&str; 1]> = names.iter().map(|n| [n.as_str()]).collect();
+        let items: Vec<&[&str]> = keys.iter().map(|k| &k[..]).collect();
+        crate::minibuffer::rank(&self.query.to_lowercase(), &items)
+            .into_iter()
+            .map(|i| Which::ALL[i])
+            .collect()
+    }
+
+    /// Which letters of `name` the query matched — to light them.
+    #[must_use]
+    pub fn lit(&self, name: &str) -> Vec<usize> {
+        crate::minibuffer::match_up(&self.query.to_lowercase(), name)
+            .map(|(_, p)| p)
+            .unwrap_or_default()
+    }
+
+    /// The manual `C-w` takes into a window: the open one, or the one under
+    /// the list's cursor.
+    fn chosen(&self, texts: &Texts) -> Option<Which> {
+        self.which
+            .or_else(|| self.found(texts).get(self.cursor).copied())
+    }
+
+    /// One key — the same in both doors.
+    ///
+    /// On the LIST: the arrows walk it, `RET` opens the manual under the
+    /// cursor where the list is, a letter or `SPC` is typed into the filter,
+    /// `DEL` takes one cluster off it, `C-v` and `C-y` paste into it, and
+    /// `Esc` closes. On a MANUAL: the arrows move it a line, `SPC` and the page
+    /// keys a page, `<home>` and `<end>` to its ends, and `Esc` goes back to
+    /// the list. `C-w` takes either into a window.
+    pub fn key(&mut self, key: Key, texts: &Texts) -> Errand {
+        let chord = key.mods.ctrl || key.mods.alt || key.mods.logo;
+        if key.mods.ctrl && key.sym == Sym::Char('w') {
+            return self.chosen(texts).map_or(Errand::Nothing, Errand::Window);
+        }
+        if key.sym == Sym::Esc {
+            return if self.which.take().is_some() {
+                Errand::Level
+            } else {
+                Errand::Close
+            };
+        }
+        if self.which.is_some() {
+            return match key.sym {
+                Sym::Down => Errand::Scroll(Scroll::Lines(1)),
+                Sym::Up => Errand::Scroll(Scroll::Lines(-1)),
+                Sym::PageDown | Sym::Space => Errand::Scroll(Scroll::Pages(1)),
+                Sym::PageUp => Errand::Scroll(Scroll::Pages(-1)),
+                Sym::Home => Errand::Scroll(Scroll::Top),
+                Sym::End => Errand::Scroll(Scroll::Bottom),
+                // Nothing else touches it. A manual is read-only, and a key
+                // that "almost" works teaches that there is something to type.
+                _ => Errand::Nothing,
+            };
+        }
+        match key.sym {
+            Sym::Char('v' | 'y') if key.mods.ctrl => Errand::Paste,
+            _ if chord => Errand::Nothing,
+            Sym::Down => {
+                let last = self.found(texts).len().saturating_sub(1);
+                self.cursor = (self.cursor + 1).min(last);
+                Errand::Changed
+            }
+            Sym::Up => {
+                self.cursor = self.cursor.saturating_sub(1);
+                Errand::Changed
+            }
+            Sym::Enter => self.open_here(texts),
+            // THE QUERY, a cluster at a time — the minibuffer's rule.
+            Sym::Backspace => {
+                if crate::line::pop_cluster(&mut self.query) {
+                    self.cursor = 0;
+                    Errand::Changed
+                } else {
+                    Errand::Nothing
+                }
+            }
+            // A SPACE IS TYPED: the manuals' names have spaces in them
+            // ("Hand gestures"), and a filter that could not type one could
+            // not type a name.
+            Sym::Space => self.typed(" "),
+            // A CONTROL CHARACTER IS NOT TYPED (`Delete`'s U+007F).
+            Sym::Char(c) if !c.is_control() => self.typed(c.encode_utf8(&mut [0; 4])),
+            _ => Errand::Nothing,
+        }
+    }
+
+    /// Text into the filter, and the cursor back on the best match.
+    fn typed(&mut self, text: &str) -> Errand {
+        self.query.push_str(text);
+        self.cursor = 0;
+        Errand::Changed
+    }
+
+    /// What was copied, into the filter — as ONE line (`line::one_line`).
+    pub fn pasted(&mut self, text: &str) -> Errand {
+        if self.which.is_some() {
+            return Errand::Nothing;
+        }
+        let line = crate::line::one_line(text);
+        if line.is_empty() {
+            return Errand::Nothing;
+        }
+        self.typed(&line)
+    }
+
+    /// Opens the manual under the list's cursor, here.
+    fn open_here(&mut self, texts: &Texts) -> Errand {
+        match self.found(texts).get(self.cursor).copied() {
+            Some(which) => {
+                self.which = Some(which);
+                Errand::Level
+            }
+            None => Errand::Nothing,
+        }
+    }
+
+    /// A click on manual `n` of the list: THE FIRST SELECTS, AND THE SECOND
+    /// OPENS it (invariant 19) — `RET` on the cursor, by the same path.
+    pub fn clicked(&mut self, n: usize, texts: &Texts) -> Errand {
+        if self.which.is_some() || n >= self.found(texts).len() {
+            return Errand::Nothing;
+        }
+        if self.cursor == n {
+            return self.open_here(texts);
+        }
+        self.cursor = n;
+        Errand::Changed
+    }
+}
 
 /// How a line of a manual is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -425,6 +659,134 @@ pub fn gesture_art(id: &str) -> Option<ronoctua_render::image::Rgba> {
 #[cfg(test)]
 mod tests {
     use ronoctua_i18n::Texts;
+    use ronoctua_keymap::Key;
+
+    fn en() -> Texts {
+        Texts::fresh("en-GB").expect("en-GB")
+    }
+
+    fn key(v: &mut super::View, notation: &str, texts: &Texts) -> super::Errand {
+        v.key(Key::parse(notation).expect("a key"), texts)
+    }
+
+    fn typed(v: &mut super::View, text: &str, texts: &Texts) {
+        for c in text.chars() {
+            let notation = if c == ' ' {
+                "SPC".to_owned()
+            } else {
+                c.to_string()
+            };
+            key(v, &notation, texts);
+        }
+    }
+
+    /// WHAT IS TYPED NARROWS THE LIST, a space included — the manuals' names
+    /// have spaces, and the footer's filter could not type one — and `DEL`
+    /// takes a cluster back off.
+    #[test]
+    fn the_list_is_narrowed_by_what_is_typed_a_space_included() {
+        use super::{Errand, View, Which};
+        let t = en();
+        let mut v = View::fresh();
+        assert_eq!(v.found(&t).len(), Which::ALL.len());
+        typed(&mut v, "hand g", &t);
+        assert_eq!(v.query(), "hand g");
+        assert_eq!(v.found(&t), vec![Which::Gestures]);
+        assert_eq!(key(&mut v, "DEL", &t), Errand::Changed);
+        assert_eq!(v.query(), "hand ");
+        // NOTHING LEFT, AND `RET` OPENS NOTHING.
+        typed(&mut v, "zzz", &t);
+        assert!(v.found(&t).is_empty());
+        assert_eq!(key(&mut v, "RET", &t), Errand::Nothing);
+        assert_eq!(v.which(), None);
+    }
+
+    /// `Esc` GOES UP ONE LEVEL: out of a manual to the list, out of the list
+    /// closed — in both doors, which drive this same view.
+    #[test]
+    fn esc_goes_up_one_level_and_then_closes() {
+        use super::{Errand, View, Which};
+        let t = en();
+        let mut v = View::fresh();
+        assert_eq!(key(&mut v, "<down>", &t), Errand::Changed);
+        assert_eq!(key(&mut v, "RET", &t), Errand::Level);
+        assert_eq!(v.which(), v.found(&t).get(1).copied());
+        assert_eq!(key(&mut v, "ESC", &t), Errand::Level);
+        assert_eq!(v.which(), None);
+        assert_eq!(key(&mut v, "ESC", &t), Errand::Close);
+        let mut opened = View::on(Which::Gestures);
+        assert_eq!(key(&mut opened, "ESC", &t), Errand::Level);
+        assert_eq!(
+            opened.which(),
+            None,
+            "a manual opened by its word goes up to the list"
+        );
+    }
+
+    /// AN OPEN MANUAL MOVES BY A LINE, A PAGE OR TO ITS ENDS, and the page
+    /// keys are keys of both doors now: the footer had no symbol for them.
+    #[test]
+    fn a_manual_moves_by_lines_pages_and_to_its_ends() {
+        use super::{Errand, Scroll, View, Which};
+        let t = en();
+        let mut v = View::on(Which::Shortcuts);
+        for (notation, how) in [
+            ("<down>", Scroll::Lines(1)),
+            ("<up>", Scroll::Lines(-1)),
+            ("SPC", Scroll::Pages(1)),
+            ("<next>", Scroll::Pages(1)),
+            ("<prior>", Scroll::Pages(-1)),
+            ("<home>", Scroll::Top),
+            ("<end>", Scroll::Bottom),
+        ] {
+            assert_eq!(key(&mut v, notation, &t), Errand::Scroll(how), "{notation}");
+        }
+        // A LETTER IS NOT TYPED INTO A MANUAL.
+        assert_eq!(key(&mut v, "a", &t), Errand::Nothing);
+        assert_eq!(v.query(), "");
+    }
+
+    /// THE FIRST CLICK SELECTS, AND THE SECOND OPENS — invariant 19.
+    #[test]
+    fn the_first_click_selects_and_the_second_opens() {
+        use super::{Errand, View};
+        let t = en();
+        let mut v = View::fresh();
+        assert_eq!(v.clicked(1, &t), Errand::Changed);
+        assert_eq!(v.cursor(), 1);
+        assert_eq!(v.which(), None);
+        assert_eq!(v.clicked(1, &t), Errand::Level);
+        assert_eq!(v.which(), v.found(&t).get(1).copied());
+        assert_eq!(
+            v.clicked(0, &t),
+            Errand::Nothing,
+            "a manual's lines take no click"
+        );
+        let mut v = View::fresh();
+        assert_eq!(v.clicked(9, &t), Errand::Nothing, "past the list");
+    }
+
+    /// A CHORD IS NOT A LETTER OF THE FILTER, `C-v` pastes into it as one
+    /// line, and `C-w` takes the manual under the cursor into a window.
+    #[test]
+    fn a_chord_is_not_typed_c_v_pastes_and_c_w_is_the_window() {
+        use super::{Errand, View};
+        let t = en();
+        let mut v = View::fresh();
+        assert_eq!(key(&mut v, "C-a", &t), Errand::Nothing);
+        assert_eq!(key(&mut v, "M-a", &t), Errand::Nothing);
+        assert_eq!(v.query(), "");
+        assert_eq!(key(&mut v, "C-v", &t), Errand::Paste);
+        assert_eq!(v.pasted("  Hand\n"), Errand::Changed);
+        assert_eq!(v.query(), "Hand");
+        assert_eq!(v.pasted(" \n"), Errand::Nothing);
+        let chosen = v.found(&t)[0];
+        assert_eq!(key(&mut v, "C-w", &t), Errand::Window(chosen));
+        // AND A MANUAL TAKES NO PASTE: nothing is typed into it.
+        let mut open = View::on(chosen);
+        assert_eq!(open.pasted("x"), Errand::Nothing);
+        assert_eq!(key(&mut open, "C-w", &t), Errand::Window(chosen));
+    }
 
     #[test]
     fn every_gesture_has_its_picture_and_its_three_sentences() {

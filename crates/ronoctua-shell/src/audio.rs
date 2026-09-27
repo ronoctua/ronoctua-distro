@@ -864,6 +864,26 @@ pub fn press_of(id: &str) -> Option<Press> {
     })
 }
 
+/// A key, as the view's press — the ONE reader both doors call: the window
+/// with `door::keys::key_of`, the footer with the key its own reader built.
+///
+/// `Esc` is every level's way back, and the arrows and `RET` are read by their
+/// symbol whatever is held, as both doors always read them. A LETTER is read
+/// by its whole notation: `C-m` is not `m`. The footer used to
+/// drop every modifier (`Key::simple`) and answer a letter held with `Ctrl` or
+/// `Alt` as the bare letter, while the window read xkb's control character
+/// and answered nothing — one key, two answers.
+#[must_use]
+pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
+    use ronoctua_keymap::{Key, Sym};
+    let notation = match key.sym {
+        Sym::Esc => return Some(Press::Escape),
+        Sym::Char(_) => key.notation(),
+        other => Key::simple(other).notation(),
+    };
+    pressed(&notation)
+}
+
 /// Which key a notation is, through [`OF_THE_VIEW`].
 #[must_use]
 pub fn pressed(notation: &str) -> Option<Press> {
@@ -1481,31 +1501,40 @@ mod tests {
     }
 
     #[test]
-    fn the_footer_reaches_every_key_the_table_holds() {
-        // WHAT THE FOOTER ACTUALLY DOES, spelled out. It has a `Sym`, turns it
-        // into a notation with `Key::simple(sym).notation()`, and asks
-        // `pressed`. Every screenshot of this view drove it through the
-        // control SOCKET instead — `ronoctua-shell command audio-down` — so
-        // the key branch itself was never exercised by anything.
-        //
-        // AND `Key::simple` DROPS MODIFIERS. The table holds plain arrows
-        // today; the day somebody writes `S-<left>` into it, the footer will
-        // strip the shift, look up `<left>`, and answer the WRONG press while
-        // the window door answers the right one. This is what says so.
+    fn both_doors_reach_every_key_the_table_holds() {
+        // WHAT BOTH DOORS DO, spelled out: each builds a `Key` — the footer
+        // with its reader, the window with `door::keys::key_of` — and asks
+        // `press_of_key`. Every row of the table is its own press.
         for (notation, id, _) in OF_THE_VIEW {
             let key = ronoctua_keymap::Key::parse(notation)
                 .unwrap_or_else(|_| panic!("`{notation}` is not a key"));
-            let as_the_footer_sees_it = ronoctua_keymap::Key::simple(key.sym).notation();
             assert_eq!(
-                as_the_footer_sees_it, *notation,
-                "the footer would look up `{as_the_footer_sees_it}` for `{notation}`"
-            );
-            assert_eq!(
-                pressed(&as_the_footer_sees_it),
+                press_of_key(key),
                 press_of(id),
-                "`{notation}` does not reach `{id}` through the footer"
+                "`{notation}` does not reach `{id}`"
             );
         }
+        assert_eq!(
+            press_of_key(ronoctua_keymap::Key::parse("ESC").expect("ESC")),
+            Some(Press::Escape)
+        );
+    }
+
+    /// A LETTER HELD WITH `Ctrl` OR `Alt` IS NOT THE LETTER. The footer
+    /// dropped every modifier and muted a device on `C-m` and made it the
+    /// default on `M-d`, while the window answered nothing for the same keys.
+    #[test]
+    fn a_chord_is_not_the_letter_under_it() {
+        let read = |n: &str| press_of_key(ronoctua_keymap::Key::parse(n).expect("a key"));
+        assert_eq!(read("m"), Some(Press::Mute));
+        assert_eq!(read("d"), Some(Press::Default));
+        for chord in ["C-m", "M-m", "C-d", "M-d", "s-d", "C-M-d"] {
+            assert_eq!(read(chord), None, "`{chord}` was taken for its letter");
+        }
+        // THE ARROWS AND `RET` are read by their symbol, as both doors
+        // always read them.
+        assert_eq!(read("S-<down>"), Some(Press::Down));
+        assert_eq!(read("C-RET"), Some(Press::Enter));
     }
 
     #[test]

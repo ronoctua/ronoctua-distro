@@ -90,6 +90,20 @@ const CHOOM: &str = match option_env!("RONOCTUA_CHOOM") {
     None => "choom",
 };
 
+/// `systemd-run`, by store path, for `choom`'s reason: the footer is a unit,
+/// and a unit's `PATH` is whatever its manager was given. Outside Nix —
+/// `cargo run` — the name, and the shell's `PATH` resolves it.
+const SYSTEMD_RUN: &str = match option_env!("RONOCTUA_SYSTEMD_RUN") {
+    Some(p) => p,
+    None => "systemd-run",
+};
+
+/// `true`, the program the probe runs in a scope — see [`scopes_work`].
+const TRUE: &str = match option_env!("RONOCTUA_TRUE") {
+    Some(p) => p,
+    None => "true",
+};
+
 #[must_use]
 pub fn scope_command(
     scope: &str,
@@ -98,7 +112,7 @@ pub fn scope_command(
     args: &[String],
 ) -> Vec<String> {
     let mut c = vec![
-        "systemd-run".to_owned(),
+        SYSTEMD_RUN.to_owned(),
         "--user".to_owned(),
         "--scope".to_owned(),
         "--quiet".to_owned(),
@@ -112,8 +126,12 @@ pub fn scope_command(
         // session — leaving this to a default the manual contradicts is how the
         // whole policy would end up applying to an empty set.
         format!("--slice={APP_SLICE}"),
-        // Hardening: a foreign buffer does not need new privileges.
-        "--property=NoNewPrivileges=yes".to_owned(),
+        // NO `NoNewPrivileges` HERE: it is an EXEC property, and a scope has
+        // no exec context of its own — `systemd-run --scope` refuses the whole
+        // command with "Unknown assignment", before it reaches the manager.
+        // With it, the probe answered "no scopes" in every session and every
+        // program opened outside `app.slice` (measured on systemd 260.2, and
+        // proved by `software-vm`).
         // THE SCOPE DIES WHOLE. Two effects, both wanted: the kernel does not
         // leave half an application running, and a scope that spawns
         // sub-cgroups stays an eligible candidate — `systemd-oomd(8)` considers
@@ -143,6 +161,67 @@ pub fn scope_command(
     c.push(program.to_owned());
     c.extend_from_slice(args);
     c
+}
+
+/// Starts `program args` in a scope of its own, on a NAMED thread, and hands
+/// the verdict to `done` on that thread.
+///
+/// THE ONE PATH every door launches by — the footer's buffers and
+/// applications, the file manager's window, the software window. Each used to
+/// carry its own copy of these lines, and a copy is where a thread comes to
+/// be forgotten: `systemd-run --scope` is synchronous ([`launch`]), and one
+/// run on a loop froze it for the life of what it opened.
+///
+/// ONE COMMAND, AND NO DISPLAY TO PICK. The compositor serves X11 itself, so
+/// an X11 program is launched exactly like a Wayland one — and the PID the
+/// compositor reports for its window is the program's own, which is what
+/// §7.5's correlation needs. The DIRECT command goes along: it is the one
+/// that runs when the scope cannot be created, and rebuilding it from the
+/// `systemd-run` would mean taking that apart.
+///
+/// The thread's NAME shows up in `perf` and in `gdb`: an anonymous thread
+/// stuck in `wait4` for hours is exactly what nobody identifies.
+///
+/// # Errors
+///
+/// No scope name could be made, or the thread could not be started.
+pub fn start_in_scope(
+    thread: &str,
+    program: &str,
+    args: &[String],
+    working_directory: Option<&str>,
+    done: impl FnOnce(Launch) + Send + 'static,
+) -> Result<()> {
+    let scope = scope_name()?;
+    let cmd = scope_command(&scope, working_directory, program, args);
+    let mut direct = vec![program.to_owned()];
+    direct.extend_from_slice(args);
+    std::thread::Builder::new()
+        .name(thread.to_owned())
+        .spawn(move || done(launch(&scope, &direct, &cmd)))
+        .context("could not create the launch thread")?;
+    Ok(())
+}
+
+/// The same launch, NOW, on the thread that calls it — BLOCKING for the life
+/// of what it opened ([`launch`]). For a thread that already had its own
+/// work to do first: the window's launch by desktop id reads the catalogue,
+/// and then starts what it found here.
+#[must_use]
+pub fn launch_now(program: &str, args: &[String], working_directory: Option<&str>) -> Launch {
+    let scope = match scope_name() {
+        Ok(s) => s,
+        Err(e) => {
+            return Launch::Failed {
+                program: program.to_owned(),
+                error: e.to_string(),
+            };
+        }
+    };
+    let cmd = scope_command(&scope, working_directory, program, args);
+    let mut direct = vec![program.to_owned()];
+    direct.extend_from_slice(args);
+    launch(&scope, &direct, &cmd)
 }
 
 /// How a launch ended.
@@ -197,16 +276,34 @@ pub enum Launch {
 /// It stayed hidden while there were four fixed callers; the app
 /// launcher makes this the main path.
 ///
-/// # Why it is still `status()`, and not `spawn()`
+/// # The exit status is the APPLICATION'S, and nothing is launched twice
 ///
-/// Because it is `status()` that tells "the scope was not created" from "it was
-/// created and the window has not appeared yet". With `spawn` the exit code is
-/// lost and the two become identical: the window simply never appears, with no
-/// error at all. That is how `SPC g g` "ran" and nothing opened.
+/// `systemd-run --scope` creates the scope and then BECOMES the program — it
+/// `exec`s it —, so once the scope exists, the status that comes back is the
+/// program's own. This used to read any failure as "the scope was not
+/// created" and spawn the program AGAIN, directly: every application that
+/// exited with a code — a closed game, an editor asked to open a file it could
+/// not, a program that ended with `exit 3` — opened a second time, orphaned,
+/// right after the person closed it.
 ///
-/// What changes is not the `status()` — it is **who waits for it**.
+/// Whether scopes work at all is asked ONCE per process, before the first
+/// launch, by a scope around `true` ([`scopes_work`]). With them, whatever the
+/// status is, it is logged and that is all ([`next`]); without them — no user
+/// manager, a container, a session started by hand — the program is spawned
+/// directly from the start, and the window is an orphan.
 #[must_use]
 pub fn launch(scope: &str, direct: &[String], cmd: &[String]) -> Launch {
+    // The shapes are checked BEFORE the probe: a command that could never run
+    // does not need to know whether scopes work.
+    if cmd.is_empty() || direct.is_empty() {
+        return launch_with(false, scope, direct, cmd);
+    }
+    launch_with(scopes_work(), scope, direct, cmd)
+}
+
+/// [`launch`], with the answer about scopes handed in — so a test can take
+/// the direct path without a probe ever reaching the machine.
+fn launch_with(scopes: bool, scope: &str, direct: &[String], cmd: &[String]) -> Launch {
     let Some((prog, rest)) = cmd.split_first() else {
         return Launch::Failed {
             program: String::new(),
@@ -220,15 +317,26 @@ pub fn launch(scope: &str, direct: &[String], cmd: &[String]) -> Launch {
         };
     };
 
-    let reason = match std::process::Command::new(prog).args(rest).status() {
-        Ok(st) if st.success() => {
+    // It is still `status()`, and not `spawn()`: waiting is what keeps the
+    // scope's name meaning "this application is running", and the wait is on
+    // this thread, never on the loop's.
+    let ran = scopes.then(|| std::process::Command::new(prog).args(rest).status());
+    let reason = match next(scopes, ran.as_ref()) {
+        Next::Ended => {
+            if let Some(Ok(st)) = &ran
+                && !st.success()
+            {
+                // THE APPLICATION'S OWN ENDING, and it stays in the log: it is
+                // how a program that "just closes" gets diagnosed, and a
+                // relaunch is exactly what must not follow it.
+                tracing::info!(program, scope, status = %st, "the application ended with a failure status");
+            }
             return Launch::WithScope {
                 scope: scope.to_owned(),
                 program: program.clone(),
             };
         }
-        Ok(st) => format!("systemd-run exited with {st}"),
-        Err(e) => format!("no systemd-run: {e}"),
+        Next::Direct(reason) => reason,
     };
 
     // It DEGRADES, and does not give up. See `Launch::Orphan`.
@@ -244,6 +352,87 @@ pub fn launch(scope: &str, direct: &[String], cmd: &[String]) -> Launch {
             error: e.to_string(),
         },
     }
+}
+
+/// What a launch does after `systemd-run` — or instead of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Next {
+    /// The application ran in its scope and has ENDED; whatever its status,
+    /// that status was its own. Nothing more is launched.
+    Ended,
+    /// Spawn the program directly, for the reason given — the scope was never
+    /// there, so the program never ran.
+    Direct(String),
+}
+
+/// The decision after a launch in a scope, as a pure function.
+///
+/// - Without scopes, the scope command never ran: spawn directly.
+/// - With scopes, a `systemd-run` that could not even be STARTED (`Err`) never
+///   ran the program either: spawn directly.
+/// - With scopes, ANY exit status — success or not — belongs to the program,
+///   which has run and ended: nothing else.
+///
+/// `ran` is `None` when nothing was run, which only a caller without scopes
+/// has any reason to hand in.
+#[must_use]
+pub fn next(scopes: bool, ran: Option<&std::io::Result<std::process::ExitStatus>>) -> Next {
+    match (scopes, ran) {
+        (true, Some(Ok(_))) => Next::Ended,
+        (true, Some(Err(e))) => Next::Direct(format!("no systemd-run: {e}")),
+        (true, None) => Next::Direct("systemd-run was not run".to_owned()),
+        (false, _) => Next::Direct("this session cannot give a program a scope".to_owned()),
+    }
+}
+
+/// Whether `systemd-run --user --scope` works in this session — asked once per
+/// process, and remembered.
+///
+/// # Why ask at all, and why this way
+///
+/// Because after a launch the exit status cannot say it: it is the program's
+/// (see [`launch`]). The one moment the answer is clean is a scope around a
+/// program whose status is known in advance — `true` —, with the SAME
+/// properties, slice and `choom` a real launch uses: a property this systemd
+/// refuses, or a `choom` that is not there, fails the probe exactly as it
+/// would fail every launch, and the launches then go direct instead of failing
+/// in silence.
+///
+/// It BLOCKS for the life of `true` — tens of milliseconds, once — so it is
+/// called where [`launch`] is: on the launching thread, never the loop's. The
+/// first launch pays it, and a footer that never opens anything never does.
+#[must_use]
+pub fn scopes_work() -> bool {
+    static SCOPES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SCOPES.get_or_init(|| {
+        let argv = probe_command(std::process::id());
+        let Some((program, args)) = argv.split_first() else {
+            return false;
+        };
+        let answer = std::process::Command::new(program)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|st| st.success());
+        tracing::info!(
+            scopes = answer,
+            "asked whether this session can give a program a scope"
+        );
+        answer
+    })
+}
+
+/// The probe's command: [`scope_command`] around `true`, in a scope of its own
+/// name.
+///
+/// Not a `ronoctua-buffer-` name: a window is matched to a buffer by that
+/// prefix, and `true` has no window — the probe is not a buffer. The process
+/// id keeps two footers' probes apart.
+#[must_use]
+pub fn probe_command(pid: u32) -> Vec<String> {
+    scope_command(&format!("ronoctua-probe-{pid}"), None, TRUE, &[])
 }
 
 // THERE IS NO SATELLITE ANY MORE, and its absence is the point.
@@ -309,9 +498,10 @@ pub fn origin_at(procfs: &Path, pid: i32) -> Origin {
 #[cfg(test)]
 mod tests {
     use super::{
-        APP_OOM_SCORE_ADJUST, APP_SLICE, Launch, Origin, SCOPE_PREFIX, launch, origin_at,
-        scope_command, scope_from_cgroup,
+        APP_OOM_SCORE_ADJUST, APP_SLICE, Launch, Next, Origin, SCOPE_PREFIX, launch_with, next,
+        origin_at, probe_command, scope_command, scope_from_cgroup,
     };
+    use std::os::unix::process::ExitStatusExt as _;
 
     #[test]
     fn reads_the_scope_from_cgroup_v2() {
@@ -416,7 +606,8 @@ mod tests {
     #[test]
     fn the_command_puts_the_process_in_a_named_scope() {
         let c = scope_command("ronoctua-buffer-x", None, "alacritty", &["-e".into()]);
-        assert_eq!(c[0], "systemd-run");
+        // By PATH under Nix, by name outside it — either way, systemd-run.
+        assert!(c[0].ends_with("systemd-run"), "{}", c[0]);
         assert!(
             c.contains(&"--scope".to_owned()),
             "with no --scope there is no cgroup"
@@ -445,7 +636,11 @@ mod tests {
     /// `systemd --user` and does not guarantee `/bin/sh`.
     #[test]
     fn when_nothing_comes_up_the_verdict_says_which_program() {
-        let v = launch(
+        // WITHOUT scopes, so nothing but the missing program is ever asked
+        // for: a test that ran the probe would start `systemd-run` on the
+        // machine that runs the tests.
+        let v = launch_with(
+            false,
             "scope-x",
             &["ronoctua-program-that-does-not-exist".to_owned()],
             &["ronoctua-systemd-run-that-does-not-exist".to_owned()],
@@ -466,13 +661,64 @@ mod tests {
     /// silently and the launch would disappear with no verdict at all.
     #[test]
     fn an_empty_command_gives_back_a_verdict_instead_of_panicking() {
-        assert!(matches!(
-            launch("s", &[], &["x".to_owned()]),
-            Launch::Failed { .. }
-        ));
-        assert!(matches!(
-            launch("s", &["x".to_owned()], &[]),
-            Launch::Failed { .. }
-        ));
+        for scopes in [false, true] {
+            assert!(matches!(
+                launch_with(scopes, "s", &[], &["x".to_owned()]),
+                Launch::Failed { .. }
+            ));
+            assert!(matches!(
+                launch_with(scopes, "s", &["x".to_owned()], &[]),
+                Launch::Failed { .. }
+            ));
+        }
+    }
+
+    /// An exit status, as `wait` would hand it back for `exit(code)`.
+    fn exited(code: i32) -> std::io::Result<std::process::ExitStatus> {
+        Ok(std::process::ExitStatus::from_raw(code << 8))
+    }
+
+    /// THE DEFECT: with a scope, the status is the APPLICATION'S — and a
+    /// program that ended with `exit 3` was read as "the scope was not
+    /// created" and opened a second time, directly, right after it closed.
+    #[test]
+    fn with_scopes_any_status_is_the_applications_and_nothing_relaunches() {
+        for code in [0, 1, 3, 127] {
+            assert_eq!(next(true, Some(&exited(code))), Next::Ended, "exit {code}");
+        }
+        // Killed by a signal is an ending too.
+        let killed: std::io::Result<std::process::ExitStatus> =
+            Ok(std::process::ExitStatus::from_raw(9));
+        assert_eq!(next(true, Some(&killed)), Next::Ended);
+    }
+
+    /// The two ways the program never ran — no scopes, or a `systemd-run` that
+    /// could not be started — are the only ones that spawn it directly.
+    #[test]
+    fn without_a_scope_the_program_is_spawned_directly() {
+        assert!(matches!(next(false, None), Next::Direct(_)));
+        assert!(matches!(next(false, Some(&exited(0))), Next::Direct(_)));
+        let missing: std::io::Result<std::process::ExitStatus> =
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+        let Next::Direct(why) = next(true, Some(&missing)) else {
+            panic!("a systemd-run that never started ran nothing, and nothing ran");
+        };
+        assert!(why.contains("systemd-run"), "{why}");
+    }
+
+    /// The probe is a real launch's SHAPE around `true`: the same properties,
+    /// slice and `choom`, so what would fail every launch fails the probe.
+    #[test]
+    fn the_probe_is_a_launch_around_true() {
+        let probe = probe_command(42);
+        let launch = scope_command("ronoctua-probe-42", None, super::TRUE, &[]);
+        assert_eq!(probe, launch);
+        assert!(
+            probe.last().is_some_and(|p| p.ends_with("true")),
+            "{probe:?}"
+        );
+        assert!(probe.contains(&"--unit=ronoctua-probe-42".to_owned()));
+        // NOT a buffer's scope: a window is matched to a buffer by that prefix.
+        assert!(probe.iter().all(|a| !a.contains(SCOPE_PREFIX)), "{probe:?}");
     }
 }

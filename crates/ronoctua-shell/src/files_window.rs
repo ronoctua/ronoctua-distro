@@ -694,26 +694,12 @@ impl Files {
                         ui.ask_paint();
                         return;
                     }
-                    // THE MAP. DETACHED and never waited on: this runs inside
-                    // the calloop callback, and waiting there is the frozen
-                    // footer the `systemd-run --scope` lesson already cost this
-                    // project twice. Same shape as `syncthing_window`'s page.
+                    // THE MAP, through the opener this system already has and
+                    // the path every door opens by — off the loop, in a scope,
+                    // as the footer opens it, and said here when it fails.
                     Doing::Web(address) => {
                         match option_env!("RONOCTUA_XDG_OPEN").filter(|p| !p.is_empty()) {
-                            Some(opener) => {
-                                match std::process::Command::new(opener)
-                                    .arg(&address)
-                                    .stdin(std::process::Stdio::null())
-                                    .stdout(std::process::Stdio::null())
-                                    .stderr(std::process::Stdio::null())
-                                    .spawn()
-                                {
-                                    Ok(child) => drop(child),
-                                    Err(e) => {
-                                        tracing::warn!(error = %e, "could not open the map");
-                                    }
-                                }
-                            }
+                            Some(opener) => ui.launch(opener, &[address], None),
                             None => {
                                 tracing::error!("RONOCTUA_XDG_OPEN was not set at build time");
                             }
@@ -725,7 +711,7 @@ impl Files {
                         if let Some(entry) = self.catalogue.iter().find(|e| e.id == which).cloned()
                         {
                             let (program, args) = crate::apps::command_for(&entry, &path);
-                            Self::spawn(&program, &args, entry.working_directory.as_deref());
+                            ui.launch(&program, &args, entry.working_directory.as_deref());
                         }
                         ui.ask_paint();
                         return;
@@ -738,7 +724,7 @@ impl Files {
                         {
                             let (program, args) =
                                 crate::apps::command_for(&entry, std::path::Path::new(""));
-                            Self::spawn(&program, &args, entry.working_directory.as_deref());
+                            ui.launch(&program, &args, entry.working_directory.as_deref());
                         } else {
                             let m = ui.texts.t_with(
                                 ronoctua_i18n::key::FILES_SIDEBAR_GONE,
@@ -756,7 +742,7 @@ impl Files {
                             && let Ok(w) = std::env::var("RONOCTUA_BUFFER_FORMAT")
                             && !w.is_empty()
                         {
-                            Self::spawn(&me.to_string_lossy(), &["buffer".to_owned(), w, id], None);
+                            ui.launch(&me.to_string_lossy(), &["buffer".to_owned(), w, id], None);
                         } else {
                             let m = ui.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
                             self.say(ui, m);
@@ -766,7 +752,7 @@ impl Files {
                     }
                     Doing::Terminal(dir) => {
                         if let Ok(me) = std::env::current_exe() {
-                            Self::spawn(
+                            ui.launch(
                                 &me.to_string_lossy(),
                                 &["terminal".to_owned()],
                                 Some(&dir.to_string_lossy()),
@@ -825,19 +811,35 @@ impl Files {
         }
     }
 
-    /// Opens a file with whatever handles its type.
+    /// Opens a file with whatever handles its type — the editor, or the
+    /// application that declares it: `files::opener_of`, the answer the
+    /// footer asks too. A text file opened the editor there and whatever
+    /// declared `text/plain` here, and a file of no known type said "nothing
+    /// opens it" here while the footer handed it to the editor.
     fn open_the_file(&mut self, ui: &mut Ui, path: &std::path::Path) {
-        let of_type = ronoctua_files::mime::of_path(path, ronoctua_files::Kind::File, true);
-        let Some(entry) = crate::apps::opens(&self.catalogue, of_type).cloned() else {
-            let m = ui.texts.t_with(
-                ronoctua_i18n::key::FILES_NOTHING_OPENS,
-                &[("type", of_type)],
-            );
-            self.say(ui, m);
-            return;
-        };
-        let (program, args) = crate::apps::command_for(&entry, path);
-        Self::spawn(&program, &args, entry.working_directory.as_deref());
+        match crate::files::opener_of(&self.catalogue, path) {
+            crate::files::Opener::Editor => {
+                let client = std::env::var("RONOCTUA_EMACSCLIENT").ok();
+                match crate::files::editor_command(client.as_deref(), path) {
+                    Some((program, args, cwd)) => ui.launch(&program, &args, cwd.as_deref()),
+                    None => {
+                        let m = ui.texts.t(ronoctua_i18n::key::FILES_NO_EDITOR);
+                        self.say(ui, m);
+                    }
+                }
+            }
+            crate::files::Opener::App(entry) => {
+                let (program, args) = crate::apps::command_for(&entry, path);
+                ui.launch(&program, &args, entry.working_directory.as_deref());
+            }
+            crate::files::Opener::Nothing(of_type) => {
+                let m = ui.texts.t_with(
+                    ronoctua_i18n::key::FILES_NOTHING_OPENS,
+                    &[("type", of_type)],
+                );
+                self.say(ui, m);
+            }
+        }
     }
 
     /// A root shell in this directory, through polkit.
@@ -851,7 +853,7 @@ impl Files {
             self.say(ui, m);
             return;
         };
-        Self::spawn(
+        ui.launch(
             &me.to_string_lossy(),
             &[
                 "terminal".to_owned(),
@@ -861,33 +863,6 @@ impl Files {
             ],
             Some(&dir.to_string_lossy()),
         );
-    }
-
-    /// Starts a program, in a scope of its own.
-    ///
-    /// Through `foreign::launch` and a NAMED thread: the manual is explicit
-    /// that `systemd-run --scope` "is synchronous, and will return only when
-    /// the command finishes". Waiting here would freeze this window for the
-    /// whole life of whatever it opened — the defect the app launcher already
-    /// paid for once.
-    fn spawn(program: &str, args: &[String], cwd: Option<&str>) {
-        let Ok(scope) = crate::foreign::scope_name() else {
-            tracing::error!("no scope name; nothing opened");
-            return;
-        };
-        let cmd = crate::foreign::scope_command(&scope, cwd, program, args);
-        // `direct` is what runs when there is no `systemd-run` — the nested
-        // loop's case. It is the same command without the wrapper.
-        let mut direct = vec![program.to_owned()];
-        direct.extend(args.iter().cloned());
-        if let Err(e) = std::thread::Builder::new()
-            .name("files-open".to_owned())
-            .spawn(move || {
-                let _ = crate::foreign::launch(&scope, &direct, &cmd);
-            })
-        {
-            tracing::error!(error = %e, "could not start the open thread");
-        }
     }
 
     /// What a thread came back with.
@@ -1024,7 +999,7 @@ impl Files {
                 return;
             }
         }
-        let Some(t) = key_of(event, mods) else {
+        let Some(t) = crate::door::keys::key_of(event, mods) else {
             return;
         };
         // `Esc` CLOSES THE OPENED LINE FIRST, exactly as it does in the other
@@ -3307,59 +3282,6 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
 /// is over — and two of the three disagreeing is a tooltip about the
 /// neighbouring field.
 const CONTENT_MARGIN: u16 = crate::chrome::FIELDS_LEAD;
-
-/// A `KeyEvent` as the manager's keymap sees it.
-///
-/// The same mapping `Footer::translate` does, minus the leader's inheritance:
-/// that exists because the footer receives the keyboard with the leader still
-/// held down, and this window is given focus like any other.
-fn key_of(event: &KeyEvent, mods: Modifiers) -> Option<ronoctua_keymap::Key> {
-    use ronoctua_keymap::{Key, Sym};
-    let sym = match event.keysym {
-        Keysym::Escape => Sym::Esc,
-        Keysym::Return | Keysym::KP_Enter => Sym::Enter,
-        Keysym::Tab | Keysym::ISO_Left_Tab => Sym::Tab,
-        Keysym::BackSpace => Sym::Backspace,
-        Keysym::space => Sym::Space,
-        Keysym::Left => Sym::Left,
-        Keysym::Right => Sym::Right,
-        Keysym::Up => Sym::Up,
-        Keysym::Down => Sym::Down,
-        otherwise => Sym::Char(otherwise.key_char()?),
-    };
-    Some(Key {
-        mods: ronoctua_keymap::Mods {
-            ctrl: mods.ctrl,
-            alt: mods.alt,
-            // SHIFT DOES NOT ENTER FROM THE MODIFIERS, for the reason
-            // `Footer::discount` gives: xkb has already applied it when
-            // producing the character, so counting both would turn `M-S` into
-            // `M-S-S` and never match. The two doors have to answer the same
-            // key the same way, and this one did not — it was invisible only
-            // while every key in the table was a bare letter and the notation
-            // dropped the modifiers anyway.
-            //
-            // IT ENTERS FROM THE KEYSYM, and that is the same rule and not an
-            // exception to it. `ISO_Left_Tab` is what xkb produces for
-            // Shift+Tab — the application has already been made, exactly as it
-            // is for `S` — so reading it here is reading what xkb decided
-            // rather than guessing at a modifier.
-            //
-            // AND FROM THE MODIFIER FOR EVERY KEY THAT IS NOT A CHARACTER,
-            // because there xkb has nothing to apply it TO: Shift+Left is
-            // `Left` and the modifier is the only place the shift exists. The
-            // rule above was written when `S-TAB` was the only shifted binding
-            // and it read as "shift comes from the keysym"; what it actually
-            // says is "shift is not counted twice", and an arrow cannot count
-            // it twice. Without this, `S-<left>` arrived as a bare `<left>`
-            // and went UP A DIRECTORY — caught on screen, turning a shape.
-            shift: event.keysym == Keysym::ISO_Left_Tab
-                || (mods.shift && !matches!(sym, Sym::Char(_))),
-            logo: mods.logo,
-        },
-        sym,
-    })
-}
 
 // ---------------------------------------------------------------------------
 // THE DRAG — entries carried out, and files dropped in

@@ -1,0 +1,1235 @@
+{
+ "repo": {
+  "name": {
+   "ar": "F-Droid",
+   "ba": "F-Droid",
+   "ca": "F-Droid",
+   "cs": "F-Droid",
+   "de": "F-Droid",
+   "en-GB": "F-Droid",
+   "en-US": "F-Droid",
+   "es": "F-Droid",
+   "fa": "اف‌دروید",
+   "fr": "F-Droid",
+   "ga": "F-Droid",
+   "id": "F-Droid",
+   "ja": "F-Droid",
+   "ko": "F-Droid",
+   "lt": "F-Droid",
+   "lv": "F-Droid",
+   "pl": "F-Droid",
+   "pt-BR": "F-Droid",
+   "ru": "F-Droid",
+   "sq": "F-Droid",
+   "sr": "F-Droid",
+   "sv": "F-Droid",
+   "sw": "F-Droid",
+   "ta": "எஃப்-டிராய்டு",
+   "tr": "F-Droid",
+   "ug": "F-Droid",
+   "uk": "F-Droid",
+   "yue": "F-Droid",
+   "zh-CN": "F-Droid",
+   "zh-TW": "F-Droid"
+  },
+  "address": "https://f-droid.org/repo",
+  "timestamp": 1790325839423
+ },
+ "packages": {
+  "org.fdroid.fdroid": {
+   "metadata": {
+    "added": 1295222400000,
+    "categories": [
+     "App Store & Updater",
+     "System"
+    ],
+    "changelog": "https://gitlab.com/fdroid/fdroidclient/-/blob/HEAD/CHANGELOG.md",
+    "issueTracker": "https://gitlab.com/fdroid/fdroidclient/issues",
+    "lastUpdated": 1790139743595,
+    "license": "GPL-3.0-or-later",
+    "sourceCode": "https://gitlab.com/fdroid/fdroidclient",
+    "translation": "https://hosted.weblate.org/projects/f-droid/f-droid",
+    "webSite": "https://f-droid.org",
+    "screenshots": {
+     "phone": {
+      "en-US": [
+       {
+        "name": "/org.fdroid.fdroid/en-US/phoneScreenshots/01-latest.png",
+        "sha256": "69c19763d936a62c4cb68735fc094df2717f4c20a6895cf1409a1034839196cd",
+        "size": 264846
+       }
+      ]
+     }
+    },
+    "name": {
+     "de": "F-Droid",
+     "en-US": "F-Droid",
+     "pt-BR": "F-Droid"
+    },
+    "summary": {
+     "de": "Der App-Store, der Freiheit und Privatsphäre respektiert",
+     "en-US": "The app store that respects freedom and privacy",
+     "pt-BR": "A loja de apps que respeita a liberdade e a privacidade"
+    },
+    "description": {
+     "de": "F-Droid ist ein installierbarer Katalog mit Libre-Software-Apps für Android. Die F-Droid-App vereinfacht die Suche nach Apps, deren Installation und sorgt dafür, dass du auf dem neuesten Stand bleibst.\n\nSie verbindet sich mit jeder mit F-Droid kompatiblen Paketquelle. Die Standardquelle wird auf f-droid.org gehostet, die ausschließlich echte Freie Software enthält.\n\nAndroid selbst ist dahingehend offen, dass jeder die Wahl hat, woher er APKs installieren möchte. Es gibt aber viele gute Gründe, F-Droid als App-Manager für Freie Software zu verwenden:\n\n* Benachrichtigungen zu verfügbaren Aktualisierungen erhalten \n* Aktualisierungen wahlweise automatisch herunterladen und installieren \n* Vorgänger- und Beta-Versionen überblicken \n* Mit dem Gerät inkompatible Apps aussortieren\n* Apps nach Kategorien und durchsuchbaren Beschreibungen finden \n* Auf URLs zugreifen, die mit Quellcode, Spendenmöglichkeiten usw. verknüpft sind \n* Durch Überprüfung von Quell-Signaturen und APK-Hashes geschützt bleiben\n",
+     "en-US": "F-Droid is an installable catalogue of libre software apps for Android. The F-Droid client app makes it easy to browse, install, and keep track of updates on your device.\n\nIt connects to any F-Droid compatible repositories. The default repo is hosted at f-droid.org, which contains only bona fide libre software.\n\nAndroid itself is open in the sense that you are free to install APKs from anywhere you wish, but there are many good reasons for using F-Droid as your libre software app manager:\n\n* Get notified when updates are available\n* Optionally download and install updates automatically\n* Keep track of older and beta versions\n* Filter out apps incompatible with the device\n* Find apps via categories and searchable descriptions\n* Access associated URLs for donations, source code etc.\n* Stay safe by checking repo index signatures and APK hashes\n",
+     "pt-BR": "O F-Droid é um catálogo instalável de apps de software livre para Android. O app cliente F-Droid facilita a navegação, instalação e acompanhamento de atualizações no seu dispositivo.\n\nEle se conecta a qualquer repositório compatível com o F-Droid. O repositório padrão é hospedado no f-droid.org, que contém apenas software livre de boa-fé.\n\nO Android em si é aberto no sentido de que você é livre para instalar APKs de qualquer lugar que desejar, mas há muitas boas razões para usar o F-Droid como seu gerenciador de apps de software livre:\n\n* Ser notificado quando atualizações estiverem disponíveis\n* Opcionalmente, atualizações são baixadas e instaladas automaticamente\n* Manter versões antigas ou beta\n* Filtrar apps incompatíveis com seu dispositivo\n* Localizar apps por categorias e descrições pesquisáveis\n* Acessar URLs associadas para doações, código-fonte, etc.\n* Ficar seguro verificando as assinaturas do índice do repositório e hashes de APK\n"
+    },
+    "icon": {
+     "en-US": {
+      "name": "/org.fdroid.fdroid/en-US/icon_0slNR8J9edqDZDoyWABFZrqQONU9EyiNVwM6B3Jui_Q=.png",
+      "sha256": "d2c94d47c27d79da83643a3258004566ba9038d53d13288d57033a07726e8bf4",
+      "size": 9649
+     }
+    },
+    "preferredSigner": "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab"
+   },
+   "versions": {
+    "94938d324b03755fb324f143229240c75640e809cdd3a90cc0a545b5d0a61931": {
+     "added": 1790139743595,
+     "file": {
+      "name": "/org.fdroid.fdroid_2000050.apk",
+      "sha256": "94938d324b03755fb324f143229240c75640e809cdd3a90cc0a545b5d0a61931",
+      "size": 12496223,
+      "ipfsCIDv1": "bafybeiam3cvgjc2n64cvt67t6idv2jzhn3dzfknpae7f3p63n57zroayiq"
+     },
+     "src": {
+      "name": "/org.fdroid.fdroid_2000050_src.tar.gz",
+      "sha256": "086293f2a56b429550019035e59c68e737e6959441f311c6a175dca3cb9879ff",
+      "size": 25516247
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a",
+       "armeabi-v7a",
+       "x86",
+       "x86_64"
+      ],
+      "versionName": "2.0.0",
+      "versionCode": 2000050,
+      "usesSdk": {
+       "minSdkVersion": 24,
+       "targetSdkVersion": 37
+      },
+      "signer": {
+       "sha256": [
+        "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.ACCESS_WIFI_STATE"
+       },
+       {
+        "name": "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+       }
+      ],
+      "usesPermissionSdk23": [
+       {
+        "name": "android.permission.ACCESS_COARSE_LOCATION",
+        "maxSdkVersion": 30
+       }
+      ]
+     },
+     "releaseChannels": [
+      "Beta"
+     ]
+    },
+    "36b343514ea2cdd353b7554c14b3da3f4309653b67be5ceb2e912b25597e3d85": {
+     "added": 1787506623262,
+     "file": {
+      "name": "/org.fdroid.fdroid_2000041.apk",
+      "sha256": "36b343514ea2cdd353b7554c14b3da3f4309653b67be5ceb2e912b25597e3d85",
+      "size": 13257686,
+      "ipfsCIDv1": "bafybeiamistw3xvic6t4wagydavmvd2xap6pqknzsn3ctbcv7ps4h5nn6q"
+     },
+     "src": {
+      "name": "/org.fdroid.fdroid_2000041_src.tar.gz",
+      "sha256": "3c5a0732f3b2e984f474aafb33a08957917363afec9618119d344a8d269b35cb",
+      "size": 25469994
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a",
+       "armeabi-v7a",
+       "x86",
+       "x86_64"
+      ],
+      "versionName": "2.0-rc1",
+      "versionCode": 2000041,
+      "usesSdk": {
+       "minSdkVersion": 24,
+       "targetSdkVersion": 37
+      },
+      "signer": {
+       "sha256": [
+        "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.ACCESS_WIFI_STATE"
+       },
+       {
+        "name": "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+       }
+      ],
+      "usesPermissionSdk23": [
+       {
+        "name": "android.permission.ACCESS_COARSE_LOCATION",
+        "maxSdkVersion": 30
+       }
+      ]
+     },
+     "releaseChannels": [
+      "Beta"
+     ]
+    },
+    "cd492ba2d5a425ad80aa22f4b13d9815b2ad487e9b2b6df6b67c31b957b19f2b": {
+     "added": 1785832389119,
+     "file": {
+      "name": "/org.fdroid.fdroid_2000040.apk",
+      "sha256": "cd492ba2d5a425ad80aa22f4b13d9815b2ad487e9b2b6df6b67c31b957b19f2b",
+      "size": 13212692,
+      "ipfsCIDv1": "bafybeidydlexabyhp677yy5fbfqyaby7jylpsvmbtj4kogfh3r5jnjwprq"
+     },
+     "src": {
+      "name": "/org.fdroid.fdroid_2000040_src.tar.gz",
+      "sha256": "0bf10fe63f1ff237d1567c8f6a0a2305d94c3b99b69c3df141252b9b93f022ed",
+      "size": 4132150
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a",
+       "armeabi-v7a",
+       "x86",
+       "x86_64"
+      ],
+      "versionName": "2.0-rc0",
+      "versionCode": 2000040,
+      "usesSdk": {
+       "minSdkVersion": 24,
+       "targetSdkVersion": 37
+      },
+      "signer": {
+       "sha256": [
+        "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.ACCESS_WIFI_STATE"
+       },
+       {
+        "name": "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+       }
+      ],
+      "usesPermissionSdk23": [
+       {
+        "name": "android.permission.ACCESS_COARSE_LOCATION",
+        "maxSdkVersion": 30
+       }
+      ]
+     },
+     "releaseChannels": [
+      "Beta"
+     ]
+    },
+    "730f81f2cf860b2671410e3bb7a9f00f99ebd8020aea941c316db1f55cd030e3": {
+     "added": 1784020591357,
+     "file": {
+      "name": "/org.fdroid.fdroid_2000011.apk",
+      "sha256": "730f81f2cf860b2671410e3bb7a9f00f99ebd8020aea941c316db1f55cd030e3",
+      "size": 13200404,
+      "ipfsCIDv1": "bafybeifls5zysimmlg36zeejsfxefi5shk6mpz6tvd3qeg7yqzfq3qdzk4"
+     },
+     "src": {
+      "name": "/org.fdroid.fdroid_2000011_src.tar.gz",
+      "sha256": "6e6c9978c310d39415610b1dc991cc8f06062c349bb59c909ca132a6de07c5b9",
+      "size": 4125920
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a",
+       "armeabi-v7a",
+       "x86",
+       "x86_64"
+      ],
+      "versionName": "2.0-alpha11",
+      "versionCode": 2000011,
+      "usesSdk": {
+       "minSdkVersion": 24,
+       "targetSdkVersion": 37
+      },
+      "signer": {
+       "sha256": [
+        "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.ACCESS_WIFI_STATE"
+       },
+       {
+        "name": "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+       }
+      ],
+      "usesPermissionSdk23": [
+       {
+        "name": "android.permission.ACCESS_COARSE_LOCATION",
+        "maxSdkVersion": 30
+       }
+      ]
+     },
+     "releaseChannels": [
+      "Beta"
+     ]
+    },
+    "0b6c65becb0712828625976c6baa76fc40153f77871487b5bc231c3433856b50": {
+     "added": 1781040519859,
+     "file": {
+      "name": "/org.fdroid.fdroid_2000010.apk",
+      "sha256": "0b6c65becb0712828625976c6baa76fc40153f77871487b5bc231c3433856b50",
+      "size": 15002599,
+      "ipfsCIDv1": "bafybeibv2dr7xglwcyven7oh4leefihb6duv3ainb5rg32quxthnpjvtc4"
+     },
+     "src": {
+      "name": "/org.fdroid.fdroid_2000010_src.tar.gz",
+      "sha256": "7ae2a73b506db2155bcc54620c4348bb401efb4d933879de71f887dba6e7d6a9",
+      "size": 5469606
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a",
+       "armeabi-v7a",
+       "x86",
+       "x86_64"
+      ],
+      "versionName": "2.0-alpha10",
+      "versionCode": 2000010,
+      "usesSdk": {
+       "minSdkVersion": 24,
+       "targetSdkVersion": 37
+      },
+      "signer": {
+       "sha256": [
+        "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.ACCESS_WIFI_STATE"
+       },
+       {
+        "name": "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+       }
+      ],
+      "usesPermissionSdk23": [
+       {
+        "name": "android.permission.ACCESS_COARSE_LOCATION",
+        "maxSdkVersion": 30
+       }
+      ]
+     },
+     "releaseChannels": [
+      "Beta"
+     ]
+    },
+    "985f5181d48bb6bafd54083a048b391271e0ab28385881cc41294fb01a222762": {
+     "added": 1771544233000,
+     "file": {
+      "name": "/org.fdroid.fdroid_1023052.apk",
+      "sha256": "985f5181d48bb6bafd54083a048b391271e0ab28385881cc41294fb01a222762",
+      "size": 12426276,
+      "ipfsCIDv1": "bafybeibggsgbc56bhx7augzvwyl5medzllaugkz6z5sjfjjicmxbyjh24a"
+     },
+     "src": {
+      "name": "/org.fdroid.fdroid_1023052_src.tar.gz",
+      "sha256": "7b558e8c4ce1520368fdf6705b0dbd40366573fcb9b3313a9bb03fcb3484e3e7",
+      "size": 5660476
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a",
+       "armeabi-v7a",
+       "x86",
+       "x86_64"
+      ],
+      "versionName": "1.23.2",
+      "versionCode": 1023052,
+      "usesSdk": {
+       "minSdkVersion": 23,
+       "targetSdkVersion": 30
+      },
+      "signer": {
+       "sha256": [
+        "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.INTERNET"
+       },
+       {
+        "name": "android.permission.ACCESS_NETWORK_STATE"
+       }
+      ],
+      "usesPermissionSdk23": [
+       {
+        "name": "android.permission.ACCESS_COARSE_LOCATION"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "com.aurora.store": {
+   "metadata": {
+    "added": 1555113600000,
+    "categories": [
+     "App Store & Updater",
+     "System"
+    ],
+    "changelog": "https://gitlab.com/AuroraOSS/AuroraStore/blob/HEAD/CHANGELOG",
+    "issueTracker": "https://gitlab.com/AuroraOSS/AuroraStore/issues",
+    "lastUpdated": 1785492883879,
+    "license": "GPL-3.0-or-later",
+    "sourceCode": "https://gitlab.com/AuroraOSS/AuroraStore",
+    "translation": "https://hosted.weblate.org/engage/aurora-store",
+    "webSite": "http://auroraoss.com",
+    "name": {
+     "en-US": "Aurora Store"
+    },
+    "summary": {
+     "en-US": "An unofficial FOSS client to Google Play with an elegant design and privacy",
+     "pt-BR": "Um cliente FOSS do Google Play com privacidade e um design elegante"
+    },
+    "description": {
+     "en-US": "Aurora Store is an unofficial, FOSS client to Google Play with an elegant design. Aurora Store allows users to download, update, and search for apps like the Play Store. It works perfectly fine with or without Google Play Services or microG.\n\n<b>Features:</b>\n\n• FOSS: Has GPLv3 licence\n• Beautiful design: Built upon latest Material 3 guidelines\n• Account login: You can login with either personal or an anonymous account\n• Device & Locale spoofing: Change your device and/or locale to access geo locked apps\n• Exodus Privacy integration: Instantly see trackers in app\n• Plexus integration: Instantly see app compatibility without Google Play Services or with microG\n• Updates blacklisting: Ignore updates for specific apps\n",
+     "pt-BR": "A Aurora Store é um cliente FOSS não oficial do Google Play com um design elegante. A Aurora Store permite que usuários baixem, atualizem, e busquem apps assim como a Play Store. Ele funciona perfeitamente sem o Google Play Services ou o microG.\n\n<b>Recursos:</b>\n\n• FOSS (software livre): licença GPLv3\n• Interface bonita: construído com base nas diretrizes do Material Design 3 mais recentes\n• Conta: Você pode se conectar com uma conta pessoal ou anônima\n• Simulação de dispositivo e localidade: Altere seu dispositivo ou sua localidade para acessar apps bloqueados em certos lugares\n• Integração com o Exodus Privacy: Veja os rastreadores diretamente no app\n• Integração com o Plexus: Veja a compatibilidade dos apps sem o Google Play Services ou com o microG, diretamente no app\n• Bloqueio de atualizações: Ignore as atualizações de apps específicos\n"
+    },
+    "icon": {
+     "en-US": {
+      "name": "/com.aurora.store/en-US/icon_tbAhwq51NNd0liZcTg0cQNNvazxrWlj7bPCe_1TkCV8=.png",
+      "sha256": "b5b021c2ae7534d77496265c4e0d1c40d36f6b3c6b5a58fb6cf09eff54e4095f",
+      "size": 14348
+     }
+    },
+    "preferredSigner": "5c83c7672b929955dc0a1db89a5e6ae4389e2eae7ec939956041694e5815f532"
+   },
+   "versions": {
+    "fd9c75d90d0f4a7c132b9b4a5a2cf1992a45e03b8d8ff988b7dcfbc0db2c4d11": {
+     "added": 1785492883879,
+     "file": {
+      "name": "/com.aurora.store_76.apk",
+      "sha256": "fd9c75d90d0f4a7c132b9b4a5a2cf1992a45e03b8d8ff988b7dcfbc0db2c4d11",
+      "size": 9360088,
+      "ipfsCIDv1": "bafybeih2cvdzgb6lp2qx7ot5zazdudylwla7hcczlrmorfifskaku5u55q"
+     },
+     "src": {
+      "name": "/com.aurora.store_76_src.tar.gz",
+      "sha256": "1d65ce2dbdf6bee790b066ff6fb10bc19794cab584f565b63ce037058130e655",
+      "size": 3878835
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a",
+       "armeabi-v7a",
+       "x86",
+       "x86_64"
+      ],
+      "versionName": "4.8.4",
+      "versionCode": 76,
+      "usesSdk": {
+       "minSdkVersion": 23,
+       "targetSdkVersion": 37
+      },
+      "signer": {
+       "sha256": [
+        "5c83c7672b929955dc0a1db89a5e6ae4389e2eae7ec939956041694e5815f532"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.INTERNET"
+       },
+       {
+        "name": "android.permission.ACCESS_NETWORK_STATE"
+       }
+      ]
+     },
+     "antiFeatures": {
+      "NonFreeNet": {
+       "en-US": "Depends on the Google Play Store servers"
+      },
+      "Tracking": {
+       "en-US": "By default, the apps list and system details are sent to Google Play Store servers, which is likely enough data to fingerprint the device"
+      }
+     }
+    },
+    "c4ce0df0bbb0e82be4e4bd7d8a3e000f08e04457187d560fe2ca3ae52941bf49": {
+     "added": 1779007734975,
+     "file": {
+      "name": "/com.aurora.store_75.apk",
+      "sha256": "c4ce0df0bbb0e82be4e4bd7d8a3e000f08e04457187d560fe2ca3ae52941bf49",
+      "size": 8954451,
+      "ipfsCIDv1": "bafybeidh43ezvkso3aotqikvppgg5ennszjv6mvce6oxxnoisk5nfkiplq"
+     },
+     "src": {
+      "name": "/com.aurora.store_75_src.tar.gz",
+      "sha256": "1118879de0fe2696430157d19c3c9eadc3588831d852430b9f404a998f3b9452",
+      "size": 3910311
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a",
+       "armeabi-v7a",
+       "x86",
+       "x86_64"
+      ],
+      "versionName": "4.8.3",
+      "versionCode": 75,
+      "usesSdk": {
+       "minSdkVersion": 23,
+       "targetSdkVersion": 37
+      },
+      "signer": {
+       "sha256": [
+        "5c83c7672b929955dc0a1db89a5e6ae4389e2eae7ec939956041694e5815f532"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.INTERNET"
+       },
+       {
+        "name": "android.permission.ACCESS_NETWORK_STATE"
+       }
+      ]
+     },
+     "antiFeatures": {
+      "NonFreeNet": {
+       "en-US": "Depends on the Google Play Store servers"
+      },
+      "Tracking": {
+       "en-US": "By default, the apps list and system details are sent to Google Play Store servers, which is likely enough data to fingerprint the device"
+      }
+     }
+    },
+    "fd4d2d4cfb4a4d77766930f722c6a524af90cc1c7ff8aa6b81fe9c2b0fc5308a": {
+     "added": 1771544205000,
+     "file": {
+      "name": "/com.aurora.store_73.apk",
+      "sha256": "fd4d2d4cfb4a4d77766930f722c6a524af90cc1c7ff8aa6b81fe9c2b0fc5308a",
+      "size": 9039110,
+      "ipfsCIDv1": "bafybeiaxdizm2xkt6hum3lqhupflhohkoa4dn6ojywfhrde3djfw7mrgyq"
+     },
+     "src": {
+      "name": "/com.aurora.store_73_src.tar.gz",
+      "sha256": "833b3b33fbb4dc555d3cc0ebdcc2f412811f77bc494ca86b4ee5a9771bbb8e70",
+      "size": 3886681
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a",
+       "armeabi-v7a",
+       "x86",
+       "x86_64"
+      ],
+      "versionName": "4.8.1",
+      "versionCode": 73,
+      "usesSdk": {
+       "minSdkVersion": 23,
+       "targetSdkVersion": 36
+      },
+      "signer": {
+       "sha256": [
+        "5c83c7672b929955dc0a1db89a5e6ae4389e2eae7ec939956041694e5815f532"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.INTERNET"
+       },
+       {
+        "name": "android.permission.ACCESS_NETWORK_STATE"
+       }
+      ]
+     },
+     "antiFeatures": {
+      "NonFreeNet": {
+       "en-US": "Depends on the Google Play Store servers"
+      },
+      "Tracking": {
+       "en-US": "By default, the apps list and system details are sent to Google Play Store servers, which is likely enough data to fingerprint the device"
+      }
+     }
+    }
+   }
+  },
+  "InfinityLoop1309.NewPipeEnhanced": {
+   "metadata": {
+    "added": 1674146767000,
+    "categories": [
+     "Internet",
+     "Multimedia",
+     "Online Media Player"
+    ],
+    "changelog": "https://github.com/InfinityLoop1308/PipePipe/releases",
+    "issueTracker": "https://github.com/InfinityLoop1308/PipePipe/issues",
+    "lastUpdated": 1789210732819,
+    "license": "GPL-3.0-or-later",
+    "sourceCode": "https://github.com/InfinityLoop1308/PipePipe",
+    "translation": "https://github.com/InfinityLoop1308/PipePipe/blob/main/TRANSLATION.md",
+    "name": {
+     "en-US": "PipePipe"
+    },
+    "summary": {
+     "en-US": "A FLOSS Android app to let you browse YouTube, NicoNico and BiliBili freely."
+    },
+    "description": {
+     "en-US": "NewPipe, reimagined: faster, more stable, and packed with more features.\n\n<b>Beyond NewPipe</b>\n\n* SponsorBlock (YouTube & BiliBili)\n* ReturnYouTubeDislike\n* Bullet comments / Live Chats\n* Search filters\n* Search & sort in local playlists\n* Filter out unwanted items by keywords/channels/...\n* Music player mode & Background playing\n* Sleep timer\n* Fullscreen gestures\n* Login to watch restricted / premium contents\n* … and many minor improvements\n"
+    },
+    "icon": {
+     "en-US": {
+      "name": "/InfinityLoop1309.NewPipeEnhanced/en-US/icon_CWQFN3-pZavxIDWYPYl4GHg-v7k6uCvk6PkmD9S8gSo=.png",
+      "sha256": "096405377fa965abf12035983d897818783ebfb93ab82be4e8f9260fd4bc812a",
+      "size": 83609
+     }
+    },
+    "preferredSigner": "dec73429ce2563275f5ed19825e44652b32b363a46f38bdff9ad6dcde4842d88"
+   },
+   "versions": {
+    "589bb89b777bf0a33a13ab6456d2c876c3b8814f40fa8f74b2c4f0285aa56bf1": {
+     "added": 1789210732819,
+     "file": {
+      "name": "/InfinityLoop1309.NewPipeEnhanced_110804.apk",
+      "sha256": "589bb89b777bf0a33a13ab6456d2c876c3b8814f40fa8f74b2c4f0285aa56bf1",
+      "size": 32331923,
+      "ipfsCIDv1": "bafybeicuwvteo2pugwsoq3vv5ubziguy6k4dtbj6vnvddvmjg72lqhfbxy"
+     },
+     "src": {
+      "name": "/InfinityLoop1309.NewPipeEnhanced_110804_src.tar.gz",
+      "sha256": "323e79d6fb65816c9f4417be41e10662076e12fcb5f7fa96a16f336161ad74a7",
+      "size": 38673160
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a"
+      ],
+      "versionName": "5.3.1",
+      "versionCode": 110804,
+      "usesSdk": {
+       "minSdkVersion": 23,
+       "targetSdkVersion": 36
+      },
+      "signer": {
+       "sha256": [
+        "dec73429ce2563275f5ed19825e44652b32b363a46f38bdff9ad6dcde4842d88"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.INTERNET"
+       },
+       {
+        "name": "android.permission.WAKE_LOCK"
+       }
+      ]
+     },
+     "antiFeatures": {
+      "NonFreeNet": {}
+     }
+    },
+    "8829d5e874bfd2b10099f90f633d6008f6c4983cd1730be02011a385cc2985ba": {
+     "added": 1789210732819,
+     "file": {
+      "name": "/InfinityLoop1309.NewPipeEnhanced_110803.apk",
+      "sha256": "8829d5e874bfd2b10099f90f633d6008f6c4983cd1730be02011a385cc2985ba",
+      "size": 32874709,
+      "ipfsCIDv1": "bafybeigz5d2tyf3tynnlxr5x7motbusxnhwcc4cdanhn5mnd5kw7kzcrai"
+     },
+     "src": {
+      "name": "/InfinityLoop1309.NewPipeEnhanced_110803_src.tar.gz",
+      "sha256": "814a231b4e531fc4c72dd7bd9116b582ec3893f1b5c1f589dd662ccb806207ca",
+      "size": 38673174
+     },
+     "manifest": {
+      "nativecode": [
+       "x86_64"
+      ],
+      "versionName": "5.3.1",
+      "versionCode": 110803,
+      "usesSdk": {
+       "minSdkVersion": 23,
+       "targetSdkVersion": 36
+      },
+      "signer": {
+       "sha256": [
+        "dec73429ce2563275f5ed19825e44652b32b363a46f38bdff9ad6dcde4842d88"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.INTERNET"
+       },
+       {
+        "name": "android.permission.WAKE_LOCK"
+       }
+      ]
+     },
+     "antiFeatures": {
+      "NonFreeNet": {}
+     }
+    },
+    "bacd8c04441d493b1817dc28f4f4000adc3dbf4fe88875246a0e089740089d1c": {
+     "added": 1789210732819,
+     "file": {
+      "name": "/InfinityLoop1309.NewPipeEnhanced_110802.apk",
+      "sha256": "bacd8c04441d493b1817dc28f4f4000adc3dbf4fe88875246a0e089740089d1c",
+      "size": 32353902,
+      "ipfsCIDv1": "bafybeigm75xqxlpumiqu4t743pzqtxwt7j5tiohj3gqvd2za3ukvoaikcy"
+     },
+     "src": {
+      "name": "/InfinityLoop1309.NewPipeEnhanced_110802_src.tar.gz",
+      "sha256": "598aee621bbb55476b8873dac36e6c8279fe1ac77542fed8be8cfc373286d317",
+      "size": 38673156
+     },
+     "manifest": {
+      "nativecode": [
+       "x86"
+      ],
+      "versionName": "5.3.1",
+      "versionCode": 110802,
+      "usesSdk": {
+       "minSdkVersion": 23,
+       "targetSdkVersion": 36
+      },
+      "signer": {
+       "sha256": [
+        "dec73429ce2563275f5ed19825e44652b32b363a46f38bdff9ad6dcde4842d88"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.INTERNET"
+       },
+       {
+        "name": "android.permission.WAKE_LOCK"
+       }
+      ]
+     },
+     "antiFeatures": {
+      "NonFreeNet": {}
+     }
+    },
+    "47c3e9fe3604c6cd9c416b54e26138bc9acaa5e516704b854ee426ae413c4daf": {
+     "added": 1789210732819,
+     "file": {
+      "name": "/InfinityLoop1309.NewPipeEnhanced_110801.apk",
+      "sha256": "47c3e9fe3604c6cd9c416b54e26138bc9acaa5e516704b854ee426ae413c4daf",
+      "size": 32061616,
+      "ipfsCIDv1": "bafybeiezkluapz555vhffeokkjgf43u3sn53ro74ugcvy7mqqpwnhsomw4"
+     },
+     "src": {
+      "name": "/InfinityLoop1309.NewPipeEnhanced_110801_src.tar.gz",
+      "sha256": "98babbfe531067e7d39bd72146a18b184cceef5feff17871f0ea8f6eedc21e9c",
+      "size": 38673177
+     },
+     "manifest": {
+      "nativecode": [
+       "armeabi-v7a"
+      ],
+      "versionName": "5.3.1",
+      "versionCode": 110801,
+      "usesSdk": {
+       "minSdkVersion": 23,
+       "targetSdkVersion": 36
+      },
+      "signer": {
+       "sha256": [
+        "dec73429ce2563275f5ed19825e44652b32b363a46f38bdff9ad6dcde4842d88"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.INTERNET"
+       },
+       {
+        "name": "android.permission.WAKE_LOCK"
+       }
+      ]
+     },
+     "antiFeatures": {
+      "NonFreeNet": {}
+     }
+    },
+    "eea687f9d5e85840f87bb522d659092f25a17fe51551a9a29118074b0c892dcf": {
+     "added": 1787822567124,
+     "file": {
+      "name": "/InfinityLoop1309.NewPipeEnhanced_110704.apk",
+      "sha256": "eea687f9d5e85840f87bb522d659092f25a17fe51551a9a29118074b0c892dcf",
+      "size": 32326596,
+      "ipfsCIDv1": "bafybeiasytlevnjfcdnmheeaynezl7xtbnspw74sozsp5ihwlyg6mtek4a"
+     },
+     "src": {
+      "name": "/InfinityLoop1309.NewPipeEnhanced_110704_src.tar.gz",
+      "sha256": "0f910bbd3b76c598fca1aeb0193e3242d8ff0a0e8f62e2e9f58be7e1c63af16b",
+      "size": 38670008
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a"
+      ],
+      "versionName": "5.3.0",
+      "versionCode": 110704,
+      "usesSdk": {
+       "minSdkVersion": 23,
+       "targetSdkVersion": 36
+      },
+      "signer": {
+       "sha256": [
+        "dec73429ce2563275f5ed19825e44652b32b363a46f38bdff9ad6dcde4842d88"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.INTERNET"
+       },
+       {
+        "name": "android.permission.WAKE_LOCK"
+       }
+      ]
+     },
+     "antiFeatures": {
+      "NonFreeNet": {}
+     }
+    }
+   }
+  },
+  "chat.simplex.app": {
+   "metadata": {
+    "added": 1670672908000,
+    "categories": [
+     "Connectivity",
+     "Messaging",
+     "Phone & SMS",
+     "Voice & Video Chat"
+    ],
+    "changelog": "https://github.com/simplex-chat/simplex-chat/releases",
+    "issueTracker": "https://github.com/simplex-chat/simplex-chat/issues",
+    "lastUpdated": 1788603314159,
+    "license": "AGPL-3.0-or-later",
+    "sourceCode": "https://github.com/simplex-chat/simplex-chat",
+    "translation": "https://hosted.weblate.org/projects/simplex-chat/android/",
+    "webSite": "https://simplex.chat/",
+    "name": {
+     "en-US": "SimpleX Chat"
+    },
+    "summary": {
+     "en-US": "SimpleX Chat - e2e encrypted messenger without any user IDs - private by design!"
+    },
+    "description": {
+     "en-US": "<h1>SimpleX - the first messaging platform that has no user identifiers, not even random numbers!</h1>\n<p><a href=\"https://simplex.chat/blog/20221108-simplex-chat-v4.2-security-audit-new-website.html\" target=\"_blank\">Security assessment</a> was done by Trail of Bits in November 2022.</p>\n<p>SimpleX Chat features:</p>\n<ul>\n  <li>end-to-end encrypted messages, with editing, replies and deletion of messages.</li>\n  <li>sending end-to-end encrypted images and files.</li>\n  <li>single-use and long-term user addresses.</li>\n  <li>secret chat groups - only group members know it exists and who is the member.</li>\n  <li>end-to-end encrypted audio and video calls.</li>\n  <li>private instant notifications.</li>\n  <li>portable chat profile - you can transfer your chat contacts and history to another device (terminal or mobile).</li>\n</ul>\n<p>SimpleX Chat advantages:</p>\n<ul>\n  <li><strong>Full privacy of your identity, profile, contacts and metadata</strong>: unlike any other existing messaging platform, SimpleX uses no phone numbers or any other identifiers assigned to the users - not even random numbers. This protects the privacy of who you are communicating with, hiding it from SimpleX platform servers and from any observers.</li>\n  <li><strong>Complete protection against spam and abuse</strong>: as you have no identifier on SimpleX platform, you cannot be contacted unless you share a one-time invitation link or an optional temporary user address.</li>\n  <li><strong>Full ownership, control and security of your data</strong>: SimpleX stores all user data on client devices, the messages are only held temporarily on SimpleX relay servers until they are received.</li>\n  <li><strong>Decentralized network</strong>: you can use SimpleX with your own servers and still communicate with people using the servers that are pre-configured in the apps or any other SimpleX servers.</li>\n</ul>\n<p>You can connect to anybody you know via link or scan QR code (in the video call or in person) and start sending messages instantly - no emails, phone numbers or passwords needed.</p> \n<p>Your profile and contacts are only stored in the app on your device - our servers do not have access to this information.</p>\n<p>All messages are end-to-end encrypted using open-source double-ratchet protocol; the messages are routed via our servers using open-source SimpleX Messaging Protocol.</p>\n<p>Please send us any questions via the app (connect to the team via settings!), <a href=\"mailto:chat@simplex.chat?subject=SimpleX Chat on F-Droid\">email us</a> or submit an <a href=\"https://github.com/simplex-chat/simplex-chat/issues\" target=\"_blank\">issue on GitHub</a>.</p>\n<p>Follow us on Mastodon (<a href=\"https://mastodon.social/@simplex\" target=\"_blank\">@simplex@mastodon.social</a>), Twitter (<a href=\"https://twitter.com/SimpleXChat\" target=\"_blank\">@SimpleXChat</a>) and Reddit (<a href=\"https://www.reddit.com/r/SimpleXChat/\" target=\"_blank\">r/SimpleXChat</a>) for the latest updates.</p>\n<p>Once you install SimpleX Chat, join the group of users via <a href=\"https://simplex.chat/contact#/?v=1-2&smp=smp%3A%2F%2Fu2dS9sG8nMNURyZwqASV4yROM28Er0luVTx5X1CsMrU%3D%40smp4.simplex.im%2FWHV0YU1sYlU7NqiEHkHDB6gxO1ofTync%23%2F%3Fv%3D1-2%26dh%3DMCowBQYDK2VuAyEAWbebOqVYuBXaiqHcXYjEHCpYi6VzDlu6CVaijDTmsQU%253D%26srv%3Do5vmywmrnaxalvz6wi3zicyftgio6psuvyniis6gco6bp6ekl4cqj4id.onion&data=%7B%22type%22%3A%22group%22%2C%22groupLinkId%22%3A%22mL-7Divb94GGmGmRBef5Dg%3D%3D%22%7D\" target=\"_blank\">this link</a> to share your ideas and feedback.</p>\n"
+    },
+    "icon": {
+     "en-US": {
+      "name": "/chat.simplex.app/en-US/icon_IDdtCGG0wL-lNRFuu7OK2tHe0TTFmPfU06AgixSneLM=.png",
+      "sha256": "20376d0861b4c0bfa535116ebbb38adad1ded134c598f7d4d3a0208b14a778b3",
+      "size": 36251
+     }
+    },
+    "preferredSigner": "aec195dcfd4614bd3a91ec26d1d514c87571c5cc8dcf48083f9283143ca2b9a6"
+   },
+   "versions": {
+    "e6ffb1d7275b7f4aed222476dfa3d4dc90bb84175c6fc1a26f46d524a6f8d116": {
+     "added": 1788603314159,
+     "file": {
+      "name": "/chat.simplex.app_376.apk",
+      "sha256": "e6ffb1d7275b7f4aed222476dfa3d4dc90bb84175c6fc1a26f46d524a6f8d116",
+      "size": 87466508,
+      "ipfsCIDv1": "bafybeigaahqi2jax6qkbhv5wjwjcdgk2bgh54dcbso26556uuzrmn6brdm"
+     },
+     "src": {
+      "name": "/chat.simplex.app_376_src.tar.gz",
+      "sha256": "c805d788071145cde8c19f1e5af7fdfe97eba40b867ab34e4b09a706eb648cd9",
+      "size": 37775931
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a"
+      ],
+      "versionName": "7.0.2",
+      "versionCode": 376,
+      "features": [
+       {
+        "name": "android.hardware.camera"
+       }
+      ],
+      "usesSdk": {
+       "minSdkVersion": 26,
+       "targetSdkVersion": 35
+      },
+      "signer": {
+       "sha256": [
+        "aec195dcfd4614bd3a91ec26d1d514c87571c5cc8dcf48083f9283143ca2b9a6"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.CAMERA"
+       },
+       {
+        "name": "android.permission.POST_NOTIFICATIONS"
+       }
+      ]
+     }
+    },
+    "461137a703e3f3e5d8ea3c01d91e1d7561ff74ca024ce344b11785558d8976c7": {
+     "added": 1788603314159,
+     "file": {
+      "name": "/chat.simplex.app_375.apk",
+      "sha256": "461137a703e3f3e5d8ea3c01d91e1d7561ff74ca024ce344b11785558d8976c7",
+      "size": 99123736,
+      "ipfsCIDv1": "bafybeib2qluxfee2dl44rkklpycbh3tyeqe34wgprx775flvlroioecnsm"
+     },
+     "src": {
+      "name": "/chat.simplex.app_375_src.tar.gz",
+      "sha256": "011edd79cb0fdbca7ceb4b1ad84e975c3918f846c9e6d6062353b989217a15a3",
+      "size": 37771556
+     },
+     "manifest": {
+      "nativecode": [
+       "armeabi-v7a"
+      ],
+      "versionName": "7.0.2",
+      "versionCode": 375,
+      "features": [
+       {
+        "name": "android.hardware.camera"
+       }
+      ],
+      "usesSdk": {
+       "minSdkVersion": 26,
+       "targetSdkVersion": 35
+      },
+      "signer": {
+       "sha256": [
+        "aec195dcfd4614bd3a91ec26d1d514c87571c5cc8dcf48083f9283143ca2b9a6"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.CAMERA"
+       },
+       {
+        "name": "android.permission.POST_NOTIFICATIONS"
+       }
+      ]
+     }
+    },
+    "aba630bdb823d5ab722cb883881a239e239a22db96fac0b54f6894e8cb6ee9cb": {
+     "added": 1787506623262,
+     "file": {
+      "name": "/chat.simplex.app_373.apk",
+      "sha256": "aba630bdb823d5ab722cb883881a239e239a22db96fac0b54f6894e8cb6ee9cb",
+      "size": 87478796,
+      "ipfsCIDv1": "bafybeieumm3merikdbutrxovl53pgx347hzz5hztebvxzyf57rqtl7xwy4"
+     },
+     "src": {
+      "name": "/chat.simplex.app_373_src.tar.gz",
+      "sha256": "3c58272fa2aea98add6bc33bfd45450ec12ef223952349bd920e8091c5a0a6e1",
+      "size": 37764927
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a"
+      ],
+      "versionName": "7.0.1",
+      "versionCode": 373,
+      "features": [
+       {
+        "name": "android.hardware.camera"
+       }
+      ],
+      "usesSdk": {
+       "minSdkVersion": 26,
+       "targetSdkVersion": 35
+      },
+      "signer": {
+       "sha256": [
+        "aec195dcfd4614bd3a91ec26d1d514c87571c5cc8dcf48083f9283143ca2b9a6"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.CAMERA"
+       },
+       {
+        "name": "android.permission.POST_NOTIFICATIONS"
+       }
+      ]
+     }
+    },
+    "be077d2f2737b5c2568168a8d385cfbc156d417dfc73fe22fd9aea11f708f83a": {
+     "added": 1787506623262,
+     "file": {
+      "name": "/chat.simplex.app_372.apk",
+      "sha256": "be077d2f2737b5c2568168a8d385cfbc156d417dfc73fe22fd9aea11f708f83a",
+      "size": 99123736,
+      "ipfsCIDv1": "bafybeiasl5nrmeq7uqdrcdg7ezb73ohxeihgw2ylxyp4euog3a76y5psz4"
+     },
+     "src": {
+      "name": "/chat.simplex.app_372_src.tar.gz",
+      "sha256": "8e9f927730cab5c8f58c9654bc744226b39e2caea95eefea38920213fe2d1268",
+      "size": 37760309
+     },
+     "manifest": {
+      "nativecode": [
+       "armeabi-v7a"
+      ],
+      "versionName": "7.0.1",
+      "versionCode": 372,
+      "features": [
+       {
+        "name": "android.hardware.camera"
+       }
+      ],
+      "usesSdk": {
+       "minSdkVersion": 26,
+       "targetSdkVersion": 35
+      },
+      "signer": {
+       "sha256": [
+        "aec195dcfd4614bd3a91ec26d1d514c87571c5cc8dcf48083f9283143ca2b9a6"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.CAMERA"
+       },
+       {
+        "name": "android.permission.POST_NOTIFICATIONS"
+       }
+      ]
+     }
+    },
+    "77552c50729089c1cafd38b20f7387c8dca0b625ec36e5681c67912494526ffe": {
+     "added": 1785492883879,
+     "file": {
+      "name": "/chat.simplex.app_367.apk",
+      "sha256": "77552c50729089c1cafd38b20f7387c8dca0b625ec36e5681c67912494526ffe",
+      "size": 85678354,
+      "ipfsCIDv1": "bafybeialo76t3gbeavtrfblux22scasfo3gzudyc55j4osjbaowb2jkyqa"
+     },
+     "src": {
+      "name": "/chat.simplex.app_367_src.tar.gz",
+      "sha256": "aab4c185a972828e2acba55e0f74acfc246e7ee9b6854c8e7ac8cd2e9db88210",
+      "size": 36867659
+     },
+     "manifest": {
+      "nativecode": [
+       "arm64-v8a"
+      ],
+      "versionName": "7.0",
+      "versionCode": 367,
+      "features": [
+       {
+        "name": "android.hardware.camera"
+       }
+      ],
+      "usesSdk": {
+       "minSdkVersion": 26,
+       "targetSdkVersion": 35
+      },
+      "signer": {
+       "sha256": [
+        "aec195dcfd4614bd3a91ec26d1d514c87571c5cc8dcf48083f9283143ca2b9a6"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.CAMERA"
+       },
+       {
+        "name": "android.permission.POST_NOTIFICATIONS"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "com.github.girator.rebooter": {
+   "metadata": {
+    "added": 1766088880000,
+    "categories": [
+     "System"
+    ],
+    "issueTracker": "https://github.com/GIRATOR/Rebooter/issues",
+    "lastUpdated": 1785832389119,
+    "license": "GPL-3.0-or-later",
+    "sourceCode": "https://github.com/GIRATOR/Rebooter",
+    "name": {
+     "en-US": "Rebooter"
+    },
+    "summary": {
+     "en-US": "Reboot device on schedule or variety of conditions"
+    },
+    "description": {
+     "en-US": "Regularly restarting device can solve some android system or app issues.\nThis app mainly intended to help protect against few specific threats,\nbecause rebooting puts device into BFU (before first unlock) mode.\nAdvanced users would be able to run any executable/script instead of reboot.\n\nFeatures\n* Reboot when screen was not unlocked for set period of time.\n* Reboot over fixed period or at scheduled time and days of week.\n* Reboot when host USB connection detected.\n* Customisable command line to fit different setups.\n* Customisable sound and speach warnings upon reboot.\n\nPermissions\n* root (mandatory)\n* set alarms & reminders (optional)\n* run in background (optional)\n* notifications (optional)\n\nFor app to function just enable background service.\nChanging any settings stops service, start it again manually.\nService checks schedule only occasionally (1 hour by default),\nso it should not consume any noticeable resources.\nFor exact timing please grant \"set alarms & reminders\" permission.\n\nThis app does not access network in any capacity.\nThis app does not collect, send or recieve any data.\nThis app able to use root permissions only executing user-defined command.\nAll default commands are variations \"/system/bin/su -c reboot\" type."
+    },
+    "icon": {
+     "en-US": {
+      "name": "/com.github.girator.rebooter/en-US/icon_tXl1U3W23aPSbr4k_CXgByJvBLGs2Cm-K043QKYH_v4=.png",
+      "sha256": "b579755375b6dda3d26ebe24fc25e007226f04b1acd829be2b4e3740a607fefe",
+      "size": 142720
+     }
+    },
+    "preferredSigner": "5a3c7dde1a0a0b204e0aaa9669fd5dfe2537b4a1b377e34c2ed15be9116696b2"
+   },
+   "versions": {
+    "5306cdc7e55fc3fdab9ad30fc7db7f9adf3802a65c21cbd4a34e70a2172aed4e": {
+     "added": 1785832389119,
+     "file": {
+      "name": "/com.github.girator.rebooter_1411.apk",
+      "sha256": "5306cdc7e55fc3fdab9ad30fc7db7f9adf3802a65c21cbd4a34e70a2172aed4e",
+      "size": 11756809,
+      "ipfsCIDv1": "bafybeiaxqfnb3i7ygcdwanpbiiapjmnckj2yncrucghz7z6dd33mwk3tci"
+     },
+     "src": {
+      "name": "/com.github.girator.rebooter_1411_src.tar.gz",
+      "sha256": "819197d0330f1956ff24ee5111034a865089d6afb86286aa22b48659e4b15d6b",
+      "size": 2031693
+     },
+     "manifest": {
+      "versionName": "1.4.1",
+      "versionCode": 1411,
+      "usesSdk": {
+       "minSdkVersion": 34,
+       "targetSdkVersion": 36
+      },
+      "signer": {
+       "sha256": [
+        "5a3c7dde1a0a0b204e0aaa9669fd5dfe2537b4a1b377e34c2ed15be9116696b2"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.POST_NOTIFICATIONS"
+       },
+       {
+        "name": "android.permission.FOREGROUND_SERVICE"
+       }
+      ]
+     }
+    },
+    "116c118b02eb8cda92c12dbf40450aa537ffd75cc7033b7a697c70201a185ed7": {
+     "added": 1785832389119,
+     "file": {
+      "name": "/com.github.girator.rebooter_1410.apk",
+      "sha256": "116c118b02eb8cda92c12dbf40450aa537ffd75cc7033b7a697c70201a185ed7",
+      "size": 5629936,
+      "ipfsCIDv1": "bafybeihat6sca6xtie7msaojz3psneblzpici47nfb2454hzyndkvf6lcm"
+     },
+     "src": {
+      "name": "/com.github.girator.rebooter_1410_src.tar.gz",
+      "sha256": "4fd35027fdfbd80aa70ecd7267f1084c03c048880bc7ed5e91b5d17fb0f5bf40",
+      "size": 2031686
+     },
+     "manifest": {
+      "versionName": "1.4.1",
+      "versionCode": 1410,
+      "usesSdk": {
+       "minSdkVersion": 24,
+       "targetSdkVersion": 33
+      },
+      "signer": {
+       "sha256": [
+        "5a3c7dde1a0a0b204e0aaa9669fd5dfe2537b4a1b377e34c2ed15be9116696b2"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.POST_NOTIFICATIONS"
+       },
+       {
+        "name": "android.permission.FOREGROUND_SERVICE"
+       }
+      ]
+     }
+    },
+    "2b45baae65d7f4a314f372f41a853ccadaa06b035089908f6b2db1795adee7f7": {
+     "added": 1773911418159,
+     "file": {
+      "name": "/com.github.girator.rebooter_14.apk",
+      "sha256": "2b45baae65d7f4a314f372f41a853ccadaa06b035089908f6b2db1795adee7f7",
+      "size": 11756809,
+      "ipfsCIDv1": "bafybeidtvmfiw4afih7dyxjxz3pcsncj2gusjxijerr43dry33b7oy27di"
+     },
+     "src": {
+      "name": "/com.github.girator.rebooter_14_src.tar.gz",
+      "sha256": "60ff62c3a5eb88403dec9209a74976ec6f07efaef84683dc42d1c01dd05013fb",
+      "size": 1503056
+     },
+     "manifest": {
+      "versionName": "1.4",
+      "versionCode": 14,
+      "usesSdk": {
+       "minSdkVersion": 34,
+       "targetSdkVersion": 36
+      },
+      "signer": {
+       "sha256": [
+        "5a3c7dde1a0a0b204e0aaa9669fd5dfe2537b4a1b377e34c2ed15be9116696b2"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.POST_NOTIFICATIONS"
+       },
+       {
+        "name": "android.permission.FOREGROUND_SERVICE"
+       }
+      ]
+     }
+    },
+    "0568ec6efe9f0ddc00e3f5dfa7831ff86ec1cbad435f744d7a13d15bc3ce4a4a": {
+     "added": 1766088880000,
+     "file": {
+      "name": "/com.github.girator.rebooter_12.apk",
+      "sha256": "0568ec6efe9f0ddc00e3f5dfa7831ff86ec1cbad435f744d7a13d15bc3ce4a4a",
+      "size": 11855113,
+      "ipfsCIDv1": "bafybeiez7fo5tg2oqn3qtf3gye6mazr6c2y7pfhff5azkj7uqzhgv63xn4"
+     },
+     "src": {
+      "name": "/com.github.girator.rebooter_12_src.tar.gz",
+      "sha256": "467a32f1234e51d13c2f6c9241e6eea326687c116e78a73c88fec0782c5d108b",
+      "size": 1507867
+     },
+     "manifest": {
+      "versionName": "1.2",
+      "versionCode": 12,
+      "usesSdk": {
+       "minSdkVersion": 29,
+       "targetSdkVersion": 36
+      },
+      "signer": {
+       "sha256": [
+        "5a3c7dde1a0a0b204e0aaa9669fd5dfe2537b4a1b377e34c2ed15be9116696b2"
+       ]
+      },
+      "usesPermission": [
+       {
+        "name": "android.permission.POST_NOTIFICATIONS"
+       },
+       {
+        "name": "android.permission.FOREGROUND_SERVICE"
+       }
+      ]
+     }
+    }
+   }
+  }
+ }
+}

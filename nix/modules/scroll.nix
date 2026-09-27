@@ -157,6 +157,11 @@ let
     # and only two are ours to choose; the rest are decorations that
     # `default_border pixel` never paints.
     default_border pixel 2
+    # AND THE SAME FOR A FLOATING WINDOW, which has a default of its own. A
+    # window that asks for SERVER-side decorations — a Chrome web app, a Qt
+    # program — and is floated would otherwise come up with a title bar, the
+    # one piece of window chrome this config otherwise never draws.
+    default_floating_border pixel 2
     titlebar_padding 1
     gaps inner 8
     gaps outer 0
@@ -592,6 +597,19 @@ in
       # EVERY failure, three for three. So this is the mechanism, and it costs
       # nothing at all while nothing is wrong: no thread, no timer, no question.
       onFailure = [ "ronoctua-lifeline.service" ];
+      # THE SESSION'S `PATH`, NOT A UNIT'S.
+      #
+      # NixOS gives every unit a `PATH` of five packages (coreutils, findutils,
+      # grep, sed, systemd) unless told otherwise, and the footer is what
+      # LAUNCHES programs: a `.desktop` whose `Exec=` is a bare name — every
+      # one the person installed into their Nix profile, every Flatpak export's
+      # `flatpak run` — resolved against those five and opened nothing. Off,
+      # and with no `path` of its own, the unit writes no `Environment=PATH`
+      # at all (`nixos/lib/systemd-lib.nix`, `mkIf (path != [])`), so it
+      # inherits the user manager's — which NixOS builds from the same
+      # `environment.profiles` a login shell gets
+      # (`/etc/environment.d/50-systemd-path.conf`), wrappers first.
+      enableDefaultPath = false;
       serviceConfig = {
         ExecStart = "${ronoctua.shell}/bin/ronoctua-shell";
         Restart = "on-failure";

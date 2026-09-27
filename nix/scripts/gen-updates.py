@@ -42,8 +42,21 @@ import sys
 # THE VOCABULARIES
 # ---------------------------------------------------------------------------
 
-# The four classes a step can be, and they are load-bearing: see ORDER LAWS.
-DOES = {"move-inputs", "apply-configuration", "refresh-cache", "reclaim-space"}
+# The five classes a step can be, and they are load-bearing: see ORDER LAWS.
+#
+# `upgrade-software` is the PERSON'S programs — the Nix profile, Flatpaks,
+# AppImages, the apps inside Android — moved to their newer versions. It is a
+# class of its own and not `refresh-cache` because the brain's page draws the
+# class beside the step, and "refreshes a cache" said of a new version of
+# somebody's editor is a label that lies. It moves only what is THERE: every
+# argument still goes through the install refusals below, with no exception.
+DOES = {
+    "move-inputs",
+    "apply-configuration",
+    "upgrade-software",
+    "refresh-cache",
+    "reclaim-space",
+}
 
 # There are exactly two failure policies and no third one. "Ask" is not among
 # them: this runs from a unit, and there is no polkit agent and no terminal to
@@ -461,6 +474,16 @@ def check_sequence(steps: list[dict]) -> None:
                     "`reclaim-space` before `apply-configuration`: the sweep "
                     "would erase what the rebuild is about to use.",
                 )
+            # THE PERSON'S PROGRAMS MOVE AGAINST THE NEW SYSTEM. `nix profile
+            # upgrade` resolves `nixpkgs` through the registry the rebuild
+            # pins, and `flatpak update` should be the Flatpak the rebuild just
+            # installed — before it, both would answer with the old ones.
+            if s["does"] == "upgrade-software" and i < applies[0]:
+                complain(
+                    f"steps[{i}] ({s['id']})",
+                    "`upgrade-software` before `apply-configuration`: it would "
+                    "resolve against the system the rebuild is about to replace.",
+                )
 
     # ---- ROOT FIRST, AND NEVER INTERLEAVED -------------------------------
     #
@@ -560,7 +583,13 @@ def emit_rust(steps: list[dict]) -> str:
     ]
     out += enum(
         "Does",
-        ["move-inputs", "apply-configuration", "refresh-cache", "reclaim-space"],
+        [
+            "move-inputs",
+            "apply-configuration",
+            "upgrade-software",
+            "refresh-cache",
+            "reclaim-space",
+        ],
         "What class of thing a step is. It decides the order laws, not the view.",
     )
     out += enum(

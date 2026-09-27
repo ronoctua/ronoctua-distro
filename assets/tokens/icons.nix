@@ -753,4 +753,38 @@
   player-follow = "md-television_play";
   player-column = "md-dock_right";
   player-window = "md-dock_window";
+
+  # THE PERSON'S OWN PROGRAMS (`LEADER i`, `crate::software`).
+  #
+  # The view's own mark, and the two modeline marks it may raise: a trial
+  # running (a flask, because a trial is an experiment that leaves nothing),
+  # and Android running (it costs memory, which is why it is shown at all).
+  software = "md-package_variant";
+  software-trial = "md-flask_outline";
+  software-android = "md-android_studio";
+  # WHERE A PROGRAM COMES FROM, one glyph per source, in front of its name on
+  # a row. A source's own logo where the font has one — Nix's snowflake,
+  # Flathub's — and a plain drawing of what it is where it has none: an
+  # AppImage is one closed package, a web app is a page. `system` is a program
+  # the flake installed, which no source here can change.
+  software-source-nix = "md-nix";
+  software-source-flatpak = "linux-flathub";
+  software-source-appimage = "md-package_variant_closed";
+  software-source-android = "md-android";
+  software-source-web = "md-web";
+  software-source-system = "md-cog_outline";
+  # WHAT SETS ONE FOUND PROGRAM APART, one glyph per badge. A glyph is never
+  # the whole of it: the sheet says each one in words (`software-badge-*`),
+  # because a drawing alone is something only whoever chose it can read.
+  software-badge-verified = "md-check_decagram";
+  software-badge-unfree = "md-lock_outline";
+  software-badge-sandboxed = "md-shield_outline";
+  software-badge-command-line = "md-console";
+  software-badge-arm-only = "md-chip";
+  software-badge-broken = "md-alert";
+  software-badge-insecure = "md-alert_octagon";
+  software-badge-end-of-life = "md-calendar_remove";
+  software-badge-anti-features = "md-eye_off";
+  software-badge-library = "md-bookshelf";
+  software-badge-installed = "md-check_circle_outline";
 }

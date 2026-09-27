@@ -49,6 +49,12 @@
       url = "github:Mic92/sops-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Declarative Flatpaks, READY and holding nothing but the Flathub remote:
+    # the person installs imperatively through `ronoctua-software` (invariant
+    # 6's dated exception), and this is the door for the day something should
+    # be declared instead. A TAG, never `latest` (which moves) nor `main`. The
+    # flake has no inputs of its own, so there is nothing to `follows`.
+    nix-flatpak.url = "github:gmodena/nix-flatpak/?ref=v0.7.0";
 
     # --- rust -----------------------------------------------------------
     crane.url = "github:ipetkov/crane";
@@ -550,6 +556,36 @@
       # fixture and the runner factory, neither of which belongs in a build.
       updatesRs = updatesTable.table;
 
+      # THE SOFTWARE CENTRE'S SEARCH INDEX, evaluated from the system's own
+      # nixpkgs — so what the search shows is what `nix profile add nixpkgs#…`
+      # installs. RUN-TIME data, handed to the modules and never to the
+      # compilation: a nixpkgs bump must not rebuild the workspace (the
+      # `atRunTime` side of `nix/rust.nix`). See `nix/software-index.nix`.
+      softwareIndex = import ./nix/software-index.nix {
+        inherit pkgs;
+        nixpkgs = inputs.nixpkgs;
+      };
+      # EVERY NAME THE SUPERPACK ANSWERS TO, for the web apps' icon search in
+      # the distro's collection. See `nix/icon-names.nix`.
+      iconNames = pkgs.callPackage ./nix/icon-names.nix { inherit iconSuperpack; };
+      # THE SOFTWARE CENTRE'S PROGRAMS for the two places no NixOS module
+      # reaches — the nested loop and the photograph stage — from the ONE table
+      # the installed system's units read too (`nix/software-tools.nix`).
+      # Every support is on here: the loop REHEARSES (`nix/dev.nix`), so a
+      # tool's presence decides what the screen offers and nothing is run.
+      softwareTools = import ./nix/software-tools.nix {
+        inherit lib pkgs;
+        nix = pkgs.nix;
+        index = softwareIndex;
+        nixpkgsRev = inputs.nixpkgs.rev;
+        flatpak = pkgs.flatpak;
+        appimageRun = pkgs.appimage-run;
+        waydroid = pkgs.waydroid;
+        chrome = true;
+        icons = "${iconSuperpack}/share/icons/noctua";
+        inherit iconNames;
+      };
+
       # THE CACHE POLICY, generated from `assets/cache.nix` — four numbers the
       # brain, the sweep and the file manager all have to agree about, and one
       # relationship between two of them that the build refuses to let go
@@ -599,22 +635,41 @@
           ronoctua-brain = rust.brain;
           ronoctua-transfers = rust.transfers;
           ronoctua-player = rust.player;
+          inherit softwareTools;
         }).driver;
+      # The stage for OTHER PEOPLE'S apps (`--apps`): Flatpak, the portal and
+      # a route out, and no footer — see the header of `nix/shot-apps.nix`.
+      shotAppsDriver = (pkgs.callPackage ./nix/shot-apps.nix { inherit scroll; }).driver;
       shotApp = pkgs.writeShellApplication {
         name = "ronoctua-shot";
         runtimeInputs = [ pkgs.coreutils ];
         text = ''
+          driver=${shotDriver}
+          if [ "''${1:-}" = "--apps" ]; then
+            driver=${shotAppsDriver}
+            shift
+          fi
           if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
-            echo "usage: nix run .#shot -- <scene.py>" >&2
+            echo "usage: nix run .#shot -- [--apps] <scene.py>" >&2
             exit 2
           fi
           scene=$(realpath "$1")
-          out="''${XDG_CACHE_HOME:-$HOME/.cache}/ronoctua-distro/shot"
+          cache="''${XDG_CACHE_HOME:-$HOME/.cache}/ronoctua-distro"
+          out="$cache/shot"
           # EMPTIED EVERY RUN: a picture of what was built before is not kept.
           rm -rf "$out"
           mkdir -p "$out"
+          # THE MACHINE'S DISK GOES ON DISK. The driver keeps it under
+          # `XDG_RUNTIME_DIR`, which is a tmpfs: sparse or not, every byte a
+          # Flatpak runtime writes into it would be RAM. Removed when done.
+          state="$cache/shot-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          chmod 700 "$state"
+          trap 'rm -rf "$state"' EXIT
           echo "shot: $scene -> $out"
-          RONOCTUA_SHOT_SCENE="$scene" ${shotDriver}/bin/nixos-test-driver -o "$out"
+          XDG_RUNTIME_DIR="$state" TMPDIR="$state" RONOCTUA_SHOT_SCENE="$scene" \
+            "$driver/bin/nixos-test-driver" -o "$out"
           ls -1 "$out"
         '';
       };
@@ -633,6 +688,8 @@
         # What the player runs; the loop's player is started from beside the
         # footer and has no unit to take them from.
         playerTools = import ./nix/player-tools.nix { inherit pkgs; };
+        # And the software centre's, for the same reason.
+        inherit softwareTools;
         # `rust.loopShell` AND NOT `rust.shell`: the nested loop is where one
         # LOOKS at the interface, never where one measures it, and it is the
         # most-run command in the project. Measured on this machine, the same
@@ -840,6 +897,16 @@
         ./nix/modules/nixpkgs-config.nix
         ./nix/modules/browser.nix
         ./nix/modules/emacs.nix
+        # THE PERSON'S OWN PROGRAMS (invariant 6's dated exception): the CLI's
+        # wrapper and the units' tools, then the three supports it drives —
+        # Flatpak (with nix-flatpak, ready and declaring nothing but Flathub),
+        # AppImage and Android. After the browser, whose switch decides whether
+        # a web app has a Chrome to open in; the persistence of the two system
+        # directories is in `persist.nix`, which holds the whole list.
+        ./nix/modules/software.nix
+        ./nix/modules/flatpak.nix
+        ./nix/modules/appimage.nix
+        ./nix/modules/android.nix
         inputs.home-manager.nixosModules.home-manager
         {
           # Injects the packages built by this flake into the modules.
@@ -889,6 +956,14 @@
               studio = rust.studio;
               # And the player's, for the same reason: libmpv, never the renderer.
               player = rust.player;
+              # The software CLI, EXTRACTED for the same reason and one sharper:
+              # the update runs it as root for the Android image, and its job is
+              # a package manager's, never a desktop's. `nix/modules/software.nix`
+              # wraps it with this machine's tools.
+              software = rust.software;
+              # Its search index and the superpack's names — run-time DATA,
+              # passed like the models above and never compiled in.
+              inherit softwareIndex iconNames;
               # The segmentation model its background effects run.
               inherit segmentModel;
               # And the hands', which the gestures read.
@@ -1020,6 +1095,11 @@
         syntax-rs = syntaxTable.table;
         syntax-negative = syntaxTable.negativeFixture;
         update-runners = self.nixosConfigurations.noctua.config.ronoctua.update.package;
+        # THE SOFTWARE CENTRE'S DATA, each buildable on its own and neither
+        # touching the Rust: the search index of the system's nixpkgs, and every
+        # name the icon superpack answers to.
+        software-nix-index = softwareIndex;
+        icon-names = iconNames;
 
         # The shell: the two-line footer.
         ronoctua-shell = rust.shell;
@@ -1114,6 +1194,16 @@
                   # one, and the seed is "what no cache has", not "what the
                   # reduced profile uses".
                   iconSuperpack
+                  # THE SOFTWARE CENTRE'S SEARCH INDEX, in both profiles. It is
+                  # 18 MB of text, and making it is an EVALUATION of the whole
+                  # of nixpkgs: 4,0 GiB of resident memory and 36 s, measured
+                  # on the build host — on a target installing from a
+                  # live medium, that is the difference between a finished
+                  # installation and the OOM killer.
+                  softwareIndex
+                  # And the superpack's names, for the same reason as the
+                  # superpack: nothing but this repository makes them.
+                  iconNames
                 ]
                 # AND THE FLAKE'S OWN INPUTS, as sources.
                 #

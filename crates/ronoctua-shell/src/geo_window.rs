@@ -14,14 +14,19 @@
 //!
 //! From a DIRECTORY and from the baked world: what is installed is
 //! `$XDG_DATA_HOME/ronoctua/atlas/`, and the catalogue is a section of
-//! `world.atlas`. There is no daemon here and no bus — and the one thing this
-//! door cannot do is ask for the filter, because a window has no minibuffer.
-//! It says where to type it instead, which is what the network and
-//! notification windows already do.
+//! `world.atlas`. There is no daemon here and no bus.
+//!
+//! # And the filter is typed HERE
+//!
+//! On the header's line (`Ui::ask`), as the footer types it on its minibuffer:
+//! the same question (`geo::FIND`), pasted into with `C-v`, and answered into
+//! the same `View::took_a_filter`. The two doors do the same things — a
+//! window that sent the person to the footer to narrow a list it was showing
+//! was a door with a hole in it.
 
 use crate::door::{Content, Ui};
 use anyhow::Result;
-use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym, Modifiers};
+use smithay_client_toolkit::seat::keyboard::{KeyEvent, Modifiers};
 
 /// The window's `app_id`.
 pub const APP_ID: &str = "br.ronoctua.geo";
@@ -34,7 +39,7 @@ pub const APP_ID: &str = "br.ronoctua.geo";
 /// `geo::View::press`. The first configure replaces it.
 const FIRST_COLUMNS: u16 = 80;
 
-/// Opens the language and region view in a window.
+/// Opens the regions' view in a window.
 ///
 /// # Errors
 ///
@@ -67,25 +72,14 @@ impl GeoWindow {
                 return;
             }
             Errand::Speak(key) => ui.message = Some(ui.texts.t(key)),
-            // A WINDOW HAS NO MINIBUFFER, so it says where to go instead of
-            // opening a prompt of its own. It is the arrangement the network
-            // window and the notification window already have, and the reason
-            // is the same: two places to type is two things that can disagree
-            // about what was typed.
-            Errand::Ask => {
-                let keys = format!("{} {}", crate::leader(), crate::leader::GEO_KEYS);
-                ui.message = Some(
-                    ui.texts
-                        .t_with(ronoctua_i18n::key::GEO_IN_THE_FOOTER, &[("keys", &keys)]),
-                );
-            }
-            // THE QUEUE, from here as well.
-            //
-            // This one is NOT the footer's business the way typing is: the
-            // queue is a daemon with a socket, reachable from any process, and
-            // sending a person to another door to press `RET` on a row they
-            // are already standing on would be chrome asking for chrome. What
-            // a window cannot do is take dictation; installing is one key.
+            // THE FILTER IS ASKED ON THIS WINDOW'S OWN LINE, the question the
+            // footer's minibuffer asks: every key is the line's until it is
+            // answered (`answered`) or let go, `C-v` pastes into it, and `f`
+            // and `d` are letters of the filter while it asks.
+            Errand::Ask => ui.ask(crate::line::Line::new(crate::geo::FIND, false, None)),
+            // THE QUEUE, from here as well: it is a daemon with a socket,
+            // reachable from any process, so this door puts the region in it
+            // the way the footer does.
             Errand::Install { region, label, url } => {
                 let Some(into) =
                     ronoctua_xdg::data_dir().map(|d| ronoctua_atlas_packs::root_of(&d))
@@ -135,9 +129,22 @@ impl Content for GeoWindow {
         format!("*{}*", texts.t(ronoctua_i18n::key::GEO_TITLE))
     }
 
-    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, _: Modifiers) {
-        if let Some(press) = press_of(event) {
+    /// A key, read by its whole notation through the reader the footer
+    /// calls too (`geo::press_of_key`).
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+        if let Some(press) =
+            crate::door::keys::key_of(event, mods).and_then(crate::geo::press_of_key)
+        {
             self.pressed(ui, press);
+        }
+    }
+
+    /// THE FILTER, typed on this window's line — the footer's minibuffer
+    /// answers into the same call.
+    fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
+        if id == crate::geo::FIND {
+            self.view.took_a_filter(text, ui.columns);
+            ui.ask_paint();
         }
     }
 
@@ -175,20 +182,124 @@ impl Content for GeoWindow {
     }
 }
 
-/// A `KeyEvent` as the view sees it — the same mapping the footer does.
-fn press_of(event: &KeyEvent) -> Option<crate::geo::Press> {
-    use crate::geo::Press;
-    Some(match event.keysym {
-        Keysym::Escape => Press::Escape,
-        Keysym::Return | Keysym::KP_Enter => Press::Enter,
-        Keysym::Up => Press::Up,
-        Keysym::Down => Press::Down,
-        // THE TWO BARE LETTERS, and they have to be the same two the footer
-        // reads or the doors drive one view differently. `f` asks for the
-        // filter — which this door answers with a sentence, because a window
-        // has no minibuffer — and `d` removes.
-        Keysym::f => Press::Find,
-        Keysym::d => Press::Remove,
-        _ => return None,
-    })
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ronoctua_keymap::Key;
+
+    /// A window over a scratch root with nothing installed in it — never the
+    /// person's own `$XDG_DATA_HOME` (`geo::tests`' rule).
+    fn a_window(name: &str) -> (GeoWindow, Ui, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-geo-window-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let me = GeoWindow {
+            view: crate::geo::View::at(dir.clone(), FIRST_COLUMNS),
+        };
+        (me, Ui::for_tests(texts), dir)
+    }
+
+    /// One key, as the keyboard sends it.
+    fn key(w: &mut GeoWindow, ui: &mut Ui, notation: &str) {
+        let (event, mods) =
+            crate::door::keys::event_of(Key::parse(notation).expect("a key of the notation"));
+        w.typed(ui, &event, mods);
+    }
+
+    /// Answers the line that is open, as the door does: the line leaves
+    /// `ui.asking` first, and the window hears the text under its id.
+    fn answer(w: &mut GeoWindow, ui: &mut Ui, text: &str) {
+        let line = ui.asking.take().expect("no line is open");
+        w.answered(ui, line.id, text);
+    }
+
+    /// THE FILTER IS ASKED ON THIS WINDOW'S OWN LINE — by `f`, as the footer
+    /// asks it on its minibuffer — and no sentence sends the person to the
+    /// footer, and nothing is handed to it.
+    ///
+    /// THE DEFECT THIS CATCHES: `f` printed "typing happens in the footer",
+    /// and the list this window exists to read could not be narrowed here.
+    #[test]
+    fn the_filter_is_asked_on_the_windows_own_line() {
+        let (mut w, mut ui, dir) = a_window("asks");
+        key(&mut w, &mut ui, "f");
+        let line = ui.asking.as_ref().expect("the filter is not asked here");
+        assert_eq!(line.id, crate::geo::FIND);
+        assert!(!line.secret, "a filter is read back, not hidden");
+        assert!(ui.message.is_none(), "{:?}", ui.message);
+        assert!(ui.orders().is_empty(), "the question went to the footer");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WHAT IS TYPED — OR PASTED — HERE NARROWS THE LIST, exactly as the same
+    /// answer in the footer's minibuffer does: both reach
+    /// `View::took_a_filter`, and nothing typed shows everything again.
+    #[test]
+    fn what_is_typed_in_the_window_narrows_the_list_as_the_footer_does() {
+        let (mut w, mut ui, dir) = a_window("narrows");
+        let (mut footer, _, other) = a_window("narrows-footer");
+        let all = w.view.shown().len();
+
+        key(&mut w, &mut ui, "f");
+        // A COPIED NAME, with its line break: the line takes it as one line.
+        let line = ui.asking.as_mut().expect("the filter is asked here");
+        let _ = line.paste("zzzz-no-region-is-called-this\n");
+        let text = line.text.clone();
+        answer(&mut w, &mut ui, &text);
+        footer.view.took_a_filter(&text, FIRST_COLUMNS);
+
+        assert_eq!(w.view.filter(), "zzzz-no-region-is-called-this");
+        assert_eq!(w.view.filter(), footer.view.filter());
+        assert_eq!(w.view.shown().len(), footer.view.shown().len());
+        assert_eq!(
+            w.view.shown().len(),
+            0,
+            "a filter that matches nothing kept rows"
+        );
+
+        // NOTHING TYPED IS EVERYTHING AGAIN.
+        key(&mut w, &mut ui, "f");
+        answer(&mut w, &mut ui, "");
+        assert_eq!(w.view.filter(), "");
+        assert_eq!(w.view.shown().len(), all);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    /// AN ANSWER UNDER ANOTHER ID IS NOT THE FILTER.
+    #[test]
+    fn an_answer_nobody_asked_for_changes_nothing() {
+        let (mut w, mut ui, dir) = a_window("stray");
+        w.answered(&mut ui, "geo-remove", "brazil");
+        assert_eq!(w.view.filter(), "");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE TWO DOORS READ A KEY ONE WAY: every row of the table is its own
+    /// press, `Esc` is the way back whatever is held, and a chord is not the
+    /// letter under it — `C-f` asked for the filter in both doors, because
+    /// each matched the symbol and dropped the modifier.
+    #[test]
+    fn the_window_reads_the_views_keys_as_the_footer_does() {
+        use crate::geo::{Press, press_of_key};
+        let read = |n: &str| press_of_key(Key::parse(n).expect("a key"));
+        assert_eq!(read("<down>"), Some(Press::Down));
+        assert_eq!(read("<up>"), Some(Press::Up));
+        assert_eq!(read("RET"), Some(Press::Enter));
+        assert_eq!(read("f"), Some(Press::Find));
+        assert_eq!(read("d"), Some(Press::Remove));
+        assert_eq!(read("ESC"), Some(Press::Escape));
+        assert_eq!(read("S-ESC"), Some(Press::Escape));
+        assert_eq!(read("C-f"), None);
+        assert_eq!(read("M-d"), None);
+        assert_eq!(read("x"), None);
+        for (taught, _) in crate::geo::OF_THE_VIEW {
+            assert!(
+                read(taught).is_some(),
+                "`{taught}` is taught and reads as nothing"
+            );
+        }
+    }
 }

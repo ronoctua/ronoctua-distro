@@ -48,6 +48,9 @@
   ronoctua-transfers,
   ronoctua-player,
   fonts,
+  # The software centre's programs, from the table the installed system's
+  # footer unit reads (`nix/software-tools.nix`).
+  softwareTools,
 }:
 
 let
@@ -313,6 +316,21 @@ pkgs.testers.runNixOSTest {
         # exports them — the chooser's shots copy a fragment and assert it.
         "--setenv=RONOCTUA_THEME=${defaultTheme} "
         "--setenv=RONOCTUA_THEMES=${themed} "
+        # AND THE SOFTWARE CENTRE'S PROGRAMS, the same table
+        # `nix/modules/software.nix` puts on the footer's unit. Without them
+        # every source answers `Refusal::SourceAbsent`, and a photograph of the
+        # view shows five sources refusing on a machine that has them all.
+        # `RONOCTUA_SOFTWARE` is the CLI beside the footer in the same build:
+        # the wrapper the system installs is per machine, and this stage is not
+        # one.
+        # One Python literal per variable, on one line: adjacent literals
+        # join, and every value is a store path, a revision or a fixed path —
+        # nothing a shell or a Python string would read as more than text.
+        ${lib.concatMapStrings (line: ''"--setenv=${line} " '') (
+          lib.mapAttrsToList (name: value: "${name}=${value}") (
+            softwareTools // { RONOCTUA_SOFTWARE = "${ronoctua-shell}/bin/ronoctua-software"; }
+          )
+        )}
         "${ronoctua-shell}/bin/ronoctua-shell"
     )
     machine.wait_until_succeeds(

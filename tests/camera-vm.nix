@@ -55,8 +55,18 @@ let
         s.close()
         return json.loads(line)
 
+    def black(pixels):
+        # The program before any source has given a frame: RGB 0, opaque.
+        n = len(pixels) // 4
+        step = max(1, n // 20000)
+        return not any(
+            pixels[4 * i] or pixels[4 * i + 1] or pixels[4 * i + 2]
+            for i in range(0, n, step)
+        )
+
     def frame():
         s = socket.socket(socket.AF_UNIX)
+        s.settimeout(20)
         s.connect(path())
         s.sendall(b'{"ask":"preview"}\n')
         data, fds, _, _ = socket.recv_fds(s, 512, 1)
@@ -64,15 +74,31 @@ let
         assert head["say"] == "preview", head
         w, h = head["width"], head["height"]
         fd = fds[0]
-        slot = s.recv(1)[0]
-        # A few frames in, not the first: the first may still be black.
-        for _ in range(10):
-            slot = s.recv(1)[0]
         size = 16 + w * h * 4
-        pixels = os.pread(fd, w * h * 4, slot * size + 16)
+        read = lambda slot: os.pread(fd, w * h * 4, slot * size + 16)
+        # THE PROGRAM COMES BEFORE THE CAMERA. The studio composes from the
+        # moment a viewer asks, and the camera opens at that same moment: until
+        # its ffmpeg is spawned, has opened the device and has given a frame,
+        # the program is the empty canvas, black. How long that takes is the
+        # machine's, not the studio's — a fixed ten frames (a third of a
+        # second) was enough on a quiet host, and a busy one handed over ten
+        # black frames. So the frames are read until the camera's first one is
+        # in the program, for at most ten seconds, and the one judged comes a
+        # few frames later. Waiting asks only whether ANYTHING arrived; whether
+        # it is the picture is still the caller's assertion, and a camera that
+        # never arrives leaves the last frame black for it to refuse.
+        waited = 0
+        deadline = time.monotonic() + 10
+        slot = s.recv(1)[0]
+        while black(read(slot)) and time.monotonic() < deadline:
+            slot = s.recv(1)[0]
+            waited += 1
+        for _ in range(3):
+            slot = s.recv(1)[0]
+        pixels = read(slot)
         s.close()
         os.close(fd)
-        return w, h, pixels
+        return w, h, waited, pixels
 
     def stats(pixels):
         n = len(pixels) // 4
@@ -90,8 +116,8 @@ let
 
     what = sys.argv[1]
     if what == "frame":
-        w, h, pixels = frame()
-        print(json.dumps({"w": w, "h": h, **stats(pixels)}))
+        w, h, waited, pixels = frame()
+        print(json.dumps({"w": w, "h": h, "black_frames": waited, **stats(pixels)}))
     else:
         print(json.dumps(ask(json.loads(what))))
   '';

@@ -129,6 +129,16 @@ let
       systemd = pkgs.systemd;
       fontconfig = pkgs.fontconfig;
       tealdeer = pkgs.tealdeer;
+      flatpak = pkgs.flatpak;
+      # A STAND-IN, and on purpose: the real one is the software CLI extracted
+      # from the workspace, and naming it here would make every check that
+      # reads these scripts wait for the whole Rust build. What is exercised is
+      # `turned_on`, which never runs a step — the generator only needs a
+      # store path with a `bin/ronoctua-software` under it.
+      software = pkgs.writeShellScriptBin "ronoctua-software" ''
+        echo "stand-in for the software CLI: this runner is a fixture" >&2
+        exit 1
+      '';
     };
     wiring = {
       shell = pkgs.runtimeShell;
@@ -2645,12 +2655,15 @@ let
     # AND NOTHING ELSE. Every segment that answers the mouse has a key that
     # does the same thing: `state` rotates (what holding `Esc` and an arrow
     # does), `notif` opens the manager (`LEADER n n`), `update` opens the
-    # window that follows a run (`LEADER s w`), `battery` and `profile` open
+    # window that follows a run (`LEADER s u w`), `battery` and `profile` open
     # the power view (`LEADER s p p`), `net-off` and `vpn` open the network
     # (`LEADER s n n`), and `airplane` toggles it (`LEADER s n a`). One more
     # would be a door only the mouse knows about.
-    acted = set(re.findall(r'if id == "([a-z-]+)"', clicked))
-    acted |= set(re.findall(r'if id != "([a-z-]+)"', clicked))
+    #
+    # EVERY COMPARISON OF `id`, and not only the one right after an `if`: an
+    # `id == "camera" || id == "recording"` hid its second id from a pattern
+    # that wanted the `if`, and a mark nobody named went through unasked.
+    acted = set(re.findall(r'\bid\s*[!=]=\s*"([a-z-]+)"', clicked))
     agreed = {
         "state", "notif", "update", "battery", "profile",
         # THE WAY OUT'S THREE MARKS AND THE TWO TUNNELS THAT ARE NOT NM'S.
@@ -2676,6 +2689,22 @@ let
         # (`LEADER s c c`), `player` runs `player-column` (`LEADER p c`), and
         # `compositor-mode` leaves the mode, which is the mode's own `Esc`.
         "camera", "player", "compositor-mode",
+        # AND THE SOFTWARE VIEW'S TWO, each a door the keyboard has:
+        # `software-trial` runs `software-trials` (`LEADER i t`) and
+        # `software-android` runs `software-android` (`LEADER i a`).
+        "software-trial", "software-android",
+        # AND THE WINDOW'S FOUR (9ab8042), each a door the keyboard has:
+        # `mode` (the app's name) runs `window-menu`, `LEADER w o`, and
+        # `LEADER w` IS that menu, generated from it; `drawer`, `trail` and
+        # `selection` open the menu at their level, and under the leader those
+        # levels are the groups `w g`, `w y` and `w v`. The drawer's right
+        # button runs `wm-scratchpad-show`, the compositor's own chord.
+        "mode", "drawer", "trail", "selection",
+        # AND THE GESTURES' ONE (05658b0): it runs `gestures`, `LEADER m g`.
+        "gestures",
+        # AND THE CAMERA'S SECOND, the recording: `camera-settings-open`, the
+        # camera's own door, `LEADER s c c`.
+        "recording",
     }
     if acted != agreed:
         gaps.append(
@@ -2747,12 +2776,74 @@ let
     for id in ('"camera-settings-open"', '"player-column"'):
         if id not in clicked or id not in keymap:
             gaps.append(f"a mark runs {id} without a key doing the same")
-    # THE WORKSPACE NUMBERS, likewise by name: `ws-1`..`ws-10` carry digits.
-    # The left button goes to the number drawn and the right one opens the
-    # overview — and both are keys: `LEADER 1`…`9`, `LEADER 0` and `TAB TAB`.
+    # EACH MARK BELOW, by what ITS OWN BRANCH runs and where that is a key:
+    # being in the set above says a mark may be clicked, and this says what it
+    # does. The branch is the block whose `if` compares `id` with that mark —
+    # the first one, which is the one that runs — so a mark split off an `||`
+    # and pointed elsewhere is asked on its own, and a command another mark
+    # runs does not answer for it.
+    def branch(mark):
+        return scope(clicked, r'\bid\s*==\s*"' + re.escape(mark) + r'"') or ""
+    for mark, needle in (
+        ("mode", '"window-menu"'),
+        ("drawer", '"drawer-open"'),
+        ("drawer", '"wm-scratchpad-show"'),
+        ("trail", '"trail-open"'),
+        ("selection", '"selection-open"'),
+        ("gestures", 'run_command("gestures")'),
+        ("camera", 'run_command("camera-settings-open")'),
+        ("recording", 'run_command("camera-settings-open")'),
+        ("player", 'run_command("player-column")'),
+        ("software-trial", 'run_command("software-trials")'),
+        ("software-android", 'run_command("software-android")'),
+    ):
+        if needle not in branch(mark):
+            gaps.append(f"clicking `{mark}` does not run {needle}")
+    for seq, command in (
+        ("w o", "window-menu"),
+        ("m g", "gestures"),
+        ("s c c", "camera-settings-open"),
+        ("p c", "player-column"),
+        ("i a", "software-android"),
+    ):
+        if f'("{seq}", "{command}"' not in keymap:
+            gaps.append(f"`{command}` has no key at LEADER {seq}")
+    # `software-trials` is bound through a constant, which the software view
+    # also uses to teach the key: the binding and the constant's value both.
+    if '(SOFTWARE_TRIALS_KEYS, "software-trials"' not in keymap or 'SOFTWARE_TRIALS_KEYS: &str = "i t"' not in keymap:
+        gaps.append("`software-trials` has no key at LEADER i t")
+    # `drawer-open`, `trail-open` and `selection-open` are the menu at a
+    # level, and under the leader each level IS a group of `LEADER w`,
+    # because `w` is generated from the menu.
+    menu = read(shell / "window_menu.rs")
+    for letter, level in (("g", "Drawer"), ("y", "Trail"), ("v", "Selection")):
+        if not re.search(r'group\("' + letter + r'", key::\w+, Level::' + level + r'\)', menu):
+            gaps.append(f"`LEADER w {letter}` no longer opens the {level} level the mark opens")
+    if "window_menu::leader_bindings()" not in keymap:
+        gaps.append("`LEADER w` is no longer generated from the window menu")
+    actions = read(shell / "actions.rs")
+    if 'd("z", "z", "wm-scratchpad-show")' not in actions:
+        gaps.append("the drawer's right button runs `wm-scratchpad-show`, and no chord does")
+    # THE TRAIL NUMBERS, by name for the reason the devices give: `trail-1`
+    # to `trail-9` carry a digit. A number puts that trail in use, which the
+    # trail mode's digits do too, and `LEADER w y <n>` in the menu.
+    trails = read(shell / "trails.rs")
+    if 'pub const POOL: [&str; 9] = [' not in trails or '"trail-9"' not in trails or '"trail-10"' in trails:
+        gaps.append("the trail pool is not the nine ids this check knows")
+    if "trails::number_of(id)" not in clicked:
+        gaps.append("a click on a trail number reaches nothing")
+    if '"wm-trail-number"' not in clicked:
+        gaps.append("a trail number does not run `wm-trail-number`")
+    if 'digits("wm-trail-number"' not in actions:
+        gaps.append("the trail numbers' `wm-trail-number` has no equivalent key")
+    # THE WORKSPACE NUMBERS, likewise by name: `ws-1`..`ws-9` carry digits.
+    # NINE, the owner's rule (9ab8042): `0` is every workspace at once and
+    # never a tenth. The left button goes to the number drawn and the right one
+    # opens the overview — and both are keys: `LEADER 1`…`9`, `LEADER 0` and
+    # `TAB TAB`.
     places = read(shell / "workspaces.rs")
-    if 'pub const POOL: [&str; 10] = [' not in places or '"ws-10"' not in places:
-        gaps.append("the workspace pool is not the ten ids this check knows")
+    if 'pub const POOL: [&str; 9] = [' not in places or '"ws-9"' not in places or '"ws-10"' in places:
+        gaps.append("the workspace pool is not the nine ids this check knows")
     if "workspaces::number_of(id)" not in clicked:
         gaps.append("a click on a workspace number reaches nothing")
     for id in ('"workspace-go"', '"workspace-all"', '"workspace-overview"'):
@@ -2781,13 +2872,21 @@ let
     if not enum:
         sys.exit("ERROR: `band::Hit` went away or changed shape")
     hits = set(re.findall(r"^    ([A-Z]\w*)", enum, re.M))
-    if hits != {"Read", "Action"}:
+    # AND `Open` (8fc9e4a, "the band opens the record whole"), whose key is
+    # read below with the manager.
+    if hits != {"Read", "Action", "Open"}:
         gaps.append("the band has targets " + repr(sorted(hits)) + ", outside what was agreed")
     # The keyboard's half of each. `keymap` is read above, with the modeline's
     # own half — one read, because two would be two things to keep in step.
     if '"notif-dismiss"' not in keymap:
         gaps.append("the band's circle has no equivalent key")
     manager = read(shell / "notifications.rs")
+    # `Open`: the keyboard reaches the same record by opening the manager
+    # (`LEADER n n`) and pressing `RET` on its row, which opens it whole.
+    if '"notif-open"' not in keymap:
+        gaps.append("the band's `Open` has no key: `notif-open` is not bound")
+    if '("RET", "notif-see", Column::Happened)' not in manager:
+        gaps.append("`RET` on a row no longer opens the record whole: the band's `Open` would be mouse-only")
     # AGAINST THE CODE AND NOT THE CRITERION: the row has to EXIST in the open
     # record's plan, and `RET` has to run the one under the cursor. Looking for
     # the words "action" anywhere would pass on a comment.
@@ -4200,102 +4299,116 @@ let
   # a walk: the listing crawled through every entry instead of arriving where
   # the pointer already was.
   #
-  # The cure is one line of vocabulary in three files: a handler marks a frame
-  # OWED, and the loop's callback — the one place that knows the batch is
-  # finished — draws it once. This check is what keeps the fourth window from
-  # being written the old way.
+  # The cure is one line of vocabulary: a handler marks a frame OWED, and the
+  # loop's callback — the one place that knows the batch is finished — draws it
+  # once. Since 258b8ad it is written ONCE, in `door/mod.rs` (`Ui::ask_paint`,
+  # `Door::settle`, the `door::run` callback), and a window is a
+  # `door::Content` that can only owe. The lifeline, which is not a door, keeps
+  # the same model in its own file.
   one-frame-model = mkCheck "one-frame-model" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
 
     exec(open("${pyPrelude}").read())
 
-    # FILE-WIDE: a door is a FILE here, and what is asked of one — that it has
-    # an `ask_paint`, a `settle`, one place that takes the debt, and no
-    # `self.paint()` outside `settle` — is about every line of it. `settle` is
-    # narrowed by name, which is how the one allowed paint is found.
+    # FILE-WIDE: what is asked of a content is about every line of its file —
+    # no loop of its own, no debt it keeps from the door — and the fence at the
+    # end sweeps whole files for a pointer handler that paints. The door's
+    # model is narrowed by name: `ask_paint`, `settle`, and the paint's span.
     home = pathlib.Path("${self}/crates/ronoctua-shell/src")
-
-    # EVERY DOOR THAT DRAWS, and not only the ones whose name ends in
-    # `_window.rs`.
-    #
-    # That glob is how this defect came back. The model was written, the
-    # reasoning was written, this check was written — and `buffer.rs` sat
-    # outside the fence, painting inside its pointer handler, one blocked
-    # present per cell the mouse crossed. The owner reported the same trailing
-    # highlight a third time, in a door the check could not see.
-    #
-    # So the fence is now a CENSUS: every file that owns a surface is named
-    # here, and a door that is not on the list is refused by the count below.
-    # Naming them costs one line each and is the only shape that cannot
-    # silently omit the next one.
-    DOORS = tuple(sorted(f.name for f in home.glob("*_window.rs"))) + (
-        # The wasip2 buffer host. It is a window like the others; it simply
-        # does not carry the word in its name.
-        "buffer.rs",
-        # The line that outlives a dead footer. Same model, own surface.
-        "lifeline.rs",
-    )
-    windows = [home / name for name in DOORS]
-    missing = [f.name for f in windows if not f.exists()]
-    if missing:
-        print("ERROR: the census names doors that are not there: " + ", ".join(missing),
-              file=sys.stderr)
-        raise SystemExit(1)
-    floor(len(windows), 14, "doors in the census")
-
-    # AND NO DOOR IS OUTSIDE IT. A file that owns a `wl_surface` and is not on
-    # the list above is exactly what `buffer.rs` was: a place this check could
-    # not reach. `surface.rs` is the one exception, and it is declared, not
-    # discovered — see the block after the loop.
-    DECLARED_APART = {"surface.rs"}
-    for f in sorted(home.glob("*.rs")):
-        if f.name in DOORS or f.name in DECLARED_APART:
-            continue
-        text = code_of(f.read_text())
-        if re.search(r"impl\s+PointerHandler\s+for", text) and "self.paint()" in text:
-            wrong_door = f.name
-            print(f"ERROR: `{wrong_door}` handles the pointer and paints, and the census",
-                  file=sys.stderr)
-            print("       does not name it. That is the shape the hover lag comes back in.",
-                  file=sys.stderr)
-            raise SystemExit(1)
-
+    door_dir = home / "door"
     wrong = []
-    for f in windows:
-        # `code_of`, because every door EXPLAINS this model in a comment above
-        # the two methods — naming `ask_paint`, `settle` and `self.paint()` in
-        # prose — and the check was reading its own evidence.
-        text = code_of(f.read_text())
-        floor(len(text), 2000, "characters of " + f.name)
-        if not re.search(r"\bfn\s+ask_paint\b", text):
-            wrong.append(f"{f.name} has no `ask_paint`")
-        if not re.search(r"\bfn\s+settle\b", text):
-            wrong.append(f"{f.name} has no `settle`")
 
-        # AND THE DEBT IS TAKEN ONCE, in the loop's callback.
-        takes = len(re.findall(r"std::mem::take\(&mut self\.owed\)", text))
-        if takes != 1:
-            wrong.append(f"{f.name} takes the debt {takes} times, and it may be taken once")
-        if not re.search(r"\.run\(None[^)]*\|(\w+)\|\s*\{\s*(?://[^\n]*\n\s*)*\1\.settle\(\)", text):
-            wrong.append(f"{f.name} does not drain the debt where the queue empties")
+    # 1) THE MODEL IS THE DOOR'S, WRITTEN ONCE (258b8ad).
+    door = code_of((door_dir / "mod.rs").read_text())
+    floor(len(door), 20000, "characters of door/mod.rs")
+    if "self.owed = true" not in must(body_of(door, "ask_paint"), "door/mod.rs: `Ui::ask_paint`"):
+        wrong.append("door/mod.rs: `ask_paint` does not mark the frame owed")
+    allowed = must(body_of(door, "settle"), "door/mod.rs: `Door::settle`")
+    takes = len(re.findall(r"std::mem::take\(&mut self\.ui\.owed\)", door))
+    if takes != 1 or "std::mem::take(&mut self.ui.owed)" not in allowed:
+        wrong.append(f"door/mod.rs takes the debt {takes} times, and it may be taken once, in `settle`")
+    # WHERE THE QUEUE EMPTIES, after every content has handed over what it owes.
+    if not re.search(r"\.run\(None[^)]*\|(\w+)\|\s*\{\s*\1\.content\.each_turn\(&mut \1\.ui\);\s*\1\.settle\(\)", door):
+        wrong.append("door/mod.rs does not drain the debt where the queue empties")
 
-        # AND NO HANDLER PAINTS WHERE IT STANDS. `settle` is the ONE caller,
-        # and the span is found by matching braces rather than by guessing how
-        # many lines back it might be — the first draft guessed, and reported
-        # `settle`'s own call three times.
-        # THE ONE PLACE A PAINT IS ALLOWED, found by name and by braces. The
-        # signature was written out here; `body_of` takes the name, so a
-        # `settle` that grew a parameter is still the same `settle`.
-        allowed = body_of(text, "settle") or ""
-        floor(len(allowed) + 1, 1, "characters of `settle` in " + f.name)
-        at = text.find(allowed) if allowed else -1
-        span = (at, at + len(allowed)) if at >= 0 else None
+    # 2) NO HANDLER OF THE DOOR PAINTS WHERE IT STANDS, in any file of door/.
+    # `settle` is the ONE caller, and its span is found by braces.
+    at = door.find(allowed)
+    for f in sorted(door_dir.glob("*.rs")):
+        text = door if f.name == "mod.rs" else code_of(f.read_text())
         for hit in re.finditer(r"self\.paint\(\);", text):
-            if span and span[0] <= hit.start() <= span[1]:
+            if f.name == "mod.rs" and at <= hit.start() <= at + len(allowed):
                 continue
             line = text.count("\n", 0, hit.start()) + 1
+            wrong.append(f"door/{f.name}:{line} paints where it stands")
+
+    # 3) EVERY CONTENT OWES AND NEVER DRAWS.
+    #
+    # THE CENSUS GOES BY WHAT A FILE IS, not by its name: a `*_window.rs`
+    # glob is how `buffer.rs` sat outside the fence, painting inside its
+    # pointer handler, one blocked present per cell the mouse crossed — the
+    # same trailing highlight reported a third time, in a door the check could
+    # not see.
+    contents = [
+        f for f in sorted(home.rglob("*.rs"))
+        if door_dir not in f.parents
+        and re.search(r"impl\s+(?:[\w:]+::)?Content\s+for\s+\w+", code_of(f.read_text()))
+    ]
+    floor(len(contents), 20, "contents of a door")
+    for f in contents:
+        text = code_of(without_tests(f.read_text()))
+        if re.search(r"\.run\(None", text):
+            wrong.append(f"{f.name} runs a loop of its own, whose debt the door never sees")
+        for hit in re.finditer(r"self\.paint\(\);", text):
+            line = text.count("\n", 0, hit.start()) + 1
             wrong.append(f"{f.name}:{line} paints where it stands")
+        # A DEBT OF ITS OWN is allowed only as a debt HANDED OVER, once a
+        # turn, in `each_turn` — which the door runs right before `settle`.
+        kept = len(re.findall(r"std::mem::take\(&mut self\.owed\)", text))
+        if kept:
+            turn = must(body_of(text, "each_turn"), f.name + ": `each_turn`")
+            spans = [turn] + [body_of(text, n) or "" for n in set(re.findall(r"self\.(\w+)\(", turn))]
+            handed = any("std::mem::take(&mut self.owed)" in s and "ui.ask_paint()" in s for s in spans)
+            if kept != 1 or not handed:
+                wrong.append(f"{f.name} keeps a debt of its own and does not hand it to the door in `each_turn`")
+    # THE BUFFER HOST, where the lag came back the third time: the component
+    # is asked for a frame only inside the frame.
+    host = code_of(without_tests((home / "buffer.rs").read_text()))
+    if "std::mem::take(&mut self.owed)" not in host:
+        wrong.append("buffer.rs no longer keeps the component's debt apart from the door's")
+    draw = must(body_of(host, "draw"), "buffer.rs: `draw`")
+    renders = len(re.findall(r"self\.re_render\(\)", host))
+    if renders < 1 or renders != draw.count("self.re_render()"):
+        wrong.append("buffer.rs asks the component for a frame outside `draw`")
+
+    # 4) THE LIFELINE is not a door (it is `every-window-is-a-door`'s own
+    # exception) and keeps the model in full, in its own file.
+    life = code_of((home / "lifeline.rs").read_text())
+    floor(len(life), 2000, "characters of lifeline.rs")
+    if not re.search(r"\bfn\s+ask_paint\b", life):
+        wrong.append("lifeline.rs has no `ask_paint`")
+    kept = len(re.findall(r"std::mem::take\(&mut self\.owed\)", life))
+    if kept != 1:
+        wrong.append(f"lifeline.rs takes the debt {kept} times, and it may be taken once")
+    if not re.search(r"\.run\(None[^)]*\|(\w+)\|\s*\{\s*\1\.settle\(\)", life):
+        wrong.append("lifeline.rs does not drain the debt where the queue empties")
+    own = must(body_of(life, "settle"), "lifeline.rs: `settle`")
+    at = life.find(own)
+    for hit in re.finditer(r"self\.paint\(\);", life):
+        if not (at <= hit.start() <= at + len(own)):
+            line = life.count("\n", 0, hit.start()) + 1
+            wrong.append(f"lifeline.rs:{line} paints where it stands")
+
+    # 5) THE FENCE: no file that handles the pointer and paints is outside all
+    # of these. `surface.rs` is the footer, declared apart and not discovered.
+    DECLARED_APART = {"surface.rs", "lifeline.rs"}
+    for f in sorted(home.rglob("*.rs")):
+        if door_dir in f.parents or f in contents or f.name in DECLARED_APART:
+            continue
+        text = code_of(f.read_text())
+        if re.search(r"impl(?:<[^>]*>)?\s+PointerHandler\s+for", text) and "self.paint()" in text:
+            wrong.append(f"{f.name} handles the pointer and paints, and is not a door")
 
     if wrong:
         print("ERROR: a window paints from a handler instead of owing a frame.",
@@ -4308,7 +4421,8 @@ let
         print("       paints makes the gesture wait for the monitor. Mark the frame", file=sys.stderr)
         print("       OWED and let the loop's callback draw it once.", file=sys.stderr)
         raise SystemExit(1)
-    print(f"OK: {len(windows)} windows, one repaint model, drained where the queue empties")
+    print(f"OK: one repaint model, in the door; {len(contents)} contents owe and never draw;"
+          " the lifeline drains its own")
     PY
   '';
 
@@ -5263,8 +5377,19 @@ let
         text = code_of(f.read_text())
         if "RULE_STRONG" not in text:
             continue
-        if not re.search(r"ronoctua_design::Scroll|\bbar_box\b|\bbars\(|\bregion_bar\b", text):
+        if not re.search(r"ronoctua_design::Scroll|\bbar_box\b|\bbar_boxes\(|\bbars\(|\bregion_bar\b", text):
             wrong.append(f.name + " paints a thumb without asking `Scroll`")
+    # `notifications::bar_boxes` is the fourth way in (8fc9e4a): an open
+    # record is two halves, each with its own bar over a BAND, and both doors
+    # paint and grab what it answers. The name counts only while it IS
+    # `chrome::band_bar`, which is `Scroll::track` and `Scroll::bar` — so the
+    # chain is proved here rather than trusted.
+    notes = code_of((home / "notifications.rs").read_text())
+    if "band_bar(" not in must(body_of(notes, "bar_boxes"), "`notifications::bar_boxes`"):
+        wrong.append("notifications.rs: `bar_boxes` no longer asks `chrome::band_bar`")
+    chrome = code_of((home / "chrome.rs").read_text())
+    if "scroll.bar(" not in must(body_of(chrome, "band_bar"), "`chrome::band_bar`"):
+        wrong.append("chrome.rs: `band_bar` no longer asks `Scroll::bar`")
 
     # AND THE RECTANGLE ITSELF IS `Scroll::bar`'s.
     #
@@ -5513,21 +5638,6 @@ let
             print(f"ERROR: this arm does not name a syntax token: {line.strip()!r}", file=sys.stderr)
             failed = 1
 
-    # AND IT IS THE ONLY MAP. Anywhere else that matches on a role is a second
-    # answer waiting to disagree.
-    for f in sorted(home.glob("*.rs")):
-        if f.name == mine:
-            continue
-        text = code_of(f.read_text())
-        if re.search(r"Role::\w+\s*=>", text):
-            print(
-                f"ERROR: {f.name} turns a syntax role into something itself.\n"
-                "       Call `chrome::syntax_color`; two maps is the two panels colouring\n"
-                "       the same code differently.",
-                file=sys.stderr,
-            )
-            failed = 1
-
     # AND EVERY ROLE THE CRATE DECLARES HAS AN ARM.
     crate = code_of(pathlib.Path("${self}/crates/ronoctua-syntax/src/lib.rs").read_text())
     floor(len(crate), 2000, "characters of ronoctua-syntax's lib.rs")
@@ -5541,6 +5651,81 @@ let
     if missing:
         print(f"ERROR: no colour for {sorted(missing)}", file=sys.stderr)
         failed = 1
+
+    # A SYNTAX ROLE IS KNOWN BY ITS VOCABULARY, not by the name `Role`: the
+    # workspace has more than one (ronoctua-syntax's, ronoctua-design's, and
+    # since 6a4a40c `ronoctua_player::remote::Role`, what a machine is when it
+    # joins another). `syntax-has-one-owner` reads it the same way.
+    #
+    # AND ONLY BY THE WORDS NO OTHER `Role` SAYS, re-measured on every run: a
+    # variant two vocabularies share (a `Heading` in both, say) cannot tell a
+    # syntax map from another enum's, so it is left to the second clause
+    # below, which asks the file whether it speaks `ronoctua_syntax` at all.
+    #
+    # EVERY ENUM WHOSE NAME ENDS IN `Role` is asked, because the sweep below
+    # reads any path that ends in `Role`.
+    #
+    # AND NO CRATE HANDS THE ENUM ON under a path of its own. The second
+    # clause trusts a file that never spells `ronoctua_syntax` to hold no
+    # syntax role; a re-export would carry `Heading` past it.
+    others = set()
+    crates = pathlib.Path("${self}/crates")
+    for f in sorted(crates.rglob("*.rs")):
+        if "target" in f.parts or f.relative_to(crates).parts[0] == "ronoctua-syntax":
+            continue
+        other = code_of(f.read_text())
+        for m in re.finditer(r"\benum \w*Role\b", other):
+            names = scope(other[m.start():], r"enum \w*Role\b") or ""
+            others |= set(re.findall(r"^\s*([A-Z]\w*)\s*[,({]", names, re.M))
+        if re.search(
+            r"\bpub(?:\s*\([^)]*\))?\s+use\s+ronoctua_syntax(?:\s*(?:;|as\b)|::(?:\*|Role\b|\{[^}]*(?:\bRole\b|\*)))"
+            r"|\bpub(?:\s*\([^)]*\))?\s+type\s+\w+\s*=\s*ronoctua_syntax::Role\b",
+            other,
+        ):
+            print(
+                f"ERROR: {f.relative_to(crates)} hands `ronoctua_syntax` on under a path of\n"
+                "       its own. A file reaching a syntax role through it never spells\n"
+                "       the crate, and this sweep would not know its `Role` for one.",
+                file=sys.stderr,
+            )
+            failed = 1
+    floor(len(others), 3, "variants of the workspace's other `Role` enums")
+    unique = owed - others
+    floor(len(unique), 5, "syntax roles no other `Role` names")
+    words = "|".join(sorted(unique))
+
+    # A PATH IS ANY NAME ENDING IN `Role`, and any name the file gives the enum
+    # with `as` or `type`. A word boundary before `Role` let
+    # `SyntaxRole::Comment =>` through, which the unanchored pattern this
+    # replaced refused; and `use ronoctua_syntax::Role as R` is how the design
+    # crate spells it.
+    def heads(text):
+        given = re.findall(r"\bRole\s+as\s+(\w+)", text)
+        given += re.findall(r"\btype\s+(\w+)\s*=\s*[\w:]*\bRole\b", text)
+        names = [r"\w*Role"] + [re.escape(a) for a in given]
+        return r"\b(?:" + "|".join(names) + r")::"
+
+    def syntax_arm(text):
+        return re.search(heads(text) + r"(?:" + words + r")\b\s*(?:=>|\|)", text)
+
+    if not syntax_arm(body):
+        print("ERROR: the syntax vocabulary no longer finds chrome's own map", file=sys.stderr)
+        failed = 1
+
+    # AND IT IS THE ONLY MAP. Anywhere else that matches on a syntax role is a
+    # second answer waiting to disagree.
+    for f in sorted(home.glob("*.rs")):
+        if f.name == mine:
+            continue
+        text = code_of(f.read_text())
+        if syntax_arm(text) or ("ronoctua_syntax" in text and re.search(heads(text) + r"\w+\s*=>", text)):
+            print(
+                f"ERROR: {f.name} turns a syntax role into something itself.\n"
+                "       Call `chrome::syntax_color`; two maps is the two panels colouring\n"
+                "       the same code differently.",
+                file=sys.stderr,
+            )
+            failed = 1
 
     if failed:
         raise SystemExit(1)
@@ -7782,51 +7967,63 @@ let
   #     runs again;
   #   - and a `kill` written out at each exit leaks an ffmpeg the day somebody
   #     adds a fifth exit.
-  motion-never-leaks-a-child =
-    mkCheck "motion-never-leaks-a-child"
-      [
-        pkgs.gnugrep
-        pkgs.coreutils
-      ]
-      ''
-        player=${../crates/ronoctua-shell/src}/motion.rs
-        failed=0
+  #
+  # BOTH ANSWERS ARE SHARED since the studio (ce95e77): the reader that polls and
+  # the guard that kills live in `ronoctua_camera::frames`, one for every frame
+  # reader in the tree, and the player hands its reads and its child to them.
+  # So the promise is asked on both sides of that hand-over.
+  motion-never-leaks-a-child = mkCheck "motion-never-leaks-a-child" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
 
-        # --- every read has a deadline --------------------------------------
-        #
-        # OVER THE CODE AND NOT THE COMMENTS. The player documents at length why
-        # `read_exact` is gone, and a grep over the whole file finds that
-        # sentence and fails on it — measured, before this check was written
-        # down. A check that cannot tell code from a sentence about code is a
-        # check that forbids writing down why.
-        code=$(grep -vE "^[[:space:]]*(///|//|\*)" "$player")
-        blocking=$(printf '%s' "$code" \
-          | grep -nE 'read_exact\(|read_to_end\(|read_to_string\(' || true)
-        [ -z "$blocking" ] || {
-          echo "ERROR: a blocking read with no deadline in the player:" >&2
-          echo "$blocking" >&2
-          echo "      A source that stops answering takes the thread with it." >&2
-          failed=1
-        }
-        grep -q 'rustix::event::poll' "$player" || {
-          echo "ERROR: the player no longer polls — what bounds its reads?" >&2
-          failed=1
-        }
+    player = code_of(without_tests(pathlib.Path("${../crates/ronoctua-shell/src}/motion.rs").read_text()))
+    frames = code_of(without_tests(pathlib.Path("${../crates/ronoctua-camera/src}/frames.rs").read_text()))
+    floor(len(player), 8000, "characters of code in motion.rs")
+    floor(len(frames), 1200, "characters of code in frames.rs")
+    wrong = []
 
-        # --- the child goes by a GUARD and not by hand ----------------------
-        grep -q 'impl Drop for Reaped' "$player" || {
-          echo "ERROR: the Drop guard is gone; every exit has to kill by hand again" >&2
-          failed=1
-        }
-        # AND ITS OWN GROUP, so a signal reaches whatever ffmpeg started.
-        grep -q 'process_group(0)' "$player" || {
-          echo "ERROR: the child is not in a group of its own" >&2
-          failed=1
-        }
+    # --- every read has a deadline --------------------------------------
+    #
+    # FILE-WIDE: a blocking read anywhere in either file is the hang, and
+    # OVER THE CODE AND NOT THE COMMENTS. The player documents at length why
+    # `read_exact` is gone, and a grep over the whole file finds that
+    # sentence and fails on it — measured, before this check was written
+    # down. A check that cannot tell code from a sentence about code is a
+    # check that forbids writing down why.
+    for name, code in (("motion.rs", player), ("frames.rs", frames)):
+        for m in re.finditer(r"\bread_(exact|to_end|to_string)\(", code):
+            wrong.append(name + ": a blocking read with no deadline (read_" + m.group(1)
+                         + "); a source that stops answering takes the thread with it")
 
-        [ "$failed" = 0 ] || exit 1
-        echo "OK: every read has a deadline and every child has a guard"
-      '';
+    # The player's reader is the shared one, and the shared one polls.
+    mine = must(body_of(player, "fill"), "motion.rs `fn fill`")
+    if "ronoctua_camera::frames::fill(" not in mine:
+        wrong.append("the player no longer reads through `frames::fill`: what bounds its reads?")
+    shared = must(body_of(frames, "fill"), "frames.rs `fn fill`")
+    if "rustix::event::poll(" not in shared:
+        wrong.append("`frames::fill` no longer polls: what bounds its reads?")
+
+    # --- the child goes by a GUARD and not by hand ----------------------
+    play = must(body_of(player, "play_video"), "motion.rs `fn play_video`")
+    if not re.search(r"\bReaped\(\s*born\s*\)", play):
+        wrong.append("`play_video` no longer holds its ffmpeg in a `Reaped`; every exit has to kill by hand again")
+    if not re.search(r"use\s+ronoctua_camera::frames::(?:Reaped\b|\{[^}]*\bReaped\b)", player):
+        wrong.append("the player's `Reaped` is not the shared guard of `ronoctua_camera::frames`")
+    drop = must(scope(frames, r"impl\s+Drop\s+for\s+Reaped\b"), "frames.rs `impl Drop for Reaped`")
+    if ".kill()" not in drop or ".wait()" not in drop:
+        wrong.append("the `Drop` of `Reaped` no longer kills and reaps: the guard is gone")
+    # AND ITS OWN GROUP, so a signal reaches whatever ffmpeg started.
+    if "process_group(0)" not in play:
+        wrong.append("the child is not in a group of its own")
+
+    for w in wrong:
+        print("ERROR: " + w, file=sys.stderr)
+    if wrong:
+        raise SystemExit(1)
+    print("OK: every read has a deadline and every child has a guard")
+    END
+  '';
 
   # NOTHING THE FILE MANAGER SPAWNS COMES BY NAME.
   #
@@ -8522,15 +8719,16 @@ let
   #
   # Two things go wrong at once when it is, and both were on screen:
   #
-  #   - THE SEQUENCE GOES STALE. `notif-act-in-the-footer` used to carry
-  #     `n h` as words, and it went on teaching `n h` after the key became
-  #     `n n`. Its fix is the shape this check demands: the keys arrive as a
-  #     `{ $keys }` argument built from a constant (`leader::NOTIF_OPEN_KEYS`).
+  #   - THE SEQUENCE GOES STALE. A sentence of the notification window used
+  #     to carry `n h` as words, and it went on teaching `n h` after the key
+  #     became `n n`. The shape this check demands: the keys arrive as a
+  #     `{ $keys }` argument built from a constant beside the binding
+  #     (`leader::PAIRING_YES_KEYS`, which the pairing card names).
   #   - THE WORD "LEADER" IS NOBODY'S KEY. `nix/modules/scroll.nix` sets
   #     `RONOCTUA_LEADER` to `SUPER` and `nix/dev.nix` to `CTRL ALT SPC`; that
   #     file's own comment says why two truths would be a screen saying `SPC`
   #     while the key is something else. Every surface renders `crate::leader()`
-  #     — except, until this check, `power-answer-in-the-footer`, which said
+  #     — except, until this check, a sentence of the power window, which said
   #     the literal word in both languages.
   #
   # It is about VALUES and not keys: `cmd-notif-open` may say what a command
@@ -8807,6 +9005,7 @@ let
                 "pointer_view",
                 "display",
                 "notifications_open",
+                "software",
                 "mx",
                 "leader",
             )
@@ -9279,9 +9478,10 @@ let
   # # What it catches, and it is INVISIBLE without this
   #
   # The band pushed with the other backgrounds. There is no depth test in this
-  # renderer — quads, then pictures, then text — and both doors already draw
-  # two RANGES of quads with the images between them (`Quads::draw_range`),
-  # which is how the film's transport sits ON the film. A rubber band in the
+  # renderer — quads, then pictures, then text — and both doors' quads are
+  # already drawn in two RANGES with the images between them
+  # (`Quads::draw_range`; who draws them is below), which is how the film's
+  # transport sits ON the film. A rubber band in the
   # first range is a band underneath every thumbnail: in a grid, which is
   # pictures edge to edge, it is a band nobody can see, and a grid is the one
   # place it matters.
@@ -9289,11 +9489,16 @@ let
   # The check reads the OVER group by name in each door — the footer appends to
   # `transport_now`, the window pushes inside its `let over` block — and
   # refuses a `sweep_px` call anywhere else in the file.
+  #
+  # WHO DRAWS THE TWO RANGES. The footer draws its own. A window owns no render
+  # pass since 258b8ad (every window is a `door::Content`): its `present` sorts
+  # the quads into `Canvas::under` and `Canvas::over`, and `Door::paint` draws
+  # every window's once — under, then the pictures, then over.
   the-claim-is-drawn-over-the-pictures =
     mkCheck "the-claim-is-drawn-over-the-pictures" [ pkgs.python3 ]
       ''
         python3 - <<'END'
-        import pathlib, sys
+        import pathlib, re, sys
 
         exec(open("${pyPrelude}").read())
 
@@ -9319,12 +9524,57 @@ let
         ):
             if owed not in footer:
                 wrong.append(f"surface.rs: {why} (`{owed}` is not there)")
-        # AND `draw_range` STILL SPLITS THE TWO GROUPS in both doors, which is what
-        # makes "appended last" mean "drawn on top" at all.
-        for name in ("surface.rs", "files_window.rs"):
-            one = code_of(without_tests((shell / name).read_text()))
-            if one.count("draw_range(") < 2:
-                wrong.append(f"{name}: the quads are no longer drawn in two ranges")
+        # AND THE GROUP IS DRAWN ON TOP, which is what makes "appended last"
+        # mean "drawn on top" at all.
+        #
+        # THE WINDOW HANDS IT TO THE DOOR AS ITS TOP LAYER: `present` cuts the
+        # over group off its quads and puts it in `Canvas::over`.
+        #
+        # BY THE NAME THE CUT IS BOUND TO, and not by the two calls being there:
+        # with the lists swapped both calls stand, and the band goes under.
+        # The cut is the LAST `over` quads, which is where the group was pushed.
+        present = must(body_of(window, "present"), "files_window.rs: `present`")
+        floor(len(present), 200, "characters of the window's `present`")
+        cut = re.search(r"let (\w+) = quads\.split_off\(", present)
+        if not cut:
+            wrong.append("files_window.rs: `present` does not cut the over group off its quads")
+        else:
+            tail = cut.group(1)
+            at = shut_at(present, cut.end())
+            if "quads.len()" not in at or not re.search(r"\bover\b", at):
+                wrong.append("files_window.rs: `present` cuts something other than the last `over` quads")
+            handed = re.findall(r"canvas\.(under|over)\.extend\((\w+)\)", present)
+            if ("over", tail) not in handed:
+                wrong.append("files_window.rs: `present` does not hand the over group to the door's top layer")
+            if ("under", "quads") not in handed:
+                wrong.append("files_window.rs: `present` does not hand the rest to the door's bottom layer")
+            if [h for h in handed if h not in (("over", tail), ("under", "quads"))]:
+                wrong.append(f"files_window.rs: `present` hands {handed} to the door, and not the rest under and the cut over")
+
+        # THE DOOR draws every window: under, then the pictures, then over.
+        #
+        # BY THE SPLIT'S NAME too: the first range ends at it and the second
+        # starts at it, and it is the length of the bottom layer taken BEFORE
+        # the top one is appended.
+        door = code_of(without_tests((shell / "door" / "mod.rs").read_text()))
+        doors = must(scope(door, r"impl<C: Content> Door<C>"), "door/mod.rs: `impl<C: Content> Door<C>`")
+        paint = must(body_of(doors, "paint"), "door/mod.rs: `Door::paint`")
+        floor(len(paint), 400, "characters of the door's `paint`")
+        bound = re.search(r"let (\w+) = [^;]*\bunder\.len\(\)", paint)
+        joined = paint.find("under.extend(over)")
+        if not bound or joined < 0 or bound.start() > joined:
+            wrong.append("door/mod.rs: the top layer is not put after the rest, where the second range starts")
+        else:
+            split = re.escape(bound.group(1))
+            first = re.search(r"\.draw_range\(\w+,\s*0,\s*" + split + r"\)", paint)
+            pics = paint.find("images.draw(", first.end()) if first else -1
+            second = re.search(r"\.draw_range\(\w+,\s*" + split + r"\s*,", paint[pics:]) if pics >= 0 else None
+            if not second:
+                wrong.append("door/mod.rs: the quads are no longer drawn in two ranges, split where the top layer starts, with the pictures between them")
+
+        # AND THE FOOTER, which is not a door, still splits its own.
+        if footer.count("draw_range(") < 2:
+            wrong.append("surface.rs: the quads are no longer drawn in two ranges")
 
         if wrong:
             print("ERROR: the pointer's claim is drawn under the pictures.", file=sys.stderr)
@@ -9392,10 +9642,10 @@ let
             wrong.append(f"door/: the door {why} (`{what}` is not there)")
 
     # THE MANAGER'S WINDOW KEEPS ITS OWN DRAWER — its control is in the `Tab`
-    # ring — and PROVES it. Three windows have no line of keys at all: the
-    # update's, the terminal's and a buffer's, whose header is the component's.
+    # ring — and PROVES it. Two windows have no line of keys at all: the
+    # terminal's and a buffer's, whose header is the component's.
     EXCEPT = "files_window.rs"
-    NO_HEADER = {"update_window.rs", "terminal.rs"}
+    NO_HEADER = {"terminal.rs"}
 
     for f in sorted(list(shell.rglob("*_window.rs")) + [shell / "terminal.rs"]):
         body = _re.sub(r"\s+", "", code_of(f.read_text()))
@@ -9415,7 +9665,14 @@ let
             continue
         # A WINDOW THAT PAINTS ITS OWN FRAME draws the header the door's way.
         if "fnpaint(" in body and not any(
-            w in body for w in ("list::header(", "list::header_of(", "list::paint(", "hinted.head(")
+            w in body
+            for w in (
+                "list::header(",
+                "list::header_of(",
+                "list::header_about(",
+                "list::paint(",
+                "hinted.head(",
+            )
         ):
             wrong.append(f"{f.name}: paints its own frame without the system's header")
         # AND ANSWERS ITS CONTROLS, if it answers the pointer itself.
@@ -9481,9 +9738,11 @@ let
         if re.search(r"delegate_(dispatch2|registry)!", code):
             wrong.append(f"{f.name}: delegates dispatch of its own")
         # THE DRAG'S THREE HANDLERS are the one thing a window may add, and
-        # only for the door it is (`Door<Files>`): the generic dispatch hands
-        # them to it.
-        for m in re.finditer(r"impl\s+(Data\w+Handler)\s+for\s+([\w<>:]+)", code):
+        # only for the door it is (`Door<Files>`, `Door<Software>`): the
+        # generic dispatch hands them to it. The trait may be written by its
+        # full path (`smithay_client_toolkit::…::DataDeviceHandler`), and a
+        # pattern that only knew the bare name read straight past those.
+        for m in re.finditer(r"impl\s+(?:[\w:]+::)?(Data\w+Handler)\s+for\s+([\w<>:]+)", code):
             if not m.group(2).startswith("Door<"):
                 wrong.append(f"{f.name}: `{m.group(1)}` for `{m.group(2)}`, and not for its door")
     for f in sorted(list(shell.glob("*_window.rs")) + [shell / "terminal.rs", shell / "buffer.rs"]):
@@ -9629,7 +9888,9 @@ let
             ("chrome.rs", chrome, "hint_of_marked", [".pressing("]),
             ("chrome.rs", chrome, "hint_marks", ["press"]),
             ("door/mod.rs", door, "pointer_frame_here", ["press_under("]),
-            ("door/mod.rs", door, "act", ["keys::event_of(", "forward("]),
+            # A COMMAND IS HANDED TO THE FOOTER off the loop, and a footer that
+            # is not there is said (`Ui::tell_the_footer`).
+            ("door/mod.rs", door, "act", ["keys::event_of(", "tell_the_footer("]),
             ("surface.rs", footer, "hint_clicked", ["keys::event_of(", "run_command("]),
             ("brain", brain, "header", ["is_a_control(", "Role::Inert"]),
         ):
@@ -9863,16 +10124,22 @@ let
         ("expansion", "expansion_len"),
         # A bluetooth answer can raise an errand, and an errand answers.
         ("bluetooth_answer", "bluetooth_errand"),
-        ("bluetooth_answer", "bluetooth_errand", "run_with"),
+        # A radio's errand can name a command of the registry, and one of those
+        # commands — disconnecting every device — gives errands back. It turns
+        # once: the command orders the thread and names no command. The ring
+        # the answers used to close through `run_with` now passes through
+        # `bluetooth_ordered`, which holds a window's answer to its question,
+        # and the search meets this one first.
+        ("bluetooth_disconnect_all", "bluetooth_errand", "run_with"),
         # A command can run a command: the clipboard's errand goes back through
         # the registry, which is the one door every command enters by.
         ("clipboard_errand", "run_command", "run_with"),
         # A view's row can name a command, and the view CLOSES before running
-        # it (`player_view`, `camera_view`, `pointer_view` set to `None`), while
-        # `run_with` only presses back into a view that is open — so the ring
-        # turns once and stops, which is the clipboard's shape above.
+        # it (`camera_view`, `pointer_view` set to `None`), while `run_with`
+        # only presses back into a view that is open — so the ring turns once
+        # and stops, which is the clipboard's shape above. The player's rows
+        # name only its doors, which `player_door` opens without the registry.
         ("camera_settings_press", "run_with"),
-        ("player_press", "run_with"),
         ("pointers_press", "run_with"),
     }
 
@@ -10806,10 +11073,12 @@ let
   # WHAT THIS REFUSES IS THE DRIFT BACK. Nothing in the compiler knows which of
   # the two a new `heading(…)` meant, and the symptom is the quietest kind there
   # is: a section title one step too dim, on one screen, which reads as a theme
-  # being off rather than as a token being wrong. So `TEXT_GROUP` is allowed in
-  # exactly ONE place — the arm that draws a leader row whose sequence carries
-  # on — and every builder whose NAME says it draws a heading has to name
-  # `TEXT_HEADING` and no second text tone.
+  # being off rather than as a token being wrong. So `TEXT_GROUP` is allowed
+  # only in the arms that draw a SUBMENU of the leader — the leader row whose
+  # sequence carries on, and since 9ab8042 the window menu's group cell, because
+  # the window menu IS `LEADER w` (generated from it) — and every builder whose
+  # NAME says it draws a heading has to name `TEXT_HEADING` and no second text
+  # tone.
   a-heading-is-not-a-submenu = mkCheck "a-heading-is-not-a-submenu" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -10821,7 +11090,7 @@ let
 
     wrong = []
 
-    # -- ONE: `TEXT_GROUP` HAS EXACTLY ONE HOME --------------------------------
+    # -- ONE: `TEXT_GROUP` LIVES ONLY IN THE SUBMENU'S ARMS --------------------
     #
     # FILE-WIDE: "no source but this one names the token" is a question about
     # whole files by construction — the defect is a heading written ANYWHERE,
@@ -10834,18 +11103,41 @@ let
         code = code_of(without_tests(f.read_text()))
         homes += [f.name] * len(re.findall(r"\bTEXT_GROUP\b", code))
     strays = sorted({n for n in homes if n != HOME})
+
+    # THE SUBMENU IS DRAWN BY TWO LISTS THAT ARE ONE: the leader's, and since
+    # 9ab8042 the window menu's, which IS `LEADER w` — generated from the menu
+    # (`window_menu::leader_bindings`), each of its groups a submenu of the
+    # leader wearing the tone "as the leader's do". One arm each, anchored by
+    # the question it asks, so counting cannot be answered by the token moving
+    # somewhere else in the same file.
+    #
+    # THE SECOND ARM'S EXCUSE IS RE-MEASURED, never taken on trust: the day the
+    # leader stops generating `w` from the menu, its groups are no longer the
+    # leader's submenus, and the tone there is a drift like any other.
+    home_code = code_of(without_tests((shell / HOME).read_text()))
+    keymap = code_of(without_tests((shell / "leader.rs").read_text()))
+    if not re.search(r"=\s*crate::window_menu::leader_bindings\(\)", keymap):
+        wrong.append("`LEADER w` is no longer generated from the window menu"
+                     " (`window_menu::leader_bindings`), so its groups are not the"
+                     " leader's submenus and may not wear `TEXT_GROUP`")
+    menu = must(scope(home_code, r"ViewState::WindowMenu\s*&&\s*let Some\(v\) = self\.window_menu\.as_ref\(\)"),
+                "the window menu's rows in " + HOME)
+    if not re.search(r"let group = e\.is_group\(\);", menu):
+        wrong.append("the window menu's `group` is no longer the entry's `is_group()`")
+    ARMS = [
+        ("leader row's `e.is_group` arm", home_code, r"text_color: if e\.is_group\b"),
+        ("window menu cell's `group` arm", menu, r"text_color: if group\b"),
+    ]
     if strays:
         wrong.append("`TEXT_GROUP` is named outside " + HOME + " (" + ", ".join(strays)
                      + "): a section title takes `TEXT_HEADING`")
-    elif len(homes) != 1:
-        wrong.append("`TEXT_GROUP` is named " + str(len(homes)) + " times, and the submenu is one arm")
-
-    # AND THE ONE HOME IS THE ARM THAT DRAWS A SUBMENU. Counting alone would be
-    # answered by the token having moved somewhere else in the same file.
-    arm = must(scope(code_of(without_tests((shell / HOME).read_text())), r"if e\.is_group"),
-               "the leader row's `e.is_group` arm")
-    if "TEXT_GROUP" not in arm:
-        wrong.append("the `e.is_group` arm of " + HOME + " no longer names `TEXT_GROUP`")
+    elif len(homes) != len(ARMS):
+        wrong.append("`TEXT_GROUP` is named " + str(len(homes)) + " times, and the submenu is "
+                     + str(len(ARMS)) + " arms")
+    for what, text, header in ARMS:
+        arm = must(scope(text, header), "the " + what)
+        if "TEXT_GROUP" not in arm:
+            wrong.append("the " + what + " of " + HOME + " no longer names `TEXT_GROUP`")
 
     # -- TWO: EVERY HEADING BUILDER NAMES `TEXT_HEADING` -----------------------
     #
@@ -10922,7 +11214,8 @@ let
         print("       to different colours now, so the wrong one is a title the eye", file=sys.stderr)
         print("       reads as body text. See `text.heading` in `assets/tokens/colors.nix`.", file=sys.stderr)
         raise SystemExit(1)
-    print("OK: `TEXT_GROUP` has one home (" + HOME + "'s `e.is_group` arm), and "
+    print("OK: `TEXT_GROUP` lives in the submenu's " + str(len(ARMS)) + " arms of " + HOME
+          + " (the leader's and `LEADER w`'s), and "
           + str(len(found) - len(EXCUSED)) + " heading builders name `TEXT_HEADING` ("
           + str(len(EXCUSED)) + " excused)")
     END
@@ -11360,7 +11653,7 @@ let
             # debt with `re_render()` and then `paint()`. So it says the same
             # thing as `re_render()` here, deferred by exactly one turn of the
             # queue — and `one-frame-model` is what keeps that true, by
-            # refusing a door with `ask_paint` and no `settle`.
+            # refusing a debt that nothing settles.
             if not any(
                 v in scaled
                 for v in (
@@ -12028,8 +12321,10 @@ let
 
   # EVERY POLKIT RULE THIS SYSTEM HAS, counted.
   #
-  # Six modules write one: `files`, `rescue`, `update`, `keyboard`, `memory`
-  # and `tor`. Four of them have a check of their own about how WIDE they are,
+  # It began with six modules writing one: `files`, `rescue`, `update`,
+  # `keyboard`, `memory` and `tor` (`keys`, `syncthing`, `base`'s clock and
+  # `android` came later, each signed below). Four of them had a check of
+  # their own about how WIDE they are,
   # and not one of them could see a SEVENTH appearing — the only sweep that
   # existed (`disks-adds-no-polkit-rule-of-its-own`, step 3) looks for a udisks
   # action and nothing else, and its step 4 asserted the presence of four of
@@ -12176,15 +12471,20 @@ let
       # comment is the audit: adding a line here is claiming somebody read the
       # rule and decided the door is the right width.
       AGREED = {
-          # OURS — eight modules, and every one of them names its units inside
+          # OURS — nine modules, and every one of them names its units inside
           # the same action. `files` and `rescue` return `AUTH_SELF_KEEP` (they
-          # ask, once, and remember); `keyboard`, `keys`, `memory`, `update` and
-          # `tor` return `YES`, because nothing this system does on its own may
-          # ask. `keys` is the one that names TWO units — keyd and its
-          # replacement, which the mode switch trades. Each has a check of its
-          # own about which unit and which verbs.
+          # ask, once, and remember); `keyboard`, `keys`, `memory`, `update`,
+          # `tor`, `syncthing` and `android` return `YES`, because nothing this
+          # system does on its own may ask. `keys` is the one that names TWO
+          # units — keyd and its replacement, which the mode switch trades —
+          # and `android` names four: prepare with either image, erase, and
+          # read the device id, verb `start` only. Each has a check of its own
+          # about which unit and which verbs.
+          #
+          # ONE RULE PER NAME HERE, counted below: a module that adds a rule
+          # for this action without adding its name is a door nobody signed.
           "org.freedesktop.systemd1.manage-units":
-              "ours: files, rescue, keyboard, keys, memory, update, tor, syncthing",
+              "ours: files, rescue, keyboard, keys, memory, update, tor, syncthing, android",
           # nix/modules/base.nix — the machine's own clock. THREE actions and
           # not four: `set-local-rtc` decides whether the hardware clock runs
           # in local time, nothing in this tree asks for it, and a fourth
@@ -12257,6 +12557,16 @@ let
           wrong.append(
               f"{rules} rules were counted and {len(bodies)} could be read; the "
               "sweep below them is not seeing every rule"
+          )
+      # EVERY MODULE SIGNED FOR `manage-units` HAS ONE RULE, AND EVERY RULE A
+      # SIGNATURE. The action is shared, so the set comparison below cannot
+      # see a tenth rule for it; the count can.
+      signed = [m.strip() for m in AGREED["org.freedesktop.systemd1.manage-units"].split(":", 1)[1].split(",")]
+      naming = [b for b in bodies if "org.freedesktop.systemd1.manage-units" in b]
+      if len(naming) != len(signed):
+          wrong.append(
+              f"{len(naming)} rules name manage-units and {len(signed)} modules are signed for it "
+              f"({', '.join(signed)}): a rule came or went without its name here"
           )
       for body in bodies:
           if "action.id" not in body:
@@ -12445,12 +12755,59 @@ let
     views = re.findall(r"^    (\w+),", enum, re.M)
     floor(len(views), 12, "views declared by `ViewState`")
 
-    # THE THREE THAT HAVE NO CURSOR, and each is a claim about what it is.
+    # THE FOUR THAT HAVE NO CURSOR, and each is a claim about what it is.
     #
-    #   `Manual`  — the shortcut list is READ, and paged by its own keys.
-    #   `Leader`  — a sequence under way draws a table, not a list.
-    #   `NoneOf`  — the region is closed.
-    WITHOUT = {"Manual", "Leader", "NoneOf"}
+    #   `Manual`     — the shortcut list is READ, and paged by its own keys.
+    #   `Leader`     — a sequence under way draws a table, not a list.
+    #   `WindowMenu` — the leader's grid for one window (`window_menu.rs`,
+    #                  9ab8042): every cell is its own key or click, nothing
+    #                  walks between cells, and a new level starts on its
+    #                  first page (`window_menu_errand`).
+    #   `NoneOf`     — the region is closed.
+    WITHOUT = {"Manual", "Leader", "WindowMenu", "NoneOf"}
+
+    # THE TWO GRIDS' EXCUSE IS RE-MEASURED, never taken on trust: a grid
+    # PAGES, and the day one of them scrolls, or the menu grows a cursor, there
+    # is a cursor to follow and the excuse is stale.
+    #
+    # READ FROM THE ARMS THAT ANSWER `Page`, and only from them: a view named
+    # anywhere before the first `Page` was taken for paged, so an arm of its
+    # own that scrolls, written above, went through.
+    nav = must(body_of(src, "navigation"), "`Footer::navigation`")
+    paged = set()
+    for arm in re.finditer(r"((?:ViewState::\w+\s*\|\s*)*ViewState::\w+)\s*=>\s*Navigation::Page\b", nav):
+        paged |= set(re.findall(r"ViewState::(\w+)", arm.group(1)))
+    # ONE is the floor: a pattern that finds no `Page` arm has stopped reading;
+    # which of the two went missing is said by name below.
+    floor(len(paged), 1, "views `navigation` pages")
+    for v in ("Leader", "WindowMenu"):
+        if v not in paged:
+            bad.append(f"ViewState::{v} is excused as a grid that pages, and `navigation` no longer pages it")
+    # AND BY NO ARM OF ITS OWN THAT GETS THERE FIRST: a match takes the first
+    # arm that fits, so a `ViewState::WindowMenu => Navigation::Scroll` above
+    # the `Page` arm wins.
+    for v in ("Leader", "WindowMenu"):
+        first = re.search(r"ViewState::" + v + r"\b[^=]*=>\s*Navigation::(\w+)", nav)
+        if first and first.group(1) != "Page":
+            bad.append(f"ViewState::{v} is excused as a grid that pages, and its first arm in `navigation` answers {first.group(1)}")
+    menu = code_of(pathlib.Path("${../crates/ronoctua-shell/src/window_menu.rs}").read_text())
+    floor(len(menu), 10000, "characters of window_menu.rs")
+    if "cursor" in menu:
+        bad.append("the window menu has a cursor now; it is no longer excused from following it")
+    # AND THE FOOTER KEEPS NONE FOR IT EITHER. A cursor is moved by a key or a
+    # click, and the footer's two menu paths are where one would be: the key
+    # goes to the menu whole (`Esc` up a level, every other key a cell), and a
+    # click runs the cell it lands on.
+    keys = must(scope(src, r"if self\.view\(\) == ViewState::WindowMenu(?=\s*\{)"), "the footer's window-menu key path")
+    own = set(re.findall(r"Sym::(\w+)", keys)) - {"Esc", "Backspace"}
+    if "cursor" in keys or ".pressed(" not in keys or own:
+        bad.append(
+            f"the footer's window-menu key path keeps {sorted(own) or 'a cursor'} for itself "
+            "instead of handing every key to the menu; it may be walking a cursor"
+        )
+    click = must(scope(src, r"Some\(Click::WindowMenu\(\w+\)\)\s*=>"), "the footer's window-menu click")
+    if "cursor" in click or ".choose(" not in click:
+        bad.append("a click on the window menu no longer runs the cell it lands on; it may be selecting")
 
     # BY BRACES, never by the next `\n    }`: a nested block that closes at
     # that indent ends the capture early, and everything after it reads as
@@ -13912,6 +14269,7 @@ let
         "syncthing.rs": ("said", ["note"]),
         "geo.rs": ("sentence", ["note"]),
         "display.rs": ("told", ["note"]),
+        "software.rs": ("said", ["note"]),
     }
     for name, (builder, doors) in views.items():
         # `code_of` ON EACH BODY, and never the raw file: these files discuss
@@ -16982,6 +17340,25 @@ let
     ronoctua-shell = rust.shell;
   };
 
+  # THE SOFTWARE CENTRE ON A BOOTED SESSION, offline: the session's PATH and
+  # XDG_DATA_DIRS in the footer and the queue, a profile install seen without a
+  # restart, an app ending with 3 run once, a web app's Chrome arguments, and
+  # an AppImage in and out without a trace — every order through the queue.
+  softwareVm = import ./software-vm.nix {
+    inherit pkgs lib inputs;
+    ronoctua = {
+      inherit fonts fontconfigConf iconSuperpack;
+      inherit themes themed defaultTheme;
+      inherit cursors;
+      inherit scroll;
+      shell = rust.shell;
+      transfers = rust.transfers;
+      software = rust.software;
+      softwareIndex = self.packages.${system}.software-nix-index;
+      iconNames = self.packages.${system}.icon-names;
+    };
+  };
+
   # The contract against the pinned compositor (milestone 4). See the file
   # for why there is no second version any more.
   compositorContract = import ./compositor-contract.nix {
@@ -17050,7 +17427,11 @@ let
     '';
 
   lean-tree = mkCheck "lean-tree" [ ] ''
-    cap=20480  # KiB — the real tree is ~1.3 MB
+    # KiB. What this catches is a BUILD inside the tree (793 GB once), which is
+    # gigabytes, not the source growing: measured 19 760 KiB at HEAD and
+    # 22 332 KiB with the software centre (2026-09-27), against a comment that
+    # still said 1.3 MB from the first commit. Measure again before moving it.
+    cap=30720
     tree_size=$(du -s --exclude=.git ${self} | cut -f1)
     echo "flake source: $tree_size KiB (ceiling $cap KiB)"
     if [ "$tree_size" -gt "$cap" ]; then
@@ -17253,6 +17634,9 @@ let
           "bluetooth-device-unknown",
           "bluetooth-connected",
           "bluetooth-off",
+          # THE SOFTWARE VIEW'S TWO: a trial running and Android on.
+          "software-trial",
+          "software-android",
           # THE WAY OUT'S THREE, beside the same digits.
           "no-internet",
           "airplane",
@@ -17415,9 +17799,10 @@ let
 
       # AND NOBODY introduces an inline size without passing through here.
       #
-      # The list above only holds while OnTheCell is asked for with the sizes
-      # this check measures: the token, or the generated `icon::chrome_size`,
-      # which is the same measurement written into the Rust. A size written
+      # The list above only holds while a glyph centred on its cell is asked for
+      # with the sizes this check measures: the token, or the generated
+      # `icon::chrome_size`, which is the same measurement written into the
+      # Rust. A size written
       # loose would escape the measurement entirely — and the way to find out
       # would again be by looking at the screen.
       #
@@ -17455,20 +17840,73 @@ let
       # point is that it may appear in one that does not exist yet. `whose` is
       # the prelude's copy of the `walls` idiom, and it is what names the
       # function a hit landed in.
-      loose, sources = [], 0
+      #
+      # TWO VARIANTS CENTRE A GLYPH ON ITS CELL since the on-screen keyboard
+      # (e9a333f): `OnTheCell(px)`, and `Lowered(by, Some(px))` for a legend a
+      # fraction of a line down — the renderer sizes and nudges both by one
+      # expression (`Size::px`, `Size::nudge`). Both are MADE only from the
+      # measurement, and it is the ARGUMENT that is read, not a window of text
+      # after the name. A PATTERN is not a making: `OnTheCell(v) =>` reads a
+      # size made elsewhere, and the `v` it binds may be handed straight on, in
+      # that arm, to `Lowered(by, Some(v))` — it already passed through here.
+      CENTRED = re.compile(r"Size::(OnTheCell|Lowered)\(")
+      ARM = re.compile(r"\s*=>\s*\{?\s*(?:\w+::)*")
+
+      def split_top(args):
+          # The arguments of one call, split at its own commas only.
+          parts, deep, cur = [], 0, []
+          for ch in args:
+              if ch in "([{":
+                  deep += 1
+              elif ch in ")]}":
+                  deep -= 1
+              if ch == "," and deep == 0:
+                  parts.append("".join(cur).strip())
+                  cur = []
+              else:
+                  cur.append(ch)
+          parts.append("".join(cur).strip())
+          return [p for p in parts if p]
+
+      loose, sources, made = [], 0, 0
       for f in sorted(shell.rglob("*.rs")):
           body = code_of(f.read_text())
           sources += 1
-          for m in re.finditer(r"Size::OnTheCell\(", body):
-              line = body[: m.start()].count("\n") + 1
-              tail = body[m.start() : body.find("\n", m.start() + 200) + 1]
-              if MEASURED.search(tail):
+          bound = []  # (where an `OnTheCell(<name>)` pattern shuts, <name>)
+          for m in CENTRED.finditer(body):
+              args = shut_at(body, m.end())
+              shut = m.end() + len(args) + 1
+              after = body[shut:].lstrip()
+              parts = split_top(args)
+              pattern = (
+                  after.startswith(("=>", "if "))
+                  or (after.startswith("|") and not after.startswith("||"))
+                  or (after.startswith("=") and not after.startswith("=="))
+                  or any(p in ("_", "..") for p in parts)
+              )
+              if pattern:
+                  if m.group(1) == "OnTheCell" and len(parts) == 1 and re.fullmatch(r"[a-z_]\w*", parts[0]):
+                      bound.append((shut, parts[0]))
+                  continue
+              if m.group(1) == "OnTheCell":
+                  size = parts[0] if parts else ""
+              else:
+                  if len(parts) < 2 or parts[1] == "None":
+                      continue  # the grid's own size, lowered: nothing centred
+                  inner = re.fullmatch(r"Some\((.*)\)", parts[1], re.S)
+                  size = inner.group(1).strip() if inner else parts[1]
+              made += 1
+              if MEASURED.search(size):
+                  continue
+              if any(name == size and ARM.fullmatch(body[end : m.start()]) for end, name in bound):
                   continue
               inside = whose(body, m.start())
               if inside == EXCEPT:
                   continue
+              line = body[: m.start()].count("\n") + 1
               loose.append(f"{f.name}:{line} (in `{inside}`)")
       floor(sources, 30, "sources of the shell swept for a loose size")
+      floor(made, 4, "centred sizes made in the shell")
 
       if loose:
           print("ERROR: a glyph centred in the cell with a size outside the measurement:")
@@ -17478,7 +17916,7 @@ let
           print("      icon::chrome_size for what the glyph generator measured.")
           print(f"      The one exception is `{EXCEPT}`, and it is named in this check.")
           sys.exit(1)
-      print("OK: every glyph centred in a cell uses the measured size")
+      print(f"OK: every glyph centred in a cell ({made} made) uses the measured size")
       PY
     '';
 
@@ -18976,7 +19414,10 @@ let
   #
   # `fragment::FILE` is what the shell WRITES; `nix/modules/scroll.nix` and
   # `nix/dev.nix` are what the compositor INCLUDES; `tests/display-vm.nix`
-  # writes its own config with its own copy. Renaming the constant left the
+  # writes its own config with its own copy. Each includes from the directory
+  # ITS shell writes to: `ronoctua/` for the system, and `ronoctua-<instance>/`
+  # for the development loop, which is a second copy with roots of its own
+  # (beecbd6). Renaming the constant left the
   # real machine including a file nobody writes — the feature stops persisting,
   # and every test stays green, because the VM includes its own hand-written
   # line rather than the one the module generates.
@@ -18999,6 +19440,35 @@ let
     # and the pointers (`ronoctua-pointers`). One loop, so the second is held
     # to exactly what the first was — a sibling check copied beside it would
     # be the next thing to drift.
+
+    # THE DIRECTORY IS THE INSTANCE'S (beecbd6), and it is derived from the
+    # rule the Rust follows rather than typed here: `ronoctua_xdg::config_dir()`
+    # is `<config>/name()`, and `name()` is NAME, or NAME-<instance> when
+    # RONOCTUA_INSTANCE is set. The development loop sets it, so ITS compositor
+    # must include what ITS footer writes; an include of `ronoctua/` there
+    # would read the installed session's file.
+    xdg = uncommented(pathlib.Path("${../crates/ronoctua-xdg/src}/lib.rs").read_text())
+    floor(len(xdg), 1500, "characters of ronoctua-xdg's lib.rs")
+    m = re.search(r'pub const NAME: &str = "([a-z-]+)";', xdg)
+    if not m:
+        print("ERROR: `ronoctua_xdg::NAME` is not there to build the directory from", file=sys.stderr)
+        raise SystemExit(1)
+    base = m.group(1)
+    if 'format!("{NAME}-{i}")' not in must(body_of(xdg, "name"), "`ronoctua_xdg::name`"):
+        print("ERROR: `ronoctua_xdg::name` no longer names an instance NAME-<instance>", file=sys.stderr)
+        raise SystemExit(1)
+    if "base.join(name())" not in must(body_of(xdg, "config_dir"), "`ronoctua_xdg::config_dir`"):
+        print("ERROR: `ronoctua_xdg::config_dir` is no longer `<config>/name()`", file=sys.stderr)
+        raise SystemExit(1)
+    # The same filter `ronoctua_xdg::instance` applies: a value it refuses
+    # falls back to NAME, and the include would name a directory nobody writes.
+    instances = re.findall(r"^\s*export RONOCTUA_INSTANCE=([a-z0-9-]{1,16})\s*$",
+                           hashless(pathlib.Path("${../nix/dev.nix}").read_text()), re.M)
+    if len(instances) != 1:
+        print("ERROR: nix/dev.nix must export exactly one RONOCTUA_INSTANCE that"
+              " `ronoctua_xdg::instance` accepts, and it exports " + str(instances), file=sys.stderr)
+        raise SystemExit(1)
+
     for crate_label, fragment_rs, lib_rs in (
         ("crates/ronoctua-display", "${../crates/ronoctua-display/src/fragment.rs}", "${../crates/ronoctua-display/src}/lib.rs"),
         ("crates/ronoctua-pointers", "${../crates/ronoctua-pointers/src/fragment.rs}", "${../crates/ronoctua-pointers/src}/lib.rs"),
@@ -19037,13 +19507,13 @@ let
         # lines interpolate `config.ronoctua.user`, so a path through
         # `.config/scroll/` still has "ronoctua" somewhere in it and a bare word
         # test passes over exactly the swap it is meant to catch.
-        where_written = "ronoctua/" + name
         wrong = []
-        for label, path in (
-            ("nix/modules/scroll.nix", "${../nix/modules/scroll.nix}"),
-            ("nix/dev.nix", "${../nix/dev.nix}"),
-            ("tests/display-vm.nix", "${../tests/display-vm.nix}"),
+        for label, path, directory in (
+            ("nix/modules/scroll.nix", "${../nix/modules/scroll.nix}", base),
+            ("nix/dev.nix", "${../nix/dev.nix}", base + "-" + instances[0]),
+            ("tests/display-vm.nix", "${../tests/display-vm.nix}", base),
         ):
+            where_written = directory + "/" + name
             lines = [
                 l
                 for l in hashless(pathlib.Path(path).read_text()).splitlines()
@@ -19090,7 +19560,7 @@ let
         print("       nothing survives a restart, and no other check can see it", file=sys.stderr)
         print("       — `display-fragment-validates` reads the CONTENT, and", file=sys.stderr)
         print("       the syntax gate is happy with an include of a file", file=sys.stderr)
-        print("       include of a file that is not there.", file=sys.stderr)
+        print("       that is not there.", file=sys.stderr)
         raise SystemExit(1)
 
     print(f"OK: `{name}` is the name the shell writes and all three configs include")
@@ -19506,32 +19976,29 @@ let
 
   # AND THE TWO DOORS ANSWER THE SAME KEYS.
   #
-  # `LEADER s b` has one view and two doors, and they read the keyboard in two
-  # different ways. The footer builds the NOTATION of what was pressed and looks
-  # it up in `bluetooth::OF_THE_VIEW`; the window matches KEYSYMS by hand for
-  # everything that is not a bare letter, because an arrow and a `TAB` produce
-  # no text and its fallback matches text. So the table is the truth in one door
-  # and a hand-written copy in the other, and a row changed there is a key that
-  # goes on working in the footer and dies in the window — silently, since both
-  # doors go on TEACHING it from the same table.
+  # `LEADER s b` has one view and two doors, and they used to read the keyboard
+  # in two ways. The footer built a NOTATION of what was pressed — with shift
+  # and nothing else — and looked it up in `bluetooth::OF_THE_VIEW`; the window
+  # matched KEYSYMS by hand for everything that is not a bare letter and the
+  # TEXT a key typed for the rest. So `<right>`, `<left>` and `TAB` were once
+  # reachable in the footer and dead in the window while both taught them, and
+  # `C-f` — `f` to the footer, which dropped the Ctrl — FORGOT the device under
+  # the cursor there, while the window, reading a control character, did
+  # nothing.
   #
-  # That already happened once: `<right>`, `<left>` and `TAB` were reachable in
-  # the footer and unreachable in the window while the hint line taught all
-  # three in both. It cost a hand-written arm to fix, which is exactly the thing
-  # this check exists to keep honest.
-  #
-  # The shift is the newest half of it. `<right>` crosses the columns and
-  # `S-<right>` is more, and the only difference between them is a modifier —
-  # which the footer has to put into the notation and the window has to keep in
-  # a field of its own, because SCTK's `KeyEvent` carries none.
+  # Now there is ONE reader, `bluetooth_words::press_of_key`, which takes the
+  # whole key and looks its whole notation up in the table; the footer hands it
+  # the key it translated and the window the one `door::keys::key_of` read.
+  # This check holds both doors to it: a door that builds a notation of its
+  # own, or reads the text a key typed, is a second answer to the same key.
   bluetooth-keys-reach-both-doors = mkCheck "bluetooth-keys-reach-both-doors" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
 
-    # FILE-WIDE: `OF_THE_VIEW` and the notation table are module-level, and the
-    # three narrowings that matter — `press_of`, the footer's click arm, the
-    # window's — are taken by name and by braces below.
+    # FILE-WIDE: `OF_THE_VIEW` and the id-to-press map are module-level; the
+    # reader, the footer's branch, the window's `typed` and the two click
+    # paths are taken by name and by braces below.
     #
     # `uncommented` and never `code_of`: a NOTATION is a string literal and so
     # is a command id. Emptying them would leave every table in this check
@@ -19546,7 +20013,7 @@ let
         floor(len(text), 2000, "characters of " + name)
     gaps = []
 
-    # 1) THE TABLE, which is what both doors teach.
+    # 1) THE TABLE, which is what both doors teach, and what each id means.
     # THE ELEMENT TYPE IS NOT WRITTEN OUT. The manager's table grew a third
     # field once and the check that spelled its type went blind the same day;
     # this one is anchored on the NAME and stops at the closing bracket.
@@ -19555,128 +20022,45 @@ let
         sys.exit("ERROR: `OF_THE_VIEW` went away or changed shape")
     rows = re.findall(r'\("([^"]+)",\s*"([a-z0-9-]+)"', table.group(1))
     floor(len(rows), 15, "rows of `OF_THE_VIEW`")
-
-    # 2) WHAT EACH ID MEANS. The footer goes id -> press through this map, so it
-    #    is the footer's whole answer once the notation has matched.
     mapping = dict(re.findall(r'"([a-z0-9-]+)" => Press::(\w+),', words))
-
-    # 3) THE WINDOW'S HAND-WRITTEN ARMS, IN SOURCE ORDER — a `match` takes the
-    #    FIRST arm that fits, so an unguarded `Keysym::Right` written above the
-    #    guarded one would shadow it and shift would stop meaning anything. The
-    #    order is part of the answer, and reading it in order is what catches
-    #    that.
-    # TWO QUESTIONS, ASKED APART. One is "does `press_of` still take the
-    # modifiers", which IS about the signature and is asked of it; the other is
-    # "what does its body answer", which `body_of` walks by braces. Written as
-    # one search of the whole signature, renaming a parameter gave the wrong
-    # diagnosis for the wrong reason.
-    press_body = body_of(window, "press_of")
-    if not press_body:
-        sys.exit("ERROR: the window's `press_of` went away")
-    floor(len(press_body), 100, "characters of `press_of`")
-    if not re.search(r"fn press_of\([^)]*\bModifiers\b", window):
-        sys.exit(
-            "ERROR: the window's `press_of` stopped taking the modifiers — "
-            "without them `<right>` and `S-<right>` are the same key"
-        )
-    arms = []
-    for line in press_body.splitlines():
-        m = re.match(
-            r"\s*(Keysym::\w+(?:\s*\|\s*Keysym::\w+)*)(\s+if mods\.shift)?\s*=> Press::(\w+),",
-            line,
-        )
-        if m:
-            arms.append((set(re.findall(r"Keysym::(\w+)", m.group(1))), bool(m.group(2)), m.group(3)))
-    floor(len(arms), 4, "arms of the window's `press_of`")
-
-    def answered_by_the_window(keysym, shift):
-        # A guarded arm answers only while shift is held; an unguarded one
-        # answers either way. Rust's own rule, and the first fit wins.
-        for syms, guarded, press in arms:
-            if keysym in syms and (shift or not guarded):
-                return press
-        return None
-
-    # 4) HOW A NOTATION IS SPELT AS A KEYSYM.
-    #
-    # A SPELLING TABLE AND NOT A LIST OF WHAT TO CHECK: a notation missing from
-    # it FAILS below rather than being skipped. A hand-typed list of what to
-    # look at is the hole this repository has already found twice — a check that
-    # scans six of eight things passes over the two it never knew about.
-    AS_KEYSYM = {
-        "RET": ("Return", False),
-        "ESC": ("Escape", False),
-        "TAB": ("Tab", False),
-        "S-TAB": ("ISO_Left_Tab", True),
-        "SPC": ("space", False),
-        "DEL": ("BackSpace", False),
-        "<up>": ("Up", False),
-        "<down>": ("Down", False),
-        "<left>": ("Left", False),
-        "<right>": ("Right", False),
-        "S-<up>": ("Up", True),
-        "S-<down>": ("Down", True),
-        "S-<left>": ("Left", True),
-        "S-<right>": ("Right", True),
-    }
-
     for notation, id in rows:
-        want = mapping.get(id)
-        if want is None:
+        if id not in mapping:
             gaps.append(f"`{notation}` teaches `{id}`, and `bluetooth_words::press_of` answers nothing")
-            continue
-        if len(notation) == 1:
-            # A BARE LETTER needs nothing hardcoded: the window's fallback reads
-            # this same table by the text the key produced, so the two doors
-            # cannot disagree about a letter.
-            continue
-        spelt = AS_KEYSYM.get(notation)
-        if spelt is None:
-            gaps.append(
-                f"this check cannot spell `{notation}` as a keysym, so it cannot say whether "
-                "the window reaches it — teach `AS_KEYSYM` how, or the key is unchecked"
-            )
-            continue
-        keysym, shift = spelt
-        got = answered_by_the_window(keysym, shift)
-        if got != want:
-            said = f"`Press::{got}`" if got else "nothing at all"
-            gaps.append(
-                f"`{notation}` is `Press::{want}` in the footer and {said} in the window"
-            )
 
-    # 5) AND THE SHIFT HAS TO SURVIVE THE TRIP, in both doors.
-    # NARROWED TO THE BRANCH, by braces, and not to a count of characters above
-    # the lookup. Two things were wrong with the count. The branch explains
-    # itself by NAMING `Key::simple` and saying why it is wrong, so the check
-    # was reading its own evidence — `uncommented` answers that. And a window
-    # of 1600 characters moves whenever anything above it does: with the prose
-    # gone it reached into a neighbouring view's arm and found THAT view's
-    # `Key::simple`, which is a correct file failing.
+    # 2) THE ONE READER reads the WHOLE notation — no modifier dropped on the
+    #    way — out of that table.
+    reader = must(body_of(words, "press_of_key"), "`bluetooth_words::press_of_key`")
+    floor(len(reader), 200, "characters of `press_of_key`")
+    if "crate::bluetooth::OF_THE_VIEW" not in reader or "key.notation()" not in reader:
+        gaps.append("`press_of_key` no longer looks the key's whole notation up in the table")
+    if re.search(r"\bMods\s*\{", reader) or "Key::simple" in reader:
+        gaps.append("`press_of_key` rebuilds the key with fewer modifiers — a chord would be read as its letter")
+
+    # 3) THE FOOTER HANDS IT THE KEY, and reads nothing itself.
     branch = scope(footer, r"if self\.view\(\) == ViewState::Bluetooth")
-    if branch is None or "crate::bluetooth::OF_THE_VIEW" not in branch:
-        sys.exit("ERROR: the footer no longer looks the bluetooth table up by notation")
-    floor(len(branch), 400, "characters of the footer's bluetooth branch")
-    if "shift: key.mods.shift" not in branch:
-        gaps.append(
-            "the footer builds the notation without the shift, so `S-<right>` arrives as "
-            "`<right>` and the volume cannot be moved"
-        )
-    if "Key::simple" in branch:
-        gaps.append("the footer is back on `Key::simple`, which drops every modifier")
-    if "press_of(&event, self.mods)" not in window:
-        gaps.append("the window does not hand the modifiers to `press_of`")
-    if "self.mods = mods;" not in window:
-        gaps.append("the window's `update_modifiers` does not record them, so shift is never held")
-    if "self.mods = Modifiers::default();" not in window:
-        gaps.append("the window does not drop the modifiers on losing focus, so a shift can stick")
+    if branch is None:
+        sys.exit("ERROR: the footer's bluetooth key branch went away or changed shape")
+    if "crate::bluetooth_words::press_of_key(key)" not in branch:
+        gaps.append("the footer's bluetooth branch does not read its key through `press_of_key`")
+    for own in ("OF_THE_VIEW", ".notation()", "Key::simple", "Mods {"):
+        if own in branch:
+            gaps.append(f"the footer's bluetooth branch reads the key itself (`{own}`) — a second answer")
 
-    # 6) AND A CLICK IS THE `RET` OF ITS ROW, in both doors and with the one
+    # 4) THE WINDOW HANDS IT THE KEY THE DOOR READ, and reads nothing itself.
+    typed = must(body_of(window, "typed"), "the window's `typed`")
+    if "key_of(" not in typed or "press_of_key" not in typed:
+        gaps.append("the window's `typed` does not read its key through `key_of` and `press_of_key`")
+    if "utf8" in window:
+        gaps.append("the window reads the TEXT a key typed — a chord is a control character there")
+    if re.search(r"\bfn press_of\b", window):
+        gaps.append("the window keeps a key reader of its own beside the shared one")
+
+    # 5) AND A CLICK IS THE `RET` OF ITS ROW, in both doors and with the one
     #    exception. A pairing question opens over whatever was on the screen; a
     #    door that acted on a click there would put `yes` about an unknown
     #    device one movement of a hand away.
     arm = scope(footer, r"Some\(Click::Bluetooth\(n\)\)\s*=>")
-    block = scope(window, r"if let Some\(row\) = clicked")
+    block = body_of(window, "clicked")
     if not arm or not block:
         sys.exit("ERROR: the click path of one of the two doors went away or changed shape")
     for door, text in [("footer", arm), ("window", block)]:
@@ -19693,11 +20077,10 @@ let
         for gap in gaps:
             print("  - " + gap)
         print("")
-        print("       One view, two doors, one table. The footer reads the table and the")
-        print("       window copies part of it by hand, so the copy has to be checked or")
-        print("       it drifts — and both doors go on TEACHING the key that died.")
+        print("       One view, two doors, one table, ONE READER: the footer and the")
+        print("       window both hand the whole key to `bluetooth_words::press_of_key`.")
         sys.exit(1)
-    print(f"OK: {len(rows)} keys, two doors, and the shift survives both")
+    print(f"OK: {len(rows)} keys, one reader, two doors")
     PY
   '';
 
@@ -22295,6 +22678,12 @@ let
     # else. A bare "pair of short strings" pattern matches half the tables in
     # these files — measured: it produced `cmd-t`, `cmd-u` and `cmd-v` out of
     # things that are not commands at all.
+    # AND A THIRD: a buffer that binds a table it SHARES with its footer panel
+    # (`ronoctua_protocol::TRANSFERS_KEYS`), under the local leader. Its
+    # commands are the table's CHORDS, which are all `local_binding` binds —
+    # read there, by the table's name the buffer names.
+    protocol = uncommented((root_dir / "crates/ronoctua-protocol/src/lib.rs").read_text())
+    shared = 0
     for rs in sorted((root_dir / "buffers").rglob("*.rs")):
         if "target" in rs.parts:
             continue
@@ -22309,6 +22698,19 @@ let
         ids.update(re.findall(r'command:\s*"([a-z0-9-]+)"', source))
         for table in re.findall(r"KEYMAP:\s*&\[\(&str, &str\)\]\s*=\s*&\[(.*?)\n\];", source, re.S):
             ids.update(re.findall(r'\(\s*"[^"]+"\s*,\s*"([a-z0-9-]+)"\s*\)', table))
+        if "local_binding" in source:
+            for name in sorted(set(re.findall(r"\b([A-Z][A-Z_]*_KEYS)\b", source))):
+                m = re.search(
+                    r"pub const " + name + r":\s*&\[\(&str, &str\)\]\s*=\s*&\[(.*?)\n\];",
+                    protocol,
+                    re.S,
+                )
+                if m:
+                    found = re.findall(r'\(\s*"C-[^"]+"\s*,\s*"([a-z0-9-]+)"\s*\)', m.group(1))
+                    shared += len(found)
+                    ids.update(found)
+
+    floor(shared, 5, "chords of a table a buffer shares with its footer panel")
 
     floor(seen_files, 8, "buffer sources swept for a binding")
     floor(len(ids), 30, "buffer commands found")
@@ -22521,9 +22923,16 @@ let
       # is format SUPPORT, and a machine that cannot preview a video or read a
       # photograph is not a reduced distro. What stayed here is `-vlc-`, which
       # is a player — which is exactly the line.
+      #
+      # WAYDROID AND APPIMAGE-RUN are the software centre's two heavy supports
+      # (0,72 GB and 1,53 GB on their own, measured), `mkDefault full` in
+      # `nix/modules/profile.nix`. They are on this list because the CLI's
+      # wrapper names a tool only when its module is on: if it ever named
+      # one unconditionally, the reduced profile would carry it through the
+      # update runner, and nothing else would say so.
       for app in -android-studio- -google-chrome- -emacs-30 -vlc- \
                  -flutter- -dart- -rustc-1 -go-1 -noctua-iosevka-ttf-3 \
-                 -noctua-icon-theme-; do
+                 -noctua-icon-theme- -waydroid- -appimage-run; do
         grep -q -e "$app" ${full}/store-paths || {
           echo "ERROR: $app is not in the full profile — did the name change?" >&2
           failed=1
@@ -22556,8 +22965,12 @@ let
       # binary would fail if they left — the panels would simply say the
       # program is missing, on every reduced machine, for ever. This line is
       # what turns that into a build failure instead.
+      #
+      # FLATPAK TOO: it is support and not an application, on in both
+      # profiles — without it the reduced machine has no way to a graphical
+      # program the flake does not carry.
       for kept in -scroll- -ronoctua-0.1.0 -noctua-iosevka-ttf-nerdfonts- -ghostty- \
-                  -networkmanager- -systemd- -ffmpeg-full- -exiftool- \
+                  -networkmanager- -systemd- -ffmpeg-full- -exiftool- -flatpak- \
                   -ronoctua-buffer-glyphs- \
                   -ronoctua-buffer-unicode- -ronoctua-buffer-lucide- \
                   -ronoctua-buffer-memory- -ronoctua-buffer-keyboard- \
@@ -23016,6 +23429,1366 @@ let
       '';
 
   # -------------------------------------------------------------------
+  # The software centre — the person's own programs (invariant 6's dated
+  # exception), and the width of every door it opens
+  # -------------------------------------------------------------------
+
+  # TWO READINGS THE SOFTWARE CENTRE'S CHECKS SHARE, and the prelude does not
+  # have. Opened AFTER the prelude, never instead of it.
+  #
+  # * `product` cuts the test modules off, `pub(crate) mod testing` included.
+  #   The prelude's `without_tests` stops at `mod` right after the attribute,
+  #   so `appimage.rs` (a fake `unsquashfs`, an AppImage built in memory) and
+  #   `github.rs` (canned answers) would be read as product. Every test module
+  #   of the crate sits at the end of its file, after the product.
+  # * `strings_of` lists every string literal with where it begins and ends.
+  #   The needles here are flags, paths and program names, and every one of
+  #   them is a STRING — `code_of` empties them, and `uncommented` keeps them
+  #   but cannot say where one ends: a character literal like the one that
+  #   holds a double quote would open a string that never closes.
+  # * `parts` splits a call's arguments at the commas of its own level.
+  softwarePy = pkgs.writeText "ronoctua-software-checks.py" ''
+    import re as _re
+
+    def product(text):
+        m = _re.search(r"#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\b", text)
+        return text if m is None else text[: m.start()]
+
+    def is_test_file(path):
+        # A FILE THAT IS A TEST MODULE (`software/tests.rs`, declared by its
+        # parent as `#[cfg(test)] mod tests;`): `product` cuts a module
+        # written inline, and a whole file of tests has nothing to cut.
+        parent = path.parent
+        declared = [parent.with_suffix(".rs"), parent / "mod.rs", parent / "lib.rs", parent / "main.rs"]
+        pattern = r"#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+" + _re.escape(path.stem) + r"\s*;"
+        return any(d.is_file() and d != path and _re.search(pattern, d.read_text()) for d in declared)
+
+    def strings_of(text):
+        out, i, n = [], 0, len(text)
+        while i < n:
+            c = text[i]
+            if text.startswith("//", i):
+                j = text.find("\n", i)
+                i = n if j < 0 else j
+                continue
+            if text.startswith("/*", i):
+                j = text.find("*/", i + 2)
+                i = n if j < 0 else j + 2
+                continue
+            if c == "\x27":
+                m = _re.match(r"\x27(?:\\.|[^\\\x27])\x27", text[i:])
+                i += m.end() if m else 1
+                continue
+            if c == "r":
+                j = i + 1
+                while j < n and text[j] == "#":
+                    j += 1
+                if j < n and text[j] == "\"" and (j > i + 1 or not text[i - 1 : i].isalnum()):
+                    close = "\"" + "#" * (j - i - 1)
+                    end = text.find(close, j + 1)
+                    stop = n if end < 0 else end
+                    out.append((i, stop + len(close), text[j + 1 : stop]))
+                    i = stop + len(close)
+                    continue
+            if c == "\"":
+                j = i + 1
+                while j < n and text[j] != "\"":
+                    j += 2 if text[j] == "\\" else 1
+                out.append((i, j + 1, text[i + 1 : j]))
+                i = j + 1
+                continue
+            i += 1
+        return out
+
+    def parts(args):
+        out, depth, cur, i, n = [], 0, [], 0, len(args)
+        while i < n:
+            c = args[i]
+            if c == "\"":
+                j = i + 1
+                while j < n and args[j] != "\"":
+                    j += 2 if args[j] == "\\" else 1
+                cur.append(args[i : j + 1])
+                i = j + 1
+                continue
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+            elif c == "," and depth == 0:
+                out.append("".join(cur).strip())
+                cur = []
+                i += 1
+                continue
+            cur.append(c)
+            i += 1
+        if "".join(cur).strip():
+            out.append("".join(cur).strip())
+        return out
+  '';
+
+  # ANDROID'S DOOR IS FOUR UNITS WIDE, and each is one the crate starts.
+  #
+  # `nix/modules/android.nix` lets the person START four root units: prepare
+  # with one image or the other, erase, and read the device id Google asks
+  # for. `YES`, because there is no polkit agent in this session — so what
+  # buys the width back is that the rule names exactly what
+  # `crates/ronoctua-software/src/android.rs` starts, and nothing else.
+  #
+  # BOTH DIRECTIONS, the shape of `timedate-polkit-is-narrow`: a unit granted
+  # and never started is width nobody uses; a unit started and never granted
+  # is a Prepare that comes back refused on somebody's screen. The crate side
+  # is read from every `start_unit(…)` call, resolved through its constants
+  # and through `init_unit` × `AndroidImage::system_type`, so a third image
+  # or a fifth unit is seen on both sides or fails here.
+  #
+  # AND THE ALTERNATIVES ARE BRACKETED: `&&` binds tighter than `||`, and a
+  # bare disjunction of units grants every unit after the first to anyone
+  # for anything (`rescue.nix` shipped that once).
+  android-polkit-is-narrow =
+    let
+      config = self.nixosConfigurations.vm.config;
+      # THE UNITS THE SYSTEM DECLARES, so a rule naming one that does not
+      # exist — a typo, a template renamed — is a finding and not a door to
+      # nowhere. A template is declared as `name@`.
+      declared = builtins.filter (lib.hasPrefix "ronoctua-android") (
+        builtins.attrNames config.systemd.services
+      );
+    in
+    mkCheck "android-polkit-is-narrow" [ pkgs.python3 ] ''
+      export RONOCTUA_USER=${config.ronoctua.user}
+      export RONOCTUA_UNITS=${lib.escapeShellArg (lib.concatStringsSep " " declared)}
+      cat > rules.js <<'RULES'
+      ${config.security.polkit.extraConfig}
+      RULES
+      python3 - <<'END'
+      import os, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+      exec(open("${softwarePy}").read())
+
+      user = os.environ["RONOCTUA_USER"]
+      declared = set(os.environ["RONOCTUA_UNITS"].split())
+      src = pathlib.Path("${../crates/ronoctua-software/src}")
+      wrong = []
+
+      # WHAT THE CRATE STARTS. `uncommented` and never `code_of`: every unit
+      # name is a string literal. `product` cuts the tests, which start fake
+      # units by the dozen.
+      android = uncommented(product((src / "android.rs").read_text()))
+      order = uncommented(product((src / "order.rs").read_text()))
+      floor(len(android), 5000, "characters of android.rs")
+
+      def constant(name):
+          m = re.search(r"pub const " + name + r": &str = \"([^\"]+)\";", android)
+          return m.group(1) if m else None
+
+      # `init_unit` is a `format!` of one image's instance name, and the
+      # instances are `AndroidImage::system_type`'s answers.
+      init = must(body_of(android, "init_unit"), "`android::init_unit`")
+      shape = re.search(r"format!\(\s*\"([^\"{]*)\{[^}]*\}([^\"]*)\"", init)
+      images = must(
+          body_of(must(scope(order, r"impl AndroidImage\b"), "`impl AndroidImage`"), "system_type"),
+          "`AndroidImage::system_type`",
+      )
+      instances = re.findall(r"=>\s*\"([^\"]+)\"", images)
+      floor(len(instances), 2, "images `AndroidImage::system_type` names")
+      if not shape:
+          wrong.append("`init_unit` no longer builds its name with one `format!`; this check cannot read it")
+          inits = set()
+      else:
+          inits = {shape.group(1) + i + shape.group(2) for i in instances}
+
+      # EVERY `start_unit(…)`, resolved. One this check cannot resolve is a
+      # finding, not a skip: it is a unit nobody can say the rule covers.
+      started, calls = set(), 0
+      for m in re.finditer(r"(?<!fn )\bstart_unit\(", android):
+          calls += 1
+          args = parts(shut_at(android, m.end()))
+          unit = args[1] if len(args) > 1 else ""
+          if re.fullmatch(r"&?init_unit\(\s*\w+\s*\)", unit):
+              started |= inits
+          elif re.fullmatch(r"[A-Z_]+", unit) and constant(unit):
+              started.add(constant(unit))
+          else:
+              wrong.append(f"`start_unit` is called with `{unit}`, which this check cannot resolve to a unit")
+      floor(calls, 3, "calls of `android::start_unit`")
+
+      # AND THE VERB IS `start`: the one door to `systemctl` for a system
+      # unit is `start_argv`, and `is-active` asks nobody.
+      door = must(body_of(android, "start_unit"), "`android::start_unit`")
+      if "start_argv(unit)" not in door:
+          wrong.append("`start_unit` no longer goes through `start_argv`")
+      verbs = [s for _, _, s in strings_of(must(body_of(android, "start_argv"), "`android::start_argv`"))
+               if not s.startswith("-")]
+      if verbs != ["start"]:
+          wrong.append(f"`start_argv` asks systemctl for {verbs}, and the rule grants `start`")
+      for m in re.finditer(r"Call::new\(\s*systemctl\s*,", android):
+          argv = shut_at(android, m.end()).strip()
+          if not re.match(r"(start_argv|is_active_argv)\(", argv):
+              wrong.append(f"systemctl is run with `{argv[:60]}`, past `start_argv`")
+
+      # FILE-WIDE: WHAT THE SYSTEM GRANTS — the merged rules of the whole
+      # system are one JavaScript file; each rule is taken out by splitting at
+      # `polkit.addRule`, and the one naming our units is the one read.
+      text = uncommented(pathlib.Path("rules.js").read_text())
+      floor(len(text), 500, "characters of the merged polkit rules")
+      ours = [r for r in re.split(r"polkit\.addRule", text)[1:] if "ronoctua-android" in r]
+      if len(ours) != 1:
+          wrong.append(f"{len(ours)} rules mention ronoctua-android; there may be one")
+
+      def top_of(condition):
+          was = None
+          while was != condition:
+              was = condition
+              condition = re.sub(r"\([^()]*\)", " ", condition)
+          return condition
+
+      for rule in ours:
+          results = set(re.findall(r"polkit\.Result\.(\w+)", rule))
+          if results != {"YES"}:
+              wrong.append(f"the rule answers {sorted(results)}, and may only answer YES")
+          actions = set(re.findall(r"action\.id\s*==\s*\"([^\"]+)\"", rule))
+          if actions != {"org.freedesktop.systemd1.manage-units"}:
+              wrong.append(f"the rule is about {sorted(actions)}")
+          verbs = set(re.findall(r"lookup\(\"verb\"\)\s*==\s*\"([^\"]+)\"", rule))
+          if verbs != {"start"}:
+              wrong.append(f"the rule allows the verbs {sorted(verbs)}; the crate only ever starts")
+          users = set(re.findall(r"subject\.user\s*==\s*\"([^\"]+)\"", rule))
+          if users != {user}:
+              wrong.append(f"the rule is for {sorted(users)}, and may be for {user}")
+
+          granted = set(re.findall(r"lookup\(\"unit\"\)\s*==\s*\"([^\"]+)\"", rule))
+          for extra in sorted(granted - started):
+              wrong.append(f"granted and never started by the crate: {extra}")
+          for missing in sorted(started - granted):
+              wrong.append(f"started by the crate and never granted: {missing}")
+          for unit in sorted(granted):
+              stem = unit.removesuffix(".service")
+              name = stem.split("@", 1)[0] + "@" if "@" in stem else stem
+              if name not in declared:
+                  wrong.append(f"the rule grants {unit}, and the system declares no such unit")
+
+          body = re.search(r"if\s*\((.*?)\)\s*\{", rule, re.S)
+          if not body:
+              wrong.append("the rule has no condition at all")
+              continue
+          condition = body.group(1)
+          left = condition
+          for known in (
+              r"action\.id\s*==\s*\"[^\"]+\"",
+              r"action\.lookup\(\"(?:unit|verb)\"\)\s*==\s*\"[^\"]+\"",
+              r"subject\.user\s*==\s*\"[^\"]+\"",
+          ):
+              left = re.sub(known, "", left)
+          leftover = re.sub(r"[\s()&|]", "", left)
+          if leftover:
+              wrong.append(f"the condition tests something else as well: {leftover!r}")
+          if "||" in top_of(condition):
+              wrong.append("the units are OR-ed without brackets, so every unit after the first "
+                           "is granted for any action and any subject")
+
+      if wrong:
+          print("ERROR: Android's polkit rule is not narrow.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       There is no polkit agent in this session, so the rule answers YES and", file=sys.stderr)
+          print("       never asks. What buys that width back is that it names exactly the", file=sys.stderr)
+          print("       units ronoctua-software starts, the verb start, and one person.", file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: one rule, start of {len(started)} units the crate starts, for {user}, bracketed")
+      END
+    '';
+
+  # NIX-FLATPAK LEAVES THE PERSON'S APPS ALONE, on both of its sides.
+  #
+  # `flatpak.nix` imports nix-flatpak as a NixOS module AND as a Home Manager
+  # module, and both default to deciding things a person installed by hand is
+  # theirs to take back: `uninstallUnmanaged = true` would uninstall, at the
+  # next activation, every Flatpak the software view put in (`uninstallUnused`
+  # follows it for runtimes), and an update on activation or on nix-flatpak's
+  # own timer would be a second answer to "when does this machine change" —
+  # the distro's update sequence is the first (`flatpak-system`,
+  # `flatpak-user`). Read from the EVALUATED configuration of both profiles:
+  # a value set in a module that never loads is not a value the machine has.
+  nix-flatpak-leaves-your-apps-alone =
+    let
+      side = cfg: services: {
+        # nixpkgs has its own `services.flatpak`; only nix-flatpak's carries
+        # these options, so their absence means the module did not load.
+        imported = cfg ? uninstallUnmanaged;
+        uninstallUnmanaged = cfg.uninstallUnmanaged or null;
+        uninstallUnused = cfg.uninstallUnused or null;
+        onActivation = cfg.update.onActivation or null;
+        auto = cfg.update.auto.enable or null;
+        timer = services ? flatpak-managed-install-timer;
+      };
+      facts =
+        name:
+        let
+          c = self.nixosConfigurations.${name}.config;
+          home = c.home-manager.users.${c.ronoctua.user};
+        in
+        {
+          inherit name;
+          flatpak = c.services.flatpak.enable;
+          nixos = side c.services.flatpak c.systemd.services;
+          home = side (home.services.flatpak or { }) home.systemd.user.services;
+        };
+    in
+    mkCheck "nix-flatpak-leaves-your-apps-alone" [ pkgs.python3 ] ''
+      cat > facts.json <<'JSON'
+      ${builtins.toJSON (
+        map facts [
+          "noctua"
+          "minimal"
+        ]
+      )}
+      JSON
+      python3 - <<'END'
+      import json, sys
+
+      # PARSED: the facts are evaluated options, written as JSON by Nix.
+      machines = json.load(open("facts.json"))
+      wrong = []
+      if len(machines) != 2:
+          wrong.append(f"{len(machines)} machines were read, and there are two profiles")
+      for m in machines:
+          name = m["name"]
+          if not m["flatpak"]:
+              wrong.append(f"{name}: Flatpak is off, and it is on in both profiles")
+              continue
+          for where in ("nixos", "home"):
+              s = m[where]
+              said = f"{name}, the {'NixOS' if where == 'nixos' else 'Home Manager'} module"
+              if not s["imported"]:
+                  wrong.append(f"{said}: nix-flatpak is not imported")
+                  continue
+              for option, why in (
+                  ("uninstallUnmanaged", "every app the person installed goes at the next activation"),
+                  ("uninstallUnused", "runtimes the person's apps use are judged by a list that does not know them"),
+                  ("onActivation", "every rebuild updates Flatpaks behind the update sequence's back"),
+                  ("auto", "a timer of its own updates Flatpaks behind the update sequence's back"),
+              ):
+                  if s[option] is not False:
+                      wrong.append(f"{said}: `{option}` is {s[option]!r}; {why}")
+              if s["timer"]:
+                  wrong.append(f"{said}: the unit `flatpak-managed-install-timer` exists")
+
+      if wrong:
+          print("ERROR: nix-flatpak would decide about the person's own apps.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: {len(machines)} profiles, both modules, nothing uninstalled and nothing updated from there")
+      END
+    '';
+
+  # NOTHING SETS `GTK_THEME` — not the system, not a unit, not an override,
+  # not our Rust.
+  #
+  # The variable replaces an app's own theme with whatever it names: the
+  # defect the owner remembers, and what old tutorials pair with the dark
+  # extension. Measured on 2026-09-26 (`docs/ARCHITECTURE.md`, "o modo
+  # escuro"), today's libadwaita shrugs `Adwaita:dark` and `Adwaita-dark`
+  # off — which is no reason to set it: any other name still wins over the
+  # app. Dark reaches Flatpak apps through the settings portal and dconf.
+  #
+  # IT MATCHES SETTINGS, NOT THE WORD. The module header, `flatpak.rs`'s docs
+  # and a test fixture all say `GTK_THEME` on purpose; what fails is a place
+  # that GIVES it a value: an environment the evaluated system writes, a
+  # `flatpak override`, a string literal in any crate's product. The one
+  # literal allowed is the detector the advanced sheet uses to offer the
+  # REMOVAL (`flatpak::forces_gtk_theme`), and `--unset-env=GTK_THEME`.
+  flatpak-dark-is-never-forced =
+    let
+      forced =
+        name:
+        let
+          c = self.nixosConfigurations.${name}.config;
+          home = c.home-manager.users.${c.ronoctua.user};
+          says = v: lib.hasInfix "GTK_THEME" (toString v);
+          units =
+            kind: services:
+            lib.concatLists (
+              lib.mapAttrsToList (
+                unit: s:
+                lib.optional (
+                  (s.environment or { }) ? GTK_THEME || says (s.serviceConfig.Environment or "")
+                ) "the ${kind} unit ${unit}"
+              ) services
+            );
+          homeUnits = lib.concatLists (
+            lib.mapAttrsToList (
+              unit: s: lib.optional (says ((s.Service or { }).Environment or "")) "the Home Manager unit ${unit}"
+            ) home.systemd.user.services
+          );
+          overrides =
+            kind: all:
+            lib.concatLists (
+              lib.mapAttrsToList (
+                app: groups: lib.optional ((groups.Environment or { }) ? GTK_THEME) "the ${kind} override of ${app}"
+              ) all
+            );
+        in
+        map (w: "${name}: ${w}") (
+          lib.optional (c.environment.sessionVariables ? GTK_THEME) "environment.sessionVariables"
+          ++ lib.optional (c.environment.variables ? GTK_THEME) "environment.variables"
+          ++ lib.optional (c.systemd.globalEnvironment ? GTK_THEME) "systemd.globalEnvironment"
+          ++ lib.optional (says c.systemd.user.extraConfig) "systemd.user.extraConfig"
+          ++ units "system" c.systemd.services
+          ++ units "user" c.systemd.user.services
+          ++ overrides "system Flatpak" (c.services.flatpak.overrides or { })
+          ++ lib.optional (home.home.sessionVariables ? GTK_THEME) "home.sessionVariables"
+          ++ lib.optional (
+            home.systemd.user.sessionVariables ? GTK_THEME
+          ) "Home Manager's systemd.user.sessionVariables"
+          ++ homeUnits
+          ++ overrides "personal Flatpak" (home.services.flatpak.overrides or { })
+        );
+      evaluated = forced "noctua" ++ forced "minimal";
+    in
+    mkCheck "flatpak-dark-is-never-forced" [ pkgs.python3 ] ''
+      cat > evaluated.json <<'JSON'
+      ${builtins.toJSON evaluated}
+      JSON
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+      exec(open("${softwarePy}").read())
+
+      wrong = []
+
+      # PARSED: 1. THE EVALUATED SYSTEMS — Nix already asked every place a
+      #    value can be given in both profiles, and wrote the ones that give
+      #    one. This half sees a route no source sweep reaches — an upstream
+      #    module, a name built by interpolation.
+      for place in json.load(open("evaluated.json")):
+          wrong.append(f"{place} sets GTK_THEME")
+
+      # FILE-WIDE: 2. EVERY CRATE AND EVERY BUFFER, their product — a value can
+      #    be given anywhere, so every string literal is asked.
+      roots = [pathlib.Path("${../crates}"), pathlib.Path("${../buffers}")]
+      swept = 0
+      for root in roots:
+          for f in sorted(root.rglob("*.rs")):
+              if is_test_file(f):
+                  continue
+              text = product(f.read_text())
+              swept += 1
+              for at, end, s in strings_of(text):
+                  if "GTK_THEME" not in s:
+                      continue
+                  if s in ("--unset-env=GTK_THEME", "unset-env=GTK_THEME"):
+                      continue
+                  # A TEST ON TEXT FINDS THE VALUE; it does not give one. The
+                  # detector below is one, and so is the permissions page
+                  # tinting the line that forces it.
+                  if (re.search(r"\.(?:starts_with|ends_with|contains|strip_prefix)\(\s*$", text[:at])
+                          and text[end:].lstrip().startswith(")")):
+                      continue
+                  wrong.append(f"{f.relative_to(root)}: `{s}` in `{whose(text, at)}` gives GTK_THEME a value")
+      floor(swept, 300, "Rust sources swept")
+
+      # AND THE DETECTOR IS STILL THERE, and still only detects: the sheet
+      # needs it to offer the removal, and it may never become a writer.
+      flatpak = product((pathlib.Path("${../crates/ronoctua-software/src}") / "flatpak.rs").read_text())
+      detector = uncommented(must(body_of(flatpak, "forces_gtk_theme"), "`flatpak::forces_gtk_theme`"))
+      if not re.fullmatch(r"\s*lines\.iter\(\)\.any\(\|l\|\s*l\.starts_with\(\"env=GTK_THEME=\"\)\)\s*", detector):
+          wrong.append("`forces_gtk_theme` does more than answer whether GTK_THEME is forced")
+
+      # 3. OUR NIX, OUR SCRIPTS. `hashless`, so the headers that explain why
+      #    it is never set are prose and not a setting.
+      nix = pathlib.Path("${../nix}")
+      sources = sorted(p for p in nix.rglob("*") if p.suffix in (".nix", ".py", ".sh"))
+      sources += [pathlib.Path("${../flake.nix}")]
+      for p in sources:
+          for n, line in enumerate(hashless(p.read_text()).splitlines(), 1):
+              if "GTK_THEME" in line:
+                  wrong.append(f"{p.name}:{n}: `{line.strip()}` names GTK_THEME in code")
+      floor(len(sources), 80, "Nix, Python and shell sources swept")
+
+      if wrong:
+          print("ERROR: something forces GTK_THEME.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       GTK_THEME replaces an app's own theme with whatever it names. Dark", file=sys.stderr)
+          print("       comes through the settings portal and dconf; a forced value may only", file=sys.stderr)
+          print("       ever be removed.", file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: two profiles evaluated, {swept} Rust and {len(sources)} Nix sources, nothing sets GTK_THEME")
+      END
+    '';
+
+  # A WEB APP IS A WINDOW OF THE PERSON'S CHROME, and nothing else.
+  #
+  # `--app=<url>` in the person's own profile: no omnibox, no tabs, their
+  # logins. The four flags that look like the same thing and are not:
+  # `--kiosk` and `--start-fullscreen` are read by the FIRST Chrome of the
+  # session and lock every later window of ordinary browsing; `--user-data-dir`
+  # is a second browser with none of the person's logins; `--enable-features`
+  # REPLACES the wrapper's own (the last one on a command line wins).
+  #
+  # And what the `.desktop` runs is our CLI at its STABLE path with the slug
+  # — never a store path, which dies with the generation that wrote it, and
+  # never the address, whose quotes, `%` and `$` a `.desktop` line would
+  # read as its own grammar. The address is checked on the way in and on the
+  # way out: `javascript:`, `file:` and `data:` would open under `--app=` as
+  # readily as a page.
+  web-apps-are-never-kiosk = mkCheck "web-apps-are-never-kiosk" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+    exec(open("${softwarePy}").read())
+
+    src = pathlib.Path("${../crates/ronoctua-software/src}")
+    web = product((src / "web.rs").read_text())
+    floor(len(web), 5000, "characters of web.rs")
+    wrong = []
+
+    # FILE-WIDE: 1. NONE OF THE FOUR, anywhere in the crate's product — a flag
+    #    added by any module reaches Chrome all the same. The tests name all
+    #    four to say they are absent; `product` leaves them out.
+    FLAGS = ("--kiosk", "--start-fullscreen", "--user-data-dir", "--enable-features")
+    swept = 0
+    for f in sorted(src.rglob("*.rs")):
+        text = product(f.read_text())
+        swept += 1
+        for at, _, s in strings_of(text):
+            for flag in FLAGS:
+                if flag in s:
+                    wrong.append(f"{f.name}: `{s}` in `{whose(text, at)}`")
+    floor(swept, 20, "sources of the crate")
+
+    # 2. THE ONE ARGUMENT VECTOR: Chrome, the profile, `--app=` — and the
+    #    address made canonical again on its way out, because the `.desktop`
+    #    is the person's file and may have been edited by hand.
+    argv = must(body_of(web, "argv_for"), "`web::argv_for`")
+    made = sorted(s for _, _, s in strings_of(argv))
+    if made != ["--app={url}", "--profile-directory={profile}"]:
+        wrong.append(f"`argv_for` hands Chrome {made}, and a web app is `--profile-directory` and `--app=`")
+    if "canonical_url(url)" not in uncommented(argv):
+        wrong.append("`argv_for` no longer checks the address on its way out")
+    for door in ("open_argv", "once_argv"):
+        if "argv_for(" not in uncommented(must(body_of(web, door), f"`web::{door}`")):
+            wrong.append(f"`{door}` builds its own argument vector instead of `argv_for`")
+
+    # 3. THE ADDRESS GUARD is an ALLOW-list on the PARSED address.
+    guard = uncommented(must(body_of(web, "canonical_url"), "`web::canonical_url`"))
+    m = re.search(
+        r"let url = Url::parse\(.*?if\s*!\s*matches!\(\s*url\.scheme\(\)\s*,([^)]*)\)\s*\{\s*"
+        r"return\s+Err\(\s*Refusal::UrlScheme\s*\)",
+        guard,
+        re.S,
+    )
+    if not m:
+        wrong.append("`canonical_url` no longer refuses every scheme of the parsed address but an allowed few")
+    else:
+        allowed = set(re.findall(r"\"([^\"]*)\"", m.group(1)))
+        if allowed != {"http", "https"}:
+            wrong.append(f"`canonical_url` lets {sorted(allowed)} through; only http and https may open")
+
+    # 4. THE `.desktop` RUNS OUR CLI BY ITS STABLE PATH, WITH THE SLUG.
+    entry = must(body_of(web, "desktop_text"), "`web::desktop_text`")
+    lines = []
+    for _, _, s in strings_of(entry):
+        lines += re.sub(r"\\\n\s*", "", s).split("\\n")
+    execs = [l for l in lines if l.startswith("Exec=")]
+    if execs != ["Exec={SOFTWARE} web-open {slug}"]:
+        wrong.append(f"the .desktop runs {execs}, and it may run `{{SOFTWARE}} web-open {{slug}}`")
+    if not re.search(r"\bslug\s*=\s*e\.slug\b", uncommented(entry)):
+        wrong.append("the `{slug}` of the Exec line is not the web app's slug")
+    software = re.search(r"pub const SOFTWARE: &str = \"([^\"]*)\";", uncommented(web))
+    if not software or software.group(1) != "/run/current-system/sw/bin/ronoctua-software":
+        wrong.append("`SOFTWARE` is not /run/current-system/sw/bin/ronoctua-software")
+    others = [s for _, _, s in strings_of(web) if "/nix/store" in s
+              or re.search(r"(?<!Try)Exec=", s) and "{SOFTWARE} web-open {slug}" not in s]
+    if others:
+        wrong.append(f"web.rs writes another Exec or a store path: {others}")
+
+    # 5. AND `web-open` IS WHERE THE CLI BECOMES CHROME, through `open_argv`.
+    cli = uncommented(product((src / "cli.rs").read_text()))
+    opener = must(body_of(cli, "web_open"), "`cli::web_open`")
+    if "web::open_argv(" not in opener:
+        wrong.append("the CLI's `web-open` no longer opens through `web::open_argv`")
+
+    if wrong:
+        print("ERROR: a web app could open as something other than a window of the person's Chrome.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       `--kiosk` and `--start-fullscreen` lock the whole Chrome of the session,", file=sys.stderr)
+        print("       `--user-data-dir` loses the person's logins, `--enable-features` replaces", file=sys.stderr)
+        print("       the wrapper's own. A web app is `--profile-directory` and `--app=`.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {swept} sources, one argument vector, http and https only, the CLI by its stable path")
+    END
+  '';
+
+  # THE PERSON'S PROGRAMS STAY IN THE PERSON'S HOME.
+  #
+  # Invariant 6's exception is exactly as wide as `$HOME`: the user's Nix
+  # profile, the `--user` Flatpak installation, `~/Applications`, the web
+  # apps' `.desktop` files. What the crate may not do is reach past it — ask
+  # for someone else's rights, touch the SYSTEM installation, or write under
+  # `/etc`, `/usr` or `/var`. The system's Flatpaks move in exactly one
+  # place: the root step `flatpak-system` of `assets/updates.nix`.
+  #
+  # THE PATHS OUTSIDE THE HOME THE PRODUCT NAMES ARE AN ALLOW-LIST, each with
+  # how it is used: `/var/lib/waydroid` is only ever asked whether
+  # `waydroid.cfg` exists or read (the image is root's, and the init unit is
+  # the only way to it); `/var/lib/flatpak` is only the system catalogue the
+  # offline search reads when the person has none; `/etc` is only bound READ-
+  # ONLY into a trial's sandbox, whose one writable bind is its own throwaway
+  # home.
+  software-stays-in-the-home =
+    let
+      steps = (import ../assets/updates.nix).steps;
+    in
+    mkCheck "software-stays-in-the-home" [ pkgs.python3 ] ''
+      cat > steps.json <<'JSON'
+      ${builtins.toJSON steps}
+      JSON
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+      exec(open("${softwarePy}").read())
+
+      src = pathlib.Path("${../crates/ronoctua-software/src}")
+      wrong = []
+
+      # FILE-WIDE: 1. EVERY STRING OF THE PRODUCT — an escalation or a path
+      #    anywhere in the crate is the question, whichever module holds it.
+      ESCALATES = re.compile(r"(?:^|[/\s])(?:sudo|pkexec|doas|run0)(?:\s|$)")
+      WIDER = ("--system", "--installation")
+      OUTSIDE = re.compile(r"/(?:etc|usr|var|opt|root|boot|srv|nix/var)(?:/|$)")
+      ALLOWED = {
+          ("android.rs", "/var/lib/waydroid"): "system",
+          ("appstream.rs", "/var/lib/flatpak"): None,
+          ("trial.rs", "/etc"): "sandbox_args",
+      }
+      seen, swept = set(), 0
+      for f in sorted(src.rglob("*.rs")):
+          text = product(f.read_text())
+          swept += 1
+          for at, _, s in strings_of(text):
+              where = f"{f.name}: `{s}` in `{whose(text, at)}`"
+              if ESCALATES.search(s):
+                  wrong.append(where + " asks for another user's rights")
+              if any(s == w or s.startswith(w + "=") for w in WIDER):
+                  wrong.append(where + " reaches past the person's own installation")
+              if OUTSIDE.match(s):
+                  key = (f.name, s)
+                  if key not in ALLOWED:
+                      wrong.append(where + " is a path outside the home")
+                  elif ALLOWED[key] and whose(text, at) != ALLOWED[key]:
+                      wrong.append(where + f" is allowed only inside `{ALLOWED[key]}`")
+                  seen.add(key)
+      floor(swept, 20, "sources of the crate")
+      for key in sorted(set(ALLOWED) - seen):
+          wrong.append(f"{key[0]} no longer names {key[1]}; take it off this check's list")
+
+      # 2. AND EACH ALLOWED PATH IS ONLY READ.
+      android = uncommented(product((src / "android.rs").read_text()))
+      uses = 0
+      for m in re.finditer(r"\bplaces\.waydroid\b", android):
+          uses += 1
+          after = android[m.end():]
+          before = android[: m.start()].rstrip()
+          if not (re.match(r"\.join\(\"waydroid\.cfg\"\)\s*\.exists\(\)", after)
+                  or before.endswith("read_to_string(")):
+              wrong.append("android.rs does more with /var/lib/waydroid than read `waydroid.cfg`: "
+                           + (android[m.start() : m.end() + 40].split("\n")[0]))
+      floor(uses, 2, "readings of /var/lib/waydroid")
+      appstream = uncommented(product((src / "appstream.rs").read_text()))
+      roots = [m.start() for m in re.finditer(r"\bSYSTEM_ROOT\b", appstream)]
+      floor(len(roots), 2, "mentions of the system catalogue")
+      for at in roots:
+          line = appstream[appstream.rfind("\n", 0, at) + 1 : appstream.find("\n", at)]
+          if not ("pub const SYSTEM_ROOT" in line or "source_under(Path::new(SYSTEM_ROOT))" in line):
+              wrong.append(f"appstream.rs uses /var/lib/flatpak past the catalogue it reads: {line.strip()}")
+      under = must(body_of(appstream, "source_under"), "`appstream::source_under`")
+      if re.search(r"\b(write|create|remove|rename|OpenOptions)\w*\(", under):
+          wrong.append("`source_under` writes; it may only name the system catalogue")
+
+      # THE SANDBOX: every system path bound READ-ONLY, and the one writable
+      # bind is the trial's own home.
+      trial = product((src / "trial.rs").read_text())
+      sandbox = must(body_of(trial, "sandbox_args"), "`trial::sandbox_args`")
+      lits = strings_of(sandbox)
+      floor(len(lits), 20, "strings of the sandbox's arguments")
+      # A bind's SOURCE is the literal written right after it; a variable
+      # there (the home, a socket) is read by its own rule below.
+      for k, (_, end, option) in enumerate(lits):
+          if option not in ("--bind", "--bind-try", "--dev-bind", "--dev-bind-try"):
+              continue
+          follows = k + 1 < len(lits) and re.fullmatch(r"[\s,]*", sandbox[end : lits[k + 1][0]])
+          source = lits[k + 1][2] if follows else None
+          if option == "--dev-bind-try" and source != "/dev/dri":
+              wrong.append(f"the sandbox binds the device {source or 'named by a variable'}")
+          elif option != "--dev-bind-try" and source is not None:
+              wrong.append(f"the sandbox binds {source} WRITABLE")
+      if uncommented(sandbox).count("\"--bind\"") != 1 or not re.search(
+          r"\"--bind\"\.to_owned\(\),\s*home\.clone\(\),\s*home\.clone\(\)", uncommented(sandbox)
+      ) or "let home = r.home." not in uncommented(sandbox):
+          wrong.append("the sandbox's one writable bind is no longer the trial's own home")
+
+      # 3. FLATPAK: `--user` on every argument vector, and no call around them.
+      flatpak = product((src / "flatpak.rs").read_text())
+      code = uncommented(flatpak)
+      builders = re.findall(r"pub fn (\w+_argv)\b", code)
+      floor(len(builders), 10, "flatpak argument builders")
+      for b in builders:
+          if "--user" not in [s for _, _, s in strings_of(must(body_of(flatpak, b), f"`flatpak::{b}`"))]:
+              wrong.append(f"`flatpak::{b}` does not carry --user")
+      calls = 0
+      for m in re.finditer(r"Call::new\(\s*program\s*,", code):
+          calls += 1
+          argv = shut_at(code, m.end()).strip()
+          if not (re.match(r"\w+_argv\(", argv) or (argv == "args" and whose(code, m.start()) == "transact")):
+              wrong.append(f"flatpak is run with `{argv[:60]}`, past the builders")
+      for m in re.finditer(r"(?<!fn )\btransact\(", code):
+          calls += 1
+          args = parts(shut_at(code, m.end()))
+          if len(args) < 3 or not re.match(r"\w+_argv\(", args[2]):
+              wrong.append(f"a flatpak transaction runs `{args[2] if len(args) > 2 else args}`, past the builders")
+      floor(calls, 10, "flatpak calls")
+      for f in sorted(src.rglob("*.rs")):
+          if f.name == "flatpak.rs":
+              continue
+          for m in re.finditer(r"\btools\.flatpak\b(?!\.is_(?:some|none)\(\))", uncommented(product(f.read_text()))):
+              wrong.append(f"{f.name} reaches flatpak itself; only flatpak.rs runs it, through its builders")
+
+      # PARSED: 4. THE ONE `flatpak update --system` — the update table, as
+      #    Nix evaluated it.
+      steps = json.load(open("steps.json"))
+      floor(len(steps), 15, "update steps")
+      system = [s for s in steps if s.get("program") == "flatpak" or s.get("package") == "flatpak"
+                or any(a == w or a.startswith(w + "=") for a in s.get("run", []) for w in WIDER)]
+      # BY WHAT IT RUNS, and not by its id: the id lives in `assets/updates.nix`
+      # alone (`update-has-one-list`).
+      sanctioned = {"root": True, "package": "flatpak", "program": "flatpak",
+                    "run": ["update", "--system", "--noninteractive", "-y"]}
+      if len(system) != 1 or any(system[0].get(k) != v for k, v in sanctioned.items()):
+          wrong.append("the update table moves the system's Flatpaks in "
+                       + ", ".join(f"`{s.get('id')}` ({s.get('run')})" for s in system)
+                       + "; the one sanctioned step is the root `flatpak-system`: flatpak update --system --noninteractive -y")
+
+      if wrong:
+          print("ERROR: the software centre reaches past the person's home.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       Invariant 6's exception is the person's own programs, under $HOME: the", file=sys.stderr)
+          print("       Nix profile, the --user installation, ~/Applications. The system's", file=sys.stderr)
+          print("       Flatpaks move only in the root update step.", file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: {swept} sources, {len(builders)} flatpak builders all --user, one system step")
+      END
+    '';
+
+  # ONE CRATE RUNS THE SOFTWARE CENTRE'S PROGRAMS.
+  #
+  # `ronoctua-software` is the only code that runs `flatpak`, `nix profile`,
+  # `appimage-run`, `unsquashfs`, `waydroid` and the trials' `bwrap` and
+  # `ronoctua-try-*` units — the shape `one-syncthing-boundary` keeps for
+  # Syncthing. The shell and the queue reach them through the library's types
+  # and the CLI the queue runs; a second caller would be a second place that
+  # has to know `--user`, the lanes and the refusals.
+  #
+  # WHAT IS NOT A CROSSING: the launcher running an installed app's
+  # `.desktop` line (`foreign.rs`, `apps.rs`). A Flatpak export's
+  # `Exec=flatpak run …` is the app's own line, read from its file — no
+  # program name is written in our code for it.
+  one-software-boundary = mkCheck "one-software-boundary" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+    exec(open("${softwarePy}").read())
+
+    crates = pathlib.Path("${../crates}")
+    home = crates / "ronoctua-software"
+    wrong = []
+
+    # FILE-WIDE: a boundary is broken by a NAME anywhere outside it, so each
+    # file is the question; `product` leaves the tests out.
+    #
+    # `RONOCTUA_NIX` is not on the list: `ronoctua-memory` asks Nix what the
+    # store weighs by the same variable, and that is not a program of the
+    # software centre. What is, is `nix profile`, and that is looked for by
+    # its words.
+    PROGRAMS = ("flatpak", "waydroid", "appimage-run", "unsquashfs", "bwrap")
+    VARIABLES = ("RONOCTUA_FLATPAK", "RONOCTUA_WAYDROID", "RONOCTUA_APPIMAGE_RUN",
+                 "RONOCTUA_UNSQUASHFS", "RONOCTUA_BWRAP")
+    PROFILE = ("add", "install", "remove", "upgrade", "rollback", "wipe-history", "list", "history")
+    swept = 0
+    for f in sorted(crates.rglob("*.rs")):
+        if home in f.parents:
+            continue
+        text = product(f.read_text())
+        lits = strings_of(text)
+        swept += 1
+        for k, (at, end, s) in enumerate(lits):
+            where = f"{f.relative_to(crates)}: `{s}` in `{whose(text, at)}`"
+            if s.rsplit("/", 1)[-1] in PROGRAMS:
+                wrong.append(where + " names a program only ronoctua-software runs")
+            if s in VARIABLES:
+                wrong.append(where + " reads a tool only ronoctua-software runs")
+            if s.startswith("ronoctua-try-") or s == "trial-exec":
+                wrong.append(where + " reaches a trial, which is ronoctua-software's")
+            if re.search(r"\bnix profile\b", s):
+                wrong.append(where + " runs `nix profile`")
+            if (s == "profile" and k + 1 < len(lits) and lits[k + 1][2] in PROFILE
+                    and re.fullmatch(r"[\s,]*", text[end : lits[k + 1][0]])):
+                wrong.append(where + f" runs `nix profile {lits[k + 1][2]}`")
+    floor(swept, 300, "sources outside ronoctua-software")
+
+    # AND THE BOUNDARY IS WHERE IT SAYS: the crate reads every one of those
+    # tools from its environment in ONE place.
+    lib = uncommented(product((home / "src" / "lib.rs").read_text()))
+    reader = must(body_of(lib, "from_env"), "`Tools::from_env`")
+    for name in VARIABLES:
+        if f"\"{name}\"" not in reader:
+            wrong.append(f"`Tools::from_env` no longer reads {name}; has the boundary moved?")
+
+    # AND OUR NIX GIVES THOSE TOOLS A VALUE IN ONE TABLE. `hashless`, so a
+    # header explaining the table is prose; and a VALUE, so the nested loop
+    # naming three of them to leave them out (`removeAttrs`) is not a second
+    # table.
+    nix = pathlib.Path("${../nix}")
+    table = sorted(nix.rglob("*.nix"))
+    floor(len(table), 50, "Nix files swept")
+    for p in table:
+        if p.name == "software-tools.nix":
+            continue
+        code = hashless(p.read_text())
+        for name in VARIABLES:
+            if re.search(r"\b" + name + r"\s*=(?!=)|--set(?:-default)?\s+" + name + r"\b", code):
+                wrong.append(f"{p.relative_to(nix)} gives {name} a value; the one table is nix/software-tools.nix")
+
+    if wrong:
+        print("ERROR: the software centre's programs are run from outside ronoctua-software.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       The shell and the queue go through the library and the CLI. A second", file=sys.stderr)
+        print("       caller is a second place that has to know --user, the lanes and the", file=sys.stderr)
+        print("       refusals.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {swept} sources outside the crate, none of them runs its programs")
+    END
+  '';
+
+  # WHAT THE SOFTWARE CENTRE STARTS IS THE PERSON'S, AND MAY DIE ALONE.
+  #
+  # Three argument vectors decide where an install, a trial and Android's
+  # session live, and each is a pure function tested as data:
+  #
+  # * the QUEUE runs the CLI as `systemd-run --user --scope --quiet --collect
+  #   --slice=app.slice -p OOMPolicy=kill -- <cli> run --progress`
+  #   (`ronoctua-transfers/src/software.rs`). `app.slice` is where the OOM
+  #   killer looks first and not the desktop's `session.slice`; `OOMPolicy=kill`
+  #   takes the order down and not the queue, whose own policy is `stop`;
+  #   `--collect`, or a scope killed for memory stays listed as failed until
+  #   the session ends.
+  # * a TRIAL is `ronoctua-try-<key>.service`, a transient USER service in
+  #   `app.slice`, `--collect`ed, with no new privileges.
+  # * Android's session is the same shape, one unit of the person's.
+  #
+  # And the queue's unit hands it `systemd-run` by path: without it the
+  # engine falls back to the bare name, which a unit's `PATH` may not have.
+  software-unit-is-narrow =
+    let
+      env = self.nixosConfigurations.vm.config.systemd.user.services.ronoctua-transfers.environment;
+      unit = {
+        systemdRunByPath =
+          env ? RONOCTUA_SYSTEMD_RUN
+          && lib.hasPrefix "${builtins.storeDir}/" env.RONOCTUA_SYSTEMD_RUN
+          && lib.hasSuffix "/bin/systemd-run" env.RONOCTUA_SYSTEMD_RUN;
+        software = env ? RONOCTUA_SOFTWARE;
+      };
+    in
+    mkCheck "software-unit-is-narrow" [ pkgs.python3 ] ''
+      cat > unit.json <<'JSON'
+      ${builtins.toJSON unit}
+      JSON
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+      exec(open("${softwarePy}").read())
+
+      wrong = []
+
+      # 1. THE QUEUE: the whole vector, in order — the program and the CLI as
+      #    the two names they are, every flag as the string it is.
+      queue = product(pathlib.Path("${../crates/ronoctua-transfers/src}/software.rs").read_text())
+      line = must(body_of(queue, "command_line"), "`software::command_line`")
+      said = [m.group(1) if m.group(1) is not None else m.group(2)
+              for m in re.finditer(r"\"([^\"]*)\"|\b(systemd_run|software)\b", uncommented(line))]
+      want = ["systemd_run", "--user", "--scope", "--quiet", "--collect", "--slice=app.slice",
+              "-p", "OOMPolicy=kill", "--", "software", "run", "--progress"]
+      if said != want:
+          wrong.append(f"the queue runs {said}; it has to be {want}")
+      if "command_line(&systemd_run(), &software)" not in uncommented(queue):
+          wrong.append("the queue no longer spawns the vector `command_line` builds")
+      if "\"RONOCTUA_SYSTEMD_RUN\"" not in uncommented(must(body_of(queue, "systemd_run"), "`software::systemd_run`")):
+          wrong.append("the queue no longer takes systemd-run from RONOCTUA_SYSTEMD_RUN")
+
+      # PARSED: what the evaluated unit hands the queue.
+      unit = json.load(open("unit.json"))
+      if not unit["systemdRunByPath"]:
+          wrong.append("the queue's unit does not hand it systemd-run by store path")
+      if not unit["software"]:
+          wrong.append("the queue's unit does not name the CLI (RONOCTUA_SOFTWARE)")
+
+      # 2. A TRIAL.
+      src = pathlib.Path("${../crates/ronoctua-software/src}")
+      trial = product((src / "trial.rs").read_text())
+      launch = must(body_of(trial, "launch_argv"), "`trial::launch_argv`")
+      lits = [s for _, _, s in strings_of(launch)]
+      floor(len(lits), 8, "strings of a trial's systemd-run")
+      for flag in ("--user", "--collect", "--"):
+          if flag not in lits:
+              wrong.append(f"a trial's systemd-run lost `{flag}`")
+      if [s for s in lits if s.startswith("--slice")] != ["--slice=app.slice"]:
+          wrong.append(f"a trial is not in app.slice: {[s for s in lits if s.startswith('--slice')]}")
+      properties = {lits[k + 1] for k, s in enumerate(lits[:-1]) if s == "-p"}
+      if properties != {"NoNewPrivileges=yes", "OOMPolicy=kill", "ExitType=cgroup"}:
+          wrong.append(f"a trial's properties are {sorted(properties)}")
+      if any(s in ("--system", "--scope") or s.startswith(("--uid", "--gid")) for s in lits):
+          wrong.append("a trial is started as something other than the person's own service")
+      if not re.search(r"format!\(\s*\"--unit=\{\}\"\s*,\s*unit_of\(key\)\s*\)", uncommented(launch)):
+          wrong.append("a trial's unit is not named by `unit_of`")
+      named = uncommented(must(body_of(trial, "unit_of"), "`trial::unit_of`"))
+      prefix = re.search(r"pub const UNIT_PREFIX: &str = \"([^\"]*)\";", uncommented(trial))
+      if "{UNIT_PREFIX}{key}.service" not in named or not prefix or prefix.group(1) != "ronoctua-try-":
+          wrong.append("a trial's unit is not `ronoctua-try-<key>.service`")
+      runs = re.findall(r"Call::new\(\s*systemd_run\s*,\s*(\w+)\(", uncommented(trial))
+      if runs != ["launch_argv"]:
+          wrong.append(f"trial.rs runs systemd-run with {runs}, and `launch_argv` is the one")
+
+      # 3. ANDROID'S SESSION: the person's, in app.slice, collected.
+      android = product((src / "android.rs").read_text())
+      session = [s for _, _, s in strings_of(must(body_of(android, "session_start_argv"), "`android::session_start_argv`"))]
+      for flag in ("--user", "--collect", "--slice=app.slice"):
+          if flag not in session:
+              wrong.append(f"Android's session lost `{flag}`")
+
+      if wrong:
+          print("ERROR: what the software centre starts is not narrow.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       An order, a trial and Android's session belong in app.slice, as the", file=sys.stderr)
+          print("       person's own units, killed alone when memory runs out, and collected.", file=sys.stderr)
+          raise SystemExit(1)
+      print("OK: the queue's scope, a trial's unit and Android's session, all in app.slice and collected")
+      END
+    '';
+
+  # THE UNITS THAT LAUNCH AND INSTALL SEE THE SESSION'S `PATH`.
+  #
+  # NixOS gives every unit five packages on `PATH` unless told otherwise, and
+  # four of ours exist to find what the PERSON has: the footer opens a
+  # `.desktop` whose `Exec=` is a bare name (everything in the Nix profile,
+  # every Flatpak export's `flatpak run`), the queue is the parent of what an
+  # install starts, and the update's two units run the `binary` steps. Off,
+  # and with no `path` of their own, they write no `Environment=PATH` and
+  # inherit the user manager's, built from `environment.profiles`.
+  #
+  # Read from the RENDERED unit as well as the option: a `path = [ … ]`
+  # added anywhere writes a `PATH` with `enableDefaultPath` still off. The
+  # lifeline is the control — it keeps its own `PATH`, and a probe that
+  # cannot see that one is not reading units at all.
+  session-units-inherit-the-session-path =
+    let
+      c = self.nixosConfigurations.vm.config;
+      probe = name: {
+        inherit name;
+        defaultPath = c.systemd.user.services.${name}.enableDefaultPath;
+        declaresPath = c.systemd.user.services.${name}.environment ? PATH;
+        writesPath = lib.any (
+          l: lib.hasPrefix "Environment=\"PATH=" l || lib.hasPrefix "Environment=PATH=" l
+        ) (lib.splitString "\n" c.systemd.user.units."${name}.service".text);
+      };
+      units = map probe [
+        "ronoctua-footer"
+        "ronoctua-transfers"
+        "ronoctua-update"
+        "ronoctua-update-rehearsal"
+      ];
+      control = probe "ronoctua-lifeline";
+    in
+    mkCheck "session-units-inherit-the-session-path" [ pkgs.python3 ] ''
+      cat > units.json <<'JSON'
+      ${builtins.toJSON { inherit units control; }}
+      JSON
+      python3 - <<'END'
+      import json, sys
+
+      # PARSED: the evaluated units, written as JSON by Nix.
+      facts = json.load(open("units.json"))
+      wrong = []
+      if len(facts["units"]) != 4:
+          wrong.append(f"{len(facts['units'])} units were read, and there are four")
+      for u in facts["units"]:
+          if u["defaultPath"]:
+              wrong.append(f"{u['name']}: `enableDefaultPath` is on")
+          if u["declaresPath"]:
+              wrong.append(f"{u['name']}: the unit declares a PATH of its own")
+          if u["writesPath"]:
+              wrong.append(f"{u['name']}: the rendered unit writes Environment=PATH")
+      if not facts["control"]["writesPath"]:
+          wrong.append("the lifeline's unit shows no PATH either, so this probe is not reading units")
+
+      if wrong:
+          print("ERROR: a unit that launches or installs has a PATH of its own.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       A unit's default PATH is five packages. The footer would open nothing", file=sys.stderr)
+          print("       from the Nix profile or Flatpak, and every `binary` update step would", file=sys.stderr)
+          print("       be skipped as missing.", file=sys.stderr)
+          raise SystemExit(1)
+      print("OK: four units inherit the session's PATH, and the lifeline keeps its own")
+      END
+    '';
+
+  # WAYDROID'S CONTAINER WAITS FOR ITS IMAGE.
+  #
+  # Upstream's `waydroid-container.service` starts at boot and FAILS with no
+  # image, and a failed unit is a `degraded` system — which is exactly when
+  # nix-flatpak's Home Manager activation skips, in silence. So it SKIPS
+  # instead, on the file `waydroid init` writes last; and the init unit
+  # skips once that file exists, so a second Prepare is not a second
+  # gigabyte over the first.
+  #
+  # THE SAME FILE on three sides: the two units' conditions, and what
+  # `android.rs` calls prepared (`Places::system` + `waydroid.cfg`). A module
+  # that moved it would leave the screen saying "prepared" over a container
+  # that never starts.
+  waydroid-waits-for-its-image =
+    let
+      c = self.nixosConfigurations.vm.config;
+      # THE CONDITION LINES ONLY, without the rest of the unit's context — the
+      # unit text names Waydroid's store path, and this check has no use for
+      # 0.72 GB of it.
+      conditions =
+        unit:
+        map builtins.unsafeDiscardStringContext (
+          builtins.filter (lib.hasPrefix "Condition") (lib.splitString "\n" c.systemd.units.${unit}.text)
+        );
+      facts = {
+        android = c.ronoctua.software.android;
+        option = c.systemd.services.waydroid-container.unitConfig.ConditionPathExists or null;
+        container = conditions "waydroid-container.service";
+        init = conditions "ronoctua-android-init@.service";
+      };
+    in
+    mkCheck "waydroid-waits-for-its-image" [ pkgs.python3 ] ''
+      cat > facts.json <<'JSON'
+      ${builtins.toJSON facts}
+      JSON
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+      exec(open("${softwarePy}").read())
+
+      wrong = []
+
+      # WHAT THE CRATE CALLS PREPARED: the machine's root, and the file.
+      android = uncommented(product(pathlib.Path("${../crates/ronoctua-software/src}/android.rs").read_text()))
+      places = must(body_of(android, "system"), "`Places::system`")
+      root = re.search(r"waydroid:\s*PathBuf::from\(\"([^\"]+)\"\)", places)
+      floor(len(re.findall(r"places\.waydroid\.join\(\"waydroid\.cfg\"\)", android)), 2,
+            "places where android.rs asks whether Android is prepared")
+      if not root:
+          wrong.append("`Places::system` no longer names Waydroid's root")
+          raise SystemExit("ERROR: " + wrong[0])
+      configured = root.group(1).rstrip("/") + "/waydroid.cfg"
+
+      # PARSED: the evaluated units' condition lines, written by Nix.
+      facts = json.load(open("facts.json"))
+      if not facts["android"]:
+          wrong.append("Android is off on the full profile's VM, so nothing here was read")
+      if facts["option"] != configured:
+          wrong.append(f"waydroid-container's condition is {facts['option']!r}, and Android is prepared at {configured}")
+      if f"ConditionPathExists={configured}" not in facts["container"]:
+          wrong.append(f"the rendered waydroid-container.service does not wait for {configured}: {facts['container']}")
+      if f"ConditionPathExists=!{configured}" not in facts["init"]:
+          wrong.append(f"the init unit does not skip once {configured} exists: {facts['init']}")
+
+      if wrong:
+          print("ERROR: Waydroid's container does not wait for its image.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       Started with no image it fails, a failed unit is a degraded system, and", file=sys.stderr)
+          print("       a degraded system is when nix-flatpak's activation skips in silence.", file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: the container waits for {configured}, and Prepare stops once it is there")
+      END
+    '';
+
+  # THE NIX SEARCH INDEX IS WHOLE.
+  #
+  # A short index is a search that says "nothing found" about programs that
+  # exist, and nothing on screen tells the two apart. The writer
+  # (`nix/scripts/software-index.py`) refuses to write fewer than its FLOOR
+  # and stamps a header with its format and its count; the reader
+  # (`nix_index.rs`) refuses a header it does not know and looks rows up by a
+  # binary search over sorted attributes. This reads the BUILT index against
+  # both: the header, the count against the rows, the floor, the order, the
+  # columns — and the revision, which has to be the system's own nixpkgs.
+  nix-index-is-whole =
+    let
+      index = self.packages.${system}.software-nix-index;
+    in
+    mkCheck "nix-index-is-whole" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import ast, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      wrong = []
+
+      # PARSED: WHAT THE WRITER PROMISES — the generator is read by Python's
+      # own parser — a `#` inside its header string would cut a line for
+      # `hashless` — and only its constants and its header are taken.
+      tree = ast.parse(pathlib.Path("${../nix/scripts/software-index.py}").read_text())
+      consts = {t.id: ast.literal_eval(n.value) for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                for t in n.targets if isinstance(t, ast.Name) and t.id in ("FORMAT", "FLOOR")}
+      heads = [v.value for n in ast.walk(tree) if isinstance(n, ast.JoinedStr)
+               for v in n.values[:1] if isinstance(v, ast.Constant) and str(v.value).startswith("#")]
+      if set(consts) != {"FORMAT", "FLOOR"} or len(heads) != 1:
+          raise SystemExit("ERROR: the generator's FORMAT, FLOOR or header went away")
+      writer = heads[0].split("\t")[0]
+      floor(consts["FLOOR"], 1000, "packages the generator's FLOOR demands")
+
+      # FILE-WIDE: AND WHAT THE READER EXPECTS — two constants at the top of
+      # `nix_index.rs`, which no function holds.
+      reader = uncommented(pathlib.Path("${../crates/ronoctua-software/src}/nix_index.rs").read_text())
+      header = re.search(r"pub const HEADER: &str = \"([^\"]*)\";", reader)
+      fmt = re.search(r"pub const FORMAT: &str = \"([^\"]*)\";", reader)
+      if not header or header.group(1) != writer:
+          wrong.append(f"the reader expects {header and header.group(1)!r} and the writer stamps {writer!r}")
+      if not fmt or fmt.group(1) != consts["FORMAT"]:
+          wrong.append(f"the reader reads format {fmt and fmt.group(1)!r} and the writer writes {consts['FORMAT']!r}")
+
+      # PARSED: THE BUILT INDEX, a TSV, line by line (18 MB).
+      count, attrs, bad = 0, [], []
+      with open("${index}/index.tsv", encoding="utf-8") as f:
+          first = f.readline().rstrip("\n").split("\t")
+          for line in f:
+              count += 1
+              cols = line.rstrip("\n").split("\t")
+              if len(cols) != 8 or not cols[0] or set(cols[3]) - set("ubinl"):
+                  bad.append(line[:80])
+              attrs.append(cols[0])
+      if len(first) != 3 or first[0] != writer or first[1] != consts["FORMAT"]:
+          wrong.append(f"the index's header is {first}")
+      elif first[2] != str(count):
+          wrong.append(f"the header says {first[2]} packages and the index has {count} rows")
+      if count < consts["FLOOR"]:
+          wrong.append(f"{count} packages, under the generator's floor of {consts['FLOOR']}")
+      if bad:
+          wrong.append(f"{len(bad)} rows are not eight columns with known flags, the first: {bad[0]!r}")
+      if any(a >= b for a, b in zip(attrs, attrs[1:])):
+          wrong.append("the rows are not in strictly ascending attribute order; a binary search would miss")
+
+      rev = pathlib.Path("${index}/rev").read_text().strip()
+      if rev != "${inputs.nixpkgs.rev}":
+          wrong.append(f"the index was built from nixpkgs {rev}, and the system installs from ${inputs.nixpkgs.rev}")
+
+      if wrong:
+          print("ERROR: the Nix search index is not whole.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       A short or unreadable index is a search that answers \"nothing found\"", file=sys.stderr)
+          print("       about programs that exist.", file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: {count} packages in order, format {consts['FORMAT']}, from the system's nixpkgs")
+      END
+    '';
+
+  # THE UPDATE MOVES WHAT THE PERSON HAS, AND ADDS NOTHING.
+  #
+  # Invariant 6's exception lets the update keep the person's programs
+  # current; it does not let it install. Two halves:
+  #
+  # * the TABLE: every `upgrade-software` step is `ronoctua-software upgrade
+  #   <source>` for a source the CLI upgrades, or the sanctioned root
+  #   `flatpak update --system`; every `tidy` is a `reclaim-space` step for a
+  #   source the CLI tidies. The CLI's own tables are read, so a source added
+  #   to one side and not the other fails here.
+  # * the CRATE: each source's dispatch sends `Order::Upgrade` to its
+  #   `upgrade` or to a refusal, and each `upgrade` works on what is installed
+  #   — the Nix manifest's elements, the Flatpak installation (`flatpak update`
+  #   of an id that is not there fails), the AppImages' sidecars, Android's
+  #   own record — and calls no installer, except that Android reinstalls, over
+  #   the old one, an app its record already holds.
+  #
+  # WHAT READING SOURCE CANNOT PIN: that `nix profile upgrade` and `flatpak
+  # update` themselves add nothing. `flatpak update` may pull in a new runtime
+  # an updated app now needs — a dependency of something installed, not a new
+  # program; `nix profile upgrade` rebuilds an element from its own flake
+  # reference. Those are the tools' semantics, and the tests in the crate
+  # exercise them against fixtures.
+  software-upgrade-installs-nothing =
+    let
+      steps = (import ../assets/updates.nix).steps;
+    in
+    mkCheck "software-upgrade-installs-nothing" [ pkgs.python3 ] ''
+      cat > steps.json <<'JSON'
+      ${builtins.toJSON steps}
+      JSON
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+      exec(open("${softwarePy}").read())
+
+      src = pathlib.Path("${../crates/ronoctua-software/src}")
+      read = lambda name: uncommented(product((src / name).read_text()))
+      wrong = []
+
+      # THE CLI'S TABLES: which sources it upgrades and tidies, as words.
+      lib = read("lib.rs")
+      words = dict(re.findall(r"Self::(\w+)\s*=>\s*\"([a-z-]+)\"",
+                              must(body_of(must(scope(lib, r"impl Source\b"), "`impl Source`"), "word"), "`Source::word`")))
+      cli = read("cli.rs")
+      def table(name):
+          m = re.search(r"pub const " + name + r": \[Source; \d+\] = \[([^\]]*)\]", cli)
+          return [words.get(s, "?" + s) for s in re.findall(r"Source::(\w+)", m.group(1))] if m else []
+      upgradable = table("UPGRADABLE") + ["android-system"]
+      tidied = table("TIDIED")
+      floor(len(upgradable), 4, "sources the CLI upgrades")
+      floor(len(tidied), 2, "sources the CLI tidies")
+
+      # PARSED: 1. THE TABLE — `assets/updates.nix`, as Nix evaluated it.
+      steps = json.load(open("steps.json"))
+      moving = [s for s in steps if s["does"] == "upgrade-software"]
+      floor(len(moving), 6, "upgrade-software steps")
+      for s in steps:
+          run = s.get("run", [])
+          if s.get("program") == "ronoctua-software":
+              if run[:1] == ["upgrade"]:
+                  if len(run) != 2 or run[1] not in upgradable or s["does"] != "upgrade-software":
+                      wrong.append(f"`{s['id']}` runs ronoctua-software {run} as {s['does']}")
+              elif run[:1] == ["tidy"]:
+                  if len(run) != 2 or run[1] not in tidied or s["does"] != "reclaim-space":
+                      wrong.append(f"`{s['id']}` runs ronoctua-software {run} as {s['does']}")
+              else:
+                  wrong.append(f"`{s['id']}` runs ronoctua-software {run}; the update may only upgrade or tidy")
+          elif s["does"] == "upgrade-software" and not (
+              s.get("program") == "flatpak" and s.get("root") is True
+              and run == ["update", "--system", "--noninteractive", "-y"]
+          ):
+              wrong.append(f"`{s['id']}` upgrades the person's programs with {s.get('program')} {run}")
+
+      # 2. THE CLI's verbs build the orders they say.
+      for verb, order in (("Upgrade(Target::Source(source))", "Order::Upgrade"), ("Tidy(source)", "Order::Tidy")):
+          arm = must(scope(cli, r"Verb::" + re.escape(verb) + r"\s*=>"), f"the CLI's `{verb}` arm")
+          if order not in arm or "Order::Install" in arm:
+              wrong.append(f"the CLI's `{verb}` does not run `{order}`")
+      if [s for _, _, s in strings_of(must(body_of(cli, "images_argv"), "`cli::images_argv`"))] != ["upgrade"]:
+          wrong.append("Android's images are moved by something other than `waydroid upgrade`")
+
+      # 3. EACH SOURCE SENDS AN UPGRADE TO ITS UPGRADE, OR REFUSES IT.
+      def target(text, at):
+          k = text.find("=>", at) + 2
+          while text[k].isspace():
+              k += 1
+          depth, j = 0, k
+          while j < len(text):
+              c = text[j]
+              if c in "([{":
+                  depth += 1
+              elif c in ")]}":
+                  if depth == 0:
+                      break
+                  depth -= 1
+                  if depth == 0 and text[k] == "{":
+                      return text[k : j + 1]
+              elif c == "," and depth == 0:
+                  break
+              j += 1
+          return text[k:j]
+      arms = 0
+      for name, dispatch in (("nix.rs", ("run",)), ("flatpak.rs", ("run",)),
+                             ("appimage.rs", ("run_with", "run_offline")), ("android.rs", ("run", "run_in"))):
+          text = read(name)
+          for fn in dispatch:
+              body = must(body_of(text, fn), f"`{name[:-3]}::{fn}`")
+              for m in re.finditer(r"\bOrder::Upgrade\b", body):
+                  arms += 1
+                  goes = target(body, m.end())
+                  if "install" in goes or not ("upgrade(" in goes or re.match(r"\{?\s*Err\(", goes)):
+                      wrong.append(f"{name}: `{fn}` sends an upgrade to `{' '.join(goes.split())[:70]}`")
+      floor(arms, 6, "upgrade arms of the four sources")
+
+      # 4. AND EACH `upgrade` WORKS ON WHAT IS INSTALLED, CALLING NO INSTALLER.
+      INSTALLERS = r"\b(install|install_file|install_argv|install_file_argv|add_argv|installable|remote_add_argv)\("
+      def fn(name, item):
+          return must(body_of(read(name), item), f"`{name[:-3]}::{item}`")
+
+      nix_up = fn("nix.rs", "upgrade")
+      if re.search(INSTALLERS, nix_up) or "upgrade_plan(" not in nix_up or "upgrade_argv(" not in nix_up:
+          wrong.append("nix.rs: `upgrade` does not move the manifest's elements with `nix profile upgrade`")
+      plan = fn("nix.rs", "upgrade_plan")
+      if "for e in manifest.elements" not in plan or re.search(r"\.push\((?!e\.name\.clone\(\))", plan):
+          wrong.append("nix.rs: `upgrade_plan` names something other than the manifest's elements")
+      argv = fn("nix.rs", "upgrade_argv")
+      if [s for _, _, s in strings_of(argv)][:2] != ["profile", "upgrade"] or "argv.extend(elements" not in argv:
+          wrong.append("nix.rs: `upgrade_argv` is not `nix profile upgrade` of the elements it is given")
+
+      flat_up = fn("flatpak.rs", "upgrade")
+      if re.search(INSTALLERS, flat_up) or "update_argv(" not in flat_up:
+          wrong.append("flatpak.rs: `upgrade` is not `flatpak update` alone")
+      if [s for _, _, s in strings_of(fn("flatpak.rs", "update_argv"))] != ["update", "--user", "-y", "--"]:
+          wrong.append("flatpak.rs: `update_argv` is not `flatpak update --user -y [-- <id>]`")
+
+      image_up = fn("appimage.rs", "upgrade")
+      if re.search(INSTALLERS, image_up) or "sidecars(&ctx.roots)" not in image_up or "sidecar(&ctx.roots, key)" not in image_up:
+          wrong.append("appimage.rs: `upgrade` does not start from the AppImages already integrated")
+      one = fn("appimage.rs", "upgrade_one")
+      if re.search(INSTALLERS, one) or "key: Some(s.key.clone())" not in one:
+          wrong.append("appimage.rs: `upgrade_one` does not replace the AppImage it was given, under its key")
+
+      apps_up = fn("android.rs", "upgrade")
+      wanted = re.search(r"let wanted\b(.*?);\s*let due\b(.*?);", apps_up, re.S)
+      if ("let kept = record(&ctx.roots)" not in apps_up or not wanted
+              or wanted.group(1).count("kept.keys()") < 2 or "catalogue" in wanted.group(1)
+              or not re.match(r"[^=]*=\s*wanted\s*\.into_iter\(\)", wanted.group(2))):
+          wrong.append("android.rs: `upgrade` does not choose from the apps its record holds")
+      loop = must(scope(apps_up, r"for app in &due"), "Android's upgrade loop")
+      if apps_up.count("install_app(") != loop.count("install_app("):
+          wrong.append("android.rs: `upgrade` installs something outside the apps it chose to move")
+
+      if wrong:
+          print("ERROR: the update could install a program the person does not have.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       Invariant 6's exception keeps the person's programs current. Putting in", file=sys.stderr)
+          print("       one they did not choose is the imperative install it refuses.", file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: {len(moving)} steps move what is there, {arms} dispatch arms, four upgrades that install nothing new")
+      END
+    '';
+
+  # -------------------------------------------------------------------
   # The test tiers, and the guards that keep them total
   # -------------------------------------------------------------------
 
@@ -23290,6 +25063,7 @@ let
     modeline-vm = modelineVm;
     leader-vm = leaderVm;
     apps-vm = appsVm;
+    software-vm = softwareVm;
     inherit keymap-no-collision i18n-complete i18n-missing-key-fails;
     inherit languages-are-declared buffer-tag-rows-have-text buffers-test;
     inherit buffers-lint;
@@ -23376,6 +25150,20 @@ let
       gate-fetches-what-no-cache-has
       trap-calls-something-that-exists
       dev-exports-before-it-starts
+      ;
+    # The software centre: invariant 6's dated exception, and how wide it is.
+    inherit
+      android-polkit-is-narrow
+      nix-flatpak-leaves-your-apps-alone
+      flatpak-dark-is-never-forced
+      web-apps-are-never-kiosk
+      software-stays-in-the-home
+      one-software-boundary
+      software-unit-is-narrow
+      session-units-inherit-the-session-path
+      waydroid-waits-for-its-image
+      nix-index-is-whole
+      software-upgrade-installs-nothing
       ;
     inherit
       group-mark-outside-translation

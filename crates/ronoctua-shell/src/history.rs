@@ -21,6 +21,15 @@
 //! a terminal, which is the failure this whole shell exists to remove. So it
 //! is shown — behind a question that opens on NO, the way the Bluetooth
 //! pairing and the format buffer already do.
+//!
+//! # What is typed is asked by the view, in either door
+//!
+//! A login is four answers — the server, the account, the password, the key
+//! — and a text setting is one. The VIEW asks each [`Question`] and keeps the
+//! answers so far; the door only opens its own line (the footer's minibuffer,
+//! the window's header) and hands what was typed back to
+//! [`View::answered`]. So the two doors ask the same questions in the same
+//! order and send the same order, and neither holds half a login.
 
 use ronoctua_atuin::options::{self, Scope, Setting};
 use ronoctua_options::Kind;
@@ -44,6 +53,120 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // silently drops — which the network view's own count caught once already.
     ("ESC", "atuin-back"),
 ];
+
+/// Something the person types, and whether it is hidden.
+///
+/// The id is the line's: its question is `ask-<id>`, and the answer comes
+/// back under it — to the footer's command of the same name, and to the
+/// window's `Content::answered` — and from either to [`View::answered`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Question {
+    /// The line's id.
+    pub id: &'static str,
+    /// Whether what is typed is masked — on the screen and in the log.
+    pub secret: bool,
+}
+
+impl Question {
+    /// Where the sync server is.
+    pub const SERVER: Self = Self {
+        id: "atuin-server",
+        secret: false,
+    };
+    /// Who to be on it.
+    pub const ACCOUNT: Self = Self {
+        id: "atuin-account",
+        secret: false,
+    };
+    /// That account's password.
+    ///
+    /// An address and an account are typed to be READ BACK and corrected; a
+    /// password is not.
+    pub const PASSWORD: Self = Self {
+        id: "atuin-password",
+        secret: true,
+    };
+    /// The key from the first machine — empty on the first one.
+    ///
+    /// HIDDEN LIKE THE PASSWORD: it decrypts the whole history. In the clear
+    /// it went to the journal with every other answer the footer logs, and it
+    /// is pasted far more than it is typed, which a hidden line takes.
+    pub const KEY: Self = Self {
+        id: "atuin-key",
+        secret: true,
+    };
+    /// A text, list or amount setting's new value.
+    pub const SETTING: Self = Self {
+        id: "atuin-setting",
+        secret: false,
+    };
+
+    /// Every question this view asks — what the footer's command table
+    /// answers by.
+    pub const ALL: [Self; 5] = [
+        Self::SERVER,
+        Self::ACCOUNT,
+        Self::PASSWORD,
+        Self::KEY,
+        Self::SETTING,
+    ];
+
+    /// The question with this id, when it is one of this view's.
+    #[must_use]
+    pub fn named(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|q| q.id == id)
+    }
+}
+
+/// A secret on its way into the order that carries it.
+///
+/// `Debug` IS WRITTEN BY HAND: the view is `Debug`, and what a panic or a
+/// `?view` prints must not be the password.
+#[derive(Clone, PartialEq, Eq)]
+struct Hidden(String);
+
+impl std::fmt::Debug for Hidden {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Hidden(•)")
+    }
+}
+
+/// Which question is on a line, and what a login's earlier answers were.
+///
+/// THE ANSWERS SO FAR LIVE HERE, and not in a door: that is what lets the
+/// footer and the window ask the same four questions and send the same order.
+/// The password waits for the key and nothing else, and goes with the
+/// question when it is let go.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Typing {
+    /// The server's address.
+    Server,
+    /// The account on it.
+    Account { address: String },
+    /// That account's password.
+    Password { address: String, username: String },
+    /// The first machine's key — the last answer before the order.
+    Key {
+        address: String,
+        username: String,
+        password: Hidden,
+    },
+    /// This setting's value.
+    Setting(&'static str),
+}
+
+impl Typing {
+    /// The question this step is asked by.
+    const fn question(&self) -> Question {
+        match self {
+            Self::Server => Question::SERVER,
+            Self::Account { .. } => Question::ACCOUNT,
+            Self::Password { .. } => Question::PASSWORD,
+            Self::Key { .. } => Question::KEY,
+            Self::Setting(_) => Question::SETTING,
+        }
+    }
+}
 
 /// A key, reduced to what the view cares about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,10 +230,8 @@ pub enum Errand {
     Nothing,
     /// Send this to the thread.
     Order(ronoctua_atuin::Order),
-    /// Ask for this setting's value to be typed.
-    Edit(&'static str),
-    /// Ask where the server is, and who to be.
-    AskServer,
+    /// Open this question on the door's own line.
+    Ask(Question),
     /// Show the key — the question has been answered yes.
     ShowKey,
     /// Close the view.
@@ -127,6 +248,14 @@ pub struct Facts<'a> {
 #[derive(Debug, Default, Clone)]
 pub struct View {
     cursor: usize,
+    /// What the cursor is ON — the row it goes back to when the rows move.
+    ///
+    /// THE ROW'S IDENTITY AND NOT ONLY ITS INDEX, the rule for a list whose
+    /// rows move under the cursor: the key's question grows a sentence ABOVE
+    /// its row. By index the cursor was left on that sentence, `settle`
+    /// carried it to the first row of the page that acts — the modeline's
+    /// ring — and the second `RET`, meant as "yes, show it", turned the ring.
+    on: Option<Target>,
     /// Is the drawer of rarely-touched settings open?
     ///
     /// IN THE VIEW AND NOT ON DISK — a drawer somebody opened once is not a
@@ -136,6 +265,8 @@ pub struct View {
     asking: bool,
     /// The key, once it has been asked for and answered.
     key: Option<String>,
+    /// What a line is open for, if anything — see [`Typing`].
+    typing: Option<Typing>,
 }
 
 impl View {
@@ -149,22 +280,43 @@ impl View {
         Self::default()
     }
 
-    /// Moves the cursor to the first row that answers a key.
+    /// Where the cursor is: on the row it was put on, wherever that row went;
+    /// else on a row that answers a key, the nearest below and then above.
     ///
     /// Called by everything that reads the cursor, so there is no order of
     /// operations to get wrong: a view whose door forgot to settle it would
     /// open on a heading, which is the defect this is named after.
+    ///
+    /// THE NEAREST, AND NOT THE PAGE'S FIRST: from a sentence the first row
+    /// that acts is the modeline's ring, at the top, and a `RET` meant for
+    /// the row the person was looking at turned it.
     fn settle(&self, built: &[(Vec<Field>, Target)]) -> usize {
-        if built
-            .get(self.cursor)
-            .is_some_and(|(_, t)| !matches!(t, Target::Nothing))
+        if let Some(on) = &self.on
+            && let Some(at) = built.iter().position(|(_, t)| t == on)
         {
+            return at;
+        }
+        let acts = |at: &usize| {
+            built
+                .get(*at)
+                .is_some_and(|(_, t)| !matches!(t, Target::Nothing))
+        };
+        if acts(&self.cursor) {
             return self.cursor;
         }
-        built
-            .iter()
-            .position(|(_, t)| !matches!(t, Target::Nothing))
+        (self.cursor..built.len())
+            .find(acts)
+            .or_else(|| (0..self.cursor.min(built.len())).rev().find(acts))
             .unwrap_or(self.cursor)
+    }
+
+    /// Puts the cursor on row `at` of `built`, and remembers what that row IS.
+    fn stand_on(&mut self, built: &[(Vec<Field>, Target)], at: usize) {
+        self.cursor = at;
+        self.on = built
+            .get(at)
+            .map(|(_, t)| t.clone())
+            .filter(|t| !matches!(t, Target::Nothing));
     }
 
     /// Which row the cursor is on.
@@ -180,6 +332,105 @@ impl View {
     #[cfg(test)]
     pub(crate) const fn asking(&self) -> bool {
         self.asking
+    }
+
+    /// The question a line is open for — read by the doors' own tests.
+    #[cfg(test)]
+    pub(crate) fn question(&self) -> Option<Question> {
+        self.typing.as_ref().map(Typing::question)
+    }
+
+    /// What was typed on the line this view asked for, under the line's id.
+    ///
+    /// ONE CALL FOR BOTH DOORS: the footer's minibuffer answers through the
+    /// command of the same id, the window through `Content::answered`, and
+    /// each does what comes back — the login's next question, or the order.
+    ///
+    /// AN ANSWER NOBODY IS WAITING FOR IS NOTHING. A question let go and a
+    /// line answered later under another id must not be taken for the one
+    /// that is gone — that is a path typed into a password.
+    #[must_use]
+    pub fn answered(&mut self, id: &str, text: &str) -> Errand {
+        let Some(typing) = self.typing.take() else {
+            return Errand::Nothing;
+        };
+        if typing.question().id != id {
+            return Errand::Nothing;
+        }
+        match typing {
+            // AN EMPTY ADDRESS OR ACCOUNT ENDS THE LOGIN: it is `RET` on
+            // nothing, which is how a person says never mind.
+            Typing::Server => {
+                let address = text.trim();
+                if address.is_empty() {
+                    return Errand::Nothing;
+                }
+                self.typing = Some(Typing::Account {
+                    address: address.to_owned(),
+                });
+                Errand::Ask(Question::ACCOUNT)
+            }
+            Typing::Account { address } => {
+                let username = text.trim();
+                if username.is_empty() {
+                    return Errand::Nothing;
+                }
+                self.typing = Some(Typing::Password {
+                    address,
+                    username: username.to_owned(),
+                });
+                Errand::Ask(Question::PASSWORD)
+            }
+            // THE PASSWORD AS TYPED — a space is a password's own. It waits
+            // here for the one question left, and goes into the order.
+            Typing::Password { address, username } => {
+                self.typing = Some(Typing::Key {
+                    address,
+                    username,
+                    password: Hidden(text.to_owned()),
+                });
+                Errand::Ask(Question::KEY)
+            }
+            // THE KEY IS THE FOURTH, and it is the FIRST MACHINE'S. Empty is
+            // the right answer on the machine that is registering; on the
+            // second one, leaving it empty gives an account whose history will
+            // not decrypt. The question says so. `cli::login` hands the
+            // password to `atuin` on STDIN — `argv` is world-readable through
+            // `/proc/*/cmdline`.
+            Typing::Key {
+                address,
+                username,
+                password,
+            } => Errand::Order(ronoctua_atuin::Order::LogIn {
+                address,
+                username,
+                password: password.0,
+                key: text.trim().to_owned(),
+            }),
+            Typing::Setting(id) => {
+                let Some(setting) = options::by_id(id) else {
+                    return Errand::Nothing;
+                };
+                // NOTHING TYPED KEEPS WHAT IS THERE. Written, it was `key = `,
+                // which is not TOML — and Atuin then falls back to its
+                // defaults for EVERYTHING, silently.
+                let value = setting.typed(text);
+                if value.is_empty() {
+                    return Errand::Nothing;
+                }
+                Errand::Order(ronoctua_atuin::Order::Set {
+                    section: setting.within.map(ToOwned::to_owned),
+                    key: setting.key.to_owned(),
+                    value,
+                })
+            }
+        }
+    }
+
+    /// The line was let go — `Esc`, `C-g`, a click on `ESC` — and the
+    /// question goes with it, and with the question a password typed for it.
+    pub fn let_go(&mut self) {
+        self.typing = None;
     }
 
     /// Takes the key the thread sent back.
@@ -383,9 +634,17 @@ impl View {
             // decrypts the history, and a second machine cannot sync without
             // it — so hiding it would send the person to a terminal, which is
             // the failure this shell exists to remove.
+            //
+            // THE ROW KEEPS ITS TARGET IN ALL THREE STATES — asked, asking,
+            // shown — so the cursor stays on it while it changes; shown, its
+            // `RET` puts the key away, as `Esc` does.
             match (self.asking, self.key.as_deref()) {
                 (_, Some(key)) => {
-                    out.push(fact(&texts.t(ronoctua_i18n::key::ATUIN_SHOW_KEY), key));
+                    out.push(door(
+                        &texts.t(ronoctua_i18n::key::ATUIN_SHOW_KEY),
+                        key,
+                        Target::Key,
+                    ));
                 }
                 (true, None) => {
                     out.push((
@@ -602,12 +861,39 @@ impl View {
         built.get(here).map_or(Target::Nothing, |(_, t)| t.clone())
     }
 
-    /// Where a click fell.
-    pub fn clicked(&mut self, row: usize) {
-        self.cursor = row;
+    /// Where a click fell, and whether the cursor was ALREADY there — the
+    /// second click, which the door turns into `RET` (invariant 19).
+    ///
+    /// THE FIRST CLICK SELECTS. It used to act: the door pressed `RET` on
+    /// every click, so a click on a ring turned it and a click on "log out"
+    /// logged out. And a row no key acts on takes no click at all: a heading
+    /// or a fact is not a place the cursor stops, and `settle` carried the
+    /// click from there to the first row that acts.
+    pub fn clicked(
+        &mut self,
+        row: usize,
+        facts: &Facts<'_>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> bool {
+        let built = self.build(facts, columns, texts);
+        if built
+            .get(row)
+            .is_none_or(|(_, t)| matches!(t, Target::Nothing))
+        {
+            return false;
+        }
+        let again = self.settle(&built) == row;
+        self.stand_on(&built, row);
+        again
     }
 
     /// Acts on a key.
+    ///
+    /// A KEY THAT REACHES THE VIEW LETS ITS QUESTION GO: while a line is
+    /// open every key is the line's, in both doors, so a key here means the
+    /// line was answered or let go — and an answer arriving after that must
+    /// not be taken for the question.
     #[must_use]
     pub fn key(
         &mut self,
@@ -616,8 +902,10 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
+        self.typing = None;
         let built = self.build(facts, columns, texts);
-        self.cursor = self.settle(&built);
+        let here = self.settle(&built);
+        self.stand_on(&built, here);
         let target = built
             .get(self.cursor)
             .map_or(Target::Nothing, |(_, t)| t.clone());
@@ -634,7 +922,7 @@ impl View {
                     // Walking through headings and facts with nothing lighting
                     // up is what the owner read on the locale view.
                     if !matches!(built[i].1, Target::Nothing) {
-                        self.cursor = i;
+                        self.stand_on(&built, i);
                         break;
                     }
                 }
@@ -661,7 +949,10 @@ impl View {
                 // row the mouse cannot use.
                 Target::Mark => Self::turn_mark(facts, true),
                 Target::Sync => Errand::Order(ronoctua_atuin::Order::Sync),
-                Target::LogIn => Errand::AskServer,
+                Target::LogIn => {
+                    self.typing = Some(Typing::Server);
+                    Errand::Ask(Question::SERVER)
+                }
                 Target::LogOut => {
                     self.key = None;
                     Errand::Order(ronoctua_atuin::Order::LogOut)
@@ -669,8 +960,13 @@ impl View {
                 Target::Key => {
                     // THE QUESTION OPENS ON NO: the first `RET` asks, and only
                     // the second shows. It is the shape the Bluetooth pairing
-                    // and the format buffer already have.
-                    if self.asking {
+                    // and the format buffer already have. A third puts it
+                    // away.
+                    if self.key.is_some() {
+                        self.key = None;
+                        self.asking = false;
+                        Errand::Nothing
+                    } else if self.asking {
                         Errand::ShowKey
                     } else {
                         self.asking = true;
@@ -701,11 +997,66 @@ impl View {
                 key: setting.key.to_owned(),
                 value,
             }),
-            // TYPED, NOT TURNED. The door decides where the typing happens,
-            // and it is the footer's minibuffer.
-            None => Errand::Edit(id),
+            // TYPED, NOT TURNED — on the line of whichever door this is, and
+            // the answer comes back to `answered`.
+            None => {
+                self.typing = Some(Typing::Setting(id));
+                Errand::Ask(Question::SETTING)
+            }
         }
     }
+}
+
+/// What a finished order says on the door's line, if anything — one answer
+/// for both doors.
+///
+/// A REFUSAL IS ALWAYS A SENTENCE. Of the orders that went through, the two
+/// whose effect the rows do not show say so: a sync and a log-out. A setting,
+/// the mark and a login redraw their own rows. The footer used to say "the
+/// history is synced" after EVERY order — a ring turned, a mark moved — which
+/// was a sentence about something that had not happened, and the window said
+/// nothing at all.
+#[must_use]
+pub fn said_when_done(
+    order: &ronoctua_atuin::Order,
+    refused: Option<&str>,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<String> {
+    use ronoctua_atuin::Order;
+    if let Some(reason) = refused {
+        return Some(texts.t_with(
+            ronoctua_i18n::key::ECHO_ATUIN_REFUSED,
+            &[("reason", reason)],
+        ));
+    }
+    match order {
+        Order::Sync => Some(texts.t(ronoctua_i18n::key::ECHO_ATUIN_SYNCED)),
+        Order::LogOut => Some(texts.t(ronoctua_i18n::key::ECHO_ATUIN_LOGGED_OUT)),
+        Order::LogIn { .. } | Order::Set { .. } | Order::Mark(_) => None,
+    }
+}
+
+/// Which press a key is, by its whole notation — the one reader both doors
+/// call.
+///
+/// BY THE WHOLE NOTATION, modifiers included: the window read a key by its
+/// TEXT, which an arrow has none of, so `S-<right>` and `S-<left>` — the
+/// value keys — did nothing there, from the keyboard or from a click on the
+/// hint. And a chord that is not in the table (`C-s`) is not taken for the
+/// letter under it. Caps Lock is undone by both readers already
+/// (`door::keys::without_caps_lock`).
+#[must_use]
+pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
+    // ESCAPE, WHATEVER IS HELD: every view of this shape leaves one level
+    // on it.
+    if key.sym == ronoctua_keymap::Sym::Esc {
+        return Some(Press::Escape);
+    }
+    let notation = key.notation();
+    OF_THE_VIEW
+        .iter()
+        .find(|(taught, _)| *taught == notation)
+        .and_then(|(_, id)| press_of(id))
 }
 
 /// One field.

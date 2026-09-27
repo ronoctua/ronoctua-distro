@@ -29,7 +29,7 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
 
    | Protocolo | Para quê | Arquivo | Check |
    |---|---|---|---|
-   | `wl_data_device` | arrastar e soltar | `carry.rs` | — |
+   | `wl_data_device` | arrastar e soltar | `carry.rs` (recebem: `surface.rs`, o rodapé; `files_window.rs`; `software_window.rs`) | — |
    | `ext-image-copy-capture-v1` | captura de tela do estúdio | `ronoctua-studio`, `screen.rs` | — |
    | `zwp_virtual_keyboard_v1` | teclado na tela (2026-09-25) | `virtual_keys.rs` | `one-virtual-keyboard` |
    | `zwlr_virtual_pointer_v1` | gestos com as mãos (2026-09-25) | `virtual_pointer.rs` | `one-virtual-pointer` |
@@ -43,6 +43,14 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    posiciona é o compositor.
 5. **Sem lógica Nix reimplementada em Rust.**
 6. **Nada imperativo.** Se não está no flake, não existe.
+   Exceção aprovada pelo dono (2026-09-26): **os programas da pessoa**. A central de programas
+   (`ronoctua-software`) instala, experimenta, atualiza e remove, só para o usuário, pacotes do
+   perfil Nix dele, Flatpaks da instalação `--user`, AppImages e web apps sob `$HOME` e apps dentro
+   do Android. Nada disso é padrão da distro nem entra no repositório ou em `/etc`. As únicas
+   escritas fora da home são a imagem do Android que a pessoa pede (uma unidade root estreita, em
+   `/var/lib/waydroid`) e o store, escrito pelo daemon do Nix. O suporte (Flatpak, nix-flatpak,
+   AppImage, Waydroid, o índice de busca) é declarado no flake, e a sequência de atualização
+   continua sem instalar nada.
 7. **`nix flake check` tem que passar** antes de qualquer coisa ser considerada pronta. Só o
    `nix run .#gate` roda tudo.
 8. **Zero string literal em UI.** Todo texto sai de uma `text-key`, completa em todos os idiomas
@@ -90,7 +98,7 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
 nix develop                  ambiente de trabalho (o direnv é opcional e fica no host)
 nix run .#dev                compositor aninhado + rodapé, com hot reload; leader = Ctrl+Alt+Espaço
 nix run .#png                desenha um buffer em PNG em ~0,2 s, sem VM
-nix run .#shot -- <cena.py>  fotografa numa VM (veja "Como trabalhar")
+nix run .#shot -- <cena.py>  fotografa numa VM (veja "Como trabalhar"); --apps é o palco do Flatpak
 nix run .#quick              dez checks escolhidos (tests/quick.nix), ~1 min
 nix run .#most               tudo menos o que constrói uma instalação, ~16 min
 nix run .#gate               tudo; dimensiona pela RAM; é o único que fecha o inv. 7
@@ -119,6 +127,9 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
   `ronoctua-brain` (decide quando a máquina se mantém: atualização, limpeza de cache, vigias),
   `ronoctua-player` e `ronoctua-studio` (a câmera). Falam com o shell por socket, um JSON por linha,
   e mandam o estado inteiro, nunca um delta.
+- **`ronoctua-software`**: não é daemon. É a biblioteca e a CLI dos programas da pessoa
+  (`LEADER i`); o rodapé a usa para ler e buscar, e toda ordem que muda algo é um
+  `Work::Software` que a fila roda como filho, num escopo próprio da `app.slice`.
 - **Buffers**: componentes WASM hospedados pelo shell (veja abaixo).
 
 ### O rodapé
@@ -148,13 +159,21 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
 
 - Toda janela é um `door::Content` aberto por `door::run` (`crates/ronoctua-shell/src/door/`). A
   `Door<C>` cuida do resto: registro, assentos, teclados e repetição, ponteiros, toque, escala, GPU,
-  as vigias de tema, idioma e tamanho do texto, cabeçalho, lista, barra e roda. A janela escreve só
-  `app_id`, `title` e `typed`; todo outro comportamento tem um padrão, que ela pode sobrescrever
-  (cobra `every-window-is-a-door`). O rodapé e a linha de vida são layer-shell com handlers
-  próprios, montados com as mesmas peças.
+  as vigias de tema, idioma, tamanho do texto e forma da data, cabeçalho, lista, barra e roda. A
+  janela escreve só `app_id`, `title` e `typed`; todo outro comportamento tem um padrão, que ela
+  pode sobrescrever (cobra `every-window-is-a-door`). O rodapé e a linha de vida são layer-shell com
+  handlers próprios, montados com as mesmas peças.
 - Uma vista costuma ser **uma `View` com duas portas**: a região do rodapé e uma janela, que
   desenham as mesmas linhas. Na leader, a sequência dobrada abre no rodapé e a terminada em `w`
   abre na janela (`s n n` / `s n w`).
+- **As duas portas fazem as mesmas coisas** (regra do dono, 2026-09-27): tudo o que a janela
+  suporta o rodapé suporta, e vice-versa — cada nível, cada tecla, colar, soltar arquivo e
+  **digitar** (buscar, responder uma pergunta, senha, caminho, nome). Nenhuma porta manda a pessoa
+  fazer algo na outra; uma lacuna numa porta é defeito — e o que uma porta DIZ (uma recusa, uma
+  falha) é dito nela. Uma janela pergunta com `Ui::ask` (a `line::Line` do minibuffer, no
+  cabeçalho; a resposta chega em `Content::answered`), cola com `Ui::paste` e abre um programa com
+  `Ui::launch`/`Ui::launch_entry`, tudo fora do laço; as duas portas colam a seleção viva
+  (`pasting.rs`), nunca o histórico.
 - Toda porta ouve todos os assentos e todos os teclados (`PerSeat` e `Seats::switch_to` em
   `seats.rs`; cobram `every-door-hears-every-seat` e `every-door-hears-every-keyboard`), segue a
   escala da tela em que está (`hidpi.rs`; cobra `every-window-knows-its-scale`) e repete teclas
@@ -262,6 +281,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | zip | `ronoctua-zip` (cobra `one-zip-reader`) |
 | keyd | `ronoctua-keyboards` |
 | arquivos de preferência | `ronoctua-store`, sobre o `ronoctua-xdg` |
+| perfil Nix da pessoa, Flatpak, AppImage, Waydroid, web apps do Chrome | `ronoctua-software` (cobra `one-software-boundary`) |
 
 ## Regras de interface
 
@@ -280,7 +300,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   `every-hint-key-explains-itself`). Essa linha sai da região, nunca da altura do rodapé: se o
   rodapé crescesse, sairia de baixo do ponteiro, o hover acabaria e a linha sumiria, em laço.
 - Toda vista da região ensina `Esc` primeiro, e ele é clicável (`chrome::with_the_way_back`). O
-  botão Voltar do mouse sobre o rodapé é o mesmo `Esc`.
+  botão Voltar do mouse sobre o rodapé ou sobre uma janela é o mesmo `Esc`.
 - Tecla nunca é texto no `.ftl`: a sequência vem de uma constante ao lado do binding mais
   `crate::leader()`, num `{ $keys }` (cobra `keys-are-never-text`). "LEADER" não é tecla de
   ninguém: em produção é `SUPER`, no `.#dev` é `CTRL ALT SPC`.
@@ -517,6 +537,10 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   até prova em contrário (`journalctl -b | grep oom-kill`). Bateria pesada roda em jaula:
   `systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=512M`.
 - `systemd-run --scope` é síncrono: esperá-lo no `calloop` congela o rodapé.
+- Unidade de usuário nasce com o `PATH` mínimo do systemd, e nele o `Exec=` de um app do
+  `~/.nix-profile`, o `flatpak run` das exportações e todo passo `binary` da atualização não
+  existem. O rodapé, a fila e as duas unidades da atualização têm `enableDefaultPath = false` e
+  herdam o `PATH` da sessão (cobra `session-units-inherit-the-session-path`).
 - Unidade com sandbox (a do Tor é um chroot) só enxerga o que foi montado nela, e só teste de VM vê
   isso — teste unitário nenhum.
 - Configurar uma unidade pelo nome errado cria uma unidade fantasma que não configura nada (é
@@ -561,6 +585,9 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   `nix run .#shot -- <cena.py>`. O palco (VM, compositor, rodapé e os ajudantes `control`, `notify`,
   `shot`, `crop`, `changed`, `has_colour`…) é o `nix/shot.nix`; as fotos vão para
   `~/.cache/ronoctua-distro/shot`, que é apagada a cada rodada. Nenhuma cena fica no repositório.
+  `--apps` troca o palco pelo `nix/shot-apps.nix`: sem rodapé, com Flatpak, o portal, uma rota para
+  a internet e 16 GiB de disco — é onde se vê um app do Flathub. O disco da VM vai para o cache e
+  não para o `XDG_RUNTIME_DIR`, que é tmpfs: cada byte de um runtime Flatpak seria RAM.
 - **Itere no `cargo`, não no Nix.** Tocar o `crates/ronoctua-protocol` reconstrói o workspace
   inteiro no Nix. Lógica nova nasce com `#[cfg(test)]` e roda com `cargo test -p <crate>`; vá ao
   Nix uma vez, para provar a travessia do WIT e o pixel.

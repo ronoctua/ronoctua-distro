@@ -1710,6 +1710,18 @@ então abrir a lista redimensiona o que está atrás. Cobrir o conteúdo esconde
 se estava lendo — e num sistema sem popup (invariante 14), a superfície do rodapé é a única coisa
 capaz de cobrir algo. O custo é o reflow: os buffers recebem `configure` a cada expansão.
 
+**O teclado sai na hora, num commit só dele; a altura espera o quadro** (`commit_now` e
+`configure_repeats_itself`, em `surface.rs`). A altura nova vai junto com o quadro desenhado nela,
+para o compositor nunca mostrar o quadro velho na caixa nova — o salto. O teclado não tem imagem a
+esperar, e ia no mesmo commit só porque era posto ao lado da altura: ficava preso enquanto o quadro
+era desenhado, uns 90 ms para a primeira lista da leader no renderizador por software da VM, e uma
+tecla digitada nesse intervalo ia para a janela atrás do rodapé, ou para lugar nenhum (o `apps-vm`
+digitava `a` logo depois de `leader active`, e o localizador nunca abria). Agora ele sai sozinho,
+num commit sem tamanho e sem buffer. O `configure` que responde a esse commit repete a altura antiga
+e chega DEPOIS do quadro já desenhado na nova; tomado como ordem, ele redimensionava de volta e a
+modeline pulava por um quadro — por isso `configure_repeats_itself` o reconhece e não muda nada.
+Juntar os dois commits de novo traz de volta a tecla perdida.
+
 **A modeline só mostra o que existe.** Sem janela em foco e sem nada acontecendo ela fica VAZIA —
 não há contador de notificações, e o sino só existe com não lida (o dono pediu assim); assim que algo
 abre, o nome do buffer aparece. Um rótulo de ausência inventado ocuparia coluna afirmando algo falso,
@@ -2133,11 +2145,16 @@ ela aparece — um filtro que ninguém consegue auditar é um filtro em que ning
 quando cabe, uma quando não. O corte sai de um token, e vale para as duas portas — que é o que faz
 "uma implementação, duas portas" ser verdade também do layout.
 
-**A janela não RODA ação, e diz isso.** Marcar lida, ajustar filtro e navegar são dela; executar uma
-ação é do rodapé, que é o processo que sabe abrir num escopo próprio (seção 9.1) e que tem a área de
-transferência. Uma segunda implementação ali é exatamente a segunda porta discordando da primeira —
-o defeito que este arranjo existe para evitar. Quando se aperta a letra na janela, ela responde com a
-frase que diz onde a ação roda, em vez de não fazer nada.
+**As duas portas fazem as mesmas coisas.** Cada nível, cada tecla e cada clique; o nome e o texto de
+um filtro, digitados na linha da própria porta — o minibuffer no rodapé, o cabeçalho na janela
+(`Ui::ask`, com colar) —, que parte do que o rascunho já tem e devolve a resposta à mesma
+`View::typed` (a vista guarda o que perguntou; resposta vazia mantém o que havia); e toda forma de
+ação. O que um botão FAZ é decidido uma vez, em `notifications::deed_of`, para as duas portas: copiar
+um caminho, copiar uma imagem e abrir um programa num escopo próprio (`foreign::start_in_scope`) a
+janela faz sozinha, porque são uma chamada de qualquer processo; o botão de um app de fora
+(`ActionInvoked`, dito por quem tem o nome no barramento) e um comando do registro são do rodapé, e a
+janela os entrega pelo soquete de controle (`notif-act`, com o nome inteiro do registro), dizendo no
+cabeçalho quando não há rodapé para receber.
 
 **Quinze dias em disco.** O histórico é estado — foi o que aconteceu, é escrito por máquina e é
 grande — e mora em `$XDG_STATE_HOME`. As preferências são configuração e moram em
@@ -2163,6 +2180,13 @@ Duas regras seguram o laço. **O que chegou DEPOIS do arquivo sobrevive**, compa
 tempo: sem isso, a janela apagaria a notificação que acabou de chegar no rodapé. E **nada é escrito
 de volta** ao reconciliar: escrever mexeria no inotify do outro processo, que leria, que escreveria —
 dois processos respondendo ao evento um do outro para sempre.
+
+**O que a janela marcou como lida é lido À MÃO também no rodapé.** Copiar a bandeira não bastava: o
+`r` do rodapé tira o cartão da faixa e manda `NotificationClosed` ao remetente, e o da janela só
+reescrevia o arquivo — uma palavra, dois contratos, conforme a porta. Antes de reconciliar, o rodapé
+pergunta quais registros ele tem como não lidos e o arquivo diz lidos (`Queue::read_there`), e faz com
+eles o que o próprio `r` faz. Só os que mudaram, e uma vez: a escrita do próprio rodapé não nomeia
+nada.
 
 ##### Um registro se chama `(id, quando chegou)`
 
@@ -2218,18 +2242,20 @@ GERENCIADOR, que é de onde o botão foi apertado. Recusava, dizia numa linha qu
 lendo, e o único efeito visível era a linha ficar quieta. Uma ação de COMANDO fecha o gerenciador
 antes de rodar; copiar um caminho e abrir um programa não fecham, porque deixam a tela onde está.
 
-Na janela, a resposta era "a ação roda pelo rodapé". É verdade e é inútil: o socket de controle
-existe exatamente para isso e o hospedeiro de buffer já escreve nele. A janela ENCAMINHA o comando.
-As outras três formas continuam sendo do rodapé e dizem por quê — resposta de barramento é de quem
-tem o nome, a área de transferência é do rodapé, e abrir num escopo próprio é a seção 9.1.
+Na janela, a resposta era "a ação roda pelo rodapé". É verdade e é inútil, e a regra do dono diz por
+quê: uma porta não manda a pessoa à outra. A janela faz o que qualquer processo faz e entrega ao
+rodapé, pelo socket de controle, só o que só ele pode fazer.
+
+**Agir é ter lido, e lido À MÃO.** Nas duas portas, rodar uma ação marca o registro como `r` marca:
+sai da faixa e o remetente recebe `NotificationClosed`, que é o que um daemon de notificação diz
+depois de uma ação. Antes a ação só virava a bandeira, e o cartão ficava na faixa depois do clique.
 
 ##### O filtro da pessoa, e o filtro de todo mundo
 
 A linguagem de regras está completa desde o dia em que foi gerada — sete campos, cinco comparações,
 os filtros da pessoa tentados antes dos da distro — e o único caminho até ela era editar o JSON de
 preferências à mão, na grafia de variante do serde (`{"Contains": "backup"}`). Isso não é interface.
-Agora se escreve na tela: nome, condições e veredito, com as setas girando o que se gira e o
-minibuffer do rodapé recebendo o que se digita.
+Agora se escreve na tela: nome, condições e veredito, com as setas girando o que se gira.
 
 E um filtro pode deixar de ser só seu. `p` abre uma pergunta que nasce no **não** (a regra do
 formatar, pelo mesmo motivo), mostra o filtro inteiro e diz numa frase que o repositório é PÚBLICO e
@@ -2532,9 +2558,10 @@ ela nomeia a consequência e esconde a causa. Pior nas ligações que existem na
 `w h` viraria `w H` e a janela se **moveria** quando se pediu para focar. Um atalho que faz outra
 coisa é pior do que um que não faz nada.
 
-Por isso o Lock é desfeito antes de a tecla virar `KeyPress` (`Footer::without_caps_lock`), nos dois
-sentidos — com Shift junto o xkb já devolveu a minúscula, e desfazer só num sentido apagaria o
-`w H`. O Shift continua decidindo a caixa, que é o desenho.
+Por isso o Lock é desfeito antes de a tecla virar `KeyPress` (`door::keys::without_caps_lock`, a
+mesma função no rodapé e em toda janela), nos dois sentidos — com Shift junto o xkb já devolveu a
+minúscula, e desfazer só num sentido apagaria o `w H`. O Shift continua decidindo a caixa, que é o
+desenho.
 
 E quando a caixa **é** o motivo de nada casar, a mensagem passa a dizer isso: `leader::other_case`
 procura a mesma sequência com a caixa trocada e, se for ela que existe, a área de eco mostra
@@ -2615,10 +2642,22 @@ frente do parser dele e lê a SAÍDA.
 **Os acordes saíram da lista do toque.** Eles apareciam ali em tom apagado, e não eram escolhas do
 que se está fazendo: a leader já está solta, e apertar `←` naquele momento não faz nada. Vinte e
 cinco linhas para dizer o que existe em *outro* modo de uso — a lista encolheu pela metade quando
-saíram. O que saiu foi para o **manual** (`LEADER h s`), que ocupa a mesma região expandida e é
-gerado da tabela: mudar um atalho muda o manual, sem passo intermediário. Um manual escrito à mão
-seria a segunda cópia da tabela de atalhos, e o dia em que ela mente é o dia em que alguém confia
-nela.
+saíram. O que saiu foi para o **manual** dos atalhos (`LEADER h`, e ele na lista dos manuais), que
+ocupa a mesma região expandida e é gerado da tabela: mudar um atalho muda o manual, sem passo
+intermediário. Um manual escrito à mão seria a segunda cópia da tabela de atalhos, e o dia em que ela
+mente é o dia em que alguém confia nela.
+
+**Os manuais têm duas portas, e as duas fazem o mesmo.** A região do rodapé e a janela
+(`ronoctua-shell manual`, `manual_window.rs`) dirigem a mesma `manual::View`: a lista, com o filtro
+digitado ali mesmo — espaço incluído, porque os nomes têm espaço, `DEL` tirando um grafema e `C-v`
+colando como uma linha só —, o manual aberto dela com `RET` ou com o segundo clique, e `Esc` subindo
+um nível: do manual para a lista, da lista para fora. O manual aberto anda uma linha nas setas, uma
+página em `SPC` e nas teclas de página, e vai às pontas em `<home>` e `<end>`; o leitor de teclas do
+rodapé não tinha símbolo para as teclas de página, e o `ronoctua-keymap` ganhou `<prior>`, `<next>`,
+`<home>` e `<end>`, os nomes do Emacs. A janela abre na lista, ou num manual pela palavra que o `C-w`
+do rodapé lhe passa, e uma palavra que não é de manual nenhum é recusada. O cabeçalho dela ensina as
+teclas do nível, cada uma um clique, menos o `C-w`: ele tira um manual do rodapé para uma janela, e
+a janela já é ela.
 
 O `+` que os prefixava virou a marca de **submenu**, e só dela.
 
@@ -2713,8 +2752,14 @@ de tabela e poupa uma decisão por uso.
 espaço conforme o uso: `LEADER TAB 7` sem nada declarado não teria para onde ir, e a mesma tecla
 levaria a lugares diferentes conforme quantas janelas estivessem abertas. O que o comando manda é
 `workspace number N`, que NOMEIA o número e cria o espaço se ele não existir — então o dígito na
-tecla **é** o número do espaço, sempre. O `0` vai para o último, que é a convenção do teclado — o
-zero fecha a fileira depois do nove.
+tecla **é** o número do espaço, sempre.
+
+**Nove, e o `0` é TODOS eles** (regra do dono). O `0` não é um décimo espaço: `LEADER 0` e `Super+0`
+mostram todos os espaços de uma vez (`workspace-all`). O arquivo que o Scroll traz põe um décimo no
+`0`, e o `every-compositor-shortcut-is-bound` registra a troca (`INSTEAD`). Onde o `0` leva a um
+número — `TAB 0`, `TAB m 0` e as faixas que movem ou trocam de espaço, `Super+Shift+0` e
+`Super+Ctrl+0` —, ele nomeia o nono, e nunca cria um espaço que nada mais aqui alcança. A modeline
+tem nove números (`workspaces::POOL`), e o `footer-mouse-reaches-nothing-new` recusa um décimo.
 
 **O que se perde é o espaço VAZIO, e isso fica declarado.** Este compositor não tem espaço
 persistente nem pré-criação — conferido no `scroll.5`: há `workspace <nome> output/gaps/…` e nenhuma
@@ -2730,6 +2775,55 @@ diferentes; sem isso, a alternativa seria `workspace-ir-1`…`-9` — nove nomes
 mesma coisa e nove chaves de texto para traduzir, só para carregar um dígito. O acorde já fazia isso
 (`LEADER+3` leva o `3` na linha do bind); agora a sequência também. Os dois montam o MESMO texto,
 pelo mesmo feito declarado, e o número passa pela validação de `wire::spoken` antes de sair.
+
+---
+
+### O menu da janela — o nome do app, e `LEADER w` gerado dele
+
+**O nome do app na modeline é o menu da janela** (`window_menu.rs`, `LEADER w o`). Clicar no
+segundo segmento (`mode`; o título, à esquerda, fica como está) abre na região a grade da leader com
+tudo o que o compositor faz com a janela em foco: uma tecla e um rótulo por célula, o grupo com `+`
+no tom de grupo, e o grupo troca a grade pela dele. O que difere é a volta: `Esc` sobe UM nível,
+porque um submenu é um lugar aonde a pessoa escolheu ir. É uma grade que PAGINA, como a da leader, e
+não uma lista com cursor (`Footer::navigation`); o `every-view-follows-its-cursor` remede essa
+desculpa a cada build: lê os braços de `navigation` que respondem `Page` e recusa um cursor do menu,
+no `window_menu.rs` e nos caminhos de tecla e de clique do rodapé.
+
+**`LEADER w` é o menu inteiro, gerado dele** (`window_menu::leader_bindings`), a pedido do dono: um
+grupo só para janela, e não dois que discordam. Cada célula é uma sequência e cada submenu um grupo;
+o que o `w` já ligava ao MESMO comando não é ligado de novo, e uma tecla que os dois dessem a
+comandos diferentes é colisão, que a árvore recusa. Por isso o tom de grupo (`text.group`) aparece
+em dois braços do rodapé — o da leader e o do menu — e continua querendo dizer só "submenu da
+leader" (`a-heading-is-not-a-submenu`). Sob o ponteiro, cada célula ensina a tecla de fora do menu
+(`window_menu::taught`).
+
+**Todo item age na janela do menu, por critério** (`Compositor::deed_on`, `[con_id=N] …`), e age
+antes de o menu fechar: sem alvo o compositor age na última janela focada, e o foco anda entre abrir
+o menu e clicar.
+
+**A gaveta é alcançável pelo ponteiro** (o *scratchpad*; `LEADER w g`, e a marca `drawer` na
+modeline enquanto a gaveta tiver alguma janela, guardada ou fora dela): uma janela guardada não tem
+foco nem nome, e nada clicável a trazia de volta. O botão esquerdo abre o menu na gaveta, uma célula
+por janela guardada; o direito tira a próxima, que é o acorde do próprio compositor
+(`wm-scratchpad-show`).
+
+**As trilhas são números na modeline** (`trails.rs`, `LEADER w y`): o glifo com quantas janelas a
+trilha em uso tem e, a partir de DUAS trilhas, um número por trilha, a em uso mais clara — a regra
+dos espaços. O clique num número põe aquela trilha em uso (`wm-trail-number`, o mesmo dígito do modo
+de trilha); o compositor conta de ZERO, e a conversão mora só em `trails::index_of`. Andar pela
+trilha até uma janela da gaveta derruba o compositor, e o inv. 3 proíbe o patch: toda janela
+guardada sai da trilha em uso (`untrail_the_drawer`), e uma notificação diz isso.
+
+**A seleção é uma CÓPIA** (`selection.rs`, `LEADER w v` e a marca `selection`). O compositor guarda
+a seleção num campo que nenhuma resposta, nenhum evento e nem a API Lua escrevem — medido na fonte
+pinada —, então o rodapé mantém a dele, escrita pelos feitos ao passarem por `run_with`; os acordes
+de seleção (a família `Insert`) passam pelo nosso binário para tecla e clique escreverem a mesma
+cópia. Ela não vê a seleção feita por script, nem a coluna inteira que o compositor marca em alguns
+modos: a marca diz "há algo selecionado" pela cópia, e o menu age no que o compositor de fato tem.
+
+**Toda marca nova tem porta de teclado.** `mode` roda `window-menu`; `drawer`, `trail` e `selection`
+abrem o menu no nível deles, que sob a leader são os grupos `w g`, `w y` e `w v`; o número de uma
+trilha é o dígito do modo de trilha. O `footer-mouse-reaches-nothing-new` confere cada par.
 
 ---
 
@@ -2914,6 +3008,67 @@ enquanto a porta segura a encanação: são dois empréstimos de coisas diferent
 **O toque veio de graça, e esse era o teste da base.** Um dedo é tocado pelo mesmo código de
 ponteiro de um mouse, com uma mão própria (`door::touch::Fingers`); nenhuma janela escreveu uma
 linha sobre toque, e toda janela futura o terá.
+
+#### Toda janela digita o que o rodapé digita
+
+A regra do dono — as duas portas fazem as mesmas coisas — tinha uma lacuna que era da base, e não
+de uma vista: só o rodapé tinha onde perguntar. Toda janela que precisava de um nome, um endereço,
+um caminho ou uma senha mandava a pessoa ao rodapé, e o rascunho que só a janela tinha não se
+respondia em lugar nenhum. A metade do minibuffer que pergunta virou peça própria, `line::Line` (o
+id que pergunta, se é segredo, o texto), e as duas portas seguram a mesma: o `Minibuffer` guarda
+uma enquanto pergunta, e o `Ui` de toda porta também (`Ui::asking`, aberta por `Ui::ask`).
+
+- **Enquanto a linha pergunta, toda tecla é dela**: `Door::typed` a desvia antes do
+  `Content::typed`, o mesmo desvio do `minibuffer_key` do rodapé. `RET` responde em
+  `Content::answered(id, texto)`, que a janela liga à mesma chamada da vista que a resposta do
+  rodapé alcança; `Esc` e `C-g` largam (`Content::unanswered`); `DEL` tira um grafema inteiro, e
+  caractere de controle não se digita.
+- **As duas portas desenham a pergunta com as mesmas peças** (`door::list::question_pieces`): a
+  pergunta (`ask-<id>`), o texto — cortado no começo, porque o fim é onde a próxima letra entra — e
+  `ESC` e `RET` como cliques (inv. 19), explicados sob o ponteiro (`about-line-*`). Na janela é a
+  linha 0, no lugar da mensagem e dos atalhos; no rodapé é a linha do minibuffer. O rodapé
+  desenhava a pergunta como prosa, cortada no fim, e ela só se respondia pelo teclado.
+- **Colar não espera ninguém, e cola o que está copiado agora.** `C-v` na linha, ou `Ui::paste`
+  pedido pela janela, lê a seleção viva numa thread com prazo e teto (`pasting.rs`), e o texto volta
+  pelo canal da porta — e só para a pergunta para a qual foi lido. O rodapé lê do mesmo jeito, pelo
+  canal dele (a linha do minibuffer, a busca dos programas, o filtro dos manuais e a imagem do
+  ícone). Ele colava a entrada mais nova do próprio histórico, que nunca guarda uma cópia marcada
+  como segredo: uma senha copiada de um gerenciador de senhas colava a cópia anterior numa linha
+  mascarada, onde ninguém via que era a errada.
+- **Segredo não sai do processo.** O texto é mascarado na tela e no `Debug`, e a resposta vai para
+  `Content::answered` e para nada mais: nem `argv`, nem o soquete do rodapé. No rodapé vale o mesmo
+  para o log: a linha que registra toda resposta do minibuffer omite o texto de uma pergunta
+  secreta (`Minibuffer::answered_a_secret`), e o registro de cada tecla lida perde a tecla enquanto
+  a linha é secreta (`Minibuffer::typing_a_secret`) — antes, a senha ia para o log uma letra por
+  linha. A exceção é o segredo cujo dono É o rodapé: o PIN de um pareamento vai ao agente, que é do
+  processo do rodapé, pelo soquete de controle — que não é `argv`, e cujo registro só escreve o id
+  do comando.
+- **Uma pergunta que acabou leva a linha junto, nas duas portas.** A vista de rede esquece o que
+  perguntou a qualquer tecla que ouve, e um clique chega a ela com a linha aberta: a porta fecha a
+  linha (`network::Question::is_the_views`), e uma senha que chega sem pergunta não entra em rede
+  nenhuma. O PIN de um pareamento que terminou, ou foi trocado por outro, também sai da linha do
+  rodapé, como já saía da janela.
+- **O que só o rodapé faz é pedido a ele fora do laço** (`Ui::tell_the_footer`: a linha de
+  `ronoctua-shell command`, escrita no soquete de controle por uma thread), e um rodapé que não
+  está lá vira frase na linha, nunca silêncio. As ordens do turno em que a janela fecha vão sem
+  thread: o processo acaba com o turno, e a thread morreria antes de conectar.
+- **Abrir um programa é da janela, e a falha é dita nela.** `Ui::launch` inicia um programa num
+  escopo próprio, fora do laço (`foreign::start_in_scope`), e `Ui::launch_entry` inicia uma
+  entrada do lançador pelo id: o catálogo é lido numa thread e a entrada começa como o rodapé a
+  começa (`apps::argv_of`, com o terminal para quem pede um). O que deu errado — "não está no
+  lançador ainda", "não abriu" — é frase na linha DESSA janela. O gerenciador de arquivos, a página
+  do Syncthing, o login do Tailscale e o mapa soltavam um filho e só registravam a falha; a janela
+  dos programas e a fila entregavam o id ao rodapé, que dizia a recusa na linha dele, na outra
+  porta. Numa janela de buffer, que desenha todas as linhas, a mensagem da porta toma as linhas de
+  baixo, e o componente é desenhado sem elas enquanto ela está lá.
+- **Uma tecla chega a toda janela lida do mesmo jeito** (`door::keys::as_read` e `key_of`, um leitor
+  só no lugar das cópias de cada janela): o Caps Lock desfeito como no rodapé — numa janela que
+  digita texto, o terminal e o buffer, ele continua sendo maiúscula, menos num acorde — e o
+  `Delete` sem o U+007F que as cópias digitavam. O botão Voltar do mouse é o `Esc`, pelo caminho da
+  tecla — e um clique numa tecla, do botão ou do cabeçalho, é APERTAR E SOLTAR: o host de um buffer
+  só decide que o `Esc` foi um toque quando ele sobe (segurado, ele escolhe um estado), e com o
+  aperto sozinho o botão Voltar não fazia nada numa janela de buffer e deixava o `Esc` preso para a
+  tecla seguinte.
 
 ## 5. Buffers nativos e o protocolo
 
@@ -3667,8 +3822,10 @@ quebrando o `match` exaustivo dos seis buffers, um diretório inteiro atravessan
 mudança, **e a vista escrita duas vezes** — porque o rodapé não pode ser wasm de jeito nenhum. O
 `ronoctua-shell terminal` já é janela nativa: é esse o molde.
 
-O que as duas portas dividem é `files::View` — estado, teclas, cliques, menu, seletor e as `Row`s.
-O que difere é uma coisa só: **como se inicia um processo**. Por isso o seletor mora DENTRO da vista
+O que as duas portas dividem é `files::View` — estado, teclas, cliques, menu, seletor e as `Row`s —
+e a resposta sobre o que abre um arquivo (`files::opener_of`: texto e tipo que ninguém nomeia vão
+para o editor, o resto para o programa que declara o tipo). O que difere é uma coisa só: **como se
+inicia um processo**. Por isso o seletor mora DENTRO da vista
 em vez de usar o localizador do rodapé; a janela não tem localizador, e dois seletores seriam dois
 comportamentos para o mesmo gesto.
 
@@ -3866,7 +4023,7 @@ inventar um segundo grupo.
 
 O grupo tem DUAS teclas e nada mais: `f f` abre o gerenciador no rodapé e **`f w` o abre em janela**,
 `w` de *window* — a mesma letra que toda vista com segunda porta usa (`t w`, `n w`, `s n w`, `s p w`,
-`s b w`, `s w`). O teto de doze linhas do rodapé está certo para um rodapé e não para o trabalho que
+`s b w`, `s u w`). O teto de doze linhas do rodapé está certo para um rodapé e não para o trabalho que
 se abre um gerenciador para fazer.
 
 Este parágrafo ensinou por meses duas teclas que não existem — `f e` para o seletor do editor e `f m`
@@ -3979,6 +4136,11 @@ ambos. **O que ele fazia continua acontecendo**: abrir um arquivo de texto no ge
 `emacs`, porque o módulo o roda como daemon — um segundo processo levaria segundos e não veria os
 buffers da sessão. E ele pode NÃO estar instalado (o perfil `minimal` o deixa de fora), então a
 ausência vira uma frase na tela e não um silêncio.
+
+**Nas duas portas.** A janela perguntava só ao catálogo: um texto ia para quem declarasse
+`text/plain`, e um arquivo sem tipo conhecido dizia que nada o abria — onde o rodapé mandava os dois
+ao Emacs. A escolha (`files::opener_of`) e o comando (`files::editor_command`, o cliente, `-c` e o
+arquivo, na pasta dele) são uma resposta só, e a janela a inicia no escopo próprio dela.
 
 **E o caminho vem do AMBIENTE, não de um `option_env!` — a segunda vez que esta armadilha custou.**
 Assado no binário, o caminho do Emacs virava referência que o workspace carregava para dentro de
@@ -4212,6 +4374,35 @@ A lista **reordena por baixo**: o que ainda acontece fica acima do que acabou, e
 que uma cópia termina toda linha abaixo dela se move. Um cursor que estava na linha três apontaria
 para outro trabalho sem a mão ter saído do lugar — e o `C-c` seguinte desistiria da transferência
 errada.
+
+#### As duas portas da fila fazem o mesmo, por UMA tabela
+
+O painel do rodapé (`t t`) e a janela (`t w`, um buffer wasm) discordavam: `RET` segurava o
+trabalho num e abria a página dele no outro, `C-p` subia num e segurava no outro, a janela tinha uma
+página por trabalho e perguntava antes de desistir, e o painel não tinha nem a página nem a pergunta
+— desistia na hora. E só o painel abria o que uma instalação pôs no lançador.
+
+Agora as teclas são uma tabela só, em `ronoctua-protocol` (`TRANSFERS_KEYS`), que compila dos dois
+lados (invariante 12). O painel lê as notações; o buffer declara cada acorde sob o líder local
+(`local_binding`: `C-c` é `, c`, que o host dele devolve como `C-c`) e recebe o resto — as setas,
+`RET`, `TAB`, `SPC` — como as intenções que o host já manda. Quais teclas uma linha ENSINA também é
+uma resposta só (`transfers_taught`): segurar só onde o motor segura, desistir só do que está em
+curso, esquecer só do que acabou, abrir só o que uma instalação fez. As duas linhas de teclas são
+cliques, e o que cada porta faz com o id é o mesmo:
+
+- `RET` (e `TAB`, `C-d`) é a página do trabalho, um campo por linha — o que o segundo clique numa
+  linha faz, nas duas; `Esc` volta uma página e só então fecha.
+- `SPC` segura e solta; `C-c` PERGUNTA, na tela da vista, com o `não` primeiro e o cursor nele — as
+  setas andam entre as duas respostas, `RET` fica com a do cursor, `Esc` é `não`, e o primeiro
+  clique numa resposta escolhe e o segundo responde. Uma pergunta sobre um trabalho que acabou some
+  com ele.
+- `C-o` abre o que a instalação pôs no lançador. No buffer isso é um pedido (`launch-job`, com o id);
+  o host acha a entrada — o buffer só sabe que ela existe (`job.opens`) — e a inicia da própria
+  janela (`Ui::launch_entry`), como a janela dos programas faz; o que der errado é dito nas linhas
+  de baixo da janela, que a mensagem da porta toma do componente enquanto está lá.
+
+O registro `job` do WIT ganhou `pauses` e `opens` para isso: sem eles o buffer ensinaria segurar
+numa instalação que a fila recusa segurar, e não saberia que uma linha abre algo.
 
 #### A modeline some em repouso, e o sino também
 
@@ -5272,13 +5463,18 @@ evento e não se desenha.
 `read_exact` é uma leitura **bloqueante sem prazo**, e a `era` só era checada *entre* quadros. Um
 ffmpeg que abre o pipe e nunca escreve — um mount que travou, um dispositivo que sumiu — segurava a
 thread do player pelo resto da sessão: a porta continuava pintando, `orders.recv()` nunca mais
-rodava, e nada na tela dizia. Agora a leitura é `poll` com tique de 50 ms, e o prazo e a `era` são
-perguntados a cada volta.
+rodava, e nada na tela dizia. Agora a leitura é `poll` com tique de 20 ms (`frames::TICK`), e o
+prazo e a `era` são perguntados a cada volta.
 
 E o filho morre por uma **guarda de `Drop`**. Estava escrito à mão em quatro saídas, e a quinta que
 alguém acrescentasse amanhã vazaria um ffmpeg lendo um filme que ninguém está olhando; um `Drop`
 cobre `return`, `?`, `break` e pânico, e não sobra onde esquecer. Mais `process_group(0)`, o idioma
 do `transfers/media.rs`, para o sinal alcançar o grupo.
+
+Desde o estúdio o leitor e a guarda não são mais do player: moram em `ronoctua_camera::frames`, um
+só para todo leitor de quadros da árvore — a câmera, as fontes do estúdio e este miniplayer, que é
+onde as duas armadilhas foram aprendidas. O `motion-never-leaks-a-child` pergunta dos dois lados: o
+player entrega a leitura e o filho a eles, e eles ainda fazem `poll` e ainda matam.
 
 ##### Os controles ficam POR CIMA do filme (2026-08-30)
 
@@ -5473,12 +5669,15 @@ sintoma é um `delete` levando o que a banda não estava por cima. É a lei que 
 gerenciador já obedecem, chegando num gesto novo.
 
 **E ele é desenhado no grupo de CIMA.** Não há teste de profundidade neste renderizador: a ordem é
-retângulo → imagem → texto, e as duas portas já desenham DUAS faixas de retângulos com as figuras
-entre elas (`Quads::draw_range`, que é o que põe os controles do filme sobre o filme). Um retângulo
-empilhado com os outros fundos é um retângulo debaixo de toda miniatura — invisível numa grade, que
-é figura de borda a borda, e uma grade é o único lugar onde ele importa. Medido na bateria de fotos:
-sobre a mesma coluna, a cor própria das figuras cai de 83 073 para 52 916 pixels enquanto a banda
-está de pé, que é o número que um retângulo desenhado por baixo não produz.
+retângulo → imagem → texto, e nas duas portas os retângulos já saem em DUAS faixas com as figuras
+entre elas (`Quads::draw_range`, que é o que põe os controles do filme sobre o filme). O rodapé
+desenha as dele; as de uma janela, desde a porta única, o `Door::paint` desenha uma vez para toda
+janela, e o `present` do gerenciador corta o grupo de cima do fim da lista e o põe em
+`Canvas::over`. Um retângulo empilhado com os outros fundos é um retângulo debaixo de toda
+miniatura — invisível numa grade, que é figura de borda a borda, e uma grade é o único lugar onde
+ele importa. Medido na bateria de fotos: sobre a mesma coluna, a cor própria das figuras cai de
+83 073 para 52 916 pixels enquanto a banda está de pé, que é o número que um retângulo desenhado por
+baixo não produz.
 
 **Arrastar é o protocolo, não um gesto interno.** `carry.rs` é a fronteira com o `wl_data_device` do
 SCTK e o formato é o `text/uri-list` do freedesktop (RFC 2483, `file://` percent-encoded) — é por
@@ -5613,6 +5812,14 @@ defeito, e a única detecção possível é a contagem: contagens diferentes sã
 **E o pacote só ACRESCENTA.** A rua e o bairro entram no `Address` que o embarcado montou, e o
 bairro só substitui a cidade quando está mais PERTO. Um pacote instalado nunca pode piorar a
 resposta que existia sem ele.
+
+**A vista `LEADER s g` filtra nas duas portas.** `f`, ou o segundo clique na linha do filtro,
+pergunta na linha da própria porta — o minibuffer no rodapé, o cabeçalho na janela — sob o mesmo
+`geo::FIND`, e as duas respostas vão para `View::took_a_filter`; colar é o `C-v` da linha, e
+enquanto ela pergunta `f` e `d` são letras do filtro. A janela dizia "digitar é no rodapé", e a
+lista de quinhentas e trinta regiões que ela existe para ler não se estreitava nela. As duas portas
+leem uma tecla pelo mesmo leitor (`geo::press_of_key`), pela notação inteira: `C-f` filtrava nas
+duas, porque cada uma casava o símbolo e largava o modificador.
 
 #### A chave do cache é uma versão, e não um tamanho
 
@@ -6241,6 +6448,14 @@ Os nomes viraram palavras (`wifi-fraco`, `wifi-otimo`), mas o que resolve de ver
 aprender a mesma coisa: fronteira que aceita o que o outro lado recusa transforma um erro de
 digitação num mistério.
 
+**E o enum chegou a 256 nomes, e o wasmtime media a etiqueta errado.** Até a versão 39 o wasmtime
+dava DOIS bytes à etiqueta de um enum ou variante com exatamente 256 casos, onde a ABI canônica — e
+o `wit-bindgen` que constrói todo buffer — dá um (wasmtime #12066). Quando os tokens de ícone
+chegaram a 256, todo `render` de buffer voltou `discriminant N out of range`: o host lia um ícone e
+o byte seguinte como uma etiqueta só. O workspace estava na 38 e está pinado na **40**, em que os
+dois lados medem a etiqueta pela mesma regra; o relato está no comentário do `Cargo.toml`. Descer da
+40 traz o defeito de volta em todo buffer.
+
 #### A vista lê o cache do NetworkManager, e não espera o rádio
 
 O localizador de aplicativos varre o XDG numa thread porque ler centenas de `.desktop` custa dezenas
@@ -6387,12 +6602,13 @@ pede, é o `ronoctua-network-agent`, abrindo um blob selado no TPM2.
 
 **A simplificação que fez isto caber:** o agente não recebe a senha de ninguém. O
 `AddAndActivateConnection` aceita a senha na própria chamada, e as `psk-flags` decidem apenas o que é
-**persistido**. Então o rodapé continua entregando a senha ao NM na hora de conectar, e o daemon só
-entra no boot seguinte — quando não há mais ninguém digitando. Sem isso, a senha teria de atravessar
+**persistido**. Então a porta em que a senha foi digitada — o rodapé ou a janela — a entrega ao NM na
+hora de conectar, e o daemon só entra no boot seguinte — quando não há mais ninguém digitando. Sem isso, a senha teria de atravessar
 mais um canal, e cada canal é uma superfície a mais.
 
-**Escolha por rede, e não política global.** Depois de conectar, uma tecla: lembrar grava
-`psk-flags=1` e sela; qualquer outra resposta deixa `psk-flags=2`, e nada persiste em lugar nenhum. A
+**Escolha por rede, e não política global.** Depois de conectar, uma pergunta da vista, nas duas
+portas: `sim` grava `psk-flags=1` e sela; `não` — o primeiro, onde o cursor nasce, e o `Esc` — deixa
+`psk-flags=2`, e nada persiste em lugar nenhum. A
 conexão acontece **antes** da pergunta, com `psk-flags=2` — guardar primeiro e apagar se a pessoa
 recusar deixaria a senha em disco no intervalo.
 
@@ -6772,6 +6988,24 @@ simplesmente não estarem lá.
    do próprio dono, que o recusou numa linha que age dizendo que aquilo *"é utilizado em elementos
    de descolapsar/colapsar"*.
 
+#### As duas portas digitam, e a pergunta é da vista
+
+O id de 63 caracteres de uma máquina, o caminho de uma pasta, onde fica uma pasta oferecida e o
+valor de uma opção de texto ou de lista são digitados na porta em que a tecla foi apertada: no
+minibuffer do rodapé ou na linha do cabeçalho da janela (`Ui::ask`), onde `C-v` cola — e um id quase
+sempre chega colado. A janela respondia com uma frase mandando digitar no rodapé, e por ela não se
+acrescentava máquina nem pasta.
+
+Quem sabe O QUE foi perguntado é a `View` (`View::asked`), porque a resposta sozinha não diz: um
+caminho pode ser de uma pasta nova ou de uma oferecida, e são ordens diferentes. As duas portas
+entregam o texto ao mesmo `View::answered(id, texto)`, e a pergunta só responde quando o id é o
+dela; sem pergunta da vista, quem decide é o id (`syncthing::unasked`), que é o que faz `s s d` e
+`s s f` funcionarem com a vista fechada. **Pergunta largada deixa de existir** — `Esc` na linha, ou
+qualquer tecla que chegue à vista, já que enquanto a linha pergunta toda tecla é dela. O `Esc` do
+minibuffer não a limpava, e um caminho digitado depois em `s s f` saía como `AddDevice`, com o
+caminho no lugar do id da máquina. Resposta vazia é "deixa para lá" nas duas portas; no rodapé ela
+reabria a pergunta, ou apertava `RET` na linha sob o cursor.
+
 #### A marca, e a única regra polkit nova desde o Tor
 
 A marca da modeline é a única do sistema cuja EXISTÊNCIA é uma escolha: `Never`, `WhenOff` (padrão)
@@ -7079,6 +7313,35 @@ LONGOS `cmd-*`, e numa tela com poucos itens caía **em cima da linha do minibuf
 fotografou. Hoje é uma dica como a de toda outra vista (`chrome::hint_of`), gerada da tabela que a
 própria vista carrega.
 
+### O histórico do shell — `LEADER s h`, e o login que as duas portas digitam
+
+`s h h` desenha a vista na região e `s h w` a abre numa janela (`br.ronoctua.history`). Ela tem
+janela e o clipboard não porque o `atuin` é um BINÁRIO e o `config.toml` é um ARQUIVO, e um segundo
+processo lê os dois (`docs/PENDING.md`, item 6).
+
+**O login são quatro respostas, e quem as guarda é a `View`.** Servidor, conta, senha e a chave da
+primeira máquina — vazia na primeira — são quatro `history::Question` feitas uma depois da outra, e
+um ajuste de texto, lista ou quantidade é uma quinta. A `View` pede cada uma (`Errand::Ask`) e guarda
+as respostas até ali; a porta só abre a própria linha — o minibuffer no rodapé, o cabeçalho na
+janela — e devolve o texto ao mesmo `View::answered`, que responde com a próxima pergunta ou com a
+ordem. Antes, a cadeia morava em três campos do rodapé, e a janela mandava digitar lá. A senha
+espera a chave dentro da `View` num tipo que mascara o `Debug`, vai para o `atuin` pelo STDIN, e sai
+quando a pergunta é largada (`View::let_go`: o `Esc` da linha nas duas portas) ou quando uma tecla
+chega à vista. **A chave também é segredo**: decifra o histórico inteiro, e numa linha às claras ia
+para o journal com toda resposta que o rodapé registra. Valor vazio num ajuste não escreve nada —
+`chave = ` não é TOML, e o Atuin então volta ao padrão em TUDO, calado.
+
+**O cursor guarda a linha, não o índice.** A pergunta da chave cresce uma frase ACIMA da linha
+dela; pelo índice o cursor ficava na frase, o `settle` o levava à primeira linha da página que age
+— o anel da marca — e o segundo `RET`, o "sim, mostra", girava o anel. Hoje a linha da chave é a
+mesma nos três estados (mostrar, perguntar, mostrada), e o `RET` na chave mostrada a guarda. O
+primeiro clique seleciona e o segundo age (inv. 19) — o clique apertava `RET`, e o primeiro clique
+em "sair" saía —, e título ou fato não pegam clique.
+
+**O que uma ordem diz ao terminar é uma resposta só** (`history::said_when_done`): recusa sempre;
+sincronizar e sair, pelo nome; ajuste, marca e login, nada, porque as linhas já mostram. O rodapé
+dizia "o histórico está sincronizado" depois de TODA ordem, e a janela não dizia nada.
+
 ---
 
 ### Os atalhos do compositor
@@ -7147,6 +7410,20 @@ bilinear (9,5 ms, e o que a redução perde é o detalhe que o desfoque existe p
 é a pessoa, o pixel original fica byte a byte); e a câmera é lida numa thread própria que guarda só
 o quadro mais novo, então nenhum efeito, por lento que seja, volta a acumular atraso. Medido depois,
 com a câmera real e o fundo desfocado: 30 quadros por segundo.
+
+**Os ajustes digitam nas duas portas.** `LEADER s c c` é a região do rodapé e `LEADER s c w` a
+janela, e as duas perguntam o nome de uma cena nova, o novo nome da cena no ar, um roteiro, o
+endereço da transmissão e a chave dela: a tecla da linha devolve uma pergunta (`Errand::Ask`), o
+rodapé a faz no minibuffer e a janela na própria linha do cabeçalho, e as duas respostas entram em
+`camera_settings::answered`. A vista fica na tela enquanto se digita, com o cursor na linha que
+perguntou — o rodapé fechava a vista antes de perguntar, e a resposta voltava para uma tela vazia.
+Resposta vazia é "deixa para lá" nas duas portas. O roteiro é lido contra o livro de cenas na hora de
+cumprir, e o que não se lê vira frase. **A chave é segredo**: mascarada na linha, fora do log, e
+escrita no arquivo `0600` pelo processo que a digitou — nunca desce o soquete do rodapé nem entra
+num `argv`. As duas portas leem uma tecla pelo mesmo leitor (`camera_settings::press_of_key`), que lê
+a letra pela notação inteira: o rodapé tomava `C-d` por `d` e tirava uma cena, e a janela não fazia
+nada. O som (`audio::press_of_key`) e os ponteiros (`pointers::press_of_key`) tinham o mesmo defeito
+com `C-m` e `M-d`, e têm o mesmo leitor.
 
 **Genérico por construção.** Nada nomeia um fabricante. Câmera é o nó cujo `device_caps` tem
 `VIDEO_CAPTURE`; infravermelho é o nó cujo único formato é cinza; a identidade é o `card`, o `bus` e
@@ -7942,6 +8219,27 @@ teste de unidade deste repositório já tinha levantado, e que o dono relatou po
 cinco vezes. Este dispararia a cada atualização vencida, numa máquina em que ele pode não estar
 sentado.
 
+#### A atualização é uma vista, com as duas portas
+
+`LEADER s u` virou grupo: `s u u` abre a vista no rodapé, `s u w` na janela — a porta que a marca
+animada da modeline abre — e `s u n` começa a atualização agora. As duas portas mostram a mesma
+`update_window::View`: os passos declarados com o veredito de cada um, o que o passo sob o cursor É
+(o segundo registro, com o motivo de um pulo) e as duas saídas, a da metade root e a da pessoa, ao
+vivo por dois `journalctl -f` que a porta mata ao fechar. As teclas são uma tabela só, ensinada nas
+duas e clicável nas duas: as setas andam nos passos, `C-j` e `C-k` andam a saída uma página, `G` vai
+ao fim dela, `u` começa a atualização pela mesma porta do `s u n` (`update_window::begin`, com a frase
+que diz se foi pelo cérebro ou pelo systemd), e `a` e `p` respondem à contagem do cérebro pela mesma
+decisão dos botões da faixa (`brain::answer`: adiar enquanto só está anunciado, abortar quando já
+roda, e dizer que não há nada quando não há). A janela só olhava: não tinha cabeçalho, não começava
+nada e não respondia à contagem.
+
+Cada porta arruma a vista no seu espaço. A janela a divide em duas metades, a dos passos e a da
+saída, cada uma com a sua rolagem. A região do rodapé tem teto de linhas, e nela a vista é UMA lista
+— o segundo registro, os passos, uma linha de ar e a saída —, que a rolagem, a barra e a roda da
+região já leem; ela conta as linhas sem construí-las e constrói só as que desenha, porque a saída
+guarda até duas mil. Uma linha que chega de um diário não move a página, com a exceção que um log
+tem: a página que a pessoa levou ao fim da saída continua no fim enquanto o fim anda.
+
 #### A faixa é a superfície do rodapé crescendo PARA BAIXO
 
 Espelho da faixa de notificação, que cresce para cima. Uma superfície só, sem popup e sem card
@@ -7984,6 +8282,40 @@ diferente. É o único fundo do arquivo que carrega matiz, e é esse o ponto —
 fazer alguma coisa consigo mesma, e a linha que diz isso não pode se ler como uma modeline que mudou
 de ideia. O branco dela também é o único quase-branco neutro do arquivo, e não sai desta linha: o
 corpo do texto é quente de propósito, e sobre um fundo azulado um branco quente se lê como sujo.
+
+### Idioma e região — `LEADER s l`, duas portas que digitam e dois escritores de um arquivo
+
+A vista é uma `View` (`locale.rs`) com duas portas: a região do rodapé (`s l l`) e a janela
+(`locale_window.rs`, `s l w`). As duas leem uma tecla pelo mesmo leitor, `locale::press_of_key`,
+pela notação inteira da `OF_THE_VIEW` — e foi isso que fez `z`, `a` e `c` existirem: a linha de
+atalhos das duas portas as ensinava, e em nenhuma a tecla, ou o clique nela, fazia alguma coisa.
+
+**As duas portas digitam.** O fuso desta interface, um lugar novo, onde fica um lugar e a data, a
+hora e o fuso da máquina são cada um um `Asking`, perguntado na linha da própria porta — o
+minibuffer no rodapé, o cabeçalho na janela (`Ui::ask`) — sob o comando de `Asking::command`; a
+resposta das duas vai para `locale::took`, que confere antes de escrever, e colar é o `C-v` da
+linha. A janela dizia "digitar é no rodapé", e as três perguntas da máquina nem no rodapé chegavam a
+lugar nenhum: eram feitas sob ids que nenhum comando tinha, e a resposta rodava um comando que não
+existia. **Um lugar é nomeado pelo FUSO**, lido quando a pergunta abre, e nunca pela linha, que a
+outra porta pode ter mexido entretanto. `c` pergunta sobre o lugar sob o cursor — era "o lugar
+zero" — e, longe de qualquer lugar, diz por quê; a coordenada que ele pede não liga o tempo, e a
+pedida pelo interruptor do tempo (`Asking::Weather`) liga.
+
+**O arquivo é o broadcast, e uma porta escreve uma MUDANÇA, nunca a cópia inteira.** `locale.json` e
+`world.json` têm dois escritores, e cada porta escrevia a cópia que tinha lido ao abrir — desfazendo
+o que a outra tivesse escrito depois: um fuso escolhido no rodapé voltava ao antigo no próximo anel
+girado numa janela aberta antes, e um lugar acrescentado sumia no próximo interruptor. Agora a vista
+entrega a mudança (`Setting`, `GlanceChange`, o lugar pelo fuso) e a porta a deita sobre o que o
+arquivo diz na hora de escrever (`prefs::with`, `glance_change`). E as duas portas vigiam os dois
+arquivos: o `locale.json` pela `Door` de toda janela, porque as datas de toda janela seguem a forma
+escolhida, e pelo rodapé, que só o lia ao nascer; o `world.json` pelo rodapé e pela janela desta
+vista. A vigia relê só os arquivos (`View::reread_files`) — o barramento e o soquete do brain
+respondem o mesmo de um instante atrás.
+
+O `world.json` se lê com `parsed` antes de escrever: quem regrava a lista sobre o padrão que um
+arquivo quebrado devolve apaga os lugares dele. O `locale.json` não, de propósito: todo campo dele é
+um anel da tela, então o que um arquivo quebrado perde é o que a tela já mostra como padrão — e
+recusar deixaria os quatro anéis sem girar até alguém consertar o arquivo à mão.
 
 ### O relógio da máquina — `ronoctua-clock`, e por que o automático é o padrão
 
@@ -8036,7 +8368,11 @@ o PPD pelo `path_namespace` de `/org/freedesktop/UPower`), `login` (`PropertiesC
 `PrepareForSleep`) e `orders`. **Os fds dos inibidores vivem na thread das ordens** — fechar o fd é
 soltar o inibidor, então quem o segura tem de ser o processo que sobrevive: a janela nativa manda
 qualquer outra ordem direto ao seu `Handle` (PPD, logind e sysfs não têm estado), mas *manter
-acordado* ela encaminha ao rodapé por `ronoctua-shell command`. E os dois interruptores são lidos de
+acordado* ela entrega ao rodapé pelo soquete de controle (`Ui::tell_the_footer`), com o estado QUERIDO
+como argumento (`power-keep-awake on`/`off`, `power_words::keep_word`) — nunca uma inversão que o
+rodapé decidiria de novo por uma leitura um instante mais velha ou mais nova —, e um rodapé que não
+está lá vira frase no cabeçalho. A leader roda o mesmo comando sem argumento, e aí ele inverte o que o
+logind diz. E os dois interruptores são lidos de
 `ListInhibitors`, nunca da memória: reiniciar o rodapé solta o fd, e a linha tem de dizer.
 
 **Nada pergunta**, pela mesma razão do udisks: não há agente polkit na sessão. Toda chamada ao logind
@@ -8115,7 +8451,9 @@ cabe na faixa, e a horizontal do FontAwesome tem metade da altura). A regra foi 
 `gen-glyphdb.py`, que já abre a fonte: o tamanho do ícone, a menos que ele ponha a tinta do glifo
 acima da faixa do check (`chromeTolerance`, os 15% para cada lado, agora num lugar só) — aí o
 tamanho que leva a tinta à do dígito. 22 para o sino, 15 para a bateria, e todo desenho que já
-passava fica exatamente onde estava — e a regra alcança só o que é desenhado CENTRADO na célula:
+passava fica exatamente onde estava — e a regra alcança só o que é desenhado CENTRADO na célula
+(`Size::OnTheCell`, e `Size::Lowered` com tamanho, a legenda que o teclado na tela baixa até o meio
+de uma linha):
 o glifo à frente de um segmento da modeline, da faixa e da linha do brain, e os dois chevrons; linha
 de listagem é texto no tamanho base e não muda. Sai no `icons.json`, vira `tokens::icon::chrome_size`
 (só as exceções escritas, agrupadas por tamanho) e é o número que o check remede. Nenhuma lista à
@@ -8155,18 +8493,34 @@ que não fala dela seria uma porta para uma parede.
 
 O molde é o da energia, e a razão é a mesma: o rodapé tem teto de doze linhas (inv. 14) e esta vista
 tem nove seções. `s n n` desenha na região; `s n w` abre a mesma `View` numa janela
-(`br.ronoctua.network`). O que a `View` guarda é um cursor, um arquivo lido esperando resposta e a
-senha do hotspot enquanto ele está de pé — nenhuma LEITURA: o `Snapshot`, os pontos de acesso, o
+(`br.ronoctua.network`). O que a `View` guarda é um cursor, um arquivo lido esperando resposta, a
+senha do hotspot enquanto ele está de pé e sobre o que é a pergunta aberta — nenhuma LEITURA: o `Snapshot`, os pontos de acesso, o
 `/proc` e os dois túneis chegam num `Facts` na hora de pedir as linhas. **Um parâmetro e não
 quatro**, porque uma assinatura que cresce com as seções é uma assinatura editada nas duas portas, no
 clique e em cada teste toda vez que uma seção nasce.
 
-**O que se digita se digita no RODAPÉ.** Senha de Wi-Fi e caminho de arquivo passam pelo minibuffer,
-que a janela não tem — então lá a linha DIZ onde responder, que é o arranjo que as perguntas de
-pareamento do Bluetooth já têm. Uma porta que não pode perguntar não finge que pode.
+**O que se digita é decidido pela `View`, e as duas portas digitam.** Três coisas aqui pedem texto: a
+senha de uma rede protegida sem perfil, o caminho de um `.conf` ou `.ovpn` e um ajuste do Tor que não
+é anel nem interruptor. A `View` decide que uma linha é necessária (`Errand::Ask` com uma `Question`:
+o id do comando e se é segredo) e guarda sobre o que ela é — a rede, o ajuste —, porque quando o
+texto volta a única outra testemunha seria o cursor, e uma varredura que chega no meio o move. Cada
+porta abre a própria linha — o minibuffer no rodapé, o cabeçalho na janela (`Ui::ask`, com colar) —
+e entrega a resposta ao mesmo `View::answered`: a senha junta a rede perguntada; o caminho é lido
+por `network::read_tunnel` (teto de 256 KiB, `~/`, recusa com o nome do arquivo) e o cursor cai em
+"trazer", com a leitura do arquivo acima; o valor do Tor substitui, e numa lista acrescenta — vazio
+limpa. A tecla também é lida de um jeito só, pela notação inteira (`network_words::press_of_key`):
+lida sem o modificador no rodapé e pelo texto na janela, o `S-<right>`/`S-<left>` que a ficha do Tor
+ensina não fazia nada em nenhuma das duas.
 
-**A pergunta "lembrar?" continua sendo do rodapé**, desenhada acima da lista e não pela `View`: a
-senha que ela guarda vive por uma tecla, e uma `View` que duas portas desenham não pode carregá-la.
+**A pergunta "guardar a senha?" é uma tela da `View`**, nas duas portas: a pergunta no topo, `não` e
+`sim` embaixo dela como linhas que a tecla e o clique respondem (inv. 19), e a lista embaixo como
+contexto — toda linha dela vira título enquanto a pergunta está de pé, então o cursor não anda até
+ela e o clique não a pega. O `não` vem primeiro, o cursor nasce nele e o `Esc` também é `não`. A
+`View` guarda só o nome da rede: a senha fica na porta que a digitou e sai de lá nas duas respostas,
+ou quando a vista fecha. O `Errand` que a leva ao NetworkManager mascara o `Debug`
+(`network::Password`), e a linha do rodapé que registra a resposta do minibuffer não escreve o texto
+de uma pergunta secreta (`Minibuffer::answered_a_secret`) — antes, a senha do Wi-Fi ia para o
+journal como "argumento" do `network-connect`.
 
 **As cinco marcas somem em repouso.** `airplane`, `net-off`, `vpn`, `tailscale` e `tor` — as três
 primeiras já existiam; as duas novas são RUNNING e não INSTALADO: um tailnet em que ninguém entrou e
@@ -8273,6 +8627,11 @@ O molde é o da rede e o da energia, e a razão é a mesma: o rodapé tem teto d
 a ficha de UMA tela tem dezoito. `s d d` desenha na região; `s d w` abre a mesma `View` numa janela
 (`br.ronoctua.display`). Um crate é a fronteira (`ronoctua-display`): o compositor por IPC, os backlights por
 `/sys`, os monitores externos por DDC/CI escrito por nós sobre `/dev/i2c-*` — sem `ddcutil`.
+
+Nada se digita nesta vista, e não há o que colar nem soltar em nenhuma das portas; o que as duas
+dividem é o leitor de tecla (`display_words::press_of_key`): setas, `RET` e `Esc` com o que estiver
+segurado, e as letras pela notação inteira da `OF_THE_VIEW`. O rodapé largava os modificadores e
+tomava `C-a` por `a`; a janela lia o caractere que o xkb digitou e tomava `C-a` por nada.
 
 **O que é diferente de toda outra vista é o RELÓGIO.** Uma mudança de escala, de resolução, de taxa ou
 de giro pode deixar a tela ilegível, e quem não consegue ler a tela não consegue desfazer. Então a
@@ -8459,15 +8818,49 @@ fronteira que este entregável não abriu.
 
 **A vista tem TRÊS níveis e o `Esc` volta um**: a lista (o rádio, os pareados, os por perto), o
 DETALHE de um dispositivo (cada fato numa linha, e uma linha por serviço que ele oferece) e o rádio.
-As teclas são LETRAS NUAS — nada se digita ali —, lidas da própria `OF_THE_VIEW` pelas duas portas,
-de modo que uma letra acrescentada à tabela é uma tecla que funciona e uma tecla fora dela é uma
-tecla que ninguém ensina. **Uma pergunta de pareamento toma a tela** (nada pareia até ela ser respondida) e o `Esc` ali
+As teclas são LETRAS NUAS — o que se digita vai para a linha da porta, que toma toda tecla enquanto
+pergunta —, lidas da própria `OF_THE_VIEW` pelas duas portas, de modo que uma letra acrescentada à
+tabela é uma tecla que funciona e uma tecla fora dela é uma tecla que ninguém ensina. O leitor é um
+só (`bluetooth_words::press_of_key`), pela notação INTEIRA: o rodapé montava a notação só com o
+shift, e `C-f` virava `f` e esquecia o aparelho sob o cursor, enquanto a janela, lendo o caractere
+de controle, não fazia nada. O Syncthing tinha a mesma divisão (`C-d` esquecia uma pasta) e ganhou
+o mesmo leitor único (`syncthing::press_of_key`). **Uma pergunta de pareamento toma a tela** (nada pareia até ela ser respondida) e o `Esc` ali
 responde NÃO, em vez de deixar o outro lado esperando os sessenta segundos do bluetoothd. Quando a
 vista NÃO PODE abrir — o gerenciador de arquivos está no rodapé, segurando uma pasta que alguém
 navegou —, a pergunta vira NOTIFICAÇÃO, com os dois botões que rodam os mesmos comandos do `s b y` e
 `s b n`; e ela é RETIRADA quando a pergunta acaba, porque um cartão crítico com dois botões que não
 respondem mais nada é pior que cartão nenhum. Pergunta que pede DÍGITOS (um PIN) não aceita um "sim"
-seco de lugar nenhum: abre a vista e pede no minibuffer, senão o que sairia daqui é um PIN vazio.
+seco de lugar nenhum: pede os dígitos na linha da porta em que se está — o minibuffer, ou o cabeçalho
+da janela —, MASCARADOS nas duas, senão o que sairia daqui é um PIN vazio. Um nome novo também se
+digita nas duas portas, partindo do nome que a coisa já tem (`View::name_being_changed`), e a vista
+guarda O QUE está sendo renomeado — o aparelho, ou esta máquina — e diz o que a resposta vira
+(`View::renamed`), a mesma chamada nas duas.
+
+**A pergunta de pareamento se responde também na janela.** O agente é do rodapé — o bluetoothd
+pergunta ao agente padrão, e só uma porta pode registrá-lo —, então a pergunta chega ao processo do
+rodapé. Ele a escreve num arquivo do diretório de runtime enquanto ela existe (`bluetooth::standing`,
+`0600`, por tela, com o pid de quem escreveu) e o apaga quando ela acaba; a janela vigia o arquivo por
+inotify e desenha a pergunta como o rodapé desenha, com `y`, `n`, `Esc`, `RET` na linha e os dígitos
+na própria linha. A resposta volta ao agente pelo soquete de controle (`bluetooth-accept`,
+`bluetooth-refuse`) — nunca num argv, e o rodapé só registra o id do comando. A resposta da janela
+NOMEIA a pergunta para a qual foi dada — o caminho do aparelho e o que ele perguntou, antes dos
+dígitos (`bluetooth::Answer`) —, e o rodapé só a aceita se é essa a pergunta de pé; o agente, por sua
+vez, só responde a pergunta que ainda espera (`Questions::answer`). Entre a janela ouvir o arquivo e
+responder pelo soquete, a pergunta pode acabar e outra tomar o lugar, e o "sim" dado a um aparelho
+confirmava o seguinte. Pelo mesmo motivo, a linha de dígitos do rodapé sai quando a pergunta acaba
+ou é trocada, como a da janela já saía. Um arquivo cujo
+escritor morreu não é pergunta: o agente foi junto, e a janela lê nada. E quando a pessoa ESTÁ na
+janela — o foco é dela, que foi onde o `p` foi apertado —, o rodapé não abre a região nem toma o
+teclado: é na janela que os dígitos vão ser digitados. Uma pergunta ainda de pé quando a janela fecha
+VOLTA ao rodapé (`bluetooth-open`), e a vista do rodapé abre sempre sobre a pergunta que estiver de
+pé: fechar a janela não responde por ninguém, e responder não por ela seria decidir pela pessoa.
+Se a região está ocupada e a vista não pode abrir, a pergunta vira o cartão, como quando chega com
+a região ocupada — senão ficaria em tela nenhuma até o agente desistir.
+
+**A frase de uma linha aparece sob o ponteiro nas duas portas.** Um fato sobre o qual ninguém tropeça
+duas vezes por ano carrega uma frase inteira (`Row::description`); o rodapé a põe na linha de
+mensagem, e a janela na linha 0 do cabeçalho (`door::list::header_about`), abaixo da pergunta e da
+mensagem e acima dos atalhos — a mesma ordem.
 
 ---
 
@@ -8628,6 +9021,37 @@ com o driver, que pode fazer o commit numa thread própria. E a prova é a JANEL
 depois da coluna, comparada com a de ANTES dela: comparada com a primeira de todas, o teste passava
 com o defeito.
 
+**As três portas fazem as mesmas coisas.** O rodapé, a janela e a coluna leem a mesma `View`, e o
+que uma porta tinha e a outra não foi fechado nos dois sentidos:
+
+- **Digitar é da porta onde se está.** O caminho ou endereço, o vídeo a seguir e o pareamento são
+  uma `player::Question` que a vista entrega à porta: o rodapé pergunta no minibuffer, a janela e a
+  coluna na linha do próprio cabeçalho (`Ui::ask`), e a vista continua aberta embaixo — o rodapé
+  fechava a vista para perguntar e perdia a pasta e o propósito dos arquivos. A resposta vai a UMA
+  função (`player::answered`), qualquer que seja a porta, e colar na pergunta vale nas duas. O
+  pareamento são duas perguntas: o nome da outra máquina, e depois o código, mascarado — o código
+  não entra em log nem em `argv`, e o `Debug` do pedido não o escreve (`player::Code`); o nome fica
+  com a PORTA entre as duas perguntas (`player::Pairing`), porque `LEADER p m` pergunta sem vista
+  aberta. O código vai numa thread (`player::pair_then`), nas duas portas: o player só responde
+  depois de a outra máquina responder, o que pode passar dos três segundos que toda outra ordem
+  espera — o laço ficava parado por eles, e a espera vencida dizia "o player não está rodando"
+  enquanto o pareamento seguia. A espera agora é a do pareamento, e vencê-la tem frase própria
+  (`player-pair-no-answer`).
+- **A posição e o volume são barras nas linhas**, nas duas portas: apertar põe o valor ali e
+  segurar arrasta (`player::slider_at` e `player::slid`, a aritmética da barra de tempo da janela).
+  A barra é o começo do valor que `chrome::field_pair` posicionou, lida de volta do campo — é pega
+  onde foi desenhada.
+- **Parar é uma tecla da vista** (`s`), a mesma do botão da janela.
+- **O rodapé mostra a imagem.** A região é larga e baixa, então a imagem vai à direita das linhas,
+  na largura da coluna (`space.column.width`), com a última célula para a barra da região
+  (`player::footer_panel`, função só da largura: as linhas são dispostas no que sobra, e perguntar a
+  altura da região de volta seria o rodapé perguntando a si mesmo). A thread de quadros é a mesma da
+  janela (`player_picture`), e só existe enquanto a vista mostra uma imagem. `o` é o palco do
+  rodapé — a imagem toma a região, as linhas somem e continuam respondendo às teclas, `Esc` as
+  devolve —, um clique na imagem toca ou pausa e o duplo clique a põe na tela inteira. Tela inteira e
+  canto continuam sendo da janela, aberta já assim: uma faixa da tela não enche a tela nem flutua,
+  que é a regra da coluna.
+
 **A imagem sozinha é um palco, e os controles são dela só enquanto há atividade.** Fora do palco a
 faixa da imagem é um tom de superfície, e o quadro é pedido na proporção do vídeo para que ela
 apareça; no palco a imagem toma a superfície e o preto é a tarja do próprio player. O transporte
@@ -8649,6 +9073,276 @@ lado. O slot é declarado uma vez: quem o toma encerra quem o tinha.
 uma nota de sondagem de 25, e o libmpv exige 26; sem nome, todos terminavam em "formato não
 reconhecido". Baixar o limiar para todo arquivo deixaria um palpite fraco ganhar noutro lugar, então
 o nome vai só para essas extensões, nas opções do `loadfile`.
+
+### Programas — `LEADER i`, os programas da PESSOA, e por que não há daemon novo
+
+O dono pediu, numa feature só, instalar, experimentar, atualizar e remover programas **só para a
+pessoa** — pacotes Nix, Flatpak, AppImage, apps Android e web apps —, com busca em todas as fontes.
+Isso colide com o invariante 6 ("se não está no flake, não existe"), e a exceção foi APROVADA
+pelo dono e escrita no próprio invariante: os programas da pessoa ficam fora do flake; o sistema,
+o repositório e `/etc` nunca. As duas únicas escritas fora da home são a imagem do Android, que a
+pessoa pede (uma unidade root estreita), e o store, que quem escreve é o daemon do Nix. O SUPORTE —
+Flatpak, nix-flatpak, `appimage-run`, Waydroid, o índice de busca — continua declarado.
+
+**Por que não há daemon novo.** O desenho do motor propôs um (`ronoctua-softwared`, com socket
+próprio), e a fila já é exatamente o que ele seria: um processo de usuário que sobrevive ao rodapé,
+com lista, progresso, cancelamento, a marca da modeline e a notificação de fim. Então o trabalho é
+um crate com biblioteca e linha de comando (`ronoctua-software`), e a fila roda a CLI como filho —
+o molde do yt-dlp (`Work::Software { order, label }`, `ronoctua-software run --progress` com a
+ordem em JSON no stdin, linhas `RONOCTUA\tstep|done|failed` no stdout). O filho vai para um escopo
+próprio (`systemd-run --user --scope --collect --slice=app.slice -p OOMPolicy=kill`): a unidade da
+fila é `OOMPolicy=stop`, e um OOM dentro dela levaria todas as cópias em voo junto. Cancelar é
+`SIGTERM` no grupo e `SIGKILL` 3 s depois; **pausar não existe** (`Engine::pauses()` falso), porque
+um `nix profile add` parado no meio não é um estado que se retoma.
+
+**Uma pista por fonte, e ela é um ARQUIVO.** A tela manda ordens pela fila e a atualização roda a
+mesma CLI de uma unidade: as pistas têm de ser algo que os dois vejam. Um `flock` por fonte
+(`lock.rs`) — o kernel solta quando o processo morre, e uma ordem que esperava diz que está
+esperando em vez de parecer travada.
+
+**O que a pessoa tem é lido da REALIDADE, toda vez** (`state::read`): o manifesto do perfil Nix
+(`nix profile list --json`, v3), `flatpak list --user`, as AppImages com o `app.json` delas,
+`waydroid app list`, e os `.desktop` dos web apps. Não há registro de "o que instalamos" para
+divergir da máquina: o que se instalou pelo terminal aparece, o que se apagou à mão some.
+
+**Ensaio.** No `.#dev` (`RONOCTUA_SOFTWARE_REHEARSE=1`) toda ordem que muda algo imprime o argv e
+não roda: o laço vive na sessão do dono, e experimentar a tela não pode tocar o perfil Nix, os
+Flatpaks nem o Android do host. Buscar e ler continuam reais.
+
+#### Nix: o perfil da pessoa, e o não livre só com consentimento
+
+`nix profile add|remove|upgrade|rollback|wipe-history` com `--log-format internal-json`; o
+progresso agrega os registros como o `progress-bar.cc` do próprio Nix (lido na 2.34.8), e `-v` NÃO
+entra — só acrescenta ~600 linhas de "evaluating file" num `hello`. `nixpkgs#` é a MESMA revisão do
+sistema: `nix.registry.nixpkgs` aponta para o input travado por `narHash`. **Não livre só com
+consentimento por pacote**, lembrado em `software.json`: o nixpkgs recusa unfree em avaliação pura
+e a única porta é `NIXPKGS_ALLOW_UNFREE=1 --impure`, passada também nos upgrades daquele elemento
+e só neles. Quebrado, inseguro e indisponível são recusados ANTES de o Nix rodar, pelo índice.
+`remove` e `upgrade` procuram o elemento no manifesto antes, porque um nome que não casa só avisa
+e sai 0.
+
+**O índice de busca é assado na build** (`nix/software-index.nix`): a receita do próprio nixpkgs
+(`packages-info`) sobre o input, com `tryEval` por registro e `lib.meta.availableOn` (o `available`
+do meta mentia sobre o Chrome, que é unfree e não indisponível). Portão M1 medido antes de escrever
+código: 4,2 GB de pico e 36 s, dentro do teto; 144 198 pacotes, 18,8 MB. Nada vai à memória: uma
+busca é uma passada no arquivo (27–61 ms otimizada) e uma consulta por atributo é busca binária em
+páginas de 4 KiB (0,08 ms).
+
+**Experimentar sem instalar** (`trial.rs`): `nix build --out-link $XDG_RUNTIME_DIR/…/trials/<k>/out`
+— a raiz de GC morre com a sessão, e a coleta do store leva o resto; é isso o "não permanente".
+Roda como `ronoctua-try-<k>` (`systemd-run --user --collect --slice=app.slice`), que executa
+`ronoctua-software trial-exec <registro>`: o registro guarda o que rodar, e o nosso terminal fica
+FORA da casa descartável. Três rastros: **casa descartável** (padrão; `HOME` e `XDG_*_HOME` sob o
+cache, apagados no fim), **a casa da pessoa**, e **caixa de areia** (`bwrap`: store e `/etc` só
+leitura, casa em tmpfs, só `wayland-1` e `pipewire-0` no runtime, rede ligável). Programa sem
+`.desktop` abre o shell da pessoa com o `bin` do pacote na frente do `PATH` — rodar `rg` direto
+piscaria uma janela e fecharia. "Ficar com ele" é `nix profile add` do MESMO caminho: instantâneo.
+
+#### Flatpak: sempre `--user`, e o nix-flatpak sem apagar nada
+
+Toda chamada leva `--user` e `--` antes dos posicionais (o GLib só engole `--` quando nada não
+lido vem antes). **`-y` e não `--noninteractive`**: na 1.16.6 pinada o segundo troca para uma
+transação "quieta" que imprime uma linha por operação e nenhuma porcentagem; com `-y` e
+`FLATPAK_FANCY_OUTPUT=0` sai a tabela e o ` NN%`. O progresso é em MILÉSIMOS da transação, nunca
+bytes — a saída simples não tem byte nenhum.
+
+**nix-flatpak** (v0.7.0, módulos NixOS e Home Manager) está pronto para o declarativo, com três
+travas: `uninstallUnmanaged = false` (senão toda instalação da pessoa sumiria na próxima ativação),
+nada de atualização na ativação nem por timer (quem atualiza é a sequência da distro), e o remoto
+flathub vem de um `.flatpakrepo` VENDORIZADO (`assets/flatpak/`), para a ativação funcionar
+offline. `ronoctua.software.declaredFlatpaks` vira `services.flatpak.packages` do HM — é a linha
+que "Tornar permanente" copia. **Tirar um id dessa lista DESINSTALA o app** na próxima ativação
+(lido no script gerado do nix-flatpak); o que a pessoa instalou à mão continua protegido. Um app
+declarado aparece na lista como do flake e recusa remover (`DeclaredInTheFlake`), com frase.
+
+**Busca**: a API do Flathub quer `pt-BR` — medido ao vivo, `pt_BR` responde em inglês e `pt-br`
+em português de Portugal. Sem rede, responde o catálogo appstream que o próprio flatpak deixa
+(3 352 apps em 0,14 s, 10,8 MB de pico, cache de 1,84 MB lido em 8 ms, busca em 0,4 ms). As
+atualizações são guardadas por COMMIT do remoto e não por versão: o cache para de mentir no
+instante em que alguém atualiza pelo terminal.
+
+#### AppImage: `~/Applications`, e o arquivo é lido em Rust
+
+ELF mais `AI\x02`; tipo 1 e DwarFS são recusados com frase. O offset do squashfs é
+`e_shoff + e_shentsize × e_shnum` (conferido contra o `readelf` num AppImage real), e o
+`unsquashfs` extrai SÓ o `.desktop`, o `.DirIcon` e o `hicolor`. Três medidas da 4.7.5:
+`-follow-symlinks` desliga os curingas (os links são resolvidos em Rust, dentro do diretório de
+trabalho), `-q` sozinho ainda desenha a barra (é `-n`), e um padrão que não casa sai 0. O
+`.desktop` nosso tem `Exec=/run/current-system/sw/bin/appimage-run <arquivo>`. **Atualizar** é
+pela última release do GitHub que o `.upd_info` nomeia — resposta guardada 6 h e `If-None-Match`,
+porque o limite anônimo é 60 por hora e o ETag alterna entre dois valores (medido); o digest da
+release é conferido quando existe, e é `null` em algumas. A extração velha do `appimage-run` sai
+junto com a troca; uma órfã espera 24 h, porque pode ser um app aberto à mão.
+
+#### Android: Waydroid, a imagem com Google Play, e o F-Droid verificado
+
+Só no perfil `full`. **Nada é baixado até a pessoa pedir**: preparar inicia uma unidade root
+modelo (`ronoctua-android-init@GAPPS` ou `@VANILLA`, `waydroid init -s <tipo>`, que confere o
+sha256 do OTA sozinho) — é a única escrita fora da home que a pessoa dispara, e a regra polkit dá
+SÓ o verbo `start`, SÓ essas unidades (mais o reset e a do id), SÓ ao usuário. O
+`waydroid-container` ganhou `ConditionPathExists=/var/lib/waydroid/waydroid.cfg`: antes do preparo
+ele PULA em vez de falhar, porque um sistema `degraded` faz a ativação HM do nix-flatpak pular calada.
+
+**A imagem padrão é a com Google Play (GAPPS)**, escolha do dono; a sem Google continua oferecida.
+Com GAPPS a Play Store só funciona depois de registrar o aparelho como não certificado, e por isso a
+tela mostra o `android_id` (lido por uma unidade root para `/run/ronoctua-android/android-id`) com
+"copiar" e o endereço do Google. O Waydroid sai 0 nos próprios erros: instalar e remover são
+confirmados listando os apps de novo.
+
+**O F-Droid é verificado de ponta a ponta**, e em Rust: o `entry.jar` assinado (RSA-2048/SHA-256,
+sem atributos assinados) → o certificado fixado (`43238d51…c9ccab`) → o sha256 do `index-v2.json`
+→ o sha256 do APK. O índice de 61 MB é compactado em streaming (4 458 apps, 264 só-ARM; 2,5 s em
+debug, 25,8 MB de pico, 5,47 MB no disco) e apagado. A versão oferecida é a estável mais nova que
+roda em x86 e pede Android 13 ou menos; só-ARM é desenhado recusando.
+
+#### Web apps: `--app`, nunca `--kiosk`
+
+A janela é `chrome --profile-directory=<p> --app=<url>`. **`--kiosk` foi lido na fonte do Chromium e recusado**: vale
+para o PROCESSO inteiro do Chrome — ou tranca toda a navegação em tela cheia, ou é ignorado com o
+Chrome já aberto — e pede outro perfil, perdendo os logins. Uma janela `--app` lado a lado no
+Scroll pede decoração de servidor e sai sem omnibox, abas, barra de título nem botões: só o
+conteúdo e a borda de 2 px do compositor, que o dono decidiu manter (é o sinal de foco). O
+`--enable-features=WaylandWindowDecorations` saiu do `browser.nix`: ele só existe no Electron, e o
+último `--enable-features` da linha vence os outros.
+
+O `.desktop` (`~/.local/share/applications/ronoctua-web-<slug>.desktop`) é a ÚNICA fonte da
+verdade — URL, perfil e origem do ícone em `X-Ronoctua-Web-*` —, e o `Exec` é
+`ronoctua-software web-open <slug>`: a URL nunca entra no `Exec` (é lá que um `%` ou uma aspa
+viraria argumento). O `StartupWMClass` é o id que o Chromium dá à janela, e ele NÃO leva a porta
+(lido no código do Chromium: `url.host()` e o caminho), então dois web apps que só diferem na porta
+são recusados como `DuplicateWindow`. Só `http(s)`, sem credenciais na URL.
+`for_window [app_id="^chrome-"] shortcuts_inhibitor disable` é gerado com as regras de janela: um
+web app nunca engole a leader.
+
+**Ícones**: do próprio site (manifest `any` → `apple-touch-icon` → o maior `rel=icon` →
+`favicon.ico`), do **dashboardicons** (`metadata.json` pelo jsDelivr — e
+a variante `light` é o desenho CLARO, para fundo escuro, ao contrário de como se lê), da coleção da
+distro (os nomes do superpacote) ou de um arquivo da pessoa. Tudo passa por bytes mágicos, teto de
+tamanho, quadrado com fundo transparente e PNG com hash no nome; SVG com `href` externo é recusado.
+Frames de ICO são escolhidos por TAMANHO — o `image` prefere profundidade de cor e pegaria 16 px
+em vez de 256.
+
+#### O HTTP ficou um só, e aprendeu bytes
+
+O `ronoctua-http` devolvia o corpo como `String` com perda, o que corrompe PNG, ICO e JAR. Agora
+há `Reply` com bytes e cabeçalhos, o chamador escolhe o teto, redirecionamento só `https→https`, e
+todos os endereços resolvidos são tentados. **E um fechamento sem `close_notify` é FIM, não erro**,
+quando há bytes: o WhatsApp Web, o google.com e o httpbin fecham TLS assim, e o framer chamava isso
+de `Offline` (com `Content-Length`, o corpo curto continua sendo erro).
+
+#### O lançador passou a ver o que a pessoa instala
+
+Quatro defeitos impediriam a feature de funcionar, e todos eram do lançador:
+1. **O carimbo seguia o link até o store**, de mtime fixo: um `nix profile add` só aparecia
+   quando o rodapé reiniciava. Agora é o caminho canônico (que troca a cada geração do perfil) mais
+   os subdiretórios, e o rodapé reescaneia quando a fila termina um trabalho de programas.
+2. **Ícone por nome só era procurado no superpacote.** A cadeia agora é superpacote → `hicolor`
+   em `XDG_DATA_HOME` e em cada `XDG_DATA_DIRS` → `pixmaps`, com os tamanhos em ordem NUMÉRICA (era
+   lexicográfica: `8x8` antes de `84x84`) e ICO decodificando. Medido neste host: de 140 entradas, o
+   superpacote sozinho resolvia 105 e a cadeia resolve 137.
+3. **`foreign::launch` relançava** diretamente um app que saía com código ≠ 0. Com escopos, o
+   código de saída é do app; a sonda de escopo roda uma vez por processo.
+4. **O `PATH` das unidades era o mínimo do systemd**: o `Exec=` de `~/.nix-profile` e o
+   `flatpak run` das exportações não abriam, e todo passo `binary` da atualização era pulado. As
+   unidades `ronoctua-footer`, `ronoctua-update`, `ronoctua-update-rehearsal` e
+   `ronoctua-transfers` têm `enableDefaultPath = false` e herdam o `PATH` da sessão, que o NixOS
+   gera de `environment.profiles`. Consequência aceita pelo dono: passos `binary` ligados, como o
+   `doom-sync`, passam a rodar de verdade.
+
+O nome na modeline de um web app vem do `Name` do `.desktop` que declara aquele `StartupWMClass`
+(sem isso apareceria `com__-Default`).
+
+#### Atualização: uma classe nova, e nenhum passo instala
+
+`does = "upgrade-software"` (rótulo honesto na página do cérebro). Raiz: `flatpak-system`
+(`flatpak update --system`, o ÚNICO `--system` da feature) e `android-images` (desligado). Pessoa:
+`nix-profile`, `flatpak-user`, `appimages`, `android-apps` → `ronoctua-software upgrade <fonte>`, na
+MESMA pista da tela; e `flatpak-unused`, `nix-profile-history`, `appimage-cache` →
+`ronoctua-software tidy <fonte>`. A lei de ordem nova do gerador: um passo `upgrade-software` não
+roda antes de `apply-configuration`. "Atualizar tudo" pula a fonte que responde `SourceUnprepared`
+— uma máquina que nunca preparou o Android não falha toda atualização.
+
+#### A vista: uma `View`, duas portas, e as duas digitam
+
+`LEADER i` é o grupo (`i i` rodapé, `i w` janela, `i t` experiências, `i b` web app novo, `i u`
+manutenção, `i a` Android); `a` continua sendo o lançador sozinho. `software.rs` é a vista PURA —
+níveis (início, resultados, ficha, experiências, editor de web app, ícones, Android, manutenção,
+avançado, permissões, consentimentos, histórico), linhas, teclas e perguntas — e devolve à porta um
+`Errand` (enfileirar uma ordem, perguntar na linha da porta, abrir, copiar…); nada nela faz I/O, e
+ela não sabe em que porta está. As
+threads são do `software_feed.rs` (retrato, busca por geração, ficha, ícones), e as figuras são um
+pool próprio (`software_pictures.rs`) cuja chave leva o lado em pixels.
+- **Digitar é buscar, nas duas portas**: letra, `DEL` e `C-v` passam pelas mesmas chamadas da
+  vista; o Nix responde na hora e as fontes de rede depois de 250 ms parado. Uma URL colada vira
+  "criar web app", um caminho de `.AppImage`/`.apk`/`.flatpakref` vira "instalar este arquivo". No
+  rodapé a busca aparece também na linha do minibuffer.
+- **As duas portas perguntam**: o endereço de um web app novo, o nome e o endereço do rascunho, o
+  caminho de uma imagem e o de um arquivo a instalar são uma `line::Line` — no minibuffer do
+  rodapé, no cabeçalho da janela — e a resposta chega ao mesmo `View::typed`. A imagem copiada
+  vira ícone nas duas, lida da seleção viva fora do laço (`pasting::image`, `software_feed::Kept`).
+  O `software-open` do rodapé aceita as palavras da janela (`advanced`, `search <palavras>`,
+  `web <endereço>`).
+- **Abrir**: um web app uma vez, uma página, o gerenciador de arquivos e a página do brain abrem
+  num escopo próprio, pelo caminho único de lançamento (`foreign::start_in_scope`), em qualquer
+  porta. Um programa instalado também: o rodapé o acha no catálogo que ele guarda, a janela lê o
+  catálogo numa thread (`Ui::launch_entry`), e os dois o iniciam do mesmo jeito (`apps::argv_of`,
+  com o terminal para quem precisa). "Não está no lançador ainda" e "não abriu" são ditos na porta
+  em que a pessoa está. A janela entregava o id ao rodapé, que dizia a recusa na linha dele e ainda
+  fechava a própria vista de programas.
+- **Toda pergunta que não se desfaz abre no NÃO** (remover, apagar o Android, devolver as
+  permissões, instalar um arquivo que catálogo nenhum conferiu), com o cursor nela.
+- **O fim de um trabalho da fila é o evento**: `transfers::ended` diz que um trabalho de programas
+  acabou; o rodapé relê o lançador, a vista, as marcas, e levanta uma das sete notificações
+  (instalado, falhou, removido, atualizado, experiência encerrada, Android pronto, web app criado).
+  Não há relógio.
+- **Duas marcas, mudas em repouso**: uma experiência rodando (frasco) e o Android ligado (ele custa
+  memória, que é a razão de existir a marca). O clique abre o nível delas.
+- **O lançador acha o que não tem**: nada casando, a última linha é "procurar «x» para instalar";
+  `C-i` abre a ficha do programa sob o cursor e `C-d` a abre com a pergunta de remover já de pé. Um
+  programa que o flake instalou mostra a frase "declarado no flake" em vez de perguntar.
+- **Permissões do Flatpak numa forma reduzida** (`Grant`: arquivos da pasta pessoal em três
+  alcances, rede, som, dispositivos, Wayland ou X11, e voltar ao padrão), lidas das permissões
+  EFETIVAS (`flatpak info --show-permissions`) e escritas por `flatpak override --user`. Não existe
+  grant que ponha variável: `GTK_THEME` só pode ser tirado.
+
+#### O modo escuro do Flatpak — medido, e duas linhas declaradas
+
+O dono lembrava de ter ouvido que instalar o "Adwaita-dark" dava tema escuro e quebrava a interface
+de vários apps. Nada foi instalado antes de medir. O palco `nix run .#shot -- --apps` (Flatpak
+1.16.6, o portal gtk e as duas chaves do dconf que o `foreign.nix` escreve) rodou apps reais do
+Flathub, e a medida é a luminância média da janela (0 é preto, 1 é branco), em 2026-09-26:
+
+| App (toolkit) | sem a extensão | com a extensão | `GTK_THEME` forçado | tema claro |
+|---|---|---|---|---|
+| Eyedropper 2.2.1 (libadwaita, GNOME 50) | 0,151 | 0,151 | 0,151 | 0,966 |
+| gedit 50.0 (GTK 3) | 0,146 | 0,146 | — | 0,984 |
+| Geany 2.1.0 (GTK 3 simples) | **0,931** | **0,436** | 0,436 | 0,931 |
+| KCalc 26.08.1 (Qt 6, KDE 6.11) | 0,155 | 0,153 | — | — |
+| FreeTube 0.25.3 (Electron) | 0,170 | 0,170 | — | 0,955 |
+
+- **`org.gtk.Gtk3theme.Adwaita-dark` é o que escurece um app GTK 3 que não sabe do modo escuro**,
+  e não mexe em mais nada: o Geany vai de claro a escuro (o 0,436 é o editor dele, que tem esquema
+  de cor próprio e continua branco; a janela é escura), o libadwaita anda 0,0002, e o gedit e o
+  KCalc não andam, porque seguem o portal sozinhos. O Electron fica onde estava. **E o Flatpak a
+  instala SOZINHO** como ref relacionada quando vê `gtk-theme=Adwaita-dark` — o wrapper da CLI põe o
+  módulo GIO do dconf no ambiente para isso. Ela é declarada no nix-flatpak mesmo assim: fica certa
+  antes do primeiro app GTK 3 e volta depois de um `flatpak uninstall --unused`.
+- **O defeito lembrado não se reproduziu**: `GTK_THEME=Adwaita:dark` e `GTK_THEME=Adwaita-dark`
+  não mudaram o libadwaita de hoje. Era o libadwaita antigo, ou um tema de terceiro no lugar da
+  folha dele. `GTK_THEME` continua proibido (cobra `flatpak-dark-is-never-forced`): com qualquer
+  outro nome, o app desenha o tema que a variável manda em vez do dele, e não há o que ganhar.
+- **O que QUEBRAVA era nosso**: o bloco `qt` do `foreign.nix` exporta `QT_QPA_PLATFORMTHEME=gnome`
+  e `QT_STYLE_OVERRIDE`, que chegam à caixa de areia e nomeiam um plugin e um estilo que o runtime
+  do KDE não tem — o KCalc escuro saía CLARO (0,944). `unset-environment` global no nix-flatpak o
+  devolveu a 0,153, porque o runtime do KDE lê o portal por conta própria.
+- **Trocar claro/escuro com os apps abertos funciona** no libadwaita e no gedit (0,150 → 0,966 e
+  0,146 → 0,984, sem reabrir).
+
+O palco teve dois defeitos que só a primeira rodada achou: o gedit abortava no primeiro ícone
+(o `glycin` decodifica imagem por `flatpak-spawn --sandbox`, que precisa do `flatpak-portal` na
+sessão), e o Chromium recusa rodar como root sem `--no-sandbox` e procura um X sem
+`--ozone-platform=wayland`. E o disco da VM foi para o cache: o driver o põe no
+`XDG_RUNTIME_DIR`, que é tmpfs, e cada byte de runtime seria RAM.
 
 ## 8. Desempenho, grafo e riscos
 
@@ -8673,6 +9367,10 @@ Duas adições ao grafo original, cada uma por um problema real:
 - **`ronoctua-clock`.** Uma fronteira, um crate — a regra que o `ronoctua-disks` e o
   `ronoctua-power` já seguem. Dois chamadores querem o `timedate1`: a vista `LEADER s l` e a vigia
   do brain. Um segundo leitor de `timedatectl` seria uma segunda resposta sobre um relógio só.
+- **`ronoctua-software`.** Biblioteca e CLI dos programas da pessoa, com três chamadores: o shell
+  (lê, busca, detalha), a fila (roda a CLI como filho; depende da biblioteca sem features) e a
+  atualização (roda a CLI de uma unidade). As features `net` (TLS pelo `ronoctua-http`) e `draw`
+  (`image` com ICO e `resvg`) nascem desligadas; o binário exige as duas.
 
 ---
 

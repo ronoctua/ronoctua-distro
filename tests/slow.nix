@@ -127,4 +127,27 @@
   # cannot be linted outside Nix at all, which is how a dead function sat in
   # `buffers/unicode` across releases.
   "buffers-lint"
+
+  # ---------------------------------------------------------------
+  # WEIGHED, AND LEFT IN THE EVERYDAY BATTERY
+  # ---------------------------------------------------------------
+  # The software centre's eleven checks meet none of the four criteria. They
+  # read sources and EVALUATED options — the systems are evaluated, never
+  # built — and their derivations were read (`nix-store -q --requisites`)
+  # to hold nothing of the workspace, the shell, Waydroid or appimage-run.
+  # `nix-index-is-whole` reads the built search index, which every system
+  # needs anyway and which is data, not an installation (the M1 gate
+  # measured 4.2 GB at the peak and 36 s to build it).
+  #
+  # `updates-never-ask` changed underneath: its runner now names the software
+  # CLI, which is copied out of the same `workspace` derivation as
+  # `rust.shell`. That is a compilation the battery already pays for, not a
+  # second one, so criterion 4 does not reach it either.
+  #
+  # `software-vm` boots ONE machine from a handful of modules — not the
+  # `toplevel` of any of the four systems — and partitions nothing, reboots
+  # nothing and emulates no TPM. What it builds beyond its script is the same
+  # workspace every VM test links, `appimage-run` and Flatpak. MEASURED with
+  # `--rebuild`, the workspace already built: 35 s, the script 26.5 s — inside
+  # the band of the battery's other VMs.
 ]

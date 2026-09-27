@@ -68,6 +68,8 @@ fn job(id: u64, engine: Engine, errand: Errand, stage: Stage, done: u64, total: 
         // The one row that went out as the person, so the detail screen has
         // both words to say and the row has both colours to draw.
         identified: id == 2,
+        pauses: true,
+        opens: false,
     }
 }
 
@@ -111,7 +113,8 @@ impl Screen {
         };
         for c in &list.commands {
             match c {
-                Command::Text { text, .. } => match text {
+                Command::Text { text, .. } | Command::Paragraph { content: text, .. } => match text
+                {
                     Text::Data(t) => me.data.push(t.clone()),
                     Text::Key(k) => me.keys.push(k.clone()),
                     Text::Icon(_) => me.icons += 1,
@@ -282,18 +285,31 @@ fn main() -> Result<()> {
     shuffled.jobs.reverse();
     inst.event(&Input::Queue(shuffled))?;
 
-    // Giving up asks first: the first press must NOT send anything.
-    let armed = run(&mut inst, "transfers-give-up")?;
+    // Giving up asks first: the first press must NOT send anything, and the
+    // question is born on `no` — `RET` there keeps the job.
+    let armed = run(&mut inst, "transfers-cancel")?;
     if armed.iter().any(|e| matches!(e, Effect::Ask(_))) {
         bail!("giving up fired without asking: {armed:?}");
     }
     let asking = look(&mut inst)?;
-    if !asking.names("transfers-window-confirm-cancel") {
-        bail!("the question did not appear on screen");
+    for k in [
+        "transfers-window-confirm-cancel",
+        "transfers-give-up-no",
+        "transfers-give-up-yes",
+    ] {
+        if !asking.names(k) {
+            bail!("the question did not show `{k}`");
+        }
+    }
+    let kept = inst.event(&Input::Confirm)?;
+    if kept.iter().any(|e| matches!(e, Effect::Ask(_))) {
+        bail!("`RET` on the question's first answer gave the job up: {kept:?}");
     }
 
-    // And the second press names the ID it was on — 2 — and not the row it now
-    // occupies, which after the reversal is a different one.
+    // And `yes` names the ID it was on — 2 — and not the row it now occupies,
+    // which after the reversal is a different one.
+    run(&mut inst, "transfers-cancel")?;
+    inst.event(&Input::Down)?;
     let fired = inst.event(&Input::Confirm)?;
     if !fired.contains(&Effect::Ask(Demand {
         what: Request::CancelJob,
@@ -307,7 +323,7 @@ fn main() -> Result<()> {
     //
     // Job 2 is paused, so the one key that holds and lets go must send
     // `resume` — never `pause`, which the queue would refuse.
-    let held = run(&mut inst, "transfers-hold")?;
+    let held = run(&mut inst, "transfers-pause")?;
     if !held.contains(&Effect::Ask(Demand {
         what: Request::ResumeJob,
         target: 2,
@@ -320,7 +336,7 @@ fn main() -> Result<()> {
     inst.event(&Input::Queue(Queue {
         jobs: vec![job(9, Engine::Media, Errand::Media, Stage::Done, GIB, GIB)],
     }))?;
-    let nothing = run(&mut inst, "transfers-hold")?;
+    let nothing = run(&mut inst, "transfers-pause")?;
     if !nothing.is_empty() {
         bail!("holding sent a request for a row that had already ended: {nothing:?}");
     }
@@ -406,10 +422,30 @@ fn main() -> Result<()> {
     // the host translates (invariant 11), so what it declares is what it
     // RESERVED. This measures every screen this run looked at, against both
     // `.ftl` files, with the ruler the host CUTS with.
-    let measured = ronoctua_runtime::driven::every_label_fits(&i18n, ON_PURPOSE, COLUMNS)?;
+    //
+    // PER LANGUAGE, because the foot's pairs are MEASURED in the words the
+    // host handed (`Input::Phrases`): a budget is one language's word, so each
+    // language is handed, toured and measured on its own — the brain's way.
+    let mut measured =
+        ronoctua_runtime::driven::every_label_fits_in(&i18n, ON_PURPOSE, COLUMNS, "en-GB")?;
+    let languages = ronoctua_runtime::driven::languages(&i18n)?;
+    for language in languages.iter().filter(|l| l.as_str() != "en-GB") {
+        ronoctua_runtime::driven::forget();
+        ronoctua_runtime::driven::hand_phrases(&mut inst, &d, &i18n, language)?;
+        inst.event(&Input::Queue(queue()))?;
+        look(&mut inst)?;
+        run(&mut inst, "transfers-detail")?;
+        look(&mut inst)?;
+        run(&mut inst, "transfers-detail")?;
+        run(&mut inst, "transfers-cancel")?;
+        look(&mut inst)?;
+        inst.event(&Input::Cancel)?;
+        measured +=
+            ronoctua_runtime::driven::every_label_fits_in(&i18n, ON_PURPOSE, COLUMNS, language)?;
+    }
     println!(
         "labels    {measured} measured in {} languages, all inside their budget",
-        ronoctua_runtime::driven::languages(&i18n)?.len()
+        languages.len()
     );
     println!("OK: the queue window takes from the host, and what is irreversible asks twice");
     Ok(())

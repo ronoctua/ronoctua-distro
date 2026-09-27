@@ -47,11 +47,46 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     ("<up>", "geo-up"),
     ("RET", "geo-enter"),
     // BARE LETTERS, for the reason the locale view gives: nothing is typed
-    // INTO this screen — the filter is asked for in the minibuffer — so a
-    // letter is not a query and is the shortest way to a row's second verb.
+    // INTO the list. The filter is asked for on a line of its own — the
+    // minibuffer in the footer, the header's line in a window — and while
+    // that line asks, every key is the line's, `f` and `d` included. So a
+    // letter here is not a query, and it is the shortest way to a row's
+    // second verb.
     ("f", "geo-find"),
     ("d", "geo-remove"),
 ];
+
+/// The command that asks for the filter, and the id its answer comes back
+/// under — in the footer's minibuffer and on a window's line alike. The
+/// question is its `ask-` key.
+pub const FIND: &str = "geo-find";
+
+/// A key, by its WHOLE notation, as the view's press — the one reader both
+/// doors call, from the keyboard or from a click on the hint.
+///
+/// By the notation, and not by the symbol: a chord that is not in the table
+/// (`C-f`) is not taken for the letter under it, in either door. `Esc` is
+/// every level's way back whatever is held, which is the rule every view of
+/// this shape keeps.
+#[must_use]
+pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
+    if key.sym == ronoctua_keymap::Sym::Esc {
+        return Some(Press::Escape);
+    }
+    let notation = key.notation();
+    let id = OF_THE_VIEW
+        .iter()
+        .find(|(taught, _)| *taught == notation)
+        .map(|(_, id)| *id)?;
+    Some(match id {
+        "geo-down" => Press::Down,
+        "geo-up" => Press::Up,
+        "geo-enter" => Press::Enter,
+        "geo-find" => Press::Find,
+        "geo-remove" => Press::Remove,
+        _ => return None,
+    })
+}
 
 /// A key, already reduced to what the view cares about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,7 +140,9 @@ pub enum Errand {
         /// Where to get it.
         url: String,
     },
-    /// Ask for the filter in the minibuffer.
+    /// Ask for the filter, on the door's own line: the footer's minibuffer,
+    /// or a window's header. The answer comes back under [`FIND`] to
+    /// [`View::took_a_filter`] from either.
     Ask,
     /// Say this on the message line.
     Speak(&'static str),
@@ -164,7 +201,7 @@ pub struct View {
     installed: Vec<ronoctua_atlas_packs::Installed>,
     /// Every region the baked world carries, as `(id, label, url)`.
     catalogue: Vec<Region>,
-    /// What was typed into the minibuffer, folded for comparing.
+    /// What was typed for the filter, in either door.
     filter: String,
     /// The region a question is open about, by its index in `installed`.
     asking: Option<usize>,
@@ -283,11 +320,19 @@ impl View {
         crate::chrome::hint_of(OF_THE_VIEW, texts)
     }
 
-    /// Takes what was typed in the minibuffer.
+    /// Takes what was typed for the filter — on the footer's minibuffer or on
+    /// a window's line, which answer here alike. Empty shows everything.
     pub fn took_a_filter(&mut self, said: &str, columns: u16) {
         self.filter = said.trim().to_owned();
         self.cursor = 0;
         self.settle(columns);
+    }
+
+    /// What the filter is, as it was typed.
+    #[cfg(test)]
+    #[must_use]
+    pub fn filter(&self) -> &str {
+        &self.filter
     }
 
     /// The catalogue as it is being shown: everything, or what the filter keeps.

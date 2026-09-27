@@ -8449,6 +8449,68 @@ impl View {
     }
 }
 
+/// What opens a file — ONE answer for both doors.
+///
+/// Text goes to the editor, and so does a file whose type nothing names: an
+/// editor opens anything, and "nothing opens this" about a file with no
+/// extension is the one answer that cannot be true. Anything else goes to the
+/// application that DECLARES the type, out of the catalogue swept at start —
+/// no directory is walked here, and no `xdg-open` is spawned to walk one.
+///
+/// It used to be decided twice, and differently: the footer sent text to the
+/// editor and the window asked only the catalogue, so the same `RET` on the
+/// same `notes.txt` opened Emacs in one door and whatever declared
+/// `text/plain` in the other — and "nothing opens it" for a `README`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Opener {
+    /// The editor ([`editor_command`]).
+    Editor,
+    /// The application that declares the type.
+    App(Box<ronoctua_apps::DesktopEntry>),
+    /// Nothing declares the type: the sentence names it.
+    Nothing(&'static str),
+}
+
+/// Which [`Opener`] a file at `path` gets.
+#[must_use]
+pub fn opener_of(catalogue: &crate::apps::Catalogue, path: &Path) -> Opener {
+    let of_type = ronoctua_files::mime::of_path(path, ronoctua_files::Kind::File, true);
+    opener_of_type(catalogue, of_type)
+}
+
+/// The same, for a type already known.
+fn opener_of_type(catalogue: &crate::apps::Catalogue, of_type: &'static str) -> Opener {
+    if of_type.starts_with("text/") || of_type == ronoctua_files::mime::UNKNOWN {
+        return Opener::Editor;
+    }
+    crate::apps::opens(catalogue, of_type).map_or(Opener::Nothing(of_type), |e| {
+        Opener::App(Box::new(e.clone()))
+    })
+}
+
+/// The editor's command for `file` — the program, its arguments and the
+/// folder it starts in — or `None` when there is no editor.
+///
+/// THE CLIENT COMES FROM THE ENVIRONMENT (`RONOCTUA_EMACSCLIENT`), and not
+/// from an `option_env!`: baked in, the path is a reference the binary carries
+/// into every closure, and `ronoctua.editor.emacs = false` in the `minimal`
+/// profile removed the package and left the whole of Emacs in the system
+/// anyway. `nix/modules/emacs.nix` sets it, inside its own `mkIf`. The door
+/// reads the variable and hands it here, so this stays a function of what it
+/// is given.
+#[must_use]
+pub fn editor_command(
+    client: Option<&str>,
+    file: &Path,
+) -> Option<(String, Vec<String>, Option<String>)> {
+    let client = client.filter(|c| !c.is_empty())?;
+    Some((
+        client.to_owned(),
+        vec!["-c".to_owned(), file.to_string_lossy().into_owned()],
+        file.parent().map(|d| d.to_string_lossy().into_owned()),
+    ))
+}
+
 /// What is left to say after an operation was carried out.
 ///
 /// The manager has TWO doors — the footer's region and a window of its own —
@@ -9931,7 +9993,10 @@ impl View {
                     // It is NOT "close the view": backspace held down would
                     // otherwise take the view with it, which is the thing one
                     // is least likely to have meant.
-                    if self.filter.pop().is_none() {
+                    // ONE CHARACTER AS A PERSON SEES IT — a letter and its
+                    // accent, an emoji and its modifier — and never half of
+                    // one (`line::pop_cluster`, the minibuffer's erase).
+                    if !crate::line::pop_cluster(&mut self.filter) {
                         self.up();
                         return Step::Changed;
                     }
@@ -10110,7 +10175,7 @@ impl View {
                 Step::Changed
             }
             Gesture::Delete => {
-                picker.query.pop();
+                crate::line::pop_cluster(&mut picker.query);
                 picker.cursor = 0;
                 Step::Changed
             }
@@ -16145,6 +16210,69 @@ fn notation_of(t: Key) -> String {
 mod tests {
     use super::*;
 
+    /// An entry of the catalogue that declares `types`.
+    fn declaring(id: &str, types: &[&str]) -> ronoctua_apps::DesktopEntry {
+        ronoctua_apps::DesktopEntry {
+            mime_types: types.iter().map(|t| (*t).to_owned()).collect(),
+            id: id.to_owned(),
+            name: id.to_owned(),
+            description: String::new(),
+            icon: id.to_owned(),
+            categories: Vec::new(),
+            command: (id.to_owned(), vec!["%f".to_owned()]),
+            working_directory: None,
+            terminal: false,
+            startup_wm_class: None,
+            key: ronoctua_apps::fold::fold(id),
+        }
+    }
+
+    /// FAILS IF: the two doors stop getting one answer about what opens a
+    /// file — text and a type nothing names go to the editor even when an
+    /// application declares `text/plain`, a declared type goes to its
+    /// application, and an undeclared one says which type it was.
+    #[test]
+    fn one_answer_opens_a_file_in_both_doors() {
+        let catalogue: crate::apps::Catalogue = std::sync::Arc::new(vec![
+            declaring("gedit", &["text/plain"]),
+            declaring("imv", &["image/png"]),
+        ]);
+        assert_eq!(opener_of_type(&catalogue, "text/plain"), Opener::Editor);
+        assert_eq!(
+            opener_of_type(&catalogue, ronoctua_files::mime::UNKNOWN),
+            Opener::Editor
+        );
+        assert!(matches!(opener_of_type(&catalogue, "image/png"), Opener::App(e) if e.id == "imv"));
+        assert_eq!(
+            opener_of_type(&catalogue, "application/x-tar"),
+            Opener::Nothing("application/x-tar")
+        );
+        // AND THE PATH IS READ THE SAME WAY: a `.txt` is text.
+        let dir = scratch("opener");
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"hello\n").expect("a text file");
+        assert_eq!(opener_of(&catalogue, &notes), Opener::Editor);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the editor's command stops being the client, `-c` and the
+    /// file, started in the file's folder — or a missing client is taken for
+    /// an editor.
+    #[test]
+    fn the_editor_is_the_client_in_the_files_folder_or_nothing() {
+        let file = Path::new("/home/someone/notes/today.txt");
+        assert_eq!(
+            editor_command(Some("/nix/store/x-emacs/bin/emacsclient"), file),
+            Some((
+                "/nix/store/x-emacs/bin/emacsclient".to_owned(),
+                vec!["-c".to_owned(), "/home/someone/notes/today.txt".to_owned()],
+                Some("/home/someone/notes".to_owned()),
+            ))
+        );
+        assert_eq!(editor_command(None, file), None);
+        assert_eq!(editor_command(Some(""), file), None);
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ronoctua-view-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -20194,6 +20322,16 @@ mod tests {
             sym: Sym::Backspace,
         });
         assert_eq!(v.filter(), "rel");
+
+        // A LETTER AND ITS ACCENT are one character to take back, not two:
+        // half of one left behind is a mark on nothing.
+        v.key(press('e'));
+        v.key(press('\u{301}'));
+        v.key(Key {
+            mods: ronoctua_keymap::Mods::default(),
+            sym: Sym::Backspace,
+        });
+        assert_eq!(v.filter(), "rel", "half a character was left behind");
 
         // Esc clears the query and gives the whole directory back — WITHOUT
         // closing the view, which would throw away both in one press.

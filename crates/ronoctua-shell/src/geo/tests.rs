@@ -45,15 +45,32 @@ fn the_cursor_is_born_on_a_row_that_acts() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// FAILS IF: `f` stops asking, or asks while a question is open.
+/// FAILS IF: `f` stops asking for the filter.
 ///
-/// A question opens over what somebody was reading, and a key that opened a
-/// second one under it would leave two things waiting for one answer.
+/// What the view asks for is a line of the DOOR's — the footer's minibuffer,
+/// a window's header — and the answer comes back to `took_a_filter` from
+/// either (`geo_window`'s tests hold the window's half).
 #[test]
-fn the_filter_is_asked_for_in_the_minibuffer() {
+fn f_asks_for_the_filter_on_the_doors_own_line() {
     let (mut v, dir) = view("filter");
     assert_eq!(v.press(Press::Find, DECIDING_WIDTH, &texts()), Errand::Ask);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// FAILS IF: the id the question is asked under stops being the one the key
+/// table teaches — the footer runs the table's id, the window asks under
+/// `FIND`, and an answer under the other would be taken by nobody.
+#[test]
+fn the_question_is_asked_under_the_id_the_table_teaches() {
+    let taught = super::OF_THE_VIEW
+        .iter()
+        .find(|(_, id)| *id == super::FIND)
+        .map(|(key, _)| *key)
+        .expect("the filter's id is not in the key table");
+    assert_eq!(
+        super::press_of_key(ronoctua_keymap::Key::parse(taught).expect("a key")),
+        Some(Press::Find)
+    );
 }
 
 /// FAILS IF: what was typed does not narrow the list, or narrows it by

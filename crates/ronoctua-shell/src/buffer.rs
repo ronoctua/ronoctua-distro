@@ -162,6 +162,21 @@ type DraggedBar = crate::paint::Grab;
 
 /// The state of the window hosting a buffer.
 struct Host {
+    /// `Ctrl+V` was pressed: the door reads the clipboard OFF THE LOOP
+    /// (`Ui::paste`) and hands the text to `Content::pasted`.
+    paste_wanted: bool,
+    /// Launcher entries a demand of the component asked to open — what an
+    /// install made — started at the end of the turn by the door, off the
+    /// loop (`Ui::launch_entry`), which says on THIS window what went wrong.
+    to_launch: Vec<String>,
+    /// The door's message, wrapped to the window — drawn on the lines under
+    /// the component's, which it is rendered without while there is one.
+    ///
+    /// A buffer draws every line of its window itself, and the door's
+    /// sentences — a footer that is not there, a paste that failed, a text
+    /// swept and copied, a program that could not be started — reached no
+    /// line of it: they were said, and nobody could read them.
+    said: Vec<String>,
     /// The seat the buffer was last told the keys are from — so
     /// `keyboard-seat` is sent when it CHANGES, and not before every key.
     typing_seat: Option<u16>,
@@ -434,11 +449,36 @@ struct Queue {
     /// actually sent before passing it on. Without it a component could name
     /// any number and cancel a job that is not even on its screen.
     known: Vec<u64>,
+    /// The launcher entry each finished install of those rows made — what a
+    /// `launch-job` opens. The buffer is told only THAT a row opens
+    /// something (`job.opens`); which entry is the host's to know.
+    opens: Vec<(u64, String)>,
 }
 
 impl Queue {
     const fn fresh() -> Self {
-        Self { known: Vec::new() }
+        Self {
+            known: Vec::new(),
+            opens: Vec::new(),
+        }
+    }
+
+    /// Takes a fresh list: its ids, and the entries its installs made.
+    fn took(&mut self, jobs: &[ronoctua_transfers::Job]) {
+        self.known.clear();
+        self.known.extend(jobs.iter().map(|j| j.id));
+        self.opens = jobs
+            .iter()
+            .filter_map(|j| crate::transfers::opens(j).map(|d| (j.id, d.to_owned())))
+            .collect();
+    }
+
+    /// The entry the row `id` opens, when it opens one.
+    fn opening(&self, id: u64) -> Option<&str> {
+        self.opens
+            .iter()
+            .find(|(of, _)| *of == id)
+            .map(|(_, d)| d.as_str())
     }
 }
 
@@ -901,52 +941,6 @@ fn copy_bytes_for_real(bytes: &[u8], mime: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Reads what is on the system clipboard.
-///
-/// [`copy_to_clipboard`]'s counterpart. What reads is the host, and not the component: the buffer does not
-/// touch the clipboard as it does not touch a file (invariant 11).
-///
-/// # Errors
-///
-/// The binary was not put in the build, did not run, or exited with an error.
-fn paste_text() -> Result<String> {
-    let path = option_env!("RONOCTUA_WL_PASTE").context(
-        "RONOCTUA_WL_PASTE was not set at build time.\n\
-         It comes from `nix/rust.nix`; without it there is no way to paste.",
-    )?;
-
-    let mut cmd = std::process::Command::new(path);
-    // THE SAME PATH as `wl-copy`'s, and for the same reason: under a systemd
-    // unit it is minimal, and these tools spawn by NAME.
-    if let Some(p) = option_env!("RONOCTUA_WL_COPY_PATH") {
-        cmd.env("PATH", p);
-    }
-    let output = cmd
-        // `--no-newline`: `wl-paste` adds a `\n` that was not in
-        // what was copied, and it would become one more character in the search.
-        .arg("--no-newline")
-        .output()
-        .with_context(|| format!("could not run {path}"))?;
-
-    // AN EMPTY CLIPBOARD IS NOT AN ERROR. `wl-paste` exits 1 when there is no selection, and
-    // treating that as a failure would fill the log with errors every time someone
-    // pressed `Ctrl+V` without having copied anything.
-    if !output.status.success() {
-        // THE REASON IN THE LOG, even though it is a normal case. Without it, "empty clipboard"
-        // and "wl-paste failed" become the same line — and it was exactly that
-        // ambiguity that made `Ctrl+V` look as if it did not exist.
-        tracing::debug!(
-            status = %output.status,
-            error = %String::from_utf8_lossy(&output.stderr).trim(),
-            "wl-paste gave back no text"
-        );
-        return Ok(String::new());
-    }
-    // HERE THE OUTPUT IS READ TO THE END, and it can be: `wl-paste` does NOT leave a child
-    // serving anything — unlike `wl-copy`, where that froze the loop.
-    String::from_utf8(output.stdout).context("what was on the clipboard is not UTF-8 text")
-}
-
 /// Opens an `xdg_toplevel` and draws a component in it — section 7.5.
 ///
 /// # Errors
@@ -1112,6 +1106,9 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
             keymap: d.keymap.clone(),
             pending: Vec::new(),
             file: file.map(std::path::Path::to_path_buf),
+            paste_wanted: false,
+            to_launch: Vec::new(),
+            said: Vec::new(),
             typing_seat: None,
             key_seat: 0,
             title: format!("*{title}*"),
@@ -1707,6 +1704,7 @@ impl Host {
     fn draw(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
         self.width = ui.width;
         self.height = ui.height;
+        self.said = self.said_of(ui.message.as_deref());
         // A THEME CHOSEN SINCE drops the old theme's CPU copies. The key
         // already tells the two apart (`svg_key`), so this is memory and not
         // correctness.
@@ -1717,9 +1715,20 @@ impl Host {
         }
         self.re_render();
         let (columns, lines) = self.context_of();
+        // WHILE THE DOOR SAYS SOMETHING, the block the component keeps at its
+        // foot is drawn where the component put it — above the message — and
+        // not counted back from the window's bottom edge, which is where the
+        // message is. Dropped from the list itself, so the drawing, the click
+        // and the bar all read the one layout (`paint::Rows`).
+        if !self.said.is_empty() {
+            self.list
+                .commands
+                .retain(|c| !matches!(c, ronoctua_protocol::Command::Anchor { .. }));
+        }
         canvas
             .spans
             .extend(spans_of(&self.list, &self.texts, columns, lines));
+        canvas.spans.extend(said_spans(&self.said, lines));
         // THE SELECTION FIRST OF ALL: it is a background, and anything drawn
         // after it stays on top. THE DRAWING BELOW THE TEXT, as in the footer:
         // what is written over it has to stay legible. The canvas draws in
@@ -1883,7 +1892,28 @@ impl Host {
         let lines = ((self.height as f32 / cell_height_px) as u32)
             .saturating_sub(u32::from(tokens::space::CONTENT_INSETY) * 2)
             .clamp(1, u32::from(u16::MAX)) as u16;
-        (columns, lines)
+        // THE DOOR'S MESSAGE TAKES ITS LINES FROM THE COMPONENT, which is told
+        // a window that much shorter — nothing it draws is covered.
+        let said = u16::try_from(self.said.len()).unwrap_or(u16::MAX);
+        (columns, lines.saturating_sub(said).max(1))
+    }
+
+    /// The door's message, as the lines it is drawn on at this width — at most
+    /// half the window, so the component always keeps the other half.
+    fn said_of(&self, message: Option<&str>) -> Vec<String> {
+        let Some(message) = message.filter(|m| !m.is_empty()) else {
+            return Vec::new();
+        };
+        let (cell_width_px, cell_height_px) = cell();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let columns = ((self.width as f32 / cell_width_px) as u32)
+            .saturating_sub(u32::from(tokens::space::CONTENT_INSET) * 2)
+            .clamp(1, u32::from(u16::MAX)) as u16;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let lines = ((self.height as f32 / cell_height_px) as usize).max(2);
+        let mut out = crate::chrome::note_lines(message, columns);
+        out.truncate(lines / 2);
+        out
     }
 
     /// Each scale's heights, in cells.
@@ -2352,6 +2382,14 @@ impl Host {
                 self.job_demand(demand.what, demand.target);
             }
             R::SweepJobs => Self::tell_queue(&ronoctua_transfers::Ask::Sweep),
+            // OPENING WHAT AN INSTALL MADE starts from this window, as the
+            // software window starts it (`Ui::launch_entry`): the entry found
+            // in the launcher's catalogue and started as the footer starts it,
+            // and a refusal said here — never on the footer's line.
+            R::LaunchJob => match self.queue.as_ref().and_then(|q| q.opening(demand.target)) {
+                Some(desktop) => self.to_launch.push(desktop.to_owned()),
+                None => tracing::warn!(id = demand.target, "a launch for a row that opens nothing"),
+            },
             R::SweepStore | R::SweepGenerations | R::SweepJournal => {
                 match ronoctua_memory::scan::sweep(demand.what) {
                     Ok(()) => tracing::info!(what = ?demand.what, "the sweep is done"),
@@ -2556,8 +2594,7 @@ impl Host {
     fn queue_arrived(&mut self, jobs: &[ronoctua_transfers::Job]) {
         let queue = crate::transfers::queue_of(jobs);
         if let Some(q) = self.queue.as_mut() {
-            q.known.clear();
-            q.known.extend(queue.jobs.iter().map(|j| j.id));
+            q.took(jobs);
         }
         self.deliver(&ronoctua_protocol::Input::Queue(queue));
     }
@@ -3265,12 +3302,11 @@ impl Host {
         //
         // UNLESS THE BUFFER BINDS `C-v` ITSELF — a local key `, v` is `C-v` in
         // this window (see below), and the buffer that declared it chose it.
+        //
+        // READ OFF THE LOOP: the program that copied answers when it likes,
+        // and this window waited for it (`crate::pasting`).
         if self.mods.ctrl && event.keysym == Keysym::v && !binds_the_chord(&self.keymap, 'v') {
-            match paste_text() {
-                Ok(t) if !t.is_empty() => self.deliver(&ronoctua_protocol::Input::Paste(t)),
-                Ok(_) => tracing::debug!("the clipboard is empty"),
-                Err(e) => tracing::error!(error = %e, "pasting FAILED"),
-            }
+            self.paste_wanted = true;
             return;
         }
         // With Ctrl the key is not text: it is a chord, and a chord belongs to the buffer's
@@ -3556,9 +3592,34 @@ impl Content for Host {
         if ui.repeating && (event.keysym == Keysym::Escape || self.escape.down) {
             return;
         }
+        // THE DOOR'S MESSAGE WAS READ: the next key gives its lines back to
+        // the component, as the next key clears every window's line.
+        if ui.message.take().is_some() {
+            ui.ask_paint();
+        }
         self.say_whose_keys();
         self.typed(event);
+        if std::mem::take(&mut self.paste_wanted) {
+            ui.paste();
+        }
         self.hand_over(ui);
+    }
+
+    /// The clipboard's text, read for `Ctrl+V` — the component receives it
+    /// resolved, and never touches the clipboard itself (invariant 11).
+    fn pasted(&mut self, ui: &mut Ui, text: &str) {
+        if text.is_empty() {
+            tracing::debug!("the clipboard is empty");
+        } else {
+            self.deliver(&ronoctua_protocol::Input::Paste(text.to_owned()));
+        }
+        self.hand_over(ui);
+    }
+
+    /// A BUFFER TYPES TEXT — an editor, a search — and there the Lock is
+    /// capitals. Its chords are still read without it (`keys::as_read`).
+    fn types_capitals(&self) -> bool {
+        true
     }
 
     fn released(&mut self, ui: &mut Ui, event: &KeyEvent) {
@@ -3596,7 +3657,14 @@ impl Content for Host {
     }
 
     fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<PerSeat>, events: &[PointerEvent]) {
+        // AND SO DOES A PRESS — after it lands, in the layout it was aimed at.
+        let pressed = events
+            .iter()
+            .any(|e| matches!(e.kind, PointerEventKind::Press { .. }));
         self.pointer_here(ui, hand, events);
+        if pressed && ui.message.take().is_some() {
+            ui.ask_paint();
+        }
         self.hand_over(ui);
     }
 
@@ -3634,10 +3702,37 @@ impl Host {
         if std::mem::take(&mut self.owed) {
             ui.ask_paint();
         }
+        for desktop in std::mem::take(&mut self.to_launch) {
+            ui.launch_entry(&desktop);
+        }
         if self.quit {
             ui.quit = true;
         }
     }
+}
+
+/// The door's message, one span per line, on the lines under the
+/// component's `lines` — in the register every window's line says a sentence
+/// in (`chrome::Piece::said`).
+fn said_spans(said: &[String], lines: u16) -> Vec<ronoctua_render::Span> {
+    let pieces: Vec<Vec<crate::chrome::Piece>> = said
+        .iter()
+        .map(|l| vec![crate::chrome::Piece::said(l.clone())])
+        .collect();
+    pieces
+        .iter()
+        .zip(0u16..)
+        .flat_map(|(line, n)| {
+            let room = ronoctua_render::layout::width(&line[0].text);
+            crate::chrome::hint_spans(
+                line,
+                ronoctua_render::Size::Px(tokens::text::size()),
+                tokens::space::CONTENT_INSET,
+                tokens::space::CONTENT_INSETY + lines + n,
+                room,
+            )
+        })
+        .collect()
 }
 
 /// Whether the buffer binds `C-<c>` — a local key whose first letter after
@@ -3907,6 +4002,93 @@ mod tests {
                 "column {column}: a list that fits was grabbed"
             );
         }
+    }
+
+    /// FAILS IF: the back button — a click, which the door now gives as a
+    /// press AND a release — stops being a tap of `Esc` here, or a press alone
+    /// is left holding `Esc` for the key after it (the defect: the button did
+    /// nothing, and the next arrow rotated the buffer's state).
+    #[test]
+    fn a_click_on_escape_is_a_press_and_a_release() {
+        let mut e = Escape::default();
+        e.press(Keysym::Escape);
+        assert_eq!(
+            e.press(Keysym::Down),
+            EscapeAct::Rotate(true),
+            "a press alone holds"
+        );
+        let mut e = Escape::default();
+        e.press(Keysym::Escape);
+        assert_eq!(e.release(Keysym::Escape), EscapeAct::Tap);
+        assert_eq!(e.press(Keysym::Down), EscapeAct::NotMine);
+    }
+
+    /// FAILS IF: a `launch-job` stops finding the entry the finished install
+    /// made — the one thing about it the buffer is not told — or finds one for
+    /// a row that made none.
+    #[test]
+    fn a_launch_opens_the_entry_the_install_made() {
+        let mut installed = ronoctua_transfers::Job::fresh_one(
+            7,
+            ronoctua_transfers::Engine::Software,
+            ronoctua_transfers::Work::Software {
+                order: Box::new(ronoctua_software::Order::Install {
+                    key: ronoctua_software::AppKey::Flatpak {
+                        id: "org.gimp.GIMP".into(),
+                    },
+                    consent: ronoctua_software::order::Consent::default(),
+                }),
+                label: "GIMP".into(),
+            },
+        );
+        installed.stage = ronoctua_transfers::Stage::Done;
+        installed.outcome = Some(ronoctua_software::Outcome {
+            key: None,
+            desktop_ids: vec!["org.gimp.GIMP.desktop".into()],
+            amount: None,
+            rehearsed: false,
+        });
+        let copy = ronoctua_transfers::Job::fresh_one(
+            1,
+            ronoctua_transfers::Engine::Local,
+            ronoctua_transfers::Work::Measure {
+                path: std::path::PathBuf::from("/a"),
+            },
+        );
+        let mut q = super::Queue::fresh();
+        q.took(&[installed, copy]);
+        assert_eq!(q.known, [7, 1]);
+        assert_eq!(q.opening(7), Some("org.gimp.GIMP.desktop"));
+        assert_eq!(q.opening(1), None);
+    }
+
+    /// FAILS IF: the door's message — a footer that is not there, a paste
+    /// that failed, a program that could not start — is drawn nowhere in a
+    /// buffer's window: it goes on the lines under the component's, one per
+    /// wrapped line, in the register a window's line says a sentence in.
+    #[test]
+    fn the_doors_message_is_drawn_under_the_component() {
+        let said = vec![
+            "No footer is listening.".to_owned(),
+            "Try again.".to_owned(),
+        ];
+        let spans = super::said_spans(&said, 20);
+        let lines: Vec<u16> = spans.iter().map(|s| s.line).collect();
+        assert_eq!(
+            lines,
+            [
+                ronoctua_tokens::space::CONTENT_INSETY + 20,
+                ronoctua_tokens::space::CONTENT_INSETY + 21
+            ]
+        );
+        let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "No footer is listening.Try again.");
+        assert!(
+            spans
+                .iter()
+                .all(|s| !s.foot && s.column == ronoctua_tokens::space::CONTENT_INSET)
+        );
+        assert!(super::said_spans(&[], 20).is_empty());
     }
 
     /// A TAP of `Esc` is still `Esc`, and it acts when the key comes back up.

@@ -1000,6 +1000,26 @@ pub fn press_of(id: &str) -> Option<Press> {
     })
 }
 
+/// A key, as the view's press — the ONE reader both doors call: the window
+/// with `door::keys::key_of`, the footer with the key its own reader built.
+///
+/// `Esc` is every level's way back, and the arrows and `RET` are read by their
+/// symbol whatever is held, as both doors always read them. A LETTER is read
+/// by its whole notation: `C-d` is not `d`. The footer used to
+/// drop every modifier (`Key::simple`) and answer a letter held with `Ctrl` or
+/// `Alt` as the bare letter, while the window read xkb's control character
+/// and answered nothing — one key, two answers.
+#[must_use]
+pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
+    use ronoctua_keymap::{Key, Sym};
+    let notation = match key.sym {
+        Sym::Esc => return Some(Press::Escape),
+        Sym::Char(_) => key.notation(),
+        other => Key::simple(other).notation(),
+    };
+    pressed(&notation)
+}
+
 /// Which key a notation is, through [`OF_THE_VIEW`].
 #[must_use]
 pub fn pressed(notation: &str) -> Option<Press> {

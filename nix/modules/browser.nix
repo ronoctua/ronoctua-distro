@@ -41,7 +41,14 @@ let
       # Wayland natively: without it Chrome runs under XWayland, which on a
       # HiDPI screen means blurred text and no fractional scaling.
       "--ozone-platform-hint=auto"
-      "--enable-features=WaylandWindowDecorations"
+      # NO `--enable-features=WaylandWindowDecorations`, which was here. That
+      # feature exists only in ELECTRON — the name is absent from the Chrome
+      # binary, so it asked for nothing — and it was a trap besides: Chrome
+      # honours the LAST `--enable-features` on its command line, so a web
+      # app's own list (`ronoctua-software web-open`) would have been silently
+      # replaced by this one, or replaced it. The nixpkgs wrapper still adds
+      # the same flag itself under `NIXOS_OZONE_WL`, which is why `web-open`
+      # never passes `--enable-features` at all.
     ];
   };
 in

@@ -3,13 +3,36 @@
 
 use ronoctua_power::{Keep, Order, Refusal};
 
-/// The command that toggles one of our locks — what `LEADER s p k`/`s p l`
-/// run, and what the window forwards to the footer.
+/// The command that takes or drops one of our locks — bare, what the leader
+/// runs, and it flips the lock; with [`keep_word`], what the window sends,
+/// and it says which way.
 #[must_use]
 pub const fn keep_command(keep: Keep) -> &'static str {
     match keep {
         Keep::Sleep => "power-keep-awake",
         Keep::Lid => "power-keep-lid",
+    }
+}
+
+/// The lock WANTED, as the argument of [`keep_command`].
+///
+/// THE STATE AND NOT A FLIP. The window decides from its own reading, and a
+/// flip decided again from the footer's could come out the other way when the
+/// two readings are a moment apart — the key would do the opposite of what
+/// the row under it said.
+#[must_use]
+pub const fn keep_word(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
+}
+
+/// [`keep_word`], read back. `None` for any other word, which is refused,
+/// never taken for a flip.
+#[must_use]
+pub fn keep_wanted(word: &str) -> Option<bool> {
+    match word.trim() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -166,6 +189,18 @@ const CHARGE_TYPES: &[(&str, &str)] = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE WINDOW SAYS WHICH WAY, and the footer reads it back; a word it
+    /// does not know is no flip.
+    #[test]
+    fn a_lock_wanted_is_said_and_read_back() {
+        for on in [true, false] {
+            assert_eq!(keep_wanted(keep_word(on)), Some(on));
+        }
+        for wrong in ["", "yes", "toggle", "On"] {
+            assert_eq!(keep_wanted(wrong), None, "{wrong}");
+        }
+    }
 
     fn texts() -> ronoctua_i18n::Texts {
         ronoctua_i18n::Texts::fresh("en-GB").unwrap()

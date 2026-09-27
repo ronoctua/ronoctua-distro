@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<components version="0.8" origin="flatpak">
+  <component type="desktop">
+    <id>com.bixense.PasswordCalculator.desktop</id>
+    <name>Password Calculator</name>
+    <summary>Calculate strong passwords for each alias from your single secret</summary>
+    <description><p>This app calculates strong passwords for each alias from your single secret. No need to remember dozens of passwords any longer and no need for a password manager!</p></description>
+    <icon type="cached" height="64" width="64">com.bixense.PasswordCalculator.png</icon>
+    <icon type="cached" height="128" width="128">com.bixense.PasswordCalculator.png</icon>
+    <categories>
+      <category>Utility</category>
+    </categories>
+    <kudos>
+      <kudo>HiDpiIcon</kudo>
+    </kudos>
+    <project_license>Zlib</project_license>
+    <url type="homepage">https://bixense.com/pwcalculator/</url>
+    <screenshots>
+      <screenshot type="default">
+        <image type="source">https://bixense.com/pwcalculator/screenshot.png</image>
+        <image type="thumbnail" height="351" width="624">https://dl.flathub.org/repo/screenshots/com.bixense.PasswordCalculator-stable/624x351/com.bixense.PasswordCalculator-18625f3a8bfa3dc6ea0934e75f7785eb.png</image>
+        <image type="thumbnail" height="63" width="112">https://dl.flathub.org/repo/screenshots/com.bixense.PasswordCalculator-stable/112x63/com.bixense.PasswordCalculator-18625f3a8bfa3dc6ea0934e75f7785eb.png</image>
+        <image type="thumbnail" height="423" width="752">https://dl.flathub.org/repo/screenshots/com.bixense.PasswordCalculator-stable/752x423/com.bixense.PasswordCalculator-18625f3a8bfa3dc6ea0934e75f7785eb.png</image>
+      </screenshot>
+    </screenshots>
+    <content_rating type="oars-1.1"/>
+    <releases>
+      <release timestamp="1497571200" version="1.1"/>
+      <release timestamp="1466121600" version="1.0"/>
+    </releases>
+    <provides>
+      <binary>pwcalculator</binary>
+    </provides>
+    <launchable type="desktop-id">com.bixense.PasswordCalculator.desktop</launchable>
+    <bundle type="flatpak" runtime="org.freedesktop.Platform/x86_64/23.08" sdk="org.freedesktop.Sdk/x86_64/23.08">app/com.bixense.PasswordCalculator/x86_64/stable</bundle>
+  </component>
+  <component type="desktop-application">
+    <id>com.writerduet.writersolo</id>
+    <name>WriterSolo</name>
+    <summary>Write a screenplay or convert between various screenplay formats</summary>
+    <project_license>LicenseRef-proprietary</project_license>
+    <description>
+      <p>This is the free version of WriterDuet without any collaboration features to it.</p>
+      <p>Excellent for working with fdx (final draft), fountain, and even will give you verbose feedback
+          and can export to PDF or any other format you need.</p>
+      <p>Take any problems with the app to writerduet who develop it and issues with the flatpak to the github repo.</p>
+    </description>
+    <developer id="com.writerduet">
+      <name>WriterDuet</name>
+    </developer>
+    <developer_name>WriterDuet</developer_name>
+    <launchable type="desktop-id">com.writerduet.writersolo.desktop</launchable>
+    <icon height="64" type="cached" width="64">com.writerduet.writersolo.png</icon>
+    <icon height="128" type="cached" width="128">com.writerduet.writersolo.png</icon>
+    <icon type="stock">com.writerduet.writersolo</icon>
+    <icon height="128" type="remote" width="128">https://dl.flathub.org/media/com/writerduet/writersolo/f392ecb1a155d12f3becd33dd8d7b2cf/icons/128x128/com.writerduet.writersolo.png</icon>
+    <icon height="128" scale="2" type="remote" width="128">https://dl.flathub.org/media/com/writerduet/writersolo/f392ecb1a155d12f3becd33dd8d7b2cf/icons/128x128@2/com.writerduet.writersolo.png</icon>
+    <url type="homepage">https://writersolo.com</url>
+    <categories>
+      <category>Utility</category>
+    </categories>
+    <screenshots>
+      <screenshot type="default">
+        <image height="512" type="source" width="512">https://dl.flathub.org/media/com/writerduet/writersolo/f392ecb1a155d12f3becd33dd8d7b2cf/screenshots/image-1_orig.png</image>
+        <image height="224" type="thumbnail" width="224">https://dl.flathub.org/media/com/writerduet/writersolo/f392ecb1a155d12f3becd33dd8d7b2cf/screenshots/image-1_224x224@1.png</image>
+      </screenshot>
+    </screenshots>
+    <releases>
+      <release timestamp="1702771200" type="stable" version="7.0.374"/>
+    </releases>
+    <content_rating type="oars-1.1"/>
+  <custom><value key="flathub::build::build_log_url">https://builds.flathub.org/api/pipelines/5d0bcef8-a11f-413a-b408-1db961a11d23/log_url</value>
+  </custom>
+  <url type="bugtracker">https://github.com/flathub/com.writerduet.writersolo/issues</url>
+    <bundle type="flatpak" runtime="org.freedesktop.Platform/x86_64/25.08" sdk="org.freedesktop.Sdk/x86_64/25.08">app/com.writerduet.writersolo/x86_64/stable</bundle>
+  </component>
+  <component type="desktop-application">
+    <id>dev.heppen.webapps</id>
+    <name>Quick Web Apps</name>
+    <name xml:lang="cs">Rychlé webové aplikace</name>
+    <summary>Web applications at your fingertips</summary>
+    <summary xml:lang="cs">Webové aplikace na dosah ruky</summary>
+    <summary xml:lang="fr">Applications web à portée de main</summary>
+    <project_license>GPL-3.0-only</project_license>
+    <description>
+      <p>Web App Manager for the COSMIC™ desktop written with love and libcosmic. Allow you to simply create web applications from given url working inside separate window. With some customization options.</p>
+      <ul>
+        <li>Fast and easy to use</li>
+        <li>Works out of the box</li>
+        <li>In-app icon pack installer</li>
+        <li>Supports WebKitGTK web engine</li>
+      </ul>
+    </description>
+    <description xml:lang="cs">
+      <p>Manažer webových aplikací pro prostředí COSMIC™ napsaný s láskou a libcosmic. Umožňuje jednoduše vytvořit webové aplikace z daných url, které pracují v odděleném okně. Nechybí ani možnosti přizpůsobení.</p>
+      <ul>
+        <li>Rychlé a snadné použití</li>
+        <li>Funguje ihned po instalaci</li>
+        <li>Instalátor balíčků ikon přímo v aplikaci</li>
+        <li>Podpora webového jádra WebKitGTK</li>
+      </ul>
+    </description>
+    <developer id="dev.heppen">
+      <name>hepp3n</name>
+    </developer>
+    <developer_name>hepp3n</developer_name>
+    <requires>
+      <display_length>640</display_length>
+      <internet>always</internet>
+    </requires>
+    <supports>
+      <control>keyboard</control>
+      <control>pointing</control>
+    </supports>
+    <launchable type="desktop-id">dev.heppen.webapps.desktop</launchable>
+    <icon height="48" type="cached" width="48">dev.heppen.webapps.png</icon>
+    <icon height="64" type="cached" width="64">dev.heppen.webapps.png</icon>
+    <icon height="128" type="cached" width="128">dev.heppen.webapps.png</icon>
+    <icon type="stock">dev.heppen.webapps</icon>
+    <icon height="128" type="remote" width="128">https://dl.flathub.org/media/dev/heppen/webapps/55c7fe5d197b326f1832e2c6ddd55ae7/icons/128x128/dev.heppen.webapps.png</icon>
+    <icon height="128" scale="2" type="remote" width="128">https://dl.flathub.org/media/dev/heppen/webapps/55c7fe5d197b326f1832e2c6ddd55ae7/icons/128x128@2/dev.heppen.webapps.png</icon>
+    <url type="homepage">https://webapps.heppen.dev</url>
+    <url type="bugtracker">https://github.com/cosmic-utils/web-apps/issues</url>
+    <url type="donation">https://github.com/sponsors/hepp3n</url>
+    <url type="translate">https://github.com/cosmic-utils/web-apps/tree/master/i18n</url>
+    <url type="vcs-browser">https://github.com/cosmic-utils/web-apps</url>
+    <url type="contribute">https://github.com/cosmic-utils/web-apps</url>
+    <categories>
+      <category>Utility</category>
+    </categories>
+    <provides>
+      <id>com.system76.CosmicApplication</id>
+    </provides>
+    <screenshots>
+      <screenshot type="default">
+        <caption>Opened app</caption>
+        <caption xml:lang="cs">Otevřená aplikace</caption>
+        <image height="768" type="source" width="1024">https://dl.flathub.org/media/dev/heppen/webapps/55c7fe5d197b326f1832e2c6ddd55ae7/screenshots/image-1_orig.png</image>
+        <image height="564" type="thumbnail" width="752">https://dl.flathub.org/media/dev/heppen/webapps/55c7fe5d197b326f1832e2c6ddd55ae7/screenshots/image-1_752x564@1.png</image>
+        <image height="468" type="thumbnail" width="624">https://dl.flathub.org/media/dev/heppen/webapps/55c7fe5d197b326f1832e2c6ddd55ae7/screenshots/image-1_624x468@1.png</image>
+        <image height="168" type="thumbnail" width="224">https://dl.flathub.org/media/dev/heppen/webapps/55c7fe5d197b326f1832e2c6ddd55ae7/screenshots/image-1_224x168@1.png</image>
+      </screenshot>
+    </screenshots>
+    <keywords>
+      <keyword>App</keyword>
+      <keyword>Software</keyword>
+      <keyword>Manager</keyword>
+    </keywords>
+    <keywords xml:lang="cs">
+      <keyword>Aplikace</keyword>
+      <keyword>Software</keyword>
+      <keyword>Manažer</keyword>
+      <keyword>Web</keyword>
+    </keywords>
+    <branding>
+      <color scheme_preference="light" type="primary">#94ebeb</color>
+      <color scheme_preference="dark" type="primary">#578383</color>
+    </branding>
+    <releases>
+      <release timestamp="1772323200" type="stable" version="3.0.0">
+        <description>
+          <p>Many improvements for everything.</p>
+        </description>
+      </release>
+    </releases>
+    <content_rating type="oars-1.1"/>
+  <custom><value key="flathub::verification::verified">true</value>
+  <value key="flathub::verification::timestamp">1738855103</value>
+  <value key="flathub::verification::method">website</value>
+  <value key="flathub::verification::website">heppen.dev</value>
+  <value key="flathub::verification::login_is_organization">false</value>
+  <value key="flathub::build::build_log_url">https://builds.flathub.org/api/pipelines/b599b405-62d0-4006-81c7-cc922cb2abdc/log_url</value>
+  </custom>
+    <bundle type="flatpak" runtime="org.gnome.Platform/x86_64/49" sdk="org.gnome.Sdk/x86_64/49">app/dev.heppen.webapps/x86_64/stable</bundle>
+  </component>
+  <component type="console-application">
+    <id>net.launchpad.Gnuclad</id>
+    <name>Gnuclad</name>
+    <summary>Cladogram tree generator</summary>
+    <description><p>gnuclad tries to help the environment by creating trees. It&apos;s primary use will be generating cladogram trees for the GNU/Linux distro timeline and similar projects.</p></description>
+    <categories>
+      <category>Graphics</category>
+      <category>VectorGraphics</category>
+    </categories>
+    <project_license>GPL-3.0-only</project_license>
+    <url type="bugtracker">https://bugs.launchpad.net/gnuclad</url>
+    <url type="homepage">https://launchpad.net/gnuclad</url>
+    <content_rating type="oars-1.1"/>
+    <releases>
+      <release timestamp="1279843200" version="0.2.4"/>
+    </releases>
+    <bundle type="flatpak" runtime="org.freedesktop.Platform/x86_64/22.08" sdk="org.freedesktop.Sdk/x86_64/22.08">app/net.launchpad.Gnuclad/x86_64/stable</bundle>
+  </component>
+  <component type="runtime">
+    <id>org.freedesktop.Sdk.Extension.texlive</id>
+    <name>TeX Live Sdk extension</name>
+    <summary>LaTeX packages and tools</summary>
+    <bundle type="flatpak" runtime="org.freedesktop.Sdk/x86_64/18.08" sdk="org.freedesktop.Sdk/x86_64/18.08">runtime/org.freedesktop.Sdk.Extension.texlive/x86_64/18.08</bundle>
+  </component>
+  <component type="addon">
+    <id>org.qutebrowser.qutebrowser.Userscripts</id>
+    <name>Userscripts</name>
+    <summary>qutebrowser userscripts supporting Python modules, shared libraries, and executables</summary>
+    <extends>org.qutebrowser.qutebrowser</extends>
+    <bundle type="flatpak" sdk="org.kde.Sdk/x86_64/5.15-21.08">runtime/org.qutebrowser.qutebrowser.Userscripts/x86_64/stable</bundle>
+  </component>
+</components>

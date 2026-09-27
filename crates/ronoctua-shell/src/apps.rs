@@ -64,6 +64,69 @@ pub enum Action {
     /// the ID, which survives a rebuild, and never the command, whose store
     /// path is a build that gets collected.
     Pin(Box<ronoctua_apps::DesktopEntry>),
+    /// Look for what was typed among the programs one can INSTALL — the
+    /// launcher's last row, and its only one when nothing installed matches.
+    ///
+    /// The query as typed, trimmed. The host closes the launcher and opens the
+    /// software view's results on it: a person who typed `gimp` and found
+    /// nothing is a person about to go and get it, and the launcher is where
+    /// they already are.
+    SearchToInstall(String),
+    /// Show what this program is and where it came from — `C-i`.
+    ///
+    /// An index into the CATALOGUE (never a row of the list, which the next
+    /// letter reorders) — the footer's own `catalogue`, which is the same `Arc`
+    /// the finder was opened over and swapped with. The host closes the
+    /// launcher and opens the program's sheet.
+    Details(usize),
+    /// Remove this program — `C-d` —, AFTER a question that opens on no.
+    ///
+    /// The same index as [`Action::Details`], and the same sheet, with the
+    /// question already up. The launcher does not know where a program came
+    /// from, so it never refuses here: a program the flake installed is the
+    /// sheet's to refuse, with the sentence that says why.
+    Remove(usize),
+}
+
+/// The launcher's own keys, and the command each one runs.
+///
+/// # Why they carry `Ctrl`
+///
+/// In a list of NAMES every bare letter is text — it goes into the query — so
+/// anything that is a command has to be something a name never is. It is the
+/// file manager's reason for its `C-` commands, and the reason a letter here
+/// would be a letter nobody could type.
+///
+/// # Why the table lives in the view
+///
+/// `leader::OF_LAUNCHER_VIEW` held it while there was one key. A view's keys
+/// live beside the view that answers them — the clipboard's table left
+/// `leader.rs` the same way —, and [`Finder::key`] and the registry read ONE
+/// table, so a key added here is a key `leader::reachable` counts.
+///
+/// `C-i` is `details` because it is what the same letter means in the file
+/// manager (the facts pane), and `C-d` removes because it is `d` for delete,
+/// behind the modifier every command in this list carries.
+pub const OF_THE_VIEW: &[(&str, &str)] = &[
+    ("C-s", "apps-pin"),
+    ("C-i", "apps-details"),
+    ("C-d", "apps-remove"),
+];
+
+/// The command id of the last row, "search to install".
+///
+/// It has no key: the row is reached like any other row, by the arrows or the
+/// pointer, and `RET` or a click takes it ([`Finder::choose`]). The id exists
+/// so `LEADER :` names it and the registry can list it.
+pub const SEARCH_TO_INSTALL: &str = "apps-search-to-install";
+
+/// The text of the last row: "Search “gimp” to install".
+#[must_use]
+pub fn search_row_text(texts: &ronoctua_i18n::Texts, query: &str) -> String {
+    texts.t_with(
+        ronoctua_i18n::key::APPS_SEARCH_TO_INSTALL,
+        &[("query", query)],
+    )
 }
 
 /// The launcher's state while it is open.
@@ -75,7 +138,8 @@ pub struct Finder {
     query: String,
     /// The catalogue indices that match, in relevance order.
     result: Vec<usize>,
-    /// Which result is focused.
+    /// Which row is focused — a result, or `result.len()` when it is the
+    /// "search to install" row after them (see [`Finder::rows`]).
     cursor: usize,
 }
 
@@ -121,9 +185,39 @@ impl Finder {
     }
 
     /// The catalogue indices on display, in screen order.
+    ///
+    /// The APPLICATIONS only: the "search to install" row that may follow them
+    /// is not an entry — see [`Finder::rows`] and [`Finder::offers_search`].
     #[must_use]
     pub fn result(&self) -> &[usize] {
         &self.result
+    }
+
+    /// What the last row offers to look for, when there is a last row.
+    ///
+    /// `Some(query)` whenever something is typed: the row is always there
+    /// after the matches, and alone when nothing matches, so "not installed"
+    /// is never a dead end. With nothing typed there is nothing to look for,
+    /// and no row.
+    ///
+    /// Trimmed, because a space typed after a word is not part of the name
+    /// anybody is looking for — and a query of spaces is no query.
+    #[must_use]
+    pub fn offers_search(&self) -> Option<&str> {
+        Some(self.query.trim()).filter(|q| !q.is_empty())
+    }
+
+    /// How many rows the list draws: every result, then the "search to
+    /// install" row when [`Finder::offers_search`] has one.
+    #[must_use]
+    pub fn rows(&self) -> usize {
+        self.result.len() + usize::from(self.offers_search().is_some())
+    }
+
+    /// Is row `n` the "search to install" one?
+    #[must_use]
+    pub fn is_search_row(&self, n: usize) -> bool {
+        n == self.result.len() && self.offers_search().is_some()
     }
 
     /// Which row is focused.
@@ -132,7 +226,8 @@ impl Finder {
         self.cursor
     }
 
-    /// The entry on row `n` of the visible list.
+    /// The entry on row `n` of the visible list. `None` on the "search to
+    /// install" row, which is not an entry.
     #[must_use]
     pub fn at(&self, n: usize) -> Option<&ronoctua_apps::DesktopEntry> {
         self.catalogue.get(*self.result.get(n)?)
@@ -142,6 +237,11 @@ impl Finder {
     #[must_use]
     pub fn chosen(&self) -> Option<&ronoctua_apps::DesktopEntry> {
         self.at(self.cursor)
+    }
+
+    /// The focused entry's index in the CATALOGUE.
+    fn chosen_index(&self) -> Option<usize> {
+        self.result.get(self.cursor).copied()
     }
 
     /// How many applications the whole catalogue has — for the log and the echo area.
@@ -168,8 +268,21 @@ impl Finder {
             .map(|e| [e.key.as_str(), e.id.as_str()])
             .collect();
         let items: Vec<&[&str]> = keys.iter().map(<[&str; 2]>::as_slice).collect();
+        // Asked of the OLD list: was the cursor past the applications, on the
+        // search row? Then it stays on the search row — whoever walked down to
+        // it and goes on typing is refining what to look for.
+        let was_searching = self.cursor >= self.result.len();
         self.result = crate::minibuffer::rank(&q, &items);
-        self.cursor = self.cursor.min(self.result.len().saturating_sub(1));
+        self.cursor = if was_searching && self.offers_search().is_some() {
+            self.result.len()
+        } else {
+            // An application otherwise, and the LAST one when the list got
+            // shorter under the cursor: narrowing the list must not carry the
+            // cursor onto the search row by itself, where `RET` would do
+            // something else than it did a letter ago. With no application at
+            // all this is row zero — which is the search row, alone.
+            self.cursor.min(self.result.len().saturating_sub(1))
+        };
     }
 
     /// Picks row `n` and confirms, as a click does.
@@ -178,7 +291,7 @@ impl Finder {
     /// reachable by mouse only, and the same row must not have two
     /// behaviours depending on how one got to it.
     pub fn choose(&mut self, n: usize) -> Action {
-        if n >= self.result.len() {
+        if n >= self.rows() {
             return Action::Nothing;
         }
         self.cursor = n;
@@ -193,22 +306,19 @@ impl Finder {
     /// memory notices.
     pub fn key(&mut self, t: ronoctua_keymap::Key) -> Action {
         use crate::minibuffer::Gesture;
-        // PINNING COMES FIRST, before `gesture_of` turns every bare letter into
-        // a letter of the query. It is the same reason the file manager's own
-        // commands carry a modifier: in a list of NAMES the letter is text, so
-        // anything that is a command has to be something a name never is.
+        // THE VIEW'S OWN KEYS COME FIRST, before `gesture_of` turns every bare
+        // letter into a letter of the query — see `OF_THE_VIEW` for why every
+        // one of them carries `Ctrl`.
         //
         // `C-s` for sidebar. In the manager's menu the same idea is a bare `s`,
         // because there the letter is not query — one idea, two notations, and
         // the alternative was `C-s` in both, which costs the menu its one-letter
         // key for a gesture nobody reaches from there anyway.
-        if crate::leader::OF_LAUNCHER_VIEW
+        if let Some((_, id)) = OF_THE_VIEW
             .iter()
-            .any(|(notation, _)| ronoctua_keymap::Key::parse(notation).is_ok_and(|k| k == t))
+            .find(|(notation, _)| ronoctua_keymap::Key::parse(notation).is_ok_and(|k| k == t))
         {
-            return self
-                .chosen()
-                .map_or(Action::Nothing, |e| Action::Pin(Box::new(e.clone())));
+            return self.command(id);
         }
         match crate::minibuffer::gesture_of(t) {
             Gesture::Cancel => Action::Closed,
@@ -229,18 +339,44 @@ impl Finder {
             }
             // CONFIRMING WITH NO RESULT DOES NOT CLOSE, as in `M-x`: closing would
             // erase what was typed, and whoever got a letter wrong would have to
-            // start over.
+            // start over. With something typed there is always a row, though —
+            // the search one — and confirming there is looking to install.
             Gesture::Confirm => match self.chosen() {
                 Some(e) => Action::Open(Box::new(e.clone())),
-                None => Action::Nothing,
+                None => self.command(SEARCH_TO_INSTALL),
             },
+        }
+    }
+
+    /// What one of the launcher's commands asks for, on the focused row.
+    ///
+    /// The ONE place the ids turn into actions: the keys of [`OF_THE_VIEW`]
+    /// come through here, and so does the same id run by name or by a click
+    /// on a hint, so the three ways in cannot come to mean different things.
+    ///
+    /// On the "search to install" row the three that act on a program do
+    /// nothing — there is no program under the cursor — and away from it
+    /// [`SEARCH_TO_INSTALL`] still takes what was typed: the row is always
+    /// there when there is a query, and running it by name should not depend
+    /// on where the cursor happens to be.
+    pub fn command(&self, id: &str) -> Action {
+        match id {
+            "apps-pin" => self
+                .chosen()
+                .map_or(Action::Nothing, |e| Action::Pin(Box::new(e.clone()))),
+            "apps-details" => self.chosen_index().map_or(Action::Nothing, Action::Details),
+            "apps-remove" => self.chosen_index().map_or(Action::Nothing, Action::Remove),
+            SEARCH_TO_INSTALL => self
+                .offers_search()
+                .map_or(Action::Nothing, |q| Action::SearchToInstall(q.to_owned())),
+            _ => Action::Nothing,
         }
     }
 
     /// Moves the cursor, without leaving the list.
     fn move_by(&mut self, d: i32) -> Action {
         let fresh = self.cursor as i32 + d;
-        if fresh < 0 || fresh >= self.result.len() as i32 {
+        if fresh < 0 || fresh >= self.rows() as i32 {
             return Action::Nothing;
         }
         self.cursor = fresh as usize;
@@ -337,6 +473,76 @@ pub fn scan(language: &str, sender: calloop::channel::Sender<Catalogue>) {
     }
 }
 
+/// How a launcher entry is started — the program, its words, and the
+/// directory it starts in — inside this binary's terminal when the entry
+/// says it needs one. `None` when this binary cannot name itself.
+///
+/// ONE ANSWER FOR EVERY DOOR: the footer's launcher, a notification's "open
+/// it" and the windows that open what an install made all start an entry this
+/// way, so a program that needs a terminal gets one whichever door opened it.
+#[must_use]
+pub fn argv_of(e: &ronoctua_apps::DesktopEntry) -> Option<(String, Vec<String>, Option<String>)> {
+    let (program, args) = &e.command;
+    if !e.terminal {
+        return Some((program.clone(), args.clone(), e.working_directory.clone()));
+    }
+    let me = std::env::current_exe().ok()?;
+    let mut inside = vec!["terminal".to_owned(), program.clone()];
+    inside.extend_from_slice(args);
+    Some((me.to_string_lossy().into_owned(), inside, None))
+}
+
+/// How a window's launch by desktop id ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Opened {
+    /// The entry was found and started — or failed to start, which the
+    /// verdict says.
+    Started(crate::foreign::Launch),
+    /// No entry of the launcher has that id: installed a moment ago and not
+    /// in the catalogue yet, or gone.
+    NotInLauncher,
+}
+
+/// Starts the launcher's entry `desktop_id` FROM A WINDOW, off the loop: the
+/// catalogue is read on a thread (the sweep the footer keeps at hand costs
+/// tens of milliseconds, which a window's loop does not spend), the entry
+/// found by the rule the software view names them by
+/// (`software::same_desktop`), and started as the footer starts it
+/// ([`argv_of`], `foreign::launch_now`). `done` hears how, on that thread.
+///
+/// The window says what happened on its own line — it used to hand the id
+/// to the footer, whose refusal then appeared on the FOOTER's line, and the
+/// window the person was using said nothing.
+pub fn launch_entry(desktop_id: &str, language: &str, done: impl FnOnce(Opened) + Send + 'static) {
+    let desktop_id = desktop_id.to_owned();
+    let language = language.replace('-', "_");
+    let born = std::thread::Builder::new()
+        .name("launch-entry".to_owned())
+        .spawn(move || {
+            let entry = ronoctua_apps::scan(&language)
+                .into_iter()
+                .find(|e| crate::software::same_desktop(&e.id, &desktop_id));
+            let Some(entry) = entry else {
+                done(Opened::NotInLauncher);
+                return;
+            };
+            let opened = match argv_of(&entry) {
+                Some((program, args, cwd)) => {
+                    tracing::info!(app = %entry.id, program, "opening the application");
+                    crate::foreign::launch_now(&program, &args, cwd.as_deref())
+                }
+                None => crate::foreign::Launch::Failed {
+                    program: entry.id.clone(),
+                    error: "this binary cannot name itself for the terminal".to_owned(),
+                },
+            };
+            done(Opened::Started(opened));
+        });
+    if let Err(e) = born {
+        tracing::error!(error = %e, "could not create the launch thread");
+    }
+}
+
 /// The icon superpackage's root (§6.6), read at RUN TIME.
 ///
 /// # Why not `option_env!`, unlike everything else here
@@ -350,8 +556,9 @@ pub fn scan(language: &str, sender: calloop::channel::Sender<Catalogue>) {
 ///
 /// So the value comes from the environment, set by `nix/modules/icons.nix` for
 /// the installed system and by `nix/dev.nix` for the nested loop. Unset, the
-/// pixmap step does not happen and the list is left with its glyphs — which is
-/// degradation, and it is what a machine that asked for no superpack wants.
+/// chain starts at `hicolor`: the programs that bring their own icon keep it,
+/// and the rest keep their glyphs — which is degradation, and it is what a
+/// machine that asked for no superpack wants.
 fn superpack() -> Option<String> {
     std::env::var("RONOCTUA_ICONS")
         .ok()
@@ -439,7 +646,8 @@ fn for_renderer(r: ronoctua_notify::icon::Rgba) -> ronoctua_render::image::Rgba 
 /// # Why one long-lived thread, and not one per request
 ///
 /// Because the expensive part is the SAME for all of them: `icon::look_up` walks the
-/// superpackage's size directories, which has 335,031 files. One thread
+/// superpackage's size directories, which has 335,031 files, and then every
+/// `hicolor` of the session for a name it does not have. One thread
 /// per request would pay the creation cost per icon and would still leave twelve rasterisations
 /// competing for the processor with the painting.
 ///
@@ -450,13 +658,19 @@ pub fn painter(
     sender: calloop::channel::Sender<Painting>,
 ) -> Option<std::sync::mpsc::Sender<Request>> {
     let (queue, requests) = std::sync::mpsc::channel::<Request>();
-    let root = superpack().map(std::path::PathBuf::from);
+    // THE WHOLE CHAIN, and read ONCE: the superpackage, then every `hicolor`
+    // and `pixmaps` the session's data directories name — which is where a
+    // Flatpak export, `~/.nix-profile` and `~/.local/share/icons` put a
+    // program's own icon. The environment is the thread's birth's: it does not
+    // change under a running footer, and reading it per icon would be a lookup
+    // of variables per row.
+    let roots = ronoctua_notify::icon::Roots::of_session(superpack().map(std::path::PathBuf::from));
     let born = std::thread::Builder::new()
         .name("ronoctua-icons".to_owned())
         .spawn(move || {
             while let Ok(p) = requests.recv() {
-                let rgba = ronoctua_notify::icon::rasterize(root.as_deref(), &p.icon, p.side)
-                    .map(for_renderer);
+                let rgba =
+                    ronoctua_notify::icon::rasterize_in(&roots, &p.icon, p.side).map(for_renderer);
                 if sender
                     .send(Painting {
                         icon: p.icon,
@@ -479,21 +693,128 @@ pub fn painter(
     }
 }
 
-/// When each `applications` directory last changed.
+/// What the launcher remembers about the `applications` directories, to tell
+/// whether the catalogue has aged. Compared with `!=`, and nothing else.
+pub type Stamp = Vec<DirStamp>;
+
+/// One `applications` directory, as far as "has it changed?" goes.
 ///
-/// It is what says whether the catalogue has aged. Comparing the CONTENT would require
-/// rescanning, which is what we want to avoid; a directory's `mtime` changes when a
-/// `.desktop` enters or leaves, which is the case that matters.
+/// # Why four things, when an `mtime` used to be enough
 ///
-/// A directory that does not exist comes in as `None`, and that counts: creating
+/// Comparing the CONTENT would require rescanning, which is what the stamp
+/// exists to avoid; a directory's `mtime` changes when a `.desktop` enters or
+/// leaves, and for a directory somebody writes into, that is still the case
+/// that matters. But the directories the session lists are mostly not written
+/// into. They are PROFILES:
+///
+/// - `~/.nix-profile/share/applications` goes through a link into the store,
+///   where every `mtime` is the same second of 1970. `nix profile add` builds a
+///   NEW generation and moves the link, and the directory it resolves to is a
+///   different one with the same `mtime` — so the stamp never moved, and an
+///   installed program stayed out of the list until the footer restarted. What
+///   moved is WHERE the path resolves ([`DirStamp::real`]), which is the
+///   generation itself; the same is true of the system's and the per-user
+///   profile across a rebuild.
+/// - A `.desktop` added in a SUBDIRECTORY changes that subdirectory's `mtime`
+///   and nothing above it, and the scan reads two levels down
+///   ([`ronoctua_apps::DEPTH`]); [`DirStamp::below`] is those directories.
+/// - The directory's own `mtime` is kept both ways — of the last component
+///   itself ([`DirStamp::link`]) and of what it resolves to
+///   ([`DirStamp::mtime`]) — because either can be the one that is a link.
+///
+/// A directory that does not exist is all `None`s, and that counts: creating
 /// `~/.local/share/applications` is exactly the gesture of whoever has just
 /// installed their first override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirStamp {
+    /// Where the path resolves to, through every link on the way — the
+    /// generation, for a profile. `None` when it does not exist.
+    pub real: Option<std::path::PathBuf>,
+    /// The `mtime` of the path's last component, not followed.
+    pub link: Option<std::time::SystemTime>,
+    /// The `mtime` of the directory it resolves to.
+    pub mtime: Option<std::time::SystemTime>,
+    /// Every directory below it that the scan reads, in path order: each with
+    /// where it resolves to and its `mtime`.
+    pub below: Vec<(
+        std::path::PathBuf,
+        Option<std::path::PathBuf>,
+        Option<std::time::SystemTime>,
+    )>,
+}
+
+/// The session's `applications` directories, stamped.
+///
+/// # What it costs, and where it runs
+///
+/// It runs on the event loop, when `LEADER a` opens (`rescan_if_changed`), so it
+/// must stay a handful of system calls. Per directory: one `canonicalize`, two
+/// `stat`s, and a `readdir` that `stat`s only what is not a `.desktop` — a
+/// profile's directory is a hundred links to `.desktop` files and two or three
+/// subdirectories, and the file names say which is which without asking.
 #[must_use]
-pub fn stamp() -> Vec<Option<std::time::SystemTime>> {
-    ronoctua_apps::directories()
-        .iter()
-        .map(|d| std::fs::metadata(d).and_then(|m| m.modified()).ok())
+pub fn stamp() -> Stamp {
+    stamp_of(&ronoctua_apps::directories())
+}
+
+/// [`stamp`], over the directories given — the tests' door.
+#[must_use]
+pub fn stamp_of(dirs: &[std::path::PathBuf]) -> Stamp {
+    dirs.iter()
+        .map(|d| {
+            let mut below = Vec::new();
+            subdirectories(d, 1, &mut below);
+            below.sort();
+            DirStamp {
+                real: std::fs::canonicalize(d).ok(),
+                link: std::fs::symlink_metadata(d).and_then(|m| m.modified()).ok(),
+                mtime: std::fs::metadata(d).and_then(|m| m.modified()).ok(),
+                below,
+            }
+        })
         .collect()
+}
+
+/// The directories under `dir` that the scan reads, down to its depth.
+///
+/// `level` is the depth of what is LISTED here: the scan reads the
+/// `applications` directory (level 0) and the directories down to
+/// `DEPTH - 1`, following links as it goes — `is_dir` follows them, and so
+/// does `metadata` here.
+fn subdirectories(
+    dir: &std::path::Path,
+    level: usize,
+    out: &mut Vec<(
+        std::path::PathBuf,
+        Option<std::path::PathBuf>,
+        Option<std::time::SystemTime>,
+    )>,
+) {
+    if level >= ronoctua_apps::DEPTH {
+        return;
+    }
+    let Ok(items) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for item in items.filter_map(Result::ok) {
+        let path = item.path();
+        // A `.desktop` is a file, and asking would be a `stat` per program.
+        if path.extension().is_some_and(|e| e == "desktop") {
+            continue;
+        }
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
+        if !meta.is_dir() {
+            continue;
+        }
+        out.push((
+            path.clone(),
+            std::fs::canonicalize(&path).ok(),
+            meta.modified().ok(),
+        ));
+        subdirectories(&path, level + 1, out);
+    }
 }
 
 /// Which application declares that it opens this type.
@@ -574,7 +895,7 @@ pub fn command_for(
 
 #[cfg(test)]
 mod tests {
-    use super::{Action, Finder, glyph_of, pixmap_key};
+    use super::{Action, Finder, OF_THE_VIEW, glyph_of, pixmap_key, stamp_of};
     use ronoctua_apps::DesktopEntry;
     use ronoctua_keymap::{Key, Mods, Sym};
     use std::sync::Arc;
@@ -590,6 +911,7 @@ mod tests {
             command: (id.to_owned(), Vec::new()),
             working_directory: None,
             terminal: false,
+            startup_wm_class: None,
             key: ronoctua_apps::fold::fold(name),
         }
     }
@@ -614,6 +936,37 @@ mod tests {
         for c in s.chars() {
             l.key(t(Sym::Char(c)));
         }
+    }
+
+    /// FAILS IF: an entry is started one way by the footer and another by a
+    /// window — the program, its words and its directory as the entry says;
+    /// one that needs a terminal inside this binary's own.
+    #[test]
+    fn an_entry_is_started_one_way_by_every_door() {
+        let mut gimp = input_of("org.gimp.GIMP", "GIMP", &[]);
+        gimp.command = ("/bin/gimp".to_owned(), vec!["-n".to_owned()]);
+        gimp.working_directory = Some("/srv".to_owned());
+        assert_eq!(
+            super::argv_of(&gimp),
+            Some((
+                "/bin/gimp".to_owned(),
+                vec!["-n".to_owned()],
+                Some("/srv".to_owned())
+            ))
+        );
+        let mut top = input_of("htop", "htop", &[]);
+        top.command = (
+            "/bin/htop".to_owned(),
+            vec!["-d".to_owned(), "5".to_owned()],
+        );
+        top.terminal = true;
+        let (program, args, cwd) = super::argv_of(&top).expect("this binary names itself");
+        assert_eq!(
+            std::path::PathBuf::from(program),
+            std::env::current_exe().unwrap()
+        );
+        assert_eq!(args, ["terminal", "/bin/htop", "-d", "5"]);
+        assert_eq!(cwd, None);
     }
 
     #[test]
@@ -699,13 +1052,259 @@ mod tests {
         assert_eq!(l.key(t(Sym::Esc)), Action::Closed);
     }
 
-    /// As in `M-x`: closing would erase what was typed.
+    /// As in `M-x`: closing would erase what was typed. With nothing typed
+    /// and nothing to list there is no row at all, and `RET` does nothing.
     #[test]
-    fn confirm_with_no_result_does_not_close() {
-        let mut l = Finder::fresh(catalogue());
-        type_in(&mut l, "zzzznaoexiste");
-        assert!(l.result().is_empty());
+    fn confirm_with_no_row_does_nothing() {
+        let mut l = Finder::fresh(Arc::new(Vec::new()));
+        assert_eq!(l.rows(), 0);
         assert_eq!(l.key(t(Sym::Enter)), Action::Nothing);
+        // And the three commands on nothing are nothing, not a panic.
+        for (_, id) in OF_THE_VIEW {
+            assert_eq!(l.command(id), Action::Nothing, "{id}");
+        }
+    }
+
+    /// THE LAST ROW: whoever typed `gimp` and found nothing is about to go and
+    /// get it, and the launcher is where they already are. With nothing
+    /// matching it is the ONLY row, and `RET` takes it — as typed, trimmed.
+    #[test]
+    fn a_query_that_matches_nothing_offers_to_search_for_it() {
+        let mut l = Finder::fresh(catalogue());
+        assert_eq!(
+            l.offers_search(),
+            None,
+            "nothing typed, nothing to look for"
+        );
+        assert_eq!(l.rows(), l.result().len());
+        type_in(&mut l, "gimp ");
+        assert!(l.result().is_empty());
+        assert_eq!(l.offers_search(), Some("gimp"));
+        assert_eq!(l.rows(), 1);
+        assert!(l.is_search_row(0) && l.cursor() == 0);
+        assert_eq!(l.chosen(), None, "the search row is not an application");
+        assert_eq!(
+            l.key(t(Sym::Enter)),
+            Action::SearchToInstall("gimp".to_owned())
+        );
+        // A query of spaces is no query.
+        let mut blank = Finder::fresh(catalogue());
+        type_in(&mut blank, "   ");
+        assert_eq!(blank.offers_search(), None);
+    }
+
+    /// With matches, the search row comes AFTER them, and is reached like any
+    /// other row: by the arrow and by the pointer.
+    #[test]
+    fn the_search_row_follows_the_matches() {
+        let mut l = Finder::fresh(catalogue());
+        type_in(&mut l, "fire");
+        let apps = l.result().len();
+        assert_eq!(apps, 1);
+        assert_eq!(l.rows(), apps + 1);
+        assert!(!l.is_search_row(0) && l.is_search_row(apps));
+        // `RET` on the match still opens it: the new row changes nothing above it.
+        assert!(matches!(l.key(t(Sym::Enter)), Action::Open(_)));
+        assert_eq!(l.key(t(Sym::Down)), Action::Changed);
+        assert!(l.is_search_row(l.cursor()));
+        assert_eq!(l.key(t(Sym::Down)), Action::Nothing, "it went past the end");
+        assert_eq!(
+            l.key(t(Sym::Enter)),
+            Action::SearchToInstall("fire".to_owned())
+        );
+        // THE POINTER, by the same `Enter`.
+        let mut m = Finder::fresh(catalogue());
+        type_in(&mut m, "fire");
+        assert_eq!(m.choose(apps), Action::SearchToInstall("fire".to_owned()));
+        assert_eq!(m.choose(apps + 1), Action::Nothing, "past the last row");
+    }
+
+    /// Narrowing the list must not carry the cursor onto the search row by
+    /// itself, where `RET` would do something else than a letter ago; but
+    /// whoever walked down to it and goes on typing stays there.
+    #[test]
+    fn typing_keeps_the_cursor_on_its_side_of_the_search_row() {
+        let mut l = Finder::fresh(catalogue());
+        type_in(&mut l, "i");
+        let before = l.result().len();
+        assert!(before >= 2, "the fixture has to give two matches");
+        for _ in 0..before - 1 {
+            l.key(t(Sym::Down));
+        }
+        assert!(l.chosen().is_some());
+        type_in(&mut l, "r");
+        assert!(!l.result().is_empty());
+        assert!(
+            l.chosen().is_some(),
+            "a letter moved the cursor onto the search row"
+        );
+
+        let mut m = Finder::fresh(catalogue());
+        type_in(&mut m, "fire");
+        m.key(t(Sym::Down));
+        assert!(m.is_search_row(m.cursor()));
+        type_in(&mut m, "f");
+        assert!(m.is_search_row(m.cursor()), "it left the row it was on");
+        assert_eq!(
+            m.key(t(Sym::Enter)),
+            Action::SearchToInstall("firef".to_owned())
+        );
+    }
+
+    /// `C-i` and `C-d` name the FOCUSED program by its place in the catalogue
+    /// — never by its row, which the next letter reorders — and `C-s` pins it.
+    #[test]
+    fn the_view_keys_act_on_the_focused_program() {
+        let chord = |c: char| Key {
+            mods: Mods {
+                ctrl: true,
+                ..Mods::default()
+            },
+            sym: Sym::Char(c),
+        };
+        let mut l = Finder::fresh(catalogue());
+        type_in(&mut l, "neovim");
+        let i = l.result()[0];
+        assert_eq!(
+            catalogue()[i].name,
+            "Neovim",
+            "the index is the catalogue's"
+        );
+        assert_eq!(l.key(chord('i')), Action::Details(i));
+        assert_eq!(l.key(chord('d')), Action::Remove(i));
+        assert!(
+            matches!(l.key(chord('s')), Action::Pin(e) if e.name == "Neovim"),
+            "pinning went elsewhere"
+        );
+        // NONE OF THEM IS A LETTER OF THE QUERY.
+        assert_eq!(l.query(), "neovim");
+        // On the search row there is no program under the cursor.
+        l.key(t(Sym::Down));
+        assert!(l.is_search_row(l.cursor()));
+        assert_eq!(l.key(chord('i')), Action::Nothing);
+        assert_eq!(l.key(chord('d')), Action::Nothing);
+        assert_eq!(l.key(chord('s')), Action::Nothing);
+    }
+
+    /// EVERY KEY OF THE TABLE DOES SOMETHING, and what it does is what its id
+    /// says when run by name: the key and `LEADER :` cannot come to mean two
+    /// things, because both go through `command`.
+    #[test]
+    fn every_key_of_the_view_runs_its_command() {
+        let mut l = Finder::fresh(catalogue());
+        for (notation, id) in OF_THE_VIEW {
+            let key = Key::parse(notation).expect("the notation parses");
+            assert!(
+                key.mods.ctrl,
+                "{notation}: a bare key here is a letter of the query"
+            );
+            let by_name = l.command(id);
+            assert_ne!(by_name, Action::Nothing, "{id} does nothing on a program");
+            assert_eq!(l.key(key), by_name, "{notation} and {id} disagree");
+        }
+        // The search row's id works by name wherever the cursor is — the row
+        // is there whenever something is typed.
+        type_in(&mut l, "zzz");
+        l.key(t(Sym::Backspace));
+        assert_eq!(
+            l.command(super::SEARCH_TO_INSTALL),
+            Action::SearchToInstall("zz".to_owned())
+        );
+        assert_eq!(l.command("apps-no-such-thing"), Action::Nothing);
+    }
+
+    /// A scratch directory of this test's own.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("ronoctua-stamp-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("mkdir");
+        d
+    }
+
+    /// Sets a directory's `mtime`, so a test does not depend on the clock
+    /// ticking between two writes.
+    fn touch(dir: &std::path::Path, seconds: u64) {
+        std::fs::File::open(dir)
+            .and_then(|f| {
+                f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+            })
+            .expect("set the mtime");
+    }
+
+    /// THE DEFECT: `~/.nix-profile` is a link into the store, where every
+    /// `mtime` is the same, so `nix profile add` — which moves the link to a
+    /// new generation — never changed the stamp, and the program stayed out of
+    /// the list until the footer restarted.
+    ///
+    /// Both generations here have the SAME `mtime` on purpose: only where the
+    /// path resolves can tell them apart, which is the half that was missing.
+    #[test]
+    fn a_new_profile_generation_changes_the_stamp() {
+        let root = scratch("generation");
+        for generation in ["gen-1", "gen-2"] {
+            let apps = root.join(generation).join("share/applications");
+            std::fs::create_dir_all(&apps).expect("mkdir");
+            std::fs::write(apps.join("a.desktop"), "[Desktop Entry]\n").expect("write");
+            touch(&apps, 1);
+        }
+        let profile = root.join("profile");
+        std::os::unix::fs::symlink(root.join("gen-1"), &profile).expect("link");
+        let dirs = [profile.join("share/applications")];
+        let before = stamp_of(&dirs);
+
+        std::fs::remove_file(&profile).expect("unlink");
+        std::os::unix::fs::symlink(root.join("gen-2"), &profile).expect("link");
+        let after = stamp_of(&dirs);
+        std::fs::remove_dir_all(&root).ok();
+
+        assert_eq!(
+            (before[0].mtime, before[0].link),
+            (after[0].mtime, after[0].link),
+            "the fixture has to hide the change from the mtimes, as the store does"
+        );
+        assert_ne!(before, after, "a new generation went unnoticed");
+    }
+
+    /// THE DEFECT: the scan reads two levels down, and a `.desktop` added in a
+    /// subdirectory changes that subdirectory's `mtime` and nothing above it.
+    #[test]
+    fn a_desktop_file_added_in_a_subdirectory_changes_the_stamp() {
+        let root = scratch("subdirectory");
+        let deep = root.join("applications/vendor/more");
+        std::fs::create_dir_all(&deep).expect("mkdir");
+        // Old, and fixed: the write below is then a change whatever the clock's
+        // resolution.
+        touch(&deep, 1);
+        touch(&root.join("applications/vendor"), 1);
+        let dirs = [root.join("applications")];
+        let before = stamp_of(&dirs);
+        std::fs::write(deep.join("x.desktop"), "[Desktop Entry]\n").expect("write");
+        let after = stamp_of(&dirs);
+        std::fs::remove_dir_all(&root).ok();
+
+        assert_eq!(
+            before[0].mtime, after[0].mtime,
+            "the top directory did not change — the old stamp would have missed this"
+        );
+        assert_ne!(before, after, "a file two levels down went unnoticed");
+    }
+
+    /// A directory that does not exist counts: creating
+    /// `~/.local/share/applications` is the first override anybody writes.
+    #[test]
+    fn a_directory_appearing_changes_the_stamp() {
+        let root = scratch("appearing");
+        let dirs = [root.join("applications")];
+        let before = stamp_of(&dirs);
+        assert_eq!(before[0].real, None);
+        std::fs::create_dir_all(&dirs[0]).expect("mkdir");
+        let after = stamp_of(&dirs);
+        // And nothing changed is no change: the comparison is what decides a
+        // rescan, and a stamp that differed from itself would rescan every time.
+        let again = stamp_of(&dirs);
+        std::fs::remove_dir_all(&root).ok();
+        assert_ne!(before, after);
+        assert_eq!(after, again);
     }
 
     #[test]

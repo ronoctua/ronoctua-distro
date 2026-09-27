@@ -208,6 +208,17 @@ in
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];
+      # THE SESSION'S `PATH`, NOT A UNIT'S — the footer's reason, one process
+      # along. The queue is the parent of every program an install, update or
+      # removal starts (`ronoctua-software`, and whatever Flatpak, Nix or an
+      # AppImage start in turn), and a child inherits its parent's `PATH`: we
+      # name our programs by store path, but a bare name anywhere further down
+      # that tree resolves against this unit's. NixOS gives a unit five
+      # packages (coreutils, findutils, grep, sed, systemd) unless told
+      # otherwise; off and with no `path`, no `Environment=PATH` is written
+      # (`nixos/lib/systemd-lib.nix`) and the user manager's is inherited —
+      # the one NixOS builds from `environment.profiles`.
+      enableDefaultPath = false;
       # WHERE yt-dlp IS, and why it arrives here rather than being baked in.
       #
       # `option_env!` with a store path is a REFERENCE, and this one would point

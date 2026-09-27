@@ -77,6 +77,21 @@ pub enum Sym {
     Up,
     /// Down arrow, `<down>`.
     Down,
+    /// Page Up, `<prior>` — Emacs's name for it, as `<left>` is.
+    ///
+    /// # Why the page keys came to exist
+    ///
+    /// For the same reason as the arrows: a door read them and the other did
+    /// not. A manual in a window paged with them, and the same manual in the
+    /// footer could not, because the footer's key reader had no symbol to put
+    /// them in and dropped them in silence.
+    PageUp,
+    /// Page Down, `<next>`.
+    PageDown,
+    /// Home, `<home>`.
+    Home,
+    /// End, `<end>`.
+    End,
 }
 
 /// A key: modifiers plus symbol.
@@ -137,6 +152,10 @@ impl Key {
             "<right>" => Sym::Right,
             "<up>" => Sym::Up,
             "<down>" => Sym::Down,
+            "<prior>" => Sym::PageUp,
+            "<next>" => Sym::PageDown,
+            "<home>" => Sym::Home,
+            "<end>" => Sym::End,
             otherwise => {
                 let mut chars = otherwise.chars();
                 match (chars.next(), chars.next()) {
@@ -179,6 +198,10 @@ impl Key {
             Sym::Right => s.push_str("<right>"),
             Sym::Up => s.push_str("<up>"),
             Sym::Down => s.push_str("<down>"),
+            Sym::PageUp => s.push_str("<prior>"),
+            Sym::PageDown => s.push_str("<next>"),
+            Sym::Home => s.push_str("<home>"),
+            Sym::End => s.push_str("<end>"),
         }
         s
     }
@@ -568,6 +591,23 @@ mod tests {
         for s in ["SPC", "f", "C-x", "M-x", "C-M-S-s-a", "RET", "ESC", "TAB"] {
             assert_eq!(Key::parse(s).unwrap().notation(), s, "it failed at {s}");
         }
+    }
+
+    /// THE PAGE KEYS ARE KEYS, in Emacs's names: a door that reads them and a
+    /// door that cannot were two doors answering one manual differently.
+    #[test]
+    fn the_page_keys_read_and_rewrite_the_same() {
+        for (s, sym) in [
+            ("<prior>", Sym::PageUp),
+            ("<next>", Sym::PageDown),
+            ("<home>", Sym::Home),
+            ("<end>", Sym::End),
+        ] {
+            let key = Key::parse(s).unwrap();
+            assert_eq!(key.sym, sym, "{s}");
+            assert_eq!(key.notation(), s, "it failed at {s}");
+        }
+        assert_eq!(Key::parse("S-<next>").unwrap().notation(), "S-<next>");
     }
 
     #[test]

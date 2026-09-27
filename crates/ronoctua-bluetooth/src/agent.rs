@@ -112,8 +112,9 @@ pub struct Questions {
     next: Arc<std::sync::atomic::AtomicU64>,
 }
 
-/// The question that is waiting, if any, and the serial that says whose.
-type Waiting = Arc<Mutex<Option<(u64, oneshot::Sender<Reply>)>>>;
+/// The question that is waiting, if any: the serial that says whose, the
+/// question itself — what an answer has to name — and where its reply goes.
+type Waiting = Arc<Mutex<Option<(u64, Question, oneshot::Sender<Reply>)>>>;
 
 /// What a person answered.
 struct Reply {
@@ -131,13 +132,43 @@ impl Questions {
         }
     }
 
-    /// Answers whatever is waiting. A `no` for nothing is nothing.
-    pub fn answer(&self, yes: bool, typed: &str) {
+    /// Answers `question` — and only it: says whether it was still the one
+    /// waiting.
+    ///
+    /// THE ANSWER NAMES ITS QUESTION. It used to answer whatever was waiting,
+    /// and a question can be replaced at any moment — the other side cancels,
+    /// or times out, and another device asks — so a PIN typed for one device,
+    /// or a yes pressed for it, reached the next one: a stranger's pairing
+    /// confirmed, or the PIN handed to it. An answer to a question that is not
+    /// the one waiting is dropped, and the one waiting keeps waiting.
+    pub fn answer(&self, question: &Question, yes: bool, typed: &str) -> bool {
+        let taken = self.pending.lock().ok().and_then(|mut p| {
+            if p.as_ref()
+                .is_some_and(|(_, waiting, _)| waiting == question)
+            {
+                p.take()
+            } else {
+                None
+            }
+        });
+        let Some((_, _, tell)) = taken else {
+            return false;
+        };
+        let _ = tell.send(Reply {
+            yes,
+            typed: typed.to_owned(),
+        });
+        true
+    }
+
+    /// Refuses whatever is waiting — bluetoothd's own `Cancel`, which names
+    /// no question because there is only ever one.
+    fn give_up(&self) {
         let taken = self.pending.lock().ok().and_then(|mut p| p.take());
-        if let Some((_, tell)) = taken {
+        if let Some((_, _, tell)) = taken {
             let _ = tell.send(Reply {
-                yes,
-                typed: typed.to_owned(),
+                yes: false,
+                typed: String::new(),
             });
         }
     }
@@ -148,7 +179,7 @@ impl Questions {
         let Ok(mut pending) = self.pending.lock() else {
             return false;
         };
-        if pending.as_ref().is_some_and(|(s, _)| *s == serial) {
+        if pending.as_ref().is_some_and(|(s, _, _)| *s == serial) {
             *pending = None;
             return true;
         }
@@ -163,11 +194,11 @@ impl Questions {
     async fn ask(&self, feed: &Feed, question: Question) -> Option<Reply> {
         let (tell, hear) = oneshot::channel();
         let serial = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if let Some((_, old)) = self
+        if let Some((_, _, old)) = self
             .pending
             .lock()
             .ok()
-            .and_then(|mut p| p.replace((serial, tell)))
+            .and_then(|mut p| p.replace((serial, question.clone(), tell)))
         {
             let _ = old.send(Reply {
                 yes: false,
@@ -216,7 +247,7 @@ struct Agent {
 impl Agent {
     /// The daemon has given up on this pairing.
     async fn cancel(&self) {
-        self.questions.answer(false, "");
+        self.questions.give_up();
         (self.feed)(Event::Unasked);
     }
 
@@ -405,11 +436,18 @@ pub fn register(connection: &zbus::blocking::Connection) {
 mod tests {
     use super::*;
 
+    fn question(device: &str, asked: Asked) -> Question {
+        Question {
+            device: device.to_owned(),
+            asked,
+        }
+    }
+
     #[test]
     fn a_timeout_clears_only_its_own_question() {
         let q = Questions::idle();
         let (mine, _hear) = oneshot::channel();
-        *q.pending.lock().unwrap() = Some((7, mine));
+        *q.pending.lock().unwrap() = Some((7, question("/d/1", Asked::Pin), mine));
         // Somebody else's serial: the question stays.
         assert!(!q.expire(6));
         assert!(q.pending.lock().unwrap().is_some());
@@ -424,20 +462,51 @@ mod tests {
     fn an_answer_to_nothing_is_nothing() {
         let q = Questions::idle();
         // No panic, no wait: there is no question.
-        q.answer(true, "123456");
-        q.answer(false, "");
+        assert!(!q.answer(&question("/d/1", Asked::Typed), true, "123456"));
+        assert!(!q.answer(&question("/d/1", Asked::Authorize), false, ""));
+        q.give_up();
     }
 
     #[test]
     fn an_answer_reaches_the_question_that_is_waiting() {
         let q = Questions::idle();
         let (tell, hear) = oneshot::channel();
-        *q.pending.lock().unwrap() = Some((1, tell));
-        q.answer(true, "012345");
+        let asked = question("/d/1", Asked::Typed);
+        *q.pending.lock().unwrap() = Some((1, asked.clone(), tell));
+        assert!(q.answer(&asked, true, "012345"));
         let reply = futures_lite::future::block_on(hear).unwrap();
         assert!(reply.yes);
         assert_eq!(reply.typed, "012345");
         assert!(q.pending.lock().unwrap().is_none(), "the question stayed");
+    }
+
+    /// FAILS IF: a PIN typed for one device — or a yes pressed for it — is
+    /// taken by the question that replaced it: another device's
+    /// confirmation, a service's authorisation, the same device asking
+    /// something else.
+    #[test]
+    fn an_answer_for_another_question_answers_nothing() {
+        let q = Questions::idle();
+        let (tell, mut hear) = oneshot::channel();
+        let waiting = question("/d/B", Asked::Confirm("123456".to_owned()));
+        *q.pending.lock().unwrap() = Some((2, waiting, tell));
+        for stale in [
+            question("/d/A", Asked::Pin),
+            question("/d/A", Asked::Confirm("123456".to_owned())),
+            question("/d/B", Asked::Pin),
+            question("/d/B", Asked::Confirm("654321".to_owned())),
+        ] {
+            assert!(!q.answer(&stale, true, "0000"), "{stale:?}");
+        }
+        assert!(
+            matches!(hear.try_recv(), Ok(None)),
+            "a stale answer reached the question waiting"
+        );
+        assert!(q.pending.lock().unwrap().is_some(), "the question went");
+        // AND bluetoothd's own `Cancel` still refuses whatever waits.
+        q.give_up();
+        let reply = futures_lite::future::block_on(hear).unwrap();
+        assert!(!reply.yes);
     }
 
     #[test]

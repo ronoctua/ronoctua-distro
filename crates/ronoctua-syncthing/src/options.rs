@@ -97,8 +97,8 @@ pub enum Kind {
 impl Kind {
     /// Whether `S-<arrows>` mean anything on this row.
     ///
-    /// Everything but text and a list: those two are typed, and typing happens
-    /// in the footer's minibuffer.
+    /// Everything but text and a list: those two are typed, on the line of
+    /// whichever door the key was pressed in.
     #[must_use]
     pub const fn turns(self) -> bool {
         !matches!(self, Self::Text | Self::List)
@@ -482,7 +482,7 @@ mod tests {
             listen.typed(" default , dynamic ,, "),
             Some(serde_json::json!(["default", "dynamic"]))
         );
-        // A LIST NEVER TURNS: it is typed, in the footer's minibuffer.
+        // A LIST NEVER TURNS: it is typed, on either door's line.
         assert_eq!(listen.turned(None, true), None);
         assert!(listen.kind.is_typed());
     }

@@ -254,10 +254,11 @@ impl Deed {
 
 /// Something the person types, and what it is for.
 ///
-/// Typing happens in the FOOTER's minibuffer — the one place in this system
-/// where anything is typed — and the window says so rather than growing a
-/// second field. It is the rule the network view's password and the glance's
-/// time zone already follow.
+/// Typed on the line of the door the key was pressed in — the footer's
+/// minibuffer, the window's header — and answered through the same
+/// [`View::answered`]. The view keeps which question it was
+/// ([`View::asked`]), because the answer alone cannot say: a path may be a new
+/// folder's or an offered one's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
     /// A declared option that is text or a list.
@@ -274,9 +275,9 @@ impl Ask {
     /// Which command carries the answer back.
     ///
     /// THE COMMAND THAT ASKS IS THE COMMAND THAT ANSWERS, which is this
-    /// system's rule: the minibuffer's question comes from that command's own
-    /// `ask-<id>` key, and the answer arrives as its argument. `s n v` and
-    /// `s b y` both work this way.
+    /// system's rule: the line's question — the minibuffer's or the window's
+    /// — comes from that command's own `ask-<id>` key, and the answer arrives
+    /// under that id. `s n v` and `s b y` both work this way.
     ///
     /// An earlier draft invented three ids that nothing else reached, and the
     /// keymap's own test found them: a command with no key path is a command
@@ -384,7 +385,7 @@ pub enum Errand {
     Keep(Preferences),
     /// Say this, and it is already a sentence.
     Speak(&'static str),
-    /// Ask for something to be typed in the footer's minibuffer.
+    /// Open this question on the door's own line.
     Ask(Ask),
     /// Open the web interface at this address.
     Web(String),
@@ -439,7 +440,7 @@ pub struct View {
     open: Vec<&'static str>,
     /// This view's own preference.
     prefs: Preferences,
-    /// What the minibuffer is being asked for, if anything.
+    /// What a line is open for, if anything.
     asking: Option<Ask>,
     /// Whether anybody has moved the cursor yet.
     moved: bool,
@@ -476,13 +477,38 @@ impl View {
         self.prefs = prefs;
     }
 
-    /// Take what was typed, and turn it into an order.
+    /// What was typed on a line, under the line's id, as an order — one call
+    /// for both doors: the footer's minibuffer answers through the command of
+    /// that id, the window through `Content::answered`.
     ///
-    /// `None` when nothing was being asked for, or when what came back cannot
-    /// be used — an empty path for a new folder, say, which is a question
-    /// somebody answered by pressing `Esc`.
-    pub fn typed(&mut self, said: &str, snap: Option<&Snapshot>) -> Option<Order> {
-        let ask = self.asking.take()?;
+    /// THE QUESTION THE VIEW ASKED ANSWERS FIRST, and only when the id is
+    /// its own: a question let go, then `s s f` typed with the view still
+    /// open, was answered as the old question — a path sent as a machine's
+    /// id. With no question of the view's, the id decides ([`unasked`]).
+    ///
+    /// `None` when what came back cannot be used — an empty path for a new
+    /// folder, say, which is a question somebody answered with nothing.
+    pub fn answered(&mut self, id: &str, said: &str, snap: Option<&Snapshot>) -> Option<Order> {
+        match self.asking.take().filter(|ask| ask.command() == id) {
+            Some(ask) => Self::typed(ask, said, snap),
+            None => unasked(id, said),
+        }
+    }
+
+    /// The line was let go — `Esc`, `C-g`, a click on `ESC` — and the
+    /// question with it.
+    pub fn let_go(&mut self) {
+        self.asking = None;
+    }
+
+    /// The question a line is open for — read by the window's own tests.
+    #[cfg(test)]
+    pub(crate) const fn asking(&self) -> Option<&Ask> {
+        self.asking.as_ref()
+    }
+
+    /// What was typed for `ask`, as an order.
+    fn typed(ask: Ask, said: &str, snap: Option<&Snapshot>) -> Option<Order> {
         let said = said.trim();
         if said.is_empty() {
             return None;
@@ -497,18 +523,8 @@ impl View {
                     body: setting.written(setting.typed(said)?),
                 })
             }
-            Ask::NewDevice => Some(Order::AddDevice {
-                id: said.to_owned(),
-                name: String::new(),
-            }),
-            Ask::NewFolder => Some(Order::AddFolder {
-                // SYNCTHING MAKES THE ID, and it makes a random one when the
-                // field is empty. Typing one is how two machines end up
-                // sharing a folder they never meant to share.
-                id: String::new(),
-                label: String::new(),
-                path: said.to_owned(),
-            }),
+            // THE SAME ORDER THE LEADER'S OWN QUESTION GIVES — one place.
+            Ask::NewDevice | Ask::NewFolder => unasked(ask.command(), said),
             Ask::Invited(n) => match snap?.invitations.get(n)? {
                 Invitation::Folder {
                     folder,
@@ -659,6 +675,10 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
+        // A KEY THAT REACHES THE VIEW LETS ITS QUESTION GO: while a line is
+        // open every key is the line's, in both doors, so a key here means
+        // the line was answered or let go.
+        self.asking = None;
         self.settle_in(snap, columns, texts);
         let rows = self.rows(snap, columns, texts);
         if rows.is_empty() {
@@ -749,9 +769,9 @@ impl View {
                 };
                 let now = snap.and_then(|s| s.setting(setting, at.as_deref()));
                 let Some(next) = setting.turned(now, forward) else {
-                    // TEXT AND LISTS ARE TYPED, and `S-<arrows>` on one is a
-                    // key that does nothing. Saying where it IS typed beats
-                    // silence, because the row plainly has a value.
+                    // TEXT AND LISTS ARE TYPED, and `S-<arrows>` on one opens
+                    // the line rather than being a key that does nothing on a
+                    // row that plainly has a value.
                     return Errand::Ask(Ask::Setting(setting.id, at.clone()));
                 };
                 Errand::Order(Box::new(Order::Set {
@@ -1429,6 +1449,34 @@ impl View {
     }
 }
 
+/// What was typed under `id` when the view asked nothing — the leader's own
+/// questions, `s s d` and `s s f`, which work with no view open at all.
+///
+/// NOTHING TYPED IS NOT A FAILURE: it is a question answered with nothing,
+/// which is how a person says never mind.
+#[must_use]
+pub fn unasked(id: &str, said: &str) -> Option<Order> {
+    let said = said.trim();
+    if said.is_empty() {
+        return None;
+    }
+    match id {
+        "syncthing-add-device" => Some(Order::AddDevice {
+            id: said.to_owned(),
+            name: String::new(),
+        }),
+        // SYNCTHING MAKES THE ID, and it makes a random one when the field is
+        // empty. Typing one is how two machines end up sharing a folder they
+        // never meant to share.
+        "syncthing-add-folder" => Some(Order::AddFolder {
+            id: String::new(),
+            label: String::new(),
+            path: said.to_owned(),
+        }),
+        _ => None,
+    }
+}
+
 /// Which key a command id is.
 ///
 /// THE ONE MAP, and both doors reach it. The footer reads a `Sym` and the
@@ -1459,6 +1507,23 @@ pub fn pressed(notation: &str) -> Option<Press> {
         .iter()
         .find(|(k, _, _)| *k == notation)
         .and_then(|(_, id, _)| press_of(id))
+}
+
+/// What a key means in the view — THE ONE READER, which both doors call:
+/// the footer with the key it translated, the window with
+/// `door::keys::key_of`.
+///
+/// BY THE WHOLE NOTATION, modifiers and all. The footer built it with shift
+/// alone, so `C-d` arrived as `d` and forgot a folder or a machine, while
+/// the window matched the text a key typed — a control character under Ctrl
+/// — and the same chord did nothing there. The value keys ARE the shifted
+/// arrows, so the shift has to be in it.
+#[must_use]
+pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
+    match key.sym {
+        ronoctua_keymap::Sym::Esc => Some(Press::Escape),
+        _ => pressed(&key.notation()),
+    }
 }
 
 /// What the whole thing is doing, as one word.

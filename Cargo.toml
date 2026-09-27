@@ -68,6 +68,7 @@ members = [
   "crates/ronoctua-ytdlp",
   "crates/ronoctua-inspect",
   "crates/ronoctua-torrent",
+  "crates/ronoctua-software",
   "crates/ronoctua-transfers",
   "crates/ronoctua-rescue",
   "crates/ronoctua-shell",
@@ -162,7 +163,14 @@ serde_json = "1"
 # `memory_init_cow` and `pooling-allocator` are NOT optional optimisations: without
 # them the glyphdb's ~1.5 MB become a memcpy per instance and blow the 5 ms
 # budget on their own. See the trap in AGENTS.md.
-wasmtime = { version = "38", default-features = false, features = [
+#
+# 40 AND NOT LESS: up to 39 wasmtime sized the tag of an enum or variant with
+# EXACTLY 256 cases as two bytes, where the canonical ABI — and the
+# `wit-bindgen` that builds every buffer — gives it one (wasmtime #12066). The
+# `icon` token enum reached 256, and every buffer's `render` came back as
+# `discriminant N out of range`: the host read one icon plus the next byte as
+# a single tag. From 40 the two sides size a tag by the same rule.
+wasmtime = { version = "40", default-features = false, features = [
   "runtime", "component-model", "cranelift", "pooling-allocator", "std",
 ] }
 wit-bindgen = { version = "0.46", default-features = false, features = [ "macros" ] }
@@ -172,7 +180,7 @@ wit-bindgen = { version = "0.46", default-features = false, features = [ "macros
 #
 # WASI does not loosen invariant 11: it gives no Wayland, no token and no
 # translation. It gives a clock, randomness and stdio, which is the target's floor.
-wasmtime-wasi = "38"
+wasmtime-wasi = "40"
 
 # --- terminal (section 7.10, risk R1) ---------------------------------
 # `alacritty_terminal` is the implementation milestone 7 closes with. The

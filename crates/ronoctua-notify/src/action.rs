@@ -103,9 +103,9 @@ pub enum Doing {
     },
     /// Put the notification's file path on the clipboard.
     ///
-    /// Its own variant and not a `Run`: the clipboard is inside the footer
-    /// (`ronoctua-clipboard`), so spawning anything for it would be starting a
-    /// process to talk to ourselves.
+    /// Its own variant and not a `Run`: putting text on the clipboard is one
+    /// call of the shell's own, from either door, and a program started for
+    /// it would be a process to do what that call does.
     CopyPath,
     /// Put the notification's file ITSELF on the clipboard, as an image —
     /// what a capture is taken for more often than not: to paste it.

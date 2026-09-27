@@ -44,7 +44,7 @@ use crate::door::{Canvas, Content, Door, Ui};
 use anyhow::Result;
 use smithay_client_toolkit::{
     reexports::calloop::{self, channel},
-    seat::keyboard::{KeyEvent, Keysym, Modifiers},
+    seat::keyboard::{KeyEvent, Modifiers},
 };
 
 /// The window's `app_id`.
@@ -502,8 +502,12 @@ impl Content for Display {
         format!("*{}*", texts.t(ronoctua_i18n::key::DISPLAY_TITLE))
     }
 
-    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, _: Modifiers) {
-        if let Some(press) = press_of(event) {
+    /// A key, through the reader the footer calls too
+    /// (`display_words::press_of_key`).
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+        if let Some(press) =
+            crate::door::keys::key_of(event, mods).and_then(crate::display_words::press_of_key)
+        {
             self.pressed(ui, press);
         }
     }
@@ -570,38 +574,4 @@ impl Content for Display {
             "the screens window drew"
         );
     }
-}
-
-/// A `KeyEvent` as the view sees it — the same mapping the footer does.
-fn press_of(event: &KeyEvent) -> Option<crate::display::Press> {
-    use crate::display::Press;
-    Some(match event.keysym {
-        Keysym::Escape => Press::Escape,
-        Keysym::Return | Keysym::KP_Enter => Press::Enter,
-        Keysym::Up => Press::Up,
-        Keysym::Down => Press::Down,
-        // `←`/`→` MOVE THE VALUE, which this view has and the radio has not.
-        Keysym::Left => Press::Less,
-        Keysym::Right => Press::More,
-        // AND THE BARE LETTERS, out of the view's own table. A letter with no
-        // press there is a letter that does nothing, and the test beside
-        // `display_words` is what says so.
-        //
-        // BY THE CHARACTER, which is what SCTK hands this door; the footer
-        // matches `Key::simple(sym).notation()`, which is what ITS toolkit
-        // hands it. The two are not the same expression and they agree on
-        // exactly the notations the table holds — `a`, `d` and `m`, three
-        // unmodified lowercase letters — because that is what both spell for
-        // an unmodified letter key. A table row spelt any other way would be a
-        // key one door answers and the other does not, which is why the table
-        // is the only place a letter is written.
-        _ => {
-            let typed = event.utf8.as_deref()?;
-            let id = crate::display::OF_THE_VIEW
-                .iter()
-                .find(|(notation, _, _)| *notation == typed)
-                .map(|(_, id, _)| *id)?;
-            crate::display_words::press_of(id)?
-        }
-    })
 }

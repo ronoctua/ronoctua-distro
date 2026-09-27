@@ -306,11 +306,10 @@ fn the_mark_turns_through_three_and_writes_the_file() {
 }
 
 #[test]
-fn a_typed_setting_asks_the_footer_rather_than_turning() {
-    // Text and lists are typed, and the one place anything is typed in this
-    // system is the footer's minibuffer. A shifted arrow on one of them would
-    // otherwise be a key that plainly does nothing on a row that plainly has a
-    // value.
+fn a_typed_setting_asks_to_be_typed_rather_than_turning() {
+    // Text and lists are typed, on the line of the door the key was pressed
+    // in. A shifted arrow on one of them would otherwise be a key that
+    // plainly does nothing on a row that plainly has a value.
     let mut v = View::fresh(Preferences::default());
     let snap = running();
     v.level = Level::Folder("papers".to_owned());
@@ -340,10 +339,20 @@ fn a_typed_setting_asks_the_footer_rather_than_turning() {
 #[test]
 fn what_was_typed_becomes_an_order_for_the_question_that_was_asked() {
     let mut v = View::fresh(Preferences::default());
-    let snap = running();
-    v.asked(Ask::Setting("folder-path", Some("papers".to_owned())));
+    let snap = Snapshot {
+        invitations: vec![Invitation::Folder {
+            folder: "shared".to_owned(),
+            label: "the shared one".to_owned(),
+            from: "THEM".to_owned(),
+            who: String::new(),
+        }],
+        ..running()
+    };
+    let ask = Ask::Setting("folder-path", Some("papers".to_owned()));
+    let id = ask.command();
+    v.asked(ask);
     let order = v
-        .typed("/home/somebody/papers", Some(&snap))
+        .answered(id, "/home/somebody/papers", Some(&snap))
         .expect("an order");
     match order {
         Order::Set { what, at, body, .. } => {
@@ -353,10 +362,99 @@ fn what_was_typed_becomes_an_order_for_the_question_that_was_asked() {
         }
         other => panic!("{other:?}"),
     }
-    // NOTHING TYPED IS `Esc` IN THE MINIBUFFER, which is how a person says
-    // never mind — not an order to write an empty path.
+    // A NEW MACHINE, A NEW FOLDER AND AN OFFERED ONE — the three the list
+    // asks, each its own order.
+    v.asked(Ask::NewDevice);
+    assert_eq!(
+        v.answered("syncthing-add-device", " ABCDEFG-1234 ", Some(&snap)),
+        Some(Order::AddDevice {
+            id: "ABCDEFG-1234".to_owned(),
+            name: String::new(),
+        })
+    );
     v.asked(Ask::NewFolder);
-    assert!(v.typed("   ", Some(&snap)).is_none());
+    assert_eq!(
+        v.answered("syncthing-add-folder", "/home/somebody/new", Some(&snap)),
+        Some(Order::AddFolder {
+            id: String::new(),
+            label: String::new(),
+            path: "/home/somebody/new".to_owned(),
+        })
+    );
+    v.asked(Ask::Invited(0));
+    assert_eq!(
+        v.answered("syncthing-add-folder", "/home/somebody/shared", Some(&snap)),
+        Some(Order::AcceptFolder {
+            folder: "shared".to_owned(),
+            from: "THEM".to_owned(),
+            label: "the shared one".to_owned(),
+            path: "/home/somebody/shared".to_owned(),
+        })
+    );
+    // NOTHING TYPED IS A QUESTION ANSWERED WITH NOTHING, which is how a
+    // person says never mind — not an order to write an empty path.
+    v.asked(Ask::NewFolder);
+    assert!(
+        v.answered("syncthing-add-folder", "   ", Some(&snap))
+            .is_none()
+    );
+    // AND WITH NO QUESTION OF THE VIEW'S, the leader's own id decides.
+    assert_eq!(
+        v.answered("syncthing-add-device", "XYZ", Some(&snap)),
+        Some(Order::AddDevice {
+            id: "XYZ".to_owned(),
+            name: String::new(),
+        })
+    );
+    assert!(
+        v.answered("syncthing-enter", "a value", Some(&snap))
+            .is_none()
+    );
+}
+
+/// THE DEFECT: `Esc` on the minibuffer never cleared the view's question, so
+/// a path typed later for `s s f` came out as `AddDevice` with the path as the
+/// machine's id. A question let go — by the line, or by a key reaching the
+/// view — is not answered later, and an answer under another id is not taken
+/// for it.
+#[test]
+fn a_question_let_go_is_not_answered_later() {
+    let snap = running();
+    let folder = |said: &str| Order::AddFolder {
+        id: String::new(),
+        label: String::new(),
+        path: said.to_owned(),
+    };
+
+    // LET GO BY THE LINE.
+    let mut v = View::fresh(Preferences::default());
+    v.asked(Ask::NewDevice);
+    v.let_go();
+    assert_eq!(
+        v.answered("syncthing-add-folder", "/a/path", Some(&snap)),
+        Some(folder("/a/path"))
+    );
+
+    // LET GO BY A KEY: while a line is open every key is the line's, so a
+    // key that reaches the view means the line is gone.
+    let mut v = View::fresh(Preferences::default());
+    v.asked(Ask::NewDevice);
+    let _ = v.key(Press::Down, Some(&snap), DECIDING_WIDTH, &texts());
+    assert!(v.asking().is_none(), "a key left the question standing");
+
+    // AN ANSWER UNDER ANOTHER ID is not the question's, and the question is
+    // gone after it.
+    let mut v = View::fresh(Preferences::default());
+    v.asked(Ask::NewDevice);
+    assert_eq!(
+        v.answered("syncthing-add-folder", "/a/path", Some(&snap)),
+        Some(folder("/a/path"))
+    );
+    assert!(v.asking().is_none());
+    assert!(
+        v.answered("syncthing-enter", "MACHINE", Some(&snap))
+            .is_none()
+    );
 }
 
 #[test]
@@ -484,6 +582,23 @@ fn the_footer_reaches_every_key_the_table_holds() {
             "`{notation}` is spelt and reaches nothing"
         );
     }
+}
+
+/// FAILS IF: a chord reaches a bare letter's deed — `C-d` forgetting a
+/// folder, `C-p` pausing it — in the reader both doors call, or the shift
+/// stops being part of the key.
+#[test]
+fn a_chord_is_not_its_letter() {
+    let read =
+        |notation: &str| press_of_key(ronoctua_keymap::Key::parse(notation).expect(notation));
+    for (notation, id, _) in OF_THE_VIEW {
+        assert_eq!(read(notation), press_of(id), "`{notation}`");
+    }
+    for chord in ["C-d", "C-p", "C-a", "C-r", "C-w", "M-d", "C-<right>"] {
+        assert_eq!(read(chord), None, "`{chord}` did a deed");
+    }
+    assert_eq!(read("ESC"), Some(Press::Escape));
+    assert_eq!(read("<right>"), None, "a bare arrow turned the ring");
 }
 
 #[test]

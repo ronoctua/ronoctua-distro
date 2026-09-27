@@ -2,9 +2,11 @@
 //! (`LEADER p c`) — two doors onto `crate::player`, one host.
 //!
 //! What a key does and which rows exist is `player.rs`; the plumbing of a
-//! surface is `crate::door`'s, as every window's is. What this holds is the
-//! two things only this door has — a transport line of glyphs, and a time
-//! bar a hand can drag — and the pictures.
+//! surface is `crate::door`'s, as every window's is. What this holds is how
+//! this door lays the picture out — above a transport line of glyphs and a
+//! time bar a hand can drag, the rows under them — and its stage. Whatever the
+//! view asks is typed on this door's own line, as the footer types it on its
+//! minibuffer (`player::Question`).
 //!
 //! # Two surfaces, one host
 //!
@@ -32,16 +34,12 @@
 //!
 //! # The frames are the clock
 //!
-//! Each picture has a thread of its own reading the player's ring, and every
-//! frame that arrives is what asks for the next paint — no timer. The newest
-//! frame wins: one slot, so a door that was behind never plays a backlog.
+//! Each picture has a thread of its own (`crate::player_picture`), and every
+//! frame that arrives is what asks for the next paint — no timer.
 
 use std::{
     cell::{Cell, RefCell},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use anyhow::{Context as _, Result};
@@ -89,9 +87,6 @@ pub enum Door {
     Column,
 }
 
-/// The newest frame of one picture, and nothing queued.
-type Slot = Arc<Mutex<Option<(u32, u32, Vec<u8>)>>>;
-
 /// The transport's buttons, in the order they are drawn: the command each one
 /// runs, which is also what the header says under the pointer.
 const BUTTONS: [&str; 9] = [
@@ -108,7 +103,7 @@ const BUTTONS: [&str; 9] = [
 
 /// How quick a second click on the picture has to be to be a DOUBLE click,
 /// which puts it on the whole screen and back.
-const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
+pub(crate) const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// How the picture is shown in this door.
 ///
@@ -383,6 +378,18 @@ pub fn host_it(door: Door, stage: Stage) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("could not hang the compositor channel: {e}"))?;
         }
 
+        // HOW A PAIRING ENDED, from the thread that waited for the other
+        // machine (`player::pair_then`).
+        let (paired, pairings) = channel::channel::<crate::player::Paired>();
+        w.handle
+            .insert_source(pairings, |event, (), d: &mut Host| {
+                if let channel::Event::Msg(p) = event {
+                    d.ui.message = crate::player::paired_said(&p, &d.ui.texts);
+                    d.ui.ask_paint();
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the pairing channel: {e}"))?;
+
         // A PING PER FRAME, from whichever picture's thread has one.
         let (frame_sender, frames) = channel::channel::<usize>();
         w.handle
@@ -429,6 +436,8 @@ pub fn host_it(door: Door, stage: Stage) -> Result<()> {
             on_screen,
             wm,
             view: crate::player::View::fresh(),
+            pairing: crate::player::Pairing::default(),
+            paired,
             player: None,
             pictures: Vec::new(),
             frame_sender,
@@ -510,87 +519,6 @@ enum Surf {
     Layer(LayerSurface),
 }
 
-/// One picture: the size its thread should ask for, and what it received.
-struct Picture {
-    /// Which video: `None` the main one, `Some(i)` the i-th follower.
-    of: Option<usize>,
-    wanted: Arc<Mutex<(u32, u32)>>,
-    slot: Slot,
-    alive: Arc<AtomicBool>,
-    frame: Option<ronoctua_render::image::Rgba>,
-    uploaded: bool,
-}
-
-impl Picture {
-    fn key(&self) -> String {
-        format!("player:picture:{}", self.of.map_or(0, |i| i + 1))
-    }
-
-    /// A picture and its thread.
-    fn start(of: Option<usize>, k: usize, ping: channel::Sender<usize>) -> Self {
-        let wanted: Arc<Mutex<(u32, u32)>> = Arc::default();
-        let slot: Slot = Arc::default();
-        let alive = Arc::new(AtomicBool::new(true));
-        let (w2, s2, a2) = (wanted.clone(), slot.clone(), alive.clone());
-        let _ = std::thread::Builder::new()
-            .name("player-picture".into())
-            .spawn(move || {
-                let mut buf = Vec::new();
-                while a2.load(Ordering::SeqCst) {
-                    let size = w2.lock().map_or((0, 0), |g| *g);
-                    if size.0 == 0 || size.1 == 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(200));
-                        continue;
-                    }
-                    let mut feed = match ronoctua_player::client::preview(size.0, size.1, of) {
-                        Ok(f) => f,
-                        Err(e) => {
-                            tracing::debug!(error = %e, "no preview yet");
-                            std::thread::sleep(std::time::Duration::from_secs(1));
-                            continue;
-                        }
-                    };
-                    // PATIENCE, so a paused film still notices the door
-                    // changed size: no frame comes, and the thread has to
-                    // look up anyway.
-                    let _ = feed.patience(Some(std::time::Duration::from_millis(250)));
-                    tracing::debug!(of = ?of, width = feed.width, height = feed.height, "a preview");
-                    loop {
-                        if !a2.load(Ordering::SeqCst) {
-                            return;
-                        }
-                        if w2.lock().map_or(size, |g| *g) != size {
-                            break;
-                        }
-                        match feed.next(&mut buf) {
-                            Ok(true) => {
-                                if let Ok(mut s) = s2.lock() {
-                                    *s = Some((feed.width, feed.height, buf.clone()));
-                                }
-                                if ping.send(k).is_err() {
-                                    return;
-                                }
-                            }
-                            Ok(false) => {}
-                            Err(e) => {
-                                tracing::debug!(error = %e, "the preview ended");
-                                break;
-                            }
-                        }
-                    }
-                }
-            });
-        Self {
-            of,
-            wanted,
-            slot,
-            alive,
-            frame: None,
-            uploaded: false,
-        }
-    }
-}
-
 /// What this door keeps for ONE pointer, past what every door keeps (the
 /// list's bar, the wheel's leftover, the row under it) — see `crate::seats`.
 #[derive(Debug, Default)]
@@ -599,6 +527,9 @@ struct PerPointer {
     seeking: bool,
     /// Dragging the volume's bar.
     turning: bool,
+    /// Dragging the bar of a row — the position's or the volume's — by its
+    /// row.
+    sliding: Option<usize>,
     /// When the picture was last clicked: a second click soon after is a
     /// double click.
     picture_clicked: Option<std::time::Instant>,
@@ -622,8 +553,12 @@ struct Player {
     /// needed.
     wm: Option<Box<dyn ronoctua_compositor::Compositor>>,
     view: crate::player::View,
+    /// A pairing's name, between its two questions.
+    pairing: crate::player::Pairing,
+    /// Where the thread that pairs says how it ended.
+    paired: channel::Sender<crate::player::Paired>,
     player: Option<State>,
-    pictures: Vec<Picture>,
+    pictures: Vec<crate::player_picture::Picture>,
     frame_sender: channel::Sender<usize>,
     /// The transport as last DRAWN: `(line, first column, last column, id)`
     /// — the volume's glyph is on the time bar's line.
@@ -672,9 +607,7 @@ struct Player {
 
 impl Drop for Player {
     fn drop(&mut self) {
-        for p in &self.pictures {
-            p.alive.store(false, Ordering::SeqCst);
-        }
+        // THE PICTURES' THREADS go with the pictures (`player_picture`).
         if self.door == Door::Column {
             crate::right_column::leave();
         }
@@ -1025,12 +958,11 @@ impl Player {
     }
 
     fn frame_arrived(&mut self, ui: &mut Ui, k: usize) {
-        if let Some(p) = self.pictures.get_mut(k)
-            && let Some((w, h, px)) = p.slot.lock().ok().and_then(|mut s| s.take())
+        if self
+            .pictures
+            .get_mut(k)
+            .is_some_and(crate::player_picture::Picture::took_a_frame)
         {
-            p.frame = ronoctua_render::image::Rgba::new(w, h, px);
-            tracing::trace!(k, w, h, taken = p.frame.is_some(), "a frame");
-            p.uploaded = false;
             ui.ask_paint();
         }
     }
@@ -1058,16 +990,15 @@ impl Player {
         };
         // A THREAD PER PICTURE, started and ended with the layout.
         let n = self.layout.pictures.len();
-        while self.pictures.len() > n {
-            if let Some(p) = self.pictures.pop() {
-                p.alive.store(false, Ordering::SeqCst);
-            }
-        }
+        self.pictures.truncate(n);
         while self.pictures.len() < n {
             let k = self.pictures.len();
             let of = k.checked_sub(1);
-            self.pictures
-                .push(Picture::start(of, k, self.frame_sender.clone()));
+            self.pictures.push(crate::player_picture::Picture::start(
+                of,
+                k,
+                self.frame_sender.clone(),
+            ));
         }
         // AND THE SIZE EACH ASKS FOR, in PHYSICAL pixels: the frame is drawn
         // one pixel to one pixel, sharp on a scale-2 screen.
@@ -1099,9 +1030,7 @@ impl Player {
                 clippy::cast_precision_loss
             )]
             let size = ((fw * ui.scale as f32) as u32, (fh * ui.scale as f32) as u32);
-            if let Ok(mut w) = p.wanted.lock() {
-                *w = size;
-            }
+            p.want(size);
         }
     }
 
@@ -1136,18 +1065,22 @@ impl Player {
                 return;
             }
             Err(crate::player::Errand::Show(show)) => self.toggle_stage(ui, show),
-            // THIS DOOR SENDS IT through the footer's control socket. A
-            // question opens in the FOOTER's minibuffer, and this door says
-            // so: letters typed here would go nowhere.
-            Err(crate::player::Errand::Run(id)) => {
-                if let Err(e) = crate::leader::send_it(&format!("command {id}")) {
-                    tracing::warn!(id, error = %e, "the footer did not take the command");
-                } else if matches!(
-                    id,
-                    "player-play-file" | "player-enqueue" | "player-follow" | "player-pair"
-                ) {
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::PLAYER_TYPED_ELSEWHERE));
-                }
+            // WHAT THE VIEW ASKS IS TYPED HERE, on this door's own line — as
+            // the footer types it on its minibuffer — and comes back to
+            // `Content::answered`, a pairing's code masked.
+            Err(crate::player::Errand::Ask(q)) => {
+                ui.ask(crate::line::Line::new(q.id, q.secret, None));
+            }
+            // A DOOR — the column, another window — is the footer's to open,
+            // and it is told off the loop.
+            Err(crate::player::Errand::Run(id)) => ui.tell_the_footer(id, None),
+            // THE PAIRING, off the loop: the player answers only once the
+            // other machine has, and this window's loop does not wait for it.
+            Err(crate::player::Errand::Pair { to, code }) => {
+                let paired = self.paired.clone();
+                crate::player::pair_then(to, code, move |p| {
+                    let _ = paired.send(p);
+                });
             }
             Err(_) => {}
         }
@@ -1215,6 +1148,25 @@ impl Player {
     fn fraction_at(ui: &Ui, x: f64) -> f64 {
         let (l, r) = Self::bar_track(ui);
         ((x as f32 - l) / (r - l).max(1.0)).clamp(0.0, 1.0).into()
+    }
+
+    /// Where `x` is among the rows' own cells — a field's `at`, in fractions
+    /// of a cell — which is what a bar of a row is measured in.
+    fn column_in_rows(x: f64) -> f64 {
+        x / f64::from(cell_px()).max(1.0) - f64::from(MARGIN)
+    }
+
+    /// Turns the bar of row `row` to where `x` is along it, when the row has
+    /// one — the press, and every motion of the drag after it.
+    fn slide(&mut self, ui: &mut Ui, row: usize, x: f64) -> bool {
+        let rows = self.rows(ui);
+        let column = Self::column_in_rows(x);
+        let Some(bar) = rows.get(row).and_then(|r| r.slider) else {
+            return false;
+        };
+        let errand = crate::player::slid(bar.of, bar.along(column), self.player.as_ref());
+        self.apply(ui, errand);
+        true
     }
 
     /// The row of the list at `(x, y)`.
@@ -1308,6 +1260,10 @@ impl Player {
                         Self::tell(ui, &Ask::Volume { percent });
                         continue;
                     }
+                    if let Some(row) = hand.extra.sliding {
+                        self.slide(ui, row, e.position.0);
+                        continue;
+                    }
                     hand.row_under_pointer = self.row_at(ui, e.position.0, e.position.1);
                     hand.extra.button_under = self.button_at(e.position.0, e.position.1);
                 }
@@ -1320,6 +1276,7 @@ impl Player {
                     hand.dragging = false;
                     hand.extra.seeking = false;
                     hand.extra.turning = false;
+                    hand.extra.sliding = None;
                     hand.row_under_pointer = None;
                     hand.extra.button_under = None;
                 }
@@ -1328,6 +1285,7 @@ impl Player {
                     hand.dragging = false;
                     hand.extra.seeking = false;
                     hand.extra.turning = false;
+                    hand.extra.sliding = None;
                 }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
                     if ui.hinted.pressed(head, e.position.0, e.position.1) {
@@ -1390,6 +1348,19 @@ impl Player {
                             hand.extra.picture_clicked = Some(now);
                         }
                         continue;
+                    }
+                    // A BAR OF A ROW — the position's, the volume's: a press
+                    // sets it there and holding drags it, through the one
+                    // answer the footer asks too (`player::slider_at`).
+                    if let Some(row) = self.row_at(ui, e.position.0, e.position.1) {
+                        let rows = self.rows(ui);
+                        let column = Self::column_in_rows(e.position.0);
+                        if crate::player::slider_at(&rows, row, column).is_some() {
+                            self.view.grabbed(row);
+                            hand.extra.sliding = Some(row);
+                            self.slide(ui, row, e.position.0);
+                            continue;
+                        }
                     }
                     // A ROW: the first click selects, the second acts.
                     if let Some(row) = self.row_at(ui, e.position.0, e.position.1) {
@@ -1558,7 +1529,7 @@ impl Content for Player {
         MARGIN
     }
 
-    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, _: Modifiers) {
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
         self.wake_controls(ui);
         // `Esc` ON STAGE brings the door back first — one level, as every
         // view with levels has it — and only then reaches the view.
@@ -1566,28 +1537,26 @@ impl Content for Player {
             self.set_stage(ui, Stage::Off);
             return;
         }
-        let notation = match event.keysym {
-            // ESCAPE GOES BACK ONE LEVEL, and closes the door from the top:
-            // the view answers which.
-            Keysym::Escape => {
-                self.pressed(ui, crate::player::Press::Escape);
-                return;
-            }
-            Keysym::Return | Keysym::KP_Enter => "RET",
-            Keysym::space => "SPC",
-            Keysym::Up => "<up>",
-            Keysym::Down => "<down>",
-            Keysym::Left => "<left>",
-            Keysym::Right => "<right>",
-            Keysym::BackSpace => "DEL",
-            _ => match event.utf8.as_deref() {
-                Some(t) => t,
-                None => return,
-            },
-        };
-        if let Some(press) = crate::player::pressed(notation) {
+        // THE FOOTER'S READER: the view answers which press a key is, with
+        // its modifiers (`player::press_of_key`), and `Esc` goes back one
+        // level and closes the door from the top.
+        if let Some(press) =
+            crate::door::keys::key_of(event, mods).and_then(crate::player::press_of_key)
+        {
             self.pressed(ui, press);
         }
+    }
+
+    /// What was typed on this door's line — the ONE function the footer's
+    /// minibuffer reaches too (`player::answered`).
+    fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
+        let errand = crate::player::answered(id, text, &mut self.pairing);
+        self.apply(ui, errand);
+    }
+
+    /// The line was let go: a pairing's name goes with it.
+    fn unanswered(&mut self, _: &mut Ui, _: &'static str) {
+        self.pairing.let_go();
     }
 
     /// The column tells the compositor its width again when the size of the
@@ -1678,15 +1647,18 @@ impl Content for Player {
         // LINE 0: the keys, what the last order said, or — with the pointer on
         // a button — what that button does.
         let under_button = self.button_under;
-        let (pieces, hinting) = match (&ui.message, under_button) {
-            (Some(t), _) => (vec![crate::chrome::Piece::said(t.clone())], false),
-            (None, Some(id)) => (
+        let question = crate::door::list::the_question(ui);
+        let (pieces, hinting) = match (question, &ui.message, under_button) {
+            // A QUESTION BEING TYPED OUTRANKS THE REST: the keyboard is its.
+            (Some(q), _, _) => (q, true),
+            (None, Some(t), _) => (vec![crate::chrome::Piece::said(t.clone())], false),
+            (None, None, Some(id)) => (
                 vec![crate::chrome::Piece::said(
                     crate::chrome::hint_sentence(id, &ui.texts).unwrap_or_default(),
                 )],
                 false,
             ),
-            (None, None) => (
+            (None, None, None) => (
                 self.view.hint(self.player.as_ref(), ui.columns, &ui.texts),
                 true,
             ),
@@ -2047,6 +2019,131 @@ mod tests {
                 "{id} is not a command of the registry"
             );
         }
+    }
+
+    /// A window onto a player that answered, with no daemon, no compositor
+    /// and no thread behind it — the loop and the queue it needs, kept alive
+    /// beside it.
+    fn a_window(
+        state: State,
+    ) -> (
+        Player,
+        Ui,
+        calloop::EventLoop<'static, Host>,
+        wayland_client::EventQueue<Host>,
+    ) {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let ui = Ui::for_tests(texts);
+        let event_loop = calloop::EventLoop::<'static, Host>::try_new().expect("a loop");
+        let queue = ui.conn.new_event_queue::<Host>();
+        let (frame_sender, _) = channel::channel::<usize>();
+        let (paired, _) = channel::channel::<crate::player::Paired>();
+        let me = Player {
+            door: Door::Window,
+            handle: event_loop.handle(),
+            qh: queue.handle(),
+            surf: RefCell::new(None),
+            told_width: Cell::new(0),
+            on_screen: None,
+            wm: None,
+            view: crate::player::View::fresh(),
+            pairing: crate::player::Pairing::default(),
+            paired,
+            player: Some(state),
+            pictures: Vec::new(),
+            frame_sender,
+            buttons: Vec::new(),
+            layout: Layout::default(),
+            stage: Stage::Off,
+            first_stage: None,
+            opened_for: None,
+            controls_until: None,
+            controls_timer: None,
+            settle_owed: false,
+            settle_asked: false,
+            corner_owed: 0,
+            fullscreen: false,
+            corner_timer: false,
+            painted: false,
+            button_under: None,
+            pointer_at: None,
+            _watch: Arc::new(AtomicBool::new(false)),
+        };
+        (me, ui, event_loop, queue)
+    }
+
+    /// Puts the cursor on the row whose target is `target`, as a click does.
+    fn stand_on(w: &mut Player, ui: &Ui, target: &crate::player::Target) {
+        let rows = w.rows(ui);
+        let at = rows
+            .iter()
+            .position(|r| &r.target == target)
+            .unwrap_or_else(|| panic!("no row for {target:?}"));
+        w.view.clicked(at, &rows);
+    }
+
+    /// FAILS IF: pairing in the window stops being typed HERE — the name on
+    /// this window's line, then the code masked on it — or anything of it goes
+    /// to the footer, or a line let go keeps the name for a later code.
+    #[test]
+    fn pairing_is_typed_on_the_windows_own_line() {
+        use crate::player::{PAIR, PAIR_CODE, Press, Target};
+        let state = State {
+            tailnet: Some("here".into()),
+            ..State::default()
+        };
+        let (mut w, mut ui, _loop, _queue) = a_window(state);
+        stand_on(&mut w, &ui, &Target::Pair);
+        w.pressed(&mut ui, Press::Enter);
+        let line = ui.asking.as_ref().expect("the name is asked here");
+        assert_eq!((line.id, line.secret), (PAIR, false));
+        // THE LINE HANDS BACK what was typed on it, and asks the code next.
+        ui.asking = None;
+        Content::answered(&mut w, &mut ui, PAIR, "den");
+        let line = ui.asking.as_ref().expect("the code is asked here");
+        assert_eq!((line.id, line.secret), (PAIR_CODE, true));
+        assert!(ui.orders().is_empty(), "the pairing went to the footer");
+        // LET GO, the name goes with it: a code typed later pairs with nothing.
+        ui.asking = None;
+        Content::unanswered(&mut w, &mut ui, PAIR_CODE);
+        Content::answered(&mut w, &mut ui, PAIR_CODE, "123456");
+        assert!(ui.asking.is_none() && ui.orders().is_empty());
+        assert_eq!(ui.message, None);
+    }
+
+    /// FAILS IF: the typed path or address row stops being asked on this
+    /// window's own line — with the files still open under it — or the
+    /// window says to type in the footer again.
+    #[test]
+    fn a_path_is_typed_here_with_the_files_open_under_it() {
+        use crate::player::{ENQUEUE, Press, Purpose, Target};
+        let root =
+            std::env::temp_dir().join(format!("ronoctua-window-library-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("Album")).expect("a library");
+        let (mut w, mut ui, _loop, _queue) = a_window(State::default());
+        w.view.files_at(&root, Purpose::Queue);
+        stand_on(&mut w, &ui, &Target::Typed);
+        w.pressed(&mut ui, Press::Enter);
+        let line = ui.asking.as_ref().expect("the path is asked here");
+        assert_eq!((line.id, line.secret), (ENQUEUE, false));
+        assert!(ui.orders().is_empty(), "the question went to the footer");
+        assert!(
+            w.rows(&ui).iter().any(|r| r.target == Target::Typed),
+            "the files closed under the question"
+        );
+        std::fs::remove_dir_all(&root).expect("the library goes");
+    }
+
+    /// FAILS IF: a door row stops being an order for the footer, off the
+    /// loop — the one thing this window hands it.
+    #[test]
+    fn opening_another_door_is_the_footers_order() {
+        use crate::player::{Press, Target};
+        let (mut w, mut ui, _loop, _queue) = a_window(State::default());
+        stand_on(&mut w, &ui, &Target::Run("player-column"));
+        w.pressed(&mut ui, Press::Enter);
+        assert_eq!(ui.orders(), ["command player-column".to_owned()]);
+        assert!(ui.asking.is_none());
     }
 
     /// FAILS IF: the stage stops being the picture over the whole surface

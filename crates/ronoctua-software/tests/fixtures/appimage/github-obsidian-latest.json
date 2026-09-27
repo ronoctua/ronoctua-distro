@@ -1,0 +1,36 @@
+{
+ "url": "https://api.github.com/repos/obsidianmd/obsidian-releases/releases/374429586",
+ "assets_url": "https://api.github.com/repos/obsidianmd/obsidian-releases/releases/374429586/assets",
+ "upload_url": "https://uploads.github.com/repos/obsidianmd/obsidian-releases/releases/374429586/assets{?name,label}",
+ "html_url": "https://github.com/obsidianmd/obsidian-releases/releases/tag/v1.13.8",
+ "id": 374429586,
+ "node_id": "RE_kwDOD6MHws4WUVeS",
+ "tag_name": "v1.13.8",
+ "target_commitish": "master",
+ "name": "1.13.8",
+ "draft": false,
+ "immutable": false,
+ "prerelease": false,
+ "created_at": "2026-08-21T13:33:23Z",
+ "updated_at": "2026-08-21T13:53:55Z",
+ "published_at": "2026-08-21T13:53:55Z",
+ "assets": [
+  {
+   "url": "https://api.github.com/repos/obsidianmd/obsidian-releases/releases/assets/523794807",
+   "id": 523794807,
+   "node_id": "RA_kwDOD6MHws4fOHl3",
+   "name": "Obsidian-1.13.8.apk",
+   "label": null,
+   "content_type": "application/vnd.android.package-archive",
+   "state": "uploaded",
+   "size": 15448001,
+   "digest": "sha256:b97cc8c3be48cffa58ea12dee59318fa704bc40b7c643acc27e61bf38d6bae7b",
+   "download_count": 78182,
+   "created_at": "2026-08-21T13:43:39Z",
+   "updated_at": "2026-08-21T13:43:41Z",
+   "browser_download_url": "https://github.com/obsidianmd/obsidian-releases/releases/download/v1.13.8/Obsidian-1.13.8.apk"
+  }
+ ],
+ "tarball_url": "https://api.github.com/repos/obsidianmd/obsidian-releases/tarball/v1.13.8",
+ "zipball_url": "https://api.github.com/repos/obsidianmd/obsidian-releases/zipball/v1.13.8"
+}

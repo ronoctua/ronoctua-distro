@@ -88,5 +88,14 @@ in
     # Qt's dark platform theme brings Qt5 and Qt6 along (591 MiB measured) for
     # applications the minimal profile does not have.
     foreign.qt = lib.mkDefault full;
+
+    # THE PERSON'S OWN PROGRAMS: two of the three supports follow the profile.
+    # `appimage-run` is an FHS environment whose closure is 1,53 GB on its own,
+    # and Waydroid's is 0,72 GB before any Android image — both measured with
+    # `nix path-info -S`. FLATPAK IS NOT HERE, and on purpose: it is how a
+    # reduced machine reaches a graphical program the flake does not carry,
+    # which is the one thing a reduced machine cannot do without.
+    software.appimage = lib.mkDefault full;
+    software.android = lib.mkDefault full;
   };
 }

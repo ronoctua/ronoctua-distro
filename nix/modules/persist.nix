@@ -111,7 +111,23 @@ in
         # lives in `/persist/etc/ronoctua/wifi`, and the wipe only renames `@root`.
         # A bind mount here would create an empty `/etc/ronoctua` that nobody reads.
         # The directory is created by `nix/modules/network.nix`.
-      ];
+      ]
+      # THE PERSON'S PROGRAMS THAT LIVE OUTSIDE THE HOME, and only where the
+      # machine has the support. Written HERE and not in `nix/modules/flatpak.nix`
+      # or `android.nix`: this option has a DEFAULT, and a definition in another
+      # module does not add to a default — it replaces it, and the wipe would
+      # then take the machine id, the Secure Boot keys and every entry above.
+      #
+      # The system Flatpak installation: its remote and anything installed
+      # `--system`. The person's own lives in `$HOME`, which is never wiped.
+      ++ lib.optional config.ronoctua.software.flatpak "/var/lib/flatpak"
+      # The Android image the person asked for — a gigabyte, downloaded once —
+      # and everything installed inside it.
+      ++ lib.optional config.ronoctua.software.android "/var/lib/waydroid";
+      defaultText = lib.literalMD ''
+        the machine's own state, plus `/var/lib/flatpak` and `/var/lib/waydroid`
+        where `ronoctua.software` turns those supports on
+      '';
     };
 
     files = lib.mkOption {

@@ -198,6 +198,30 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
+### 0.000003. Os programas da pessoa — o que só uma máquina de verdade prova · pequeno cada
+
+A central (`LEADER i`, `docs/ARCHITECTURE.md`, "Programas") foi provada por teste, por palco e por
+avaliação; estas coisas não:
+
+- **O Waydroid rodando**: preparar a imagem GAPPS, o `android_id` lido pelo `sqlite3` de dentro
+  dela, a sessão, instalar um APK do F-Droid. Tudo foi escrito contra a fonte do waydroid 1.6.3 e
+  testado com um `waydroid` falso; a VM não roda um Android útil.
+- **O inibidor de atalhos num web app de verdade.** `for_window [app_id="^chrome-"]
+  shortcuts_inhibitor disable` é gerado, mas o `--validate` não interpreta comando dentro de
+  `for_window` (uma linha com comando inventado também passa). Só uma janela `--app` do Chrome 151
+  prova que a leader continua chegando.
+- **A ativação do nix-flatpak** instalando a extensão escura e escrevendo o override global dos
+  `QT_*`: o que o experimento mediu foi o arquivo que o `flatpak override` escreve; a declaração
+  foi conferida por avaliação.
+- **Um Flatpak Electron na sessão real.** No palco o FreeTube procurava um servidor X sem
+  `--ozone-platform=wayland`; na sessão há Xwayland, e falta ver qual dos dois ele usa e se o
+  escuro chega igual.
+- **O F-Droid guarda no catálogo compacto só nome e resumo**: a ficha de um app Android não tem
+  descrição longa nem permissões. Guardar as duas por idioma é o que custa (o catálogo tem 5,47 MB).
+- **O caminho de atributos assinados da verificação do F-Droid não tem teste**: a fixture era uma
+  chave privada RSA de teste, e ela não entra num repositório público. O `entry.jar` de hoje não usa
+  esse caminho.
+
 ### 0.0000035. O que a câmera ainda não faz · pequeno a médio cada
 
 - **Câmera MIPI atrás do libcamera** (muitos laptops novos com sensor Intel IPU): ela não é um nó
@@ -215,9 +239,9 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ### 0.000004. O que falta de `LEADER s l`, e o relance que não existe · médio cada
 
-A vista de idioma e região existe no RODAPÉ (`s l`), troca de idioma ao vivo nas dez portas, e
-o relógio e a ordem da data alcançam toda data do sistema. Duas coisas do pedido do dono ficaram
-de fora, e nenhuma está começada — não há meio código no caminho de ninguém.
+A vista de idioma e região existe nas duas portas (`s l l` e `s l w`), troca de idioma ao vivo nas
+dez portas, e o relógio e a ordem da data alcançam toda data do sistema. Duas coisas do pedido do
+dono ficaram de fora, e nenhuma está começada — não há meio código no caminho de ninguém.
 
 - **A MOEDA de um lugar ainda não se escolhe na tela.** Acrescentar e remover lugares, escolher o
   fuso desta interface e o que cada lugar mostra já são teclas (`LEADER s l`); o par de câmbio
@@ -226,11 +250,11 @@ de fora, e nenhuma está começada — não há meio código no caminho de ningu
   o caminho já existe — é o mesmo `Asking` do fuso e da coordenada. **Como saber que acabou:**
   acrescentar Lisboa, ligar o câmbio dela e ver `1 EUR = …` no relance.
 
-- **Não há completação ao digitar um fuso.** O minibuffer pergunta e o nome é conferido contra o
-  ARQUIVO (`a_real_zone`), então errar diz "não existe fuso com esse nome" — o que é honesto e
-  não é ajuda. São umas quatrocentas zonas e o instalador já lê a lista
-  (`available_timezones`, do `zone1970.tab`). **Como saber que acabou:** digitar `Lis` e ver
-  `Europe/Lisbon` oferecido.
+- **Não há completação ao digitar um fuso.** A linha da porta pergunta — o minibuffer no rodapé, o
+  cabeçalho na janela — e o nome é conferido contra o ARQUIVO (`a_real_zone`), então errar diz "não
+  existe fuso com esse nome" — o que é honesto e não é ajuda. São umas quatrocentas zonas e o
+  instalador já lê a lista (`available_timezones`, do `zone1970.tab`). **Como saber que acabou:**
+  digitar `Lis` e ver `Europe/Lisbon` oferecido, nas duas portas.
 
 ### 0.000005. O que a exibição de escritas ainda não alcança · pequeno cada
 
@@ -556,6 +580,14 @@ pequeno:
 - **Hotspot na TELA do dono.** Está implementado e provado por teste unitário (a linha oferece o
   outro estado, diz o que custa e recusa com o rádio desligado), mas nunca foi acionado: ligá-lo
   derruba o Wi-Fi da máquina de quem está lendo isto. Falta uma VM com `mac80211_hwsim`.
+- **A senha do hotspot só aparece na porta que o ligou.** A linha lê o `View::sharing` da própria
+  vista, que só o `Hotspot(true)` daquela porta preenche: ligado no rodapé, a janela diz "hotspot
+  ligado" sem a senha, e o contrário também; reabrir a vista do rodapé também a perde. O conserto
+  que a revisão propôs — ler a senha do perfil ativo no NetworkManager (`GetSecrets`) — pede uma
+  decisão: para um perfil de sistema essa chamada pode exigir autorização, e nada que o sistema faz
+  sozinho pode perguntar. A outra saída é um arquivo `0600` no diretório de runtime, escrito por
+  quem liga e apagado quando o hotspot cai (o `bluetooth::standing` é o precedente) — uma senha a
+  mais em disco, ainda que em tmpfs. Pequeno, depois da escolha.
 - **Perfil de VPN com senha.** Importar um `.ovpn` que pede senha traz o perfil; a senha em si ainda
   é digitada no `nmcli` ou no primeiro `RET` do NetworkManager. O `store_vpn_secret` do plano
   (`GetSecrets` + `Update` com `password-flags=0`) não foi escrito.

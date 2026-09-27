@@ -758,6 +758,25 @@ impl Queue {
         moved
     }
 
+    /// The records this queue holds UNREAD that `disk` says are read — what
+    /// another door marked read by writing the file.
+    ///
+    /// Asked BEFORE [`Self::took_from_disk`], which makes them read here too:
+    /// being read in the other door is being read BY HAND, and the caller
+    /// does with them what its own `r` does — off the band, and
+    /// `NotificationClosed` on the bus. Copying the flag alone left the card
+    /// on the band and the sender never told.
+    #[must_use]
+    pub fn read_there(&self, disk: &[Record]) -> Vec<RecordKey> {
+        let read: std::collections::HashSet<RecordKey> =
+            disk.iter().filter(|r| r.read).map(Record::key).collect();
+        self.history
+            .iter()
+            .filter(|r| !r.read && read.contains(&r.key()))
+            .map(Record::key)
+            .collect()
+    }
+
     /// The whole history, oldest first.
     #[must_use]
     pub fn history(&self) -> &[Record] {
@@ -1064,6 +1083,33 @@ mod tests {
         assert!(f.took_from_disk(&disk), "the file's `unread` was ignored");
         assert!(!f.history()[0].read);
         assert_eq!(f.unread(), 1, "and it counts on the bell again");
+    }
+
+    #[test]
+    fn what_the_other_door_read_is_named_before_it_is_taken() {
+        // THE WINDOW MARKS READ BY WRITING THE FILE, and the footer has to
+        // do with it what its own `r` does — take it off the band, close it
+        // on the bus. So the records the file made read are named first:
+        // only those, only once, and never one already read here.
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        for id in 1..=3_u32 {
+            let mut one = n(id);
+            one.at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(id));
+            f.enqueue(one, p(50, Life::Normal), t0);
+        }
+        let key = |id: u32| RecordKey {
+            id,
+            at: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(id)),
+        };
+        assert!(f.mark_read(key(3)));
+        let mut disk = f.history().to_vec();
+        for r in &mut disk {
+            r.read = r.notification.id != 2;
+        }
+        assert_eq!(f.read_there(&disk), vec![key(1)]);
+        assert!(f.took_from_disk(&disk));
+        assert!(f.read_there(&disk).is_empty(), "named twice");
     }
 
     #[test]

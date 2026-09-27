@@ -62,11 +62,15 @@
 #               the two text keys are `update-<id>` and `update-does-<id>`, the
 #               line in `/etc/ronoctua/updates.conf` is `<id> on|off`, and the
 #               report the view reads is keyed by it.
-#   does        move-inputs | apply-configuration | refresh-cache | reclaim-space
+#   does        move-inputs | apply-configuration | upgrade-software |
+#               refresh-cache | reclaim-space
 #               What class of thing this step is, and it is load-bearing: there
 #               is exactly ONE `move-inputs` and exactly ONE
-#               `apply-configuration`, `move-inputs` comes before it and every
-#               `reclaim-space` comes after it. The generator enforces all four.
+#               `apply-configuration`, `move-inputs` comes before it, and every
+#               `upgrade-software` and every `reclaim-space` comes after it. The
+#               generator enforces all five. `upgrade-software` is the person's
+#               own programs (invariant 6's dated exception): it moves what is
+#               installed to a newer version and never adds one.
 #   root        true  -> the system unit, as root, from a store path
 #               false -> the person's user unit, as them, with their PATH
 #   package +   the store path. `package` is the attribute in `nixpkgs`,
@@ -101,11 +105,11 @@
     # THE ROOT HALF
     # =================================================================
 
-    # 1. THE ONLY STEP THAT ACTUALLY UPGRADES ANYTHING.
+    # 1. THE ONLY STEP THAT MOVES THE SYSTEM FORWARD.
     #
-    # Everything after it applies, refreshes or reclaims; this is the one that
-    # moves the pinned inputs forward, and therefore the one that can bring a
-    # kernel that does not boot. That risk is not answered here and it does not
+    # Everything after it applies, refreshes, reclaims or moves the person's
+    # own programs; this is the one that moves the pinned inputs forward, and
+    # therefore the one that can bring a kernel that does not boot. That risk is not answered here and it does not
     # need to be: the way back is the previous generation, which the boot menu
     # already offers, and which `store-collect-garbage` below is written so as
     # not to delete.
@@ -168,7 +172,75 @@
       enable = true;
     }
 
-    # 3. GARBAGE ONLY, AND THE GENERATIONS STAY.
+    # 3. THE SYSTEM'S FLATPAKS, AFTER THE REBUILD.
+    #
+    # The system installation holds what the machine declares through
+    # nix-flatpak (`nix/modules/flatpak.nix`) — the Flathub remote, and a
+    # runtime or an app only if one is ever declared. The person's apps are in
+    # their own installation and move in the person's half, below.
+    #
+    # `flatpak` DIRECTLY and not through our CLI, because nothing here needs
+    # what the CLI adds: there is no consent to remember and no lane to share
+    # with a screen, since the screen only ever touches `--user`. `update`
+    # moves what is installed and installs nothing; `-y` answers the one
+    # question it may ask (a runtime that moved to a new branch) the way the
+    # update already decided.
+    #
+    # AFTER the rebuild, so it is the Flatpak the rebuild just installed, and
+    # `carry-on`: a Flathub that does not answer is not a reason to leave the
+    # store full of garbage. The directory is where the system installation
+    # keeps its repository — on a machine with no Flatpak support there is
+    # none, and the step says it does not apply.
+    {
+      id = "flatpak-system";
+      does = "upgrade-software";
+      root = true;
+      package = "flatpak";
+      program = "flatpak";
+      run = [
+        "update"
+        "--system"
+        "--noninteractive"
+        "-y"
+      ];
+      needs = [
+        { directory = "/var/lib/flatpak/repo"; }
+        { network = true; }
+      ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
+    # 4. THE ANDROID SYSTEM IMAGE — OFF.
+    #
+    # Waydroid's own `upgrade`, run by our CLI because it has to wait: the
+    # images cannot be replaced under a running Android, so the CLI checks the
+    # session first and says so rather than stopping somebody's app. It is a
+    # root step because `/var/lib/waydroid` is root's (`nix/modules/android.nix`).
+    #
+    # OFF: it rewrites the system a person's Android apps run on, a gigabyte
+    # at a time, and that is a decision rather than a schedule — one line,
+    # `ronoctua.update.steps.android-images = true;`, on the machine that
+    # wants it. The directory only exists once Android was prepared.
+    {
+      id = "android-images";
+      does = "upgrade-software";
+      root = true;
+      package = "software";
+      program = "ronoctua-software";
+      run = [
+        "upgrade"
+        "android-system"
+      ];
+      needs = [
+        { directory = "/var/lib/waydroid/images"; }
+        { network = true; }
+      ];
+      on-failure = "carry-on";
+      enable = false;
+    }
+
+    # 5. GARBAGE ONLY, AND THE GENERATIONS STAY.
     #
     # This is `nix-collect-garbage` with no `--delete-older-than`, and that is
     # the whole decision: the sequence has just switched to a generation whose
@@ -188,7 +260,7 @@
       enable = true;
     }
 
-    # 4. AND THEN DEDUPLICATE WHAT IS LEFT.
+    # 6. AND THEN DEDUPLICATE WHAT IS LEFT.
     #
     # AFTER the collection and not before: optimising a path that is about to be
     # deleted is work thrown away. `auto-optimise-store` is already on
@@ -210,7 +282,7 @@
       enable = true;
     }
 
-    # 5. THE ONE THAT DELETES THE WAY BACK — OFF.
+    # 7. THE ONE THAT DELETES THE WAY BACK — OFF.
     #
     # Same command `nix/modules/memory.nix` offers as `@generations`, and the
     # same reasoning that put it behind its own key there: it removes the older
@@ -235,7 +307,7 @@
       enable = false;
     }
 
-    # 6. AND THE JOURNAL — ALSO OFF, AND FOR A SMALLER REASON.
+    # 8. AND THE JOURNAL — ALSO OFF, AND FOR A SMALLER REASON.
     #
     # The journal is the only record of what this very sequence did. Vacuuming it
     # at the end of the run is throwing away the answer to "why did the rebuild
@@ -261,7 +333,7 @@
     # THE PERSON'S HALF — their PATH, their home, no privilege at all
     # =================================================================
 
-    # 7. THE FONT CACHE, AFTER the rebuild and not before.
+    # 9. THE FONT CACHE, AFTER the rebuild and not before.
     #
     # A rebuild can change the font set — `nix/fonts.nix` builds five derivations
     # and 27 variants — and a cache built before it describes the previous
@@ -281,7 +353,7 @@
       enable = true;
     }
 
-    # 8. THE TLDR PAGES.
+    # 10. THE TLDR PAGES.
     #
     # `nix/modules/cli.nix` already updates them weekly, as `nobody` — which
     # builds a cache in a home nobody reads. Run as the person, it lands in
@@ -298,6 +370,110 @@
       needs = [ { network = true; } ];
       on-failure = "carry-on";
       enable = true;
+    }
+
+    # =================================================================
+    # THE PERSON'S OWN PROGRAMS — what they installed, moved forward
+    # =================================================================
+    #
+    # Invariant 6's dated exception (`AGENTS.md`, 2026-09-26): the person
+    # installs programs for themselves, and the update keeps them current. Four
+    # steps, one per source, and every one of them is `ronoctua-software
+    # upgrade <source>` — the SAME program and the same per-source lock the
+    # software view's own "update" takes, so a run started by the brain and a
+    # button pressed on the screen can never move one source at once.
+    #
+    # `upgrade` MOVES ONLY WHAT THE PERSON HAS: it reads what is installed and
+    # never adds a program, and the generator refuses every argument that could
+    # say otherwise, with no exception for these.
+    #
+    # EACH ONE'S DIRECTORY EXISTS ONLY WHEN THAT SOURCE HAS SOMETHING, so a
+    # machine where nobody ever installed an AppImage skips the AppImage step
+    # and says so, instead of running a program to find nothing.
+
+    # 11. THE NIX PROFILE: `nix profile upgrade`, against the `nixpkgs` the rebuild
+    # just pinned in the registry (`nix/modules/base.nix`). The CLI splits the
+    # free packages from the ones the person consented to as not free — those
+    # need `--impure`, and only for the packages that were agreed to.
+    {
+      id = "nix-profile";
+      does = "upgrade-software";
+      root = false;
+      package = "software";
+      program = "ronoctua-software";
+      run = [
+        "upgrade"
+        "nix"
+      ];
+      needs = [
+        { directory = "$XDG_STATE_HOME/nix/profiles"; }
+        { network = true; }
+      ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
+    # 12. THE PERSON'S FLATPAKS: the `--user` installation, apps and runtimes
+    # together, and Flathub's catalogue with them.
+    {
+      id = "flatpak-user";
+      does = "upgrade-software";
+      root = false;
+      package = "software";
+      program = "ronoctua-software";
+      run = [
+        "upgrade"
+        "flatpak"
+      ];
+      needs = [
+        { directory = "$XDG_DATA_HOME/flatpak/repo"; }
+        { network = true; }
+      ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
+    # 13. THE APPIMAGES in `~/Applications`, each against the releases of the
+    # place it came from. OFF here, and `nix/modules/software.nix` turns it on
+    # where the machine has `appimage-run`: a machine that cannot run one has
+    # nothing to update.
+    {
+      id = "appimages";
+      does = "upgrade-software";
+      root = false;
+      package = "software";
+      program = "ronoctua-software";
+      run = [
+        "upgrade"
+        "appimage"
+      ];
+      needs = [
+        { directory = "$HOME/Applications"; }
+        { network = true; }
+      ];
+      on-failure = "carry-on";
+      enable = false;
+    }
+
+    # 14. THE APPS INSIDE ANDROID, from F-Droid, every one checked against the
+    # signer and the digest the index names. OFF here for the reason the
+    # AppImages are; `nix/modules/software.nix` turns it on with Waydroid.
+    {
+      id = "android-apps";
+      does = "upgrade-software";
+      root = false;
+      package = "software";
+      program = "ronoctua-software";
+      run = [
+        "upgrade"
+        "android"
+      ];
+      needs = [
+        { directory = "$XDG_DATA_HOME/waydroid"; }
+        { network = true; }
+      ];
+      on-failure = "carry-on";
+      enable = false;
     }
 
     # =================================================================
@@ -410,7 +586,7 @@
       enable = false;
     }
 
-    # 13. DOOM EMACS, RESOLVED AGAINST WHAT WAS JUST INSTALLED.
+    # 19. DOOM EMACS, RESOLVED AGAINST WHAT WAS JUST INSTALLED.
     #
     # The owner asked for it: when the machine updates itself it should bring
     # the editor's packages with it. It belongs here and not in a task of its
@@ -450,6 +626,71 @@
         { directory = "$XDG_CONFIG_HOME/emacs"; }
         { network = true; }
       ];
+      on-failure = "carry-on";
+      enable = false;
+    }
+
+    # =================================================================
+    # AND WHAT THE PERSON'S PROGRAMS LEFT BEHIND — last
+    # =================================================================
+    #
+    # After every upgrade, because an upgrade is what leaves the leftovers:
+    # the runtime an app stopped using, the profile generation it replaced.
+    # `ronoctua-software tidy <source>` and never the managers' own commands:
+    # Flatpak's is a removal verb with a flag, which the generator refuses by
+    # name, and it is right to — the refusal is what keeps every removal out
+    # of this sequence, and the CLI is what knows which leftovers nothing uses.
+
+    # 20. FLATPAK RUNTIMES NO APP NEEDS ANY MORE, in the person's installation.
+    {
+      id = "flatpak-unused";
+      does = "reclaim-space";
+      root = false;
+      package = "software";
+      program = "ronoctua-software";
+      run = [
+        "tidy"
+        "flatpak"
+      ];
+      needs = [ { directory = "$XDG_DATA_HOME/flatpak/repo"; } ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
+    # 21. THE NIX PROFILE'S OLD GENERATIONS. Each one keeps the programs it had
+    # alive in the store, and a generation older than the CLI's window is a
+    # way back nobody is going to take — the software view's "go back" reaches
+    # the recent ones, which this leaves.
+    {
+      id = "nix-profile-history";
+      does = "reclaim-space";
+      root = false;
+      package = "software";
+      program = "ronoctua-software";
+      run = [
+        "tidy"
+        "nix"
+      ];
+      needs = [ { directory = "$XDG_STATE_HOME/nix/profiles"; } ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
+    # 22. WHAT `appimage-run` UNPACKED for AppImages that are gone or were
+    # replaced. It unpacks each one into `$XDG_CACHE_HOME/appimage-run/<digest>`
+    # on the first start and never removes it; the CLI removes the ones whose
+    # AppImage no longer exists. OFF here, on where the machine has the support.
+    {
+      id = "appimage-cache";
+      does = "reclaim-space";
+      root = false;
+      package = "software";
+      program = "ronoctua-software";
+      run = [
+        "tidy"
+        "appimage"
+      ];
+      needs = [ { directory = "$XDG_CACHE_HOME/appimage-run"; } ];
       on-failure = "carry-on";
       enable = false;
     }

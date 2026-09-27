@@ -687,6 +687,10 @@ interface types {
         forget-job,
         // Drop every finished job at once. `target` is ignored.
         sweep-jobs,
+        // Open what the finished install `target` names put in the launcher.
+        // The HOST finds the entry; the buffer knows only that there is one
+        // (`job.opens`).
+        launch-job,
 
         // The brain, for whoever declared `capability::brain`. `target` is a
         // 1-BASED index into the last `mind`'s task list — never a name the
@@ -825,6 +829,13 @@ interface types {
         // who was asking. A screen that did not say which of the two happened
         // would be asking the reader to remember.
         identified: bool,
+        // Whether it can be held and let go. A program's install is one run
+        // nothing can freeze halfway, and a window offering to hold it would
+        // offer a key the queue refuses.
+        pauses: bool,
+        // Whether it is a finished install that put an entry in the launcher,
+        // which `launch-job` opens.
+        opens: bool,
     }
 
     record queue {

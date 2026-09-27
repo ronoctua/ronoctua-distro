@@ -994,10 +994,13 @@ impl Content for CameraWindow {
         // one does, its key, and — on a button that opens a menu — what each
         // mouse button does to it.
         let texts = ui.texts.clone();
-        let (pieces, hinting) = match (&ui.message, self.button_under) {
-            (Some(t), _) => (vec![crate::chrome::Piece::said(t.clone())], false),
-            (None, Some(id)) => (camera::about_button(id, &texts), false),
-            (None, None) => (camera::hint(&texts), true),
+        let question = crate::door::list::the_question(ui);
+        let (pieces, hinting) = match (question, &ui.message, self.button_under) {
+            // A QUESTION BEING TYPED OUTRANKS THE REST: the keyboard is its.
+            (Some(q), _, _) => (q, true),
+            (None, Some(t), _) => (vec![crate::chrome::Piece::said(t.clone())], false),
+            (None, None, Some(id)) => (camera::about_button(id, &texts), false),
+            (None, None, None) => (camera::hint(&texts), true),
         };
         let columns = ui.columns;
         canvas

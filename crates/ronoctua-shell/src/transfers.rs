@@ -11,6 +11,14 @@
 //! WHAT to do is a function of state, and a function of state is a thing a test
 //! can hold in its hand.
 //!
+//! # Two doors, one table
+//!
+//! The window (`LEADER t w`) is a wasm buffer, and it answers the same keys
+//! the same way: the table is `ronoctua_protocol::TRANSFERS_KEYS`, which both
+//! compile, and so is the answer about which of them a row teaches. The pages
+//! are the window's two — the list, and one job a field a line — and giving up
+//! asks first in both, on a screen of the view with `no` under the cursor.
+//!
 //! # Why the cursor is a job ID and not a row number
 //!
 //! Because the list REORDERS underneath it. What is still happening sorts above
@@ -30,7 +38,7 @@ use ronoctua_keymap::Key;
 use ronoctua_tokens as tokens;
 use ronoctua_transfers::{Ask, Job, Measure, Stage};
 
-use crate::files::{Field, Hit, Ink, Row};
+use crate::files::{Field, Hit, Ink};
 
 /// The bar's width in cells, from the token.
 const BAR: u16 = tokens::space::TRANSFERS_BAR;
@@ -66,7 +74,7 @@ const FIGURE: u16 = 4;
 pub enum Step {
     /// Nothing happened; do not redraw.
     Nothing,
-    /// The cursor moved; redraw.
+    /// The cursor or the page moved; redraw.
     Changed,
     /// The view closed.
     Closed,
@@ -76,27 +84,60 @@ pub enum Step {
     /// `files::Doing` has, and for the same reason: this view never opens a
     /// socket, so it can be tested without one.
     Send(Ask),
+    /// Open this launcher entry (a desktop id): what a finished install made.
+    Launch(String),
 }
 
-/// The view's own keys, as DATA.
+/// The view's own keys, as DATA — the SAME table the window's buffer binds
+/// (`ronoctua_protocol::TRANSFERS_KEYS`), so a key means one thing in both
+/// doors of the queue.
 ///
-/// All under `C-`, and **never under `M-`**: in the nested loop the leader's
-/// chord family IS `Alt`, so `M-` never reaches the footer at all — it opens a
-/// terminal. That was reported from the screen once already, and the file
-/// manager's table carries the same warning.
-pub const OF_THE_VIEW: &[(&str, &str)] = &[
-    ("<down>", "transfers-down"),
-    ("C-n", "transfers-down"),
-    ("<up>", "transfers-up"),
-    ("C-p", "transfers-up"),
-    // `RET` toggles, because holding and letting go are one gesture with two
-    // names. Two keys would mean looking at the row to find out which one to
-    // press, and the row is what one is trying to act on.
-    ("RET", "transfers-pause"),
-    ("C-c", "transfers-cancel"),
-    ("C-k", "transfers-forget"),
-    ("C-l", "transfers-sweep"),
-];
+/// Chords under `C-`, and **never under `M-`**: in the nested loop the
+/// leader's chord family IS `Alt`, so `M-` never reaches the footer at all —
+/// it opens a terminal. That was reported from the screen once already, and
+/// the file manager's table carries the same warning.
+pub const OF_THE_VIEW: &[(&str, &str)] = ronoctua_protocol::TRANSFERS_KEYS;
+
+/// Which page of the queue is up — the window's two faces, in this door too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Level {
+    /// Every job, one a row.
+    #[default]
+    List,
+    /// One job, one field a line — where the whole failure and the whole
+    /// name fit, which a row cannot promise.
+    Detail,
+}
+
+/// The give-up question on screen: which job, and whether the cursor is on
+/// `yes`. It is born on `no` — giving up deletes what was already written, and
+/// a question about something that cannot be undone starts on the answer that
+/// keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GiveUp {
+    id: u64,
+    yes: bool,
+}
+
+/// What a line does under a click, or under `RET` with the cursor on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// A fact, a heading, the question's sentence: nothing.
+    Nothing,
+    /// A job of the list, by its place in it.
+    Job(usize),
+    /// An answer to the give-up question.
+    Answer(bool),
+}
+
+/// One drawn line of the panel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Line {
+    /// Placed and cut, in the row's own cells.
+    pub fields: Vec<Field>,
+    /// What a click on it does.
+    pub target: Target,
+}
 
 /// The panel's whole state.
 #[derive(Debug, Default)]
@@ -106,6 +147,10 @@ pub struct View {
     /// Which JOB the cursor is on — see the module header for why it is not a
     /// row number.
     on: Option<u64>,
+    /// Which page is up.
+    level: Level,
+    /// The give-up question, while it is on screen.
+    asking: Option<GiveUp>,
 }
 
 impl View {
@@ -121,11 +166,19 @@ impl View {
     /// is now in that place rather than to the top: a cursor that jumps home
     /// every time something finishes is a cursor nobody can use while things
     /// are finishing.
+    ///
+    /// A QUESTION ABOUT A JOB THAT ENDED goes: there is nothing left to give
+    /// up, and a `yes` taken later would be about nothing.
     pub fn refresh(&mut self, jobs: Vec<Job>) {
         let was = self
             .on
             .and_then(|id| self.jobs.iter().position(|j| j.id == id));
         self.jobs = jobs;
+        if let Some(q) = self.asking
+            && !self.jobs.iter().any(|j| j.id == q.id && j.afoot())
+        {
+            self.asking = None;
+        }
         if let Some(id) = self.on
             && self.jobs.iter().any(|j| j.id == id)
         {
@@ -138,10 +191,18 @@ impl View {
             .map(|j| j.id);
     }
 
-    /// How many rows there are. Zero means the "nothing under way" line.
+    /// Which page is up.
+    #[cfg(test)]
     #[must_use]
-    pub fn row_count(&self) -> usize {
-        self.jobs.len()
+    pub const fn level(&self) -> Level {
+        self.level
+    }
+
+    /// Whether the give-up question is on screen.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn asking(&self) -> bool {
+        self.asking.is_some()
     }
 
     /// The job the cursor is on.
@@ -150,67 +211,178 @@ impl View {
         self.on.and_then(|id| self.jobs.iter().find(|j| j.id == id))
     }
 
-    /// Puts the cursor on a row of the LIST — what a click does.
-    ///
-    /// The list's row and not the page's: what the click carries is
-    /// `Click::Transfers(n)`, built by `expansion()` over the whole list before
-    /// it was cut into a page. Taking a page index here would name a different
-    /// transfer the moment the region scrolled.
+    /// Puts the cursor on a job of the LIST, by its place in it.
     pub fn focus_row(&mut self, row: usize) {
         if let Some(j) = self.jobs.get(row) {
             self.on = Some(j.id);
         }
     }
 
-    /// The job on a row of the LIST — see [`View::focus_row`] for which index
-    /// this is, and why it matters.
-    #[must_use]
-    pub fn at(&self, row: usize) -> Option<&Job> {
-        self.jobs.get(row)
-    }
-
-    /// Which row the cursor is on, for the drawing's highlight.
+    /// Which job of the list the cursor is on, by its place in it.
     #[must_use]
     pub fn focused_row(&self) -> Option<usize> {
         self.on
             .and_then(|id| self.jobs.iter().position(|j| j.id == id))
     }
 
+    /// The job a drawn LINE is about, when it is one — what the pointer's
+    /// sentence reads. The line's and not a job index: the page's lines are
+    /// the list's rows only on the list.
+    #[must_use]
+    pub fn job_on(&self, line: usize, width: u16, texts: &ronoctua_i18n::Texts) -> Option<&Job> {
+        match self.lines(width, texts).get(line)?.target {
+            Target::Job(i) => self.jobs.get(i),
+            Target::Nothing | Target::Answer(_) => None,
+        }
+    }
+
+    /// How many lines the page has — without building them on the list,
+    /// which is the page a footer measures on every motion of the pointer.
+    #[must_use]
+    pub fn line_count(&self, width: u16, texts: &ronoctua_i18n::Texts) -> usize {
+        if self.asking.is_none() && self.level == Level::List {
+            return self.jobs.len();
+        }
+        self.lines(width, texts).len()
+    }
+
+    /// Which drawn line the cursor is on: the job's on the list, the answer's
+    /// under the question, and none on a job's page, which is all facts.
+    #[must_use]
+    pub fn cursor_line(&self, width: u16, texts: &ronoctua_i18n::Texts) -> Option<usize> {
+        if let Some(q) = self.asking {
+            return self
+                .lines(width, texts)
+                .iter()
+                .position(|l| l.target == Target::Answer(q.yes));
+        }
+        match self.level {
+            Level::List => self.focused_row(),
+            Level::Detail => None,
+        }
+    }
+
     /// One key.
     pub fn key(&mut self, t: Key) -> Step {
-        // ESC IS NOT IN THE TABLE, deliberately: every view in this system
-        // closes with it, and a line for it would say what the whole system
-        // already says. The file manager's own table carries the same note.
-        if matches!(t.sym, ronoctua_keymap::Sym::Esc) {
+        use ronoctua_keymap::Sym;
+        let id = of_the_view(t);
+        // THE QUESTION TAKES THE KEYS while it is up: the arrows walk its two
+        // answers, `RET` takes the one the cursor is on, and `Esc` is `no`.
+        if let Some(q) = self.asking.as_mut() {
+            return match (t.sym, id) {
+                (Sym::Esc, _) => {
+                    self.asking = None;
+                    Step::Changed
+                }
+                (Sym::Enter, _) => self.answer(),
+                (_, Some("transfers-up")) if q.yes => {
+                    q.yes = false;
+                    Step::Changed
+                }
+                (_, Some("transfers-down")) if !q.yes => {
+                    q.yes = true;
+                    Step::Changed
+                }
+                _ => Step::Nothing,
+            };
+        }
+        // `Esc` GOES BACK ONE PAGE, and closes from the list.
+        if matches!(t.sym, Sym::Esc) {
+            if self.level == Level::Detail {
+                self.level = Level::List;
+                return Step::Changed;
+            }
             return Step::Closed;
         }
-        let Some(id) = of_the_view(t) else {
+        let Some(id) = id else {
             return Step::Nothing;
         };
+        self.run(id)
+    }
+
+    /// What a command of the table does, on the row under the cursor.
+    fn run(&mut self, id: &str) -> Step {
+        let row = self.focused().map(facts);
         match id {
             "transfers-down" => self.step_by(1),
             "transfers-up" => self.step_by(-1),
+            // THE JOB'S OWN PAGE, and back — what a second click on a row does.
+            "transfers-detail" => match self.level {
+                Level::List if row.is_some() => {
+                    self.level = Level::Detail;
+                    Step::Changed
+                }
+                Level::List => Step::Nothing,
+                Level::Detail => {
+                    self.level = Level::List;
+                    Step::Changed
+                }
+            },
             // TOGGLE, and the row decides which way. A held job resumes, a
             // running one is held, and one that has ended does neither —
             // pressing it on a finished row must not resurrect anything.
-            "transfers-pause" => match self.focused().map(|j| (j.id, j.stage)) {
-                Some((id, Stage::Paused)) => Step::Send(Ask::Resume { id }),
-                Some((id, s)) if s.afoot() => Step::Send(Ask::Pause { id }),
+            // AND ONLY WHERE THE ENGINE CAN HOLD: a program's order is one
+            // `nix`, `flatpak` or `waydroid` run that nothing can freeze
+            // halfway (`Engine::pauses`), and the queue refuses it anyway.
+            "transfers-pause" => match (self.on, row) {
+                (Some(id), Some(r)) if r.held => Step::Send(Ask::Resume { id }),
+                (Some(id), Some(r)) if r.afoot && r.pauses => Step::Send(Ask::Pause { id }),
                 _ => Step::Nothing,
             },
-            "transfers-cancel" => match self.focused() {
-                Some(j) if j.afoot() => Step::Send(Ask::Cancel { id: j.id }),
+            // GIVING UP ASKS FIRST, in both doors: what was written is deleted.
+            "transfers-cancel" => match (self.on, row) {
+                (Some(id), Some(r)) if r.afoot => {
+                    self.asking = Some(GiveUp { id, yes: false });
+                    Step::Changed
+                }
                 _ => Step::Nothing,
             },
             // FORGET only takes away a row that has ended. The queue refuses
             // the other case too — this is the half that keeps the key from
             // looking broken when it is being correct.
-            "transfers-forget" => match self.focused() {
-                Some(j) if !j.afoot() => Step::Send(Ask::Forget { id: j.id }),
+            "transfers-forget" => match (self.on, row) {
+                (Some(id), Some(r)) if !r.afoot => Step::Send(Ask::Forget { id }),
                 _ => Step::Nothing,
             },
             "transfers-sweep" => Step::Send(Ask::Sweep),
+            "transfers-launch" => self
+                .focused()
+                .and_then(opens)
+                .map_or(Step::Nothing, |id| Step::Launch(id.to_owned())),
             _ => Step::Nothing,
+        }
+    }
+
+    /// The question's answer, the one the cursor is on.
+    fn answer(&mut self) -> Step {
+        match self.asking.take() {
+            Some(GiveUp { id, yes: true }) => Step::Send(Ask::Cancel { id }),
+            Some(GiveUp { yes: false, .. }) => Step::Changed,
+            None => Step::Nothing,
+        }
+    }
+
+    /// A click on drawn line `n`: the FIRST click selects and the SECOND does
+    /// what `RET` does there — the job's page, or the answer (invariant 19).
+    pub fn clicked(&mut self, n: usize, width: u16, texts: &ronoctua_i18n::Texts) -> Step {
+        let Some(target) = self.lines(width, texts).get(n).map(|l| l.target) else {
+            return Step::Nothing;
+        };
+        match target {
+            Target::Nothing => Step::Nothing,
+            Target::Job(i) if self.focused_row() == Some(i) => self.run("transfers-detail"),
+            Target::Job(i) => {
+                self.focus_row(i);
+                Step::Changed
+            }
+            Target::Answer(yes) => match self.asking.as_mut() {
+                Some(q) if q.yes == yes => self.answer(),
+                Some(q) => {
+                    q.yes = yes;
+                    Step::Changed
+                }
+                None => Step::Nothing,
+            },
         }
     }
 
@@ -235,65 +407,203 @@ impl View {
         Step::Changed
     }
 
-    /// The rows, laid out for a screen this wide.
+    /// The page's lines, laid out for a screen this wide: the question, the
+    /// job's page, or the list.
     #[must_use]
-    pub fn rows(&self, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
+    pub fn lines(&self, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Line> {
+        if let Some(q) = self.asking {
+            return self.question_lines(q, width, texts);
+        }
+        if self.level == Level::Detail
+            && let Some(job) = self.focused()
+        {
+            return detail_lines(job, width, texts);
+        }
         let focused = self.focused_row();
         self.jobs
             .iter()
             .enumerate()
-            .map(|(n, j)| {
-                let here = Some(n) == focused;
-                Row {
-                    fields: row_of(j, width, texts, here),
-                    marked: false,
-                    focused: here,
-                    foot: false,
-                }
+            .map(|(n, j)| Line {
+                fields: row_of(j, width, texts, Some(n) == focused),
+                target: Target::Job(n),
             })
             .collect()
     }
 
-    /// The hint line: which key does what, with the keys read from the table.
-    ///
-    /// Interpolated and never written into the text, for the reason the file
-    /// manager's own hint gives: keys move, and a sentence naming the old one
-    /// is worse than no sentence at all.
+    /// The question: the job it is about, the sentence, and `no` before
+    /// `yes`.
+    fn question_lines(&self, q: GiveUp, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Line> {
+        use ronoctua_i18n::key;
+        let (left, room) = crate::power::extent(width);
+        let mut out = Vec::new();
+        if let Some(job) = self.jobs.iter().find(|j| j.id == q.id) {
+            out.push(Line {
+                fields: row_of(job, width, texts, false),
+                target: Target::Nothing,
+            });
+        }
+        for line in crate::chrome::note_lines(&texts.t(key::TRANSFERS_WINDOW_CONFIRM_CANCEL), room)
+        {
+            out.push(Line {
+                fields: vec![plain(left, line, tokens::color::TEXT_SECONDARY)],
+                target: Target::Nothing,
+            });
+        }
+        for (yes, said) in [
+            (false, key::TRANSFERS_GIVE_UP_NO),
+            (true, key::TRANSFERS_GIVE_UP_YES),
+        ] {
+            out.push(Line {
+                fields: crate::chrome::field_pair(
+                    left,
+                    room,
+                    &texts.t(said),
+                    "",
+                    crate::chrome::Kind::Setting,
+                    q.yes == yes,
+                ),
+                target: Target::Answer(yes),
+            });
+        }
+        out
+    }
+
+    /// The hint line: the keys of the table this page and this row allow —
+    /// `ronoctua_protocol::transfers_taught`, the answer the window's line
+    /// reads too.
     #[must_use]
     pub fn hint(&self, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
-        let of = |id: &str| key_that_runs(id).map_or_else(String::new, |t| t.notation());
-        let (pause, cancel, sweep) = (
-            of("transfers-pause"),
-            of("transfers-cancel"),
-            of("transfers-sweep"),
+        if self.asking.is_some() {
+            return crate::chrome::hint_of(ronoctua_protocol::TRANSFERS_ANSWER, texts);
+        }
+        let taught = ronoctua_protocol::transfers_taught(
+            self.level == Level::Detail,
+            self.focused().map(facts),
         );
-        let marked = texts.t_marked(
-            ronoctua_i18n::key::TRANSFERS_HINT,
-            &[
-                ("pause", pause.as_str()),
-                ("cancel", cancel.as_str()),
-                ("sweep", sweep.as_str()),
-            ],
-        );
-        let mut out = Vec::new();
-        crate::chrome::Piece::extend(
-            &mut out,
-            &marked,
-            &[pause.as_str(), cancel.as_str(), sweep.as_str()],
-        );
-        out
+        crate::chrome::hint_of_marked(&taught, |_| None, texts)
     }
 }
 
-/// The KEY that runs a given id, read out of the same table. See
-/// `files::key_that_runs` for why the mouse and the hint read it rather than
-/// writing a key out by hand.
+/// What a job allows, as the table's shared answer reads it.
+fn facts(job: &Job) -> ronoctua_protocol::TransferRow {
+    ronoctua_protocol::TransferRow {
+        afoot: job.afoot(),
+        held: job.stage == Stage::Paused,
+        pauses: job.engine.pauses(),
+        opens: opens(job).is_some(),
+    }
+}
+
+/// One job's page: what moves it, what it is, where it is, who asked, what it
+/// is on, how far — the window's detail, field for field.
+fn detail_lines(job: &Job, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Line> {
+    use ronoctua_i18n::key;
+    let (left, room) = crate::power::extent(width);
+    let fact = |label: &str, value: String| Line {
+        fields: crate::chrome::field_pair(
+            left,
+            room,
+            &texts.t(label),
+            &value,
+            crate::chrome::Kind::Fact,
+            false,
+        ),
+        target: Target::Nothing,
+    };
+    let amount = |n: u64| match job.measure {
+        Measure::Bytes => crate::files::size_text(n, texts.decimal_mark()),
+        Measure::Items => n.to_string(),
+    };
+    let mut out = vec![Line {
+        fields: vec![plain(
+            left,
+            ronoctua_render::layout::elide_end(&texts.t(key::TRANSFERS_WINDOW_DETAIL), room),
+            tokens::color::TEXT_HEADING,
+        )],
+        target: Target::Nothing,
+    }];
+    out.push(fact(
+        key::TRANSFERS_WINDOW_FIELD_ENGINE,
+        texts.t(&format!("transfers-engine-{}", job.engine.word())),
+    ));
+    out.push(fact(
+        key::TRANSFERS_WINDOW_FIELD_ERRAND,
+        texts.t(&format!("transfers-work-{}", job.work.word())),
+    ));
+    out.push(fact(
+        key::TRANSFERS_WINDOW_FIELD_STAGE,
+        texts.t(&format!("transfers-stage-{}", job.stage.word())),
+    ));
+    out.push(fact(
+        key::TRANSFERS_WINDOW_FIELD_IDENTITY,
+        texts.t(if identified(&job.work) {
+            key::TRANSFERS_IDENTITY_MINE
+        } else {
+            key::TRANSFERS_IDENTITY_ANONYMOUS
+        }),
+    ));
+    out.push(fact(key::TRANSFERS_WINDOW_FIELD_SUBJECT, subject_of(job)));
+    out.push(fact(key::TRANSFERS_WINDOW_FIELD_DONE, amount(job.done)));
+    out.push(fact(
+        key::TRANSFERS_WINDOW_FIELD_TOTAL,
+        if job.total == 0 {
+            texts.t(key::TRANSFERS_WINDOW_UNKNOWN)
+        } else {
+            amount(job.total)
+        },
+    ));
+    if let Some(answer) = job.answer {
+        out.push(fact(
+            key::TRANSFERS_WINDOW_FIELD_ANSWER,
+            crate::files::size_text(answer, texts.decimal_mark()),
+        ));
+    }
+    if job.trouble.is_some() || job.refusal.is_some() {
+        out.push(fact(
+            key::TRANSFERS_WINDOW_FIELD_TROUBLE,
+            under_the_pointer(job, texts),
+        ));
+    }
+    // THE BAR AND ITS FIGURE, after a line of air — the window's own line —
+    // and, where the bar does not fit, the figure alone: the part that
+    // answers "is it moving".
+    if job.along().is_some() {
+        let at = crate::chrome::value_column(left, room);
+        let end = left + room;
+        let fields = if at + BAR + 1 + FIGURE <= end {
+            let mut fields = bar(at, job);
+            fields.push(plain(at + BAR + 1, figure(job), colour_of(job.stage)));
+            fields
+        } else if at + FIGURE <= end {
+            vec![plain(at, figure(job), colour_of(job.stage))]
+        } else {
+            Vec::new()
+        };
+        if !fields.is_empty() {
+            out.push(Line {
+                fields: crate::chrome::AIR,
+                target: Target::Nothing,
+            });
+            out.push(Line {
+                fields,
+                target: Target::Nothing,
+            });
+        }
+    }
+    out
+}
+
+/// The launcher entry a finished program's order made, when it made one — what
+/// `C-o` on its row opens.
 #[must_use]
-pub fn key_that_runs(id: &str) -> Option<Key> {
-    OF_THE_VIEW
-        .iter()
-        .find(|(_, command)| *command == id)
-        .and_then(|(notation, _)| Key::parse(notation).ok())
+pub fn opens(job: &Job) -> Option<&str> {
+    if job.stage != Stage::Done || !matches!(job.work, ronoctua_transfers::Work::Software { .. }) {
+        return None;
+    }
+    job.outcome
+        .as_ref()
+        .and_then(|o| o.desktop_ids.first())
+        .map(String::as_str)
 }
 
 /// The id a key runs, if the table has one for it.
@@ -399,7 +709,7 @@ fn sentence(job: &Job, texts: &ronoctua_i18n::Texts) -> String {
     } else {
         format!("{who} · {}", job.now)
     };
-    match job.work.landing() {
+    let said = match job.work.landing() {
         Some(where_) => {
             let there = where_.file_name().map_or_else(
                 || where_.to_string_lossy().into_owned(),
@@ -412,6 +722,16 @@ fn sentence(job: &Job, texts: &ronoctua_i18n::Texts) -> String {
             format!("{what} {who} {into}")
         }
         None => format!("{what} {who}"),
+    };
+    // A PROGRAM'S ORDER SAYS WHERE INSIDE IT IS — downloading, building,
+    // putting it in the launcher —, which is the one thing its figure cannot:
+    // a build has no percentage anybody can compute honestly.
+    match job.phase {
+        Some(phase) if job.afoot() => format!(
+            "{said} · {}",
+            texts.t(crate::software_words::phase_key(phase))
+        ),
+        _ => said,
     }
 }
 
@@ -520,6 +840,16 @@ pub const fn colour_of(stage: Stage) -> tokens::Color {
 /// a row that sends somebody to the journal.
 #[must_use]
 pub fn under_the_pointer(job: &Job, texts: &ronoctua_i18n::Texts) -> String {
+    // A PROGRAM'S REFUSAL IS A SENTENCE, and its word (`declared-in-the-flake`)
+    // is the CLI's name for it. The program's own words, when there are more
+    // than the word, follow it.
+    if let Some(why) = job.refusal {
+        let said = texts.t(crate::software_words::refusal_key(why));
+        return match job.trouble.as_deref().map(str::trim) {
+            Some(t) if !t.is_empty() && t != why.word() => format!("{said} · {t}"),
+            _ => said,
+        };
+    }
     if let Some(trouble) = &job.trouble {
         return trouble.clone();
     }
@@ -617,9 +947,11 @@ pub fn segment(jobs: &[Job]) -> Option<String> {
 /// an hour ago.
 #[must_use]
 pub fn what_ended(before: &[Job], now: &[Job]) -> Vec<crate::files::Report> {
-    now.iter()
-        .filter(|j| !j.afoot())
-        .filter(|j| before.iter().any(|old| old.id == j.id && old.afoot()))
+    ended(before, now)
+        // A PROGRAM'S ORDER IS NOT THE FILE MANAGER'S: its end is its own
+        // notification, with the refusal as a sentence (`software::ended_of`),
+        // and a report here would echo the refusal's bare word.
+        .filter(|j| !matches!(j.work, ronoctua_transfers::Work::Software { .. }))
         .map(|j| match (&j.work, j.answer, j.stage) {
             (ronoctua_transfers::Work::Measure { path }, Some(bytes), _) => {
                 let name = path
@@ -639,6 +971,15 @@ pub fn what_ended(before: &[Job], now: &[Job]) -> Vec<crate::files::Report> {
             _ => crate::files::Report::Done,
         })
         .collect()
+}
+
+/// The jobs that ENDED between two lists: afoot in the first, not in the
+/// second. The one definition of "this job is over", for the file manager's
+/// reports and the software centre's notifications alike.
+pub fn ended<'a>(before: &'a [Job], now: &'a [Job]) -> impl Iterator<Item = &'a Job> + 'a {
+    now.iter()
+        .filter(|j| !j.afoot())
+        .filter(|j| before.iter().any(|old| old.id == j.id && old.afoot()))
 }
 
 /// Listens to the queue and turns each list into the file manager's reports.
@@ -720,6 +1061,10 @@ const fn errand_of(work: &ronoctua_transfers::Work) -> ronoctua_protocol::Errand
         // the region's name. The FOOTER's door, which is not a buffer, reads
         // `Work::word` and says "install a region's streets" in full.
         W::Atlas { .. } => E::Fetch,
+        // A PROGRAM'S INSTALL, REMOVAL OR UPDATE, for the same reason: no WIT
+        // change for a word. The buffer's row says what it is by its subject
+        // (the program's name); the footer's door names the order in full.
+        W::Software { .. } => E::Fetch,
     }
 }
 
@@ -734,6 +1079,7 @@ const fn engine_of(engine: ronoctua_transfers::Engine) -> ronoctua_protocol::Eng
         ronoctua_transfers::Engine::Fetch => E::Fetch,
         ronoctua_transfers::Engine::Media => E::Media,
         ronoctua_transfers::Engine::Torrent => E::Torrent,
+        ronoctua_transfers::Engine::Software => E::Fetch,
     }
 }
 
@@ -811,6 +1157,8 @@ pub fn queue_of(jobs: &[Job]) -> ronoctua_protocol::Queue {
                 trouble: j.trouble.clone().unwrap_or_default(),
                 answer: j.answer.unwrap_or(0),
                 identified: identified(&j.work),
+                pauses: j.engine.pauses(),
+                opens: opens(j).is_some(),
             })
             .collect(),
     }
@@ -868,9 +1216,15 @@ mod tests {
         // The twin of `files::every_view_key_in_the_table_actually_does_something`:
         // a key in the table that no arm answers is a line promising something
         // that does not happen — and the manual would list it.
-        let mut view = View::fresh_one();
         for (notation, id) in OF_THE_VIEW {
+            let mut view = View::fresh_one();
             let key = Key::parse(notation).expect(notation);
+            // OPENING needs a program that was installed and made an entry.
+            if *id == "transfers-launch" {
+                view.refresh(vec![installed_gimp()]);
+                assert_eq!(view.key(key), Step::Launch("org.gimp.GIMP.desktop".into()));
+                continue;
+            }
             // EACH KEY GETS THE ROW IT NEEDS. `forget` only takes a finished
             // one — that refusal is the point of the key, not a gap in it — and
             // `up` needs somewhere to come from.
@@ -897,7 +1251,7 @@ mod tests {
     #[test]
     fn pausing_a_held_job_resumes_it_and_a_finished_one_does_neither() {
         let mut view = View::fresh_one();
-        let ret = Key::parse("RET").unwrap();
+        let ret = Key::parse("SPC").unwrap();
 
         view.refresh(vec![a_job(1, Stage::Running)]);
         assert_eq!(view.key(ret), Step::Send(Ask::Pause { id: 1 }));
@@ -930,8 +1284,17 @@ mod tests {
             v
         };
         let t = texts();
+        let mut detailed = View::fresh_one();
+        detailed.refresh(view.jobs.clone());
+        detailed.key(Key::parse("RET").unwrap());
+        let mut asked = View::fresh_one();
+        asked.refresh(view.jobs.clone());
+        asked.key(Key::parse("C-c").unwrap());
         for columns in [20_u16, 40, 52, 76, 80, 200] {
-            for row in view.rows(columns, &t) {
+            for row in [&view, &detailed, &asked]
+                .iter()
+                .flat_map(|v| v.lines(columns, &t))
+            {
                 for f in &row.fields {
                     assert!(
                         f.at + ronoctua_render::layout::width(&f.text) <= columns,
@@ -986,6 +1349,219 @@ mod tests {
             segment(&[broke]).is_some(),
             "the failure went away from the modeline"
         );
+    }
+
+    /// A finished install of GIMP, with the entry it made.
+    fn installed_gimp() -> Job {
+        let mut j = Job::fresh_one(
+            7,
+            Engine::Software,
+            Work::Software {
+                order: Box::new(ronoctua_software::Order::Install {
+                    key: ronoctua_software::AppKey::Flatpak {
+                        id: "org.gimp.GIMP".into(),
+                    },
+                    consent: ronoctua_software::order::Consent::default(),
+                }),
+                label: "GIMP".into(),
+            },
+        );
+        j.stage = Stage::Done;
+        j.outcome = Some(ronoctua_software::Outcome {
+            key: None,
+            desktop_ids: vec!["org.gimp.GIMP.desktop".into()],
+            amount: None,
+            rehearsed: false,
+        });
+        j
+    }
+
+    #[test]
+    fn a_program_s_order_cannot_be_held_and_the_line_does_not_teach_it() {
+        let mut view = View::fresh_one();
+        let mut running = installed_gimp();
+        running.stage = Stage::Running;
+        running.outcome = None;
+        running.phase = Some(ronoctua_software::progress::Phase::Downloading);
+        view.refresh(vec![running]);
+        assert_eq!(view.key(Key::parse("SPC").unwrap()), Step::Nothing);
+        let t = texts();
+        let taught: String = view.hint(&t).iter().map(|p| p.text.as_str()).collect();
+        assert!(!taught.contains("SPC"), "{taught}");
+        assert!(taught.contains("C-c"), "{taught}");
+        // AND THE ROW SAYS WHERE INSIDE THE ORDER IT IS.
+        let rows = view.lines(200, &t);
+        let said: String = rows[0].fields.iter().map(|f| f.text.as_str()).collect();
+        assert!(
+            said.contains(&t.t(ronoctua_i18n::key::SOFTWARE_PHASE_DOWNLOADING)),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn a_finished_install_opens_from_its_row() {
+        let mut view = View::fresh_one();
+        view.refresh(vec![installed_gimp()]);
+        let t = texts();
+        let taught: String = view.hint(&t).iter().map(|p| p.text.as_str()).collect();
+        assert!(taught.contains("C-o"), "{taught}");
+        // A COPY THAT FINISHED opens nothing.
+        view.refresh(vec![a_job(1, Stage::Done)]);
+        assert_eq!(view.key(Key::parse("C-o").unwrap()), Step::Nothing);
+    }
+
+    /// FAILS IF: the panel loses the window's second page — `RET` opening
+    /// the job one field a line, the failure and who asked on it, `Esc`
+    /// going back one page and only then closing — or the second click on a
+    /// row stops doing what `RET` does.
+    #[test]
+    fn a_job_has_its_own_page_and_the_second_click_opens_it() {
+        let t = texts();
+        let mut view = View::fresh_one();
+        let mut broke = a_job(2, Stage::Failed);
+        broke.trouble = Some("no space left on the disk".into());
+        view.refresh(vec![a_job(1, Stage::Running), broke]);
+        // THE FIRST CLICK SELECTS, the second opens.
+        assert_eq!(view.clicked(1, 200, &t), Step::Changed);
+        assert_eq!(view.level(), Level::List);
+        assert_eq!(view.clicked(1, 200, &t), Step::Changed);
+        assert_eq!(view.level(), Level::Detail);
+        let said: String = view
+            .lines(200, &t)
+            .iter()
+            .flat_map(|l| l.fields.iter().map(|f| f.text.clone()))
+            .collect();
+        for wanted in [
+            t.t(ronoctua_i18n::key::TRANSFERS_WINDOW_FIELD_ENGINE),
+            t.t(ronoctua_i18n::key::TRANSFERS_WINDOW_FIELD_IDENTITY),
+            t.t(ronoctua_i18n::key::TRANSFERS_IDENTITY_ANONYMOUS),
+            "no space left on the disk".to_owned(),
+        ] {
+            assert!(
+                said.contains(&wanted),
+                "the page did not say {wanted}: {said}"
+            );
+        }
+        // NO LINE OF THE PAGE is a job to click, and the cursor is on none.
+        assert!(
+            view.lines(200, &t)
+                .iter()
+                .all(|l| l.target == Target::Nothing)
+        );
+        assert_eq!(view.cursor_line(200, &t), None);
+        // `Esc` GOES BACK ONE PAGE, and only then closes.
+        let esc = Key::parse("ESC").unwrap();
+        assert_eq!(view.key(esc), Step::Changed);
+        assert_eq!(view.level(), Level::List);
+        assert_eq!(view.key(esc), Step::Closed);
+        // AND `RET` IS THE PAGE, not the hold it used to be.
+        assert_eq!(view.key(Key::parse("RET").unwrap()), Step::Changed);
+        assert_eq!(view.level(), Level::Detail);
+    }
+
+    /// FAILS IF: giving up stops asking first, or the question opens on
+    /// `yes`, or `Esc` gives up, or the answer names a row and not the job,
+    /// or a click takes an answer without selecting it first.
+    #[test]
+    fn giving_up_asks_first_with_no_under_the_cursor() {
+        let t = texts();
+        let mut view = View::fresh_one();
+        view.refresh(vec![a_job(7, Stage::Running), a_job(8, Stage::Paused)]);
+        let give_up = Key::parse("C-c").unwrap();
+        // THE QUESTION, and nothing sent.
+        assert_eq!(view.key(give_up), Step::Changed);
+        assert!(view.asking());
+        let lines = view.lines(200, &t);
+        let on = view.cursor_line(200, &t).expect("a cursor on an answer");
+        assert_eq!(lines[on].target, Target::Answer(false), "born on yes");
+        let no = lines
+            .iter()
+            .position(|l| l.target == Target::Answer(false))
+            .unwrap();
+        let yes = lines
+            .iter()
+            .position(|l| l.target == Target::Answer(true))
+            .unwrap();
+        assert!(no < yes, "yes is drawn first");
+        // `RET` ON NO keeps it; `Esc` is no too.
+        assert_eq!(view.key(Key::parse("RET").unwrap()), Step::Changed);
+        assert!(!view.asking());
+        view.key(give_up);
+        assert_eq!(view.key(Key::parse("ESC").unwrap()), Step::Changed);
+        assert!(!view.asking());
+        // `↓` AND `RET` give it up — the job, by its id.
+        view.key(give_up);
+        view.key(Key::parse("<down>").unwrap());
+        assert_eq!(
+            view.key(Key::parse("RET").unwrap()),
+            Step::Send(Ask::Cancel { id: 7 })
+        );
+        // BY THE POINTER: the first click on `yes` selects, the second answers.
+        view.key(give_up);
+        assert_eq!(view.clicked(yes, 200, &t), Step::Changed);
+        assert!(view.asking());
+        assert_eq!(
+            view.clicked(yes, 200, &t),
+            Step::Send(Ask::Cancel { id: 7 })
+        );
+        // A QUESTION ABOUT A JOB THAT ENDED goes with it.
+        view.key(give_up);
+        view.refresh(vec![a_job(7, Stage::Done), a_job(8, Stage::Paused)]);
+        assert!(!view.asking());
+        // AND WHAT HAS ENDED is not asked about.
+        assert_eq!(view.key(give_up), Step::Nothing);
+    }
+
+    /// FAILS IF: the panel's table stops being the window's — the one the
+    /// buffer binds — or the hint teaches a key the row does nothing with.
+    #[test]
+    fn the_panel_teaches_the_windows_table() {
+        assert!(std::ptr::eq(OF_THE_VIEW, ronoctua_protocol::TRANSFERS_KEYS));
+        let t = texts();
+        let mut view = View::fresh_one();
+        view.refresh(vec![a_job(1, Stage::Done)]);
+        let taught: String = view.hint(&t).iter().map(|p| p.text.as_str()).collect();
+        assert!(taught.contains("C-k"), "{taught}");
+        assert!(!taught.contains("C-c"), "{taught}");
+        assert!(!taught.contains("SPC"), "{taught}");
+        // EVERY ID OF THE TABLE says what it does, in both languages.
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect(language);
+            for (_, id) in OF_THE_VIEW
+                .iter()
+                .chain(ronoctua_protocol::TRANSFERS_ANSWER)
+            {
+                for key in [(*id).to_owned(), format!("about-{id}")] {
+                    assert_ne!(t.t(&key), key, "{language} has no `{key}`");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_program_s_refusal_is_a_sentence_and_not_its_word() {
+        let mut broke = installed_gimp();
+        broke.stage = Stage::Failed;
+        broke.outcome = None;
+        broke.refusal = Some(ronoctua_software::Refusal::DeclaredInTheFlake);
+        broke.trouble = Some("declared-in-the-flake".into());
+        let t = texts();
+        let said = under_the_pointer(&broke, &t);
+        assert_eq!(
+            said,
+            t.t(crate::software_words::refusal_key(
+                ronoctua_software::Refusal::DeclaredInTheFlake
+            ))
+        );
+        // AND ITS END IS NOT THE FILE MANAGER'S, which would echo the word.
+        let mut before = broke.clone();
+        before.stage = Stage::Running;
+        assert!(what_ended(&[before.clone()], std::slice::from_ref(&broke)).is_empty());
+        assert_eq!(ended(&[before], std::slice::from_ref(&broke)).count(), 1);
+        // A FAILURE WITH MORE THAN THE WORD keeps the program's words after it.
+        broke.refusal = Some(ronoctua_software::Refusal::ToolFailed);
+        broke.trouble = Some("error: collision between two files".into());
+        assert!(under_the_pointer(&broke, &t).ends_with("error: collision between two files"));
     }
 
     #[test]

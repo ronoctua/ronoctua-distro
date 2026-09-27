@@ -1,0 +1,24 @@
+Looking for matches…
+Required runtime for org.gnome.Calculator/x86_64/stable (runtime/org.gnome.Platform/x86_64/51) found in remote flathub
+
+org.gnome.Calculator permissions:
+    ipc	network	fallback-x11	wayland
+    dri
+
+
+ 1.	   	org.gnome.Platform.Locale	51	i	flathub	< 386.1 MB (partial)
+ 2.	   	org.gnome.Platform	51	i	flathub	< 402.3 MB
+ 3.	   	org.gnome.Calculator	stable	i	flathub	< 1.9 MB
+
+
+
+Installing 1/3…
+Installing 1/3… ██▌                  12%  2.1 MB/s  00:15
+Installing 1/3… ████████████████████ 100%  2.4 MB/s
+Installing 2/3…
+Installing 2/3… █▌                    7%  3.0 MB/s  01:40
+Installing 2/3… ██████████▌          52%  3.1 MB/s  00:30
+Installing 2/3… ████████████████████ 100%  3.2 MB/s
+Installing 3/3…
+Installing 3/3… ████████████████████ 100%  1.9 MB/s
+Installation complete.

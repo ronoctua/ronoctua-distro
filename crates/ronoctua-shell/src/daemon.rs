@@ -159,8 +159,16 @@ pub fn buffer_name(state: &State, texts: &Texts) -> String {
 }
 
 /// The `major-mode` segment's text: the focused window's app id (section 4.3).
+///
+/// `catalogue` is the launcher's — the entries the session scanned —, and it
+/// is what names a window whose `app_id` a program's `.desktop` declares; see
+/// [`mode_label`]. An empty one only loses that.
 #[must_use]
-pub fn buffer_mode(state: &State, texts: &Texts) -> String {
+pub fn buffer_mode(
+    state: &State,
+    texts: &Texts,
+    catalogue: &[ronoctua_apps::DesktopEntry],
+) -> String {
     // EMPTY, and not an invented name. With no focused window there is no mode, and
     // writing `fundamental` took up a column asserting something false — the reader
     // went looking for a buffer that does not exist. The segment disappears (see `segments`).
@@ -168,7 +176,7 @@ pub fn buffer_mode(state: &State, texts: &Texts) -> String {
         return String::new();
     };
     match j.app_id.as_deref().filter(|a| !a.is_empty()) {
-        Some(a) => mode_label(texts, a),
+        Some(a) => mode_label(texts, a, catalogue),
         None => texts.t(key::MODE_UNKNOWN),
     }
 }
@@ -196,12 +204,37 @@ pub const OURS: &str = "br.ronoctua.";
 ///
 /// A mode of ours with no key shows `[mode-x]`, and it is meant to: what stops
 /// that from reaching a screen is `buffer-modes-have-text`, at build time.
+///
+/// # And a WEB APP's window shows the name its `.desktop` gives it
+///
+/// The last dotted component is a guess about a reverse-DNS id, and a web
+/// app's window is where it guesses wrong: Chrome names that window after its
+/// address — `chrome-web.whatsapp.com__-Default` —, and the guess drew
+/// `com__-Default`. The entry that opens it says so in `StartupWMClass=`
+/// ([`ronoctua_apps::declared_window`]), and its `Name=` is the web app's own
+/// data just as the `app_id` is: the word the launcher lists it under, and
+/// still nothing this system invented.
+///
+/// ONLY FOR CHROME'S WINDOWS (`terminal::CHROME_APP_PREFIX`). Any other
+/// program whose entry declares a class already had a reverse-DNS or plain
+/// `app_id` the guess reads well — `google-chrome`, `gimp` —, and swapping it
+/// for the entry's name would change what the modeline says about every such
+/// program, which is not what this was for.
 #[must_use]
-pub fn mode_label(texts: &Texts, app_id: &str) -> String {
-    match app_id.strip_prefix(OURS) {
-        Some(id) => texts.t(&format!("mode-{id}")),
-        None => app_id.rsplit('.').next().unwrap_or(app_id).to_owned(),
+pub fn mode_label(
+    texts: &Texts,
+    app_id: &str,
+    catalogue: &[ronoctua_apps::DesktopEntry],
+) -> String {
+    if let Some(id) = app_id.strip_prefix(OURS) {
+        return texts.t(&format!("mode-{id}"));
     }
+    if app_id.starts_with(crate::terminal::CHROME_APP_PREFIX)
+        && let Some(e) = ronoctua_apps::declared_window(catalogue, app_id)
+    {
+        return e.name.clone();
+    }
+    app_id.rsplit('.').next().unwrap_or(app_id).to_owned()
 }
 
 #[cfg(test)]
@@ -248,7 +281,7 @@ mod tests {
         // `fundamental` took up a column asserting something false: the reader
         // went looking for a buffer that does not exist.
         assert!(
-            buffer_mode(&e, &t).is_empty(),
+            buffer_mode(&e, &t, &[]).is_empty(),
             "with no window the mode has to be empty, so the segment goes away"
         );
     }
@@ -268,7 +301,7 @@ mod tests {
         );
         // The title is NOT translated: it comes from the application.
         assert_eq!(buffer_name(&e, &t), "arq.rs");
-        assert_eq!(buffer_mode(&e, &t), "ghostty");
+        assert_eq!(buffer_mode(&e, &t, &[]), "ghostty");
     }
 
     #[test]
@@ -276,7 +309,10 @@ mod tests {
         let (e, t) = (with_focus(None, None), texts());
         // pt-BR: a pt-BR VALUE, which is what this asserts arrives.
         assert_eq!(buffer_name(&e, &t), "*sem nome*");
-        assert_eq!(buffer_mode(&e, &t), t.t(ronoctua_i18n::key::MODE_UNKNOWN));
+        assert_eq!(
+            buffer_mode(&e, &t, &[]),
+            t.t(ronoctua_i18n::key::MODE_UNKNOWN)
+        );
     }
 
     #[test]
@@ -285,13 +321,13 @@ mod tests {
         // OURS. The id is English and the screen is not — which is the whole
         // point of the split, and the reason `glifos` used to be the label.
         // pt-BR: the VALUE of a text key, asserted — the screen's word.
-        assert_eq!(mode_label(&t, "br.ronoctua.glyphs"), "glifos");
-        assert_eq!(mode_label(&t, "br.ronoctua.memory"), "memória");
+        assert_eq!(mode_label(&t, "br.ronoctua.glyphs", &[]), "glifos");
+        assert_eq!(mode_label(&t, "br.ronoctua.memory", &[]), "memória");
         // FOREIGN. Nobody can write a key for every program on earth, and
         // inventing a name for somebody else's software is worse than showing
         // the one they chose.
-        assert_eq!(mode_label(&t, "com.mitchellh.ghostty"), "ghostty");
-        assert_eq!(mode_label(&t, "firefox"), "firefox");
+        assert_eq!(mode_label(&t, "com.mitchellh.ghostty", &[]), "ghostty");
+        assert_eq!(mode_label(&t, "firefox", &[]), "firefox");
     }
 
     #[test]
@@ -303,6 +339,85 @@ mod tests {
             texts(),
         );
         // pt-BR: the VALUE of a text key, asserted — the screen's word.
-        assert_eq!(buffer_mode(&e, &t), "glifos");
+        assert_eq!(buffer_mode(&e, &t, &[]), "glifos");
+    }
+
+    /// An entry of the catalogue, declaring (or not) a window class.
+    fn entry(id: &str, name: &str, class: Option<&str>) -> ronoctua_apps::DesktopEntry {
+        ronoctua_apps::DesktopEntry {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            description: String::new(),
+            icon: String::new(),
+            categories: Vec::new(),
+            mime_types: Vec::new(),
+            command: (id.to_owned(), Vec::new()),
+            terminal: false,
+            working_directory: None,
+            startup_wm_class: class.map(ToOwned::to_owned),
+            key: ronoctua_apps::fold::fold(name),
+        }
+    }
+
+    /// THE DEFECT: a web app's window is named after its address, and the
+    /// last dotted component of `chrome-web.whatsapp.com__-Default` is
+    /// `com__-Default` — which is what the modeline would have drawn.
+    #[test]
+    fn a_window_a_desktop_entry_declares_shows_that_entrys_name() {
+        let t = texts();
+        let catalogue = [
+            entry("google-chrome", "Google Chrome", Some("google-chrome")),
+            entry(
+                "ronoctua-web-whatsapp",
+                "WhatsApp",
+                Some("chrome-web.whatsapp.com__-Default"),
+            ),
+            entry("com.mitchellh.ghostty", "Ghostty", None),
+        ];
+        let web = with_focus(Some("WhatsApp"), Some("chrome-web.whatsapp.com__-Default"));
+        assert_eq!(buffer_mode(&web, &t, &catalogue), "WhatsApp");
+        // WITHOUT the catalogue it is still the guess — the defect, kept as
+        // the proof that the catalogue is what fixed it.
+        assert_eq!(buffer_mode(&web, &t, &[]), "com__-Default");
+        // The same site in another Chrome profile is ANOTHER window class, and
+        // nothing declares it: the guess, not a neighbour's name.
+        assert_eq!(
+            mode_label(&t, "chrome-web.whatsapp.com__-Profile_1", &catalogue),
+            "com__-Profile_1"
+        );
+        // An entry with no class names nothing, even with the app id as its id:
+        // the desktop id is not a window class.
+        assert_eq!(
+            mode_label(&t, "com.mitchellh.ghostty", &catalogue),
+            "ghostty"
+        );
+        // OURS stay translated, whatever an entry declares.
+        let ours = [entry("x", "Not Ours", Some("br.ronoctua.glyphs"))];
+        assert_eq!(
+            mode_label(&t, "br.ronoctua.glyphs", &ours),
+            t.t("mode-glyphs")
+        );
+    }
+
+    /// ONLY A WEB APP'S WINDOW takes its entry's name: every other program
+    /// keeps what the modeline always said, whatever its entry declares.
+    #[test]
+    fn a_program_that_is_not_a_web_app_keeps_its_app_id() {
+        let t = texts();
+        let catalogue = [
+            entry("google-chrome", "Google Chrome", Some("google-chrome")),
+            entry(
+                "org.gimp.GIMP",
+                "GNU Image Manipulation Program",
+                Some("gimp"),
+            ),
+        ];
+        assert_eq!(mode_label(&t, "google-chrome", &catalogue), "google-chrome");
+        assert_eq!(mode_label(&t, "gimp", &catalogue), "gimp");
+        // AND A CHROME WINDOW NOBODY DECLARES keeps the guess.
+        assert_eq!(
+            mode_label(&t, "chrome-mail.example.org__-Default", &catalogue),
+            "org__-Default"
+        );
     }
 }

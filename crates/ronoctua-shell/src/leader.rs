@@ -691,9 +691,33 @@ pub const BY_NAME_ONLY: &[&str] = &[
     "brain-proceed",
     "brain-start-emacs",
     "brain-clock-automatic",
+    // THE LAUNCHER'S LAST ROW: `RET` or a click on "search to install" runs
+    // it, and a key of its own would be a second way to the row it already is.
+    "apps-search-to-install",
+    // THE SOFTWARE VIEW'S QUESTIONS: rows of the view run them, and each opens
+    // its door's line asking for its words (`ask-<id>`) — the footer's
+    // minibuffer or the window's header — and the answer comes back as the
+    // same command's argument.
+    "software-web-address",
+    "software-web-name",
+    "software-icon-path",
+    "software-file-path",
+    // AND WHAT A NOTIFICATION OFFERS once something was installed: open it.
+    // A key of its own would open whatever was installed last, which is a
+    // key that means something different every day.
+    "software-launch-latest",
     "example-open",
-    // THE CAMERA'S QUESTIONS: rows of `LEADER s c` run them, and each opens
-    // the minibuffer asking for its words (`ask-<id>`).
+    // THE MACHINE'S CLOCK, asked by `RET` on its rows in `LEADER s l`: each
+    // opens its door's line asking for its words (`ask-<id>`), and the answer
+    // comes back as the same command's argument. A key of their own would
+    // ask for a date on a machine whose clock is kept automatically, which
+    // the rows refuse on sight.
+    "locale-system-date",
+    "locale-system-time",
+    "locale-system-zone",
+    // THE CAMERA'S QUESTIONS: rows of `LEADER s c` ask them where the view is
+    // open — the footer's minibuffer or the window's own line — and `M-x`
+    // reaches them by name; each asks for its words (`ask-<id>`).
     "camera-scene-add",
     "camera-scene-rename",
     "camera-script-add",
@@ -732,21 +756,11 @@ pub const STATE_KEY: &str = "s";
 
 /// The sequence that opens the notification manager in the footer.
 ///
-/// A constant for the reason the two above are: the window's door SAYS it
-/// ("the action runs from the footer: …") and a sentence that carried the
-/// keys as text went stale the day the key moved from `n h` to `n n`.
+/// A constant for the reason the two above are, and the one every sequence a
+/// sentence names keeps: a sentence once carried these keys as TEXT, and went
+/// on teaching `n h` after the key became `n n`. What a sentence names is an
+/// argument read from the constant the binding reads (`keys-are-never-text`).
 pub const NOTIF_OPEN_KEYS: &str = "n n";
-
-/// The two sequences that take and drop the sleep locks, in the footer.
-///
-/// The power window's message says where the lock lives, and it used to say it
-/// as TEXT in both `.ftl` files: "LEADER s p k, or LEADER s p l". Two things
-/// were wrong with that at once — the sequences would go stale the day either
-/// key moved, exactly as `n h` did; and the word "LEADER" is nobody's key.
-/// `nix/modules/scroll.nix` sets `RONOCTUA_LEADER` to `SUPER` and `nix/dev.nix`
-/// to `CTRL ALT SPC`, and every other surface in this system renders
-/// `crate::leader()` — the one place that knows.
-pub const KEEP_AWAKE_KEYS: &str = "s p k";
 
 /// The two sequences that answer a pairing question from anywhere.
 ///
@@ -758,9 +772,6 @@ pub const PAIRING_YES_KEYS: &str = "s b y";
 
 /// The refusal's half of [`PAIRING_YES_KEYS`].
 pub const PAIRING_NO_KEYS: &str = "s b n";
-
-/// The lid's half of [`KEEP_AWAKE_KEYS`].
-pub const KEEP_LID_KEYS: &str = "s p l";
 
 /// The default keymap and the commands it references.
 ///
@@ -1577,7 +1588,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "bluetooth-down",
             label: key::CMD_BLUETOOTH_DOWN,
         },
-        // `LEADER s u` — THE WHOLE UPDATE, BY HAND, WITH NO BRAIN IN IT.
+        // `LEADER s u n` — THE WHOLE UPDATE, BY HAND, WITH NO BRAIN IN IT.
         //
         // The brain decides WHEN the machine updates itself; this is the
         // person deciding it is now. The two are not two sequences: this
@@ -1592,6 +1603,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "system-update",
             label: key::CMD_SYSTEM_UPDATE,
+        },
+        // AND THE VIEW THAT WATCHES ONE HAPPEN, in the footer's region — the
+        // same `update_window::View` as the window below, which starts it,
+        // answers the brain's countdown and follows both journals too.
+        Command {
+            id: "update-open",
+            label: key::CMD_UPDATE_OPEN,
         },
         // AND THE WINDOW THAT WATCHES ONE HAPPEN — the door the modeline's
         // animated mark opens.
@@ -1957,6 +1975,18 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             label: key::CMD_APPS_PIN,
         },
         Command {
+            id: "apps-details",
+            label: key::CMD_APPS_DETAILS,
+        },
+        Command {
+            id: "apps-remove",
+            label: key::CMD_APPS_REMOVE,
+        },
+        Command {
+            id: crate::apps::SEARCH_TO_INSTALL,
+            label: key::CMD_APPS_SEARCH_TO_INSTALL,
+        },
+        Command {
             id: "clipboard-pin",
             label: key::CMD_CLIPBOARD_PIN,
         },
@@ -2004,6 +2034,115 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "apps-open",
             label: key::CMD_APPS_OPEN,
+        },
+        // THE PERSON'S OWN PROGRAMS (`LEADER i`): the footer's view and its
+        // window, the four levels a key opens directly, the five questions
+        // its rows ask on their door's line (the footer's minibuffer or the
+        // window's header), what a notification offers, and the view's own
+        // keys (`software::OF_THE_VIEW`).
+        Command {
+            id: "software-open",
+            label: key::CMD_SOFTWARE_OPEN,
+        },
+        Command {
+            id: "software-window",
+            label: key::CMD_SOFTWARE_WINDOW,
+        },
+        Command {
+            id: "software-trials",
+            label: key::CMD_SOFTWARE_TRIALS,
+        },
+        Command {
+            id: "software-maintenance",
+            label: key::CMD_SOFTWARE_MAINTENANCE,
+        },
+        Command {
+            id: "software-android",
+            label: key::CMD_SOFTWARE_ANDROID,
+        },
+        Command {
+            id: "software-web-new",
+            label: key::CMD_SOFTWARE_WEB_NEW,
+        },
+        Command {
+            id: "software-web-address",
+            label: key::CMD_SOFTWARE_WEB_ADDRESS,
+        },
+        Command {
+            id: "software-web-name",
+            label: key::CMD_SOFTWARE_WEB_NAME,
+        },
+        Command {
+            id: "software-icon-path",
+            label: key::CMD_SOFTWARE_ICON_PATH,
+        },
+        Command {
+            id: "software-file-path",
+            label: key::CMD_SOFTWARE_FILE_PATH,
+        },
+        Command {
+            id: "software-launch-latest",
+            label: key::CMD_SOFTWARE_LAUNCH_LATEST,
+        },
+        Command {
+            id: "software-down",
+            label: key::CMD_SOFTWARE_DOWN,
+        },
+        Command {
+            id: "software-up",
+            label: key::CMD_SOFTWARE_UP,
+        },
+        Command {
+            id: "software-enter",
+            label: key::CMD_SOFTWARE_ENTER,
+        },
+        Command {
+            id: "software-next-source",
+            label: key::CMD_SOFTWARE_NEXT_SOURCE,
+        },
+        Command {
+            id: "software-previous-source",
+            label: key::CMD_SOFTWARE_PREVIOUS_SOURCE,
+        },
+        Command {
+            id: "software-less",
+            label: key::CMD_SOFTWARE_LESS,
+        },
+        Command {
+            id: "software-more",
+            label: key::CMD_SOFTWARE_MORE,
+        },
+        Command {
+            id: "software-install",
+            label: key::CMD_SOFTWARE_INSTALL,
+        },
+        Command {
+            id: "software-try-it",
+            label: key::CMD_SOFTWARE_TRY_IT,
+        },
+        Command {
+            id: "software-launch",
+            label: key::CMD_SOFTWARE_LAUNCH,
+        },
+        Command {
+            id: "software-update",
+            label: key::CMD_SOFTWARE_UPDATE,
+        },
+        Command {
+            id: "software-edit",
+            label: key::CMD_SOFTWARE_EDIT,
+        },
+        Command {
+            id: "software-remove",
+            label: key::CMD_SOFTWARE_REMOVE,
+        },
+        Command {
+            id: "software-stop",
+            label: key::CMD_SOFTWARE_STOP,
+        },
+        Command {
+            id: "software-paste",
+            label: key::CMD_SOFTWARE_PASTE,
         },
         // THE MANUAL. It exists because the chords left the tap list:
         // what one holds has to appear somewhere, and the tap
@@ -2085,8 +2224,9 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "geo-enter",
             label: key::CMD_GEO_ENTER,
         },
-        // THE TWO THE MINIBUFFER AND THE QUESTION ANSWER. `geo-find` runs
-        // twice, like the language view's three: once to ask, once to be told.
+        // THE TWO THE LINE AND THE QUESTION ANSWER. `geo-find` runs twice in
+        // the footer, like the language view's questions: once to ask, once
+        // to be told — and a window's line answers under the same id.
         Command {
             id: "geo-find",
             label: key::CMD_GEO_FIND,
@@ -2123,8 +2263,11 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "locale-more",
             label: key::CMD_LOCALE_MORE,
         },
-        // THE THREE THE MINIBUFFER ANSWERS. Reachable by name like every
-        // other command, and run twice: once to ask, once to be told.
+        // THE QUESTIONS OF THE LANGUAGE VIEW, and the ids their answers come
+        // back under — the footer's minibuffer runs them twice, once to ask
+        // and once to be told, and a window's line answers under the same id
+        // into the same `locale::took`. Reachable by name like every other
+        // command.
         Command {
             id: "locale-zone",
             label: key::CMD_LOCALE_ZONE,
@@ -2136,6 +2279,21 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "locale-where",
             label: key::CMD_LOCALE_WHERE,
+        },
+        // THE MACHINE'S THREE, asked by `RET` on their rows. They were asked
+        // under ids no command had: the footer drew the raw id as the
+        // question, and the answer ran nothing.
+        Command {
+            id: "locale-system-date",
+            label: key::CMD_LOCALE_SYSTEM_DATE,
+        },
+        Command {
+            id: "locale-system-time",
+            label: key::CMD_LOCALE_SYSTEM_TIME,
+        },
+        Command {
+            id: "locale-system-zone",
+            label: key::CMD_LOCALE_SYSTEM_ZONE,
         },
         Command {
             id: "theme-open",
@@ -2475,12 +2633,12 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `a` for APPLICATIONS, at the first level. It was free, and an
         // application launcher is a first-level thing: if it costs two
         // keys, the person goes back to opening everything through the terminal.
-        ("a", "apps-open", None),
+        (APPS_KEYS, "apps-open", None),
         // `LEADER t` IS THE TRANSFER QUEUE. `t t` opens the panel in the
         // footer's region, doubling the key the way `s n n` and `. .` already do
         // — because `t` is a PREFIX, and hanging a command off a prefix is the
         // collision `PrefixWithCommand` exists to flag.
-        ("t t", "transfers-open", None),
+        (TRANSFERS_KEYS, "transfers-open", None),
         // `t w` — the same queue, in a window. `w` for window, and it is the
         // second door of one thing, exactly like the file manager's `. w`.
         ("t w", "transfers-window", None),
@@ -2596,11 +2754,28 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // said plainly: somebody at the keyboard answers a countdown with
         // `LEADER b` and then `, a`, where it used to be `LEADER b a`. The
         // band keeps both buttons for the mouse.
-        ("b", "brain-open", None),
-        // `LEADER s u` — `u` for update, under the SYSTEM group, beside the
-        // memory panel and the disk formatter. It was free, and it is where
-        // somebody looks for "do something to this machine".
-        ("s u", "system-update", None),
+        (BRAIN_KEYS, "brain-open", None),
+        // `LEADER i` — THE PERSON'S OWN PROGRAMS: install, try, update and
+        // remove, for this user only. `i` because the verb begins with it in
+        // both languages, and it was free; `a` stays the bare launcher. `i i` is
+        // the footer (the doubled letter every view here uses) and `i w` the
+        // window; the other four open the view on one of its levels, and
+        // `i b` — `b` for browser, since `w` is the window's letter — asks
+        // for a web app's address first.
+        (SOFTWARE_KEYS, "software-open", None),
+        ("i w", "software-window", None),
+        (SOFTWARE_TRIALS_KEYS, "software-trials", None),
+        ("i b", "software-web-new", None),
+        ("i u", "software-maintenance", None),
+        ("i a", "software-android", None),
+        // `LEADER s u` — THE UPDATE, a group under SYSTEM, beside the memory
+        // panel and the disk formatter: `s u u` opens its view (the doubled
+        // letter every view here uses) and `s u w` its window — `w` for
+        // WINDOW, the letter every view with a second door uses — and `s u n`
+        // starts it NOW, the key the view itself teaches as `u`.
+        ("s u u", "update-open", None),
+        ("s u w", "update-watch", None),
+        ("s u n", "system-update", None),
         // `LEADER s d` — THE SCREENS. `s d d` opens the view (the doubled
         // letter, the convention `s p p`, `s n n`, `t t` and `. .` already
         // use) and `s d w` the window; everything about ONE screen is a letter
@@ -2643,10 +2818,6 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // answer it are the brain's `b a`/`b p` arrangement.
         ("s b y", "bluetooth-accept", None),
         ("s b n", "bluetooth-refuse", None),
-        // `s w` — `w` for WINDOW, the letter every view with a second door
-        // already uses: `t w`, `. w`, `n w`, `s n w`, `s p w`, `s b w`. Seven
-        // doors, one letter, and this is the seventh.
-        ("s w", "update-watch", None),
         // `t` for theme, under `s` because a theme is the SYSTEM's skin and not
         // any one buffer's: the same drawer as memory, format and the brain.
         ("s t", "theme-open", None),
@@ -2692,7 +2863,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         (NOTIF_OPEN_KEYS, "notif-open", None),
         ("n d", "notif-dismiss", None),
         // `w` for WINDOW, the same letter every view with a second door uses
-        // — see the note over `s w`, which lists all seven.
+        // — see the note over `s u w`.
         ("n w", "notif-window", None),
         ("n r", "notif-read-all", None),
         // `n f` — THE FILTERS, which had no door at all. They are the third
@@ -2793,6 +2964,8 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // happened.
         ("t i", key::GROUP_IDENTIFIED),
         ("n", key::GROUP_NOTIFICATION),
+        // `i` FOR THE PERSON'S OWN PROGRAMS — see the bindings.
+        ("i", key::GROUP_SOFTWARE),
         // `s` for SYSTEM — what the machine is doing to itself, as opposed to
         // what one is doing with it: memory, disks, the update, the theme —
         // and the network and Syncthing, which moved in from the first level.
@@ -2808,6 +2981,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("s b", key::GROUP_BLUETOOTH),
         ("s l", key::GROUP_LOCALE),
         ("s g", key::GROUP_GEO),
+        ("s u", key::GROUP_UPDATE),
         ("s q", key::GROUP_QUIT),
     ];
 
@@ -2936,12 +3110,23 @@ pub fn default_of() -> Result<(Tree, Registry)> {
 /// key moves, and `n h` taught `n h` for weeks after it became `n n`.
 pub const GLANCE_KEYS: &str = "d";
 
-/// The language and region view's keys, BESIDE its binding — see
-/// [`GLANCE_KEYS`] for why a sentence may not spell them out.
-pub const LOCALE_KEYS: &str = "s l l";
+/// The software view's keys in the footer, BESIDE its binding.
+pub const SOFTWARE_KEYS: &str = "i i";
 
-/// The regions' view's keys, BESIDE its binding — see [`GLANCE_KEYS`].
-pub const GEO_KEYS: &str = "s g g";
+/// The software view's trials, BESIDE its binding — for a sentence that
+/// names where the trials are (the modeline's trial mark leads there too).
+pub const SOFTWARE_TRIALS_KEYS: &str = "i t";
+
+/// The launcher's key, BESIDE its binding — the software view points at it
+/// for the system's own programs.
+pub const APPS_KEYS: &str = "a";
+
+/// The transfer queue's footer panel, BESIDE its binding — every order the
+/// software view sends says where it can be watched.
+pub const TRANSFERS_KEYS: &str = "t t";
+
+/// The brain's page, BESIDE its binding — where the automatic updates are.
+pub const BRAIN_KEYS: &str = "b";
 
 /// The key that turns every workspace at once on and off, BESIDE its binding:
 /// the line under the modeline prints it while that view is on.
@@ -2950,7 +3135,8 @@ pub const EVERY_WORKSPACE_KEYS: &str = "0";
 /// The key that zooms the workspace in front out and back, likewise.
 pub const OVERVIEW_KEYS: &str = "TAB TAB";
 
-pub const OF_LAUNCHER_VIEW: &[(&str, &str)] = &[("C-s", "apps-pin")];
+/// The launcher's keys — its table lives in the view, `crate::apps::OF_THE_VIEW`.
+pub const OF_LAUNCHER_VIEW: &[(&str, &str)] = crate::apps::OF_THE_VIEW;
 
 // THE CLIPBOARD VIEW'S KEYS USED TO LIVE HERE, and they live in the view now.
 //
@@ -3042,6 +3228,7 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     out.extend(crate::display::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::bluetooth::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::network::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
+    out.extend(crate::software::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(OF_THEME_VIEW.iter().map(|(_, id)| *id));
     out
 }
@@ -3946,10 +4133,12 @@ mod tests {
             "brain-abort",
             "brain-proceed",
             // THE UPDATE, outside the brain. `system-update` starts the same
-            // unit the brain starts and `update-watch` opens the window the
-            // modeline's mark opens — which is why both are commands of the
-            // registry rather than keys of a view.
+            // unit the brain starts, `update-open` opens the view in the
+            // footer and `update-watch` the window the modeline's mark opens
+            // — which is why they are commands of the registry rather than
+            // keys of a view.
             "system-update",
+            "update-open",
             "update-watch",
             "glyphs-nerd-fonts",
             "unicode-symbols",
@@ -3975,6 +4164,34 @@ mod tests {
             // `reachable` — all seven need an action, otherwise they would appear in the
             // list and do nothing.
             "apps-pin",
+            "apps-details",
+            "apps-remove",
+            "software-open",
+            "software-window",
+            "software-trials",
+            "software-maintenance",
+            "software-android",
+            "software-web-new",
+            "software-web-address",
+            "software-web-name",
+            "software-icon-path",
+            "software-file-path",
+            "software-launch-latest",
+            "software-down",
+            "software-up",
+            "software-enter",
+            "software-next-source",
+            "software-previous-source",
+            "software-less",
+            "software-more",
+            "software-install",
+            "software-try-it",
+            "software-launch",
+            "software-update",
+            "software-edit",
+            "software-remove",
+            "software-stop",
+            "software-paste",
             "clipboard-open",
             "clipboard-copy-of-new",
             "clipboard-remove",

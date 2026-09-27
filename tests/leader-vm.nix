@@ -378,16 +378,20 @@ pkgs.testers.runNixOSTest {
         )
 
     with subtest("a prefix key narrows the list"):
-        # `h` AND NOT `i`. This pressed `i` for as long as the three browsers
-        # lived at the top level; they moved under `m` (`m i`), `i` stopped
-        # being a prefix, and pressing it did nothing at all — so the second
-        # `inputs=` never appeared and this subtest had been red ever since,
-        # in a battery nobody had run over the tree.
+        # `n` AND NOT `h`, and not `i` before it. This pressed `i` for as long
+        # as the three browsers lived at the top level; they moved under `m`
+        # (`m i`), `i` stopped being a prefix, and pressing it did nothing at
+        # all — so the second `inputs=` never appeared and this subtest had been
+        # red ever since, in a battery nobody had run over the tree. `h` went
+        # the same way when the manuals became a list: `LEADER h` is the
+        # `help` COMMAND now (the owner's rule, `leader.rs`), and it fired
+        # instead of narrowing.
         #
-        # `h` and not `b`: `b` today has as many bindings as the root, and
+        # `n` and not `b`: `b` today has as many bindings as the root, and
         # "it narrowed" would become a coincidence. What is asserted is that
-        # the list became the PREFIX's, and `h` has one item.
-        press_key("h")
+        # the list became the PREFIX's, and `n` — the notifications — has a
+        # handful of items.
+        press_key("n")
         journal = machine.succeed("journalctl -u footer --no-pager")
         # What is asserted is that it NARROWED, not a number: how many commands
         # exist at the top changes with the keymap.
@@ -402,10 +406,10 @@ pkgs.testers.runNixOSTest {
         # the line below, and there was nothing there: pressing the leader and seeing
         # the same screen is indistinguishable from "it did not register the key".
         journal = machine.succeed("journalctl -u footer --no-pager")
-        # `LEADER h-`: the label from the environment, and Doom's notation (`-`,
+        # `LEADER n-`: the label from the environment, and Doom's notation (`-`,
         # and not ` …`). `SPC` here would be the fallback, and would prove the
         # opposite.
-        assert "LEADER h-" in journal, journal
+        assert "LEADER n-" in journal, journal
 
         w, h, x, y = compositor_geometry()
         # POLLED, like every other read of a height that has just changed:
@@ -444,11 +448,10 @@ pkgs.testers.runNixOSTest {
         echo_line = [l for l in journal.splitlines() if "echo area" in l][-1]
         print(f"echo: {echo_line}")
         # THE MESSAGE cites the whole sequence, not only the last key:
-        # `LEADER h z` is what the user typed, and `z` on its own would not
-        # help. The prefix is `h` because the subtest above pressed it — it
-        # used to be `i`, which stopped being a prefix when the three browsers
-        # moved under `m`.
-        assert "LEADER h z" in echo_line, echo_line
+        # `LEADER n z` is what the user typed, and `z` on its own would not
+        # help. The prefix is `n` because the subtest above pressed it — it
+        # used to be `i`, and then `h`, and each stopped being a prefix.
+        assert "LEADER n z" in echo_line, echo_line
         # And in pt-BR, translated — not the raw key.
         assert "echo-" not in echo_line, echo_line
 
@@ -884,11 +887,12 @@ pkgs.testers.runNixOSTest {
             machine.wait_until_succeeds(
                 "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
             )
-            # `h` AND NOT `m`, for the collision written above the subtest
+            # `n` AND NOT `m`, for the collision written above the subtest
             # before this one: two buffer windows are open by now, and at the
             # root of a sequence `m` is the FOCUSED BUFFER's prefix, not the
-            # tree's. `h` is a group of the tree and reaches it.
-            xdo("key", "h")
+            # tree's. `n` is a group of the tree and reaches it — `h` was one
+            # too, until it became the `help` command.
+            xdo("key", "n")
             machine.sleep(1)
         finally:
             # In the `finally` on purpose: an Alt stuck in Xvfb would spoil any
@@ -897,11 +901,11 @@ pkgs.testers.runNixOSTest {
             xdo("keyup", "alt")
 
         journal = machine.succeed("journalctl -u footer --no-pager")
-        # THE PROOF: `h` opened the group. With the defect, the log carries
-        # `is not bound` and the pending sequence never reaches `LEADER h-`.
-        assert "LEADER h-" in journal, (
-            "with the Alt held, `LEADER h` did not open the help group.\n"
-            "The key came out as `M-h` and matched nothing.\n\n" + journal
+        # THE PROOF: `n` opened the group. With the defect, the log carries
+        # `is not bound` and the pending sequence never reaches `LEADER n-`.
+        assert "LEADER n-" in journal, (
+            "with the Alt held, `LEADER n` did not open the notifications group.\n"
+            "The key came out as `M-n` and matched nothing.\n\n" + journal
         )
   '';
 }

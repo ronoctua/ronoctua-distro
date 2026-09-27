@@ -147,6 +147,12 @@ ronoctua-memory = { path = "../ronoctua-memory" }
 # own: it watches the daemon's socket, draws the countdown and sends back the
 # two answers to it — the same arrangement as the transfer queue one line up.
 ronoctua-brain = { path = "../ronoctua-brain" }
+# THE PERSON'S OWN PROGRAMS (`LEADER i`). The shell links the library for what
+# is quick and read-only — the installed list, the search, a sheet's details,
+# a picture — on its own threads; every order that changes the machine goes to
+# the queue, which runs the crate's CLI. `net` is the search and the pictures
+# from the network, `draw` the icon decoder.
+ronoctua-software = { path = "../ronoctua-software", features = [ "net", "draw" ] }
 
 # Integration with the compositor through wlr-layer-shell and IPC (invariant 3),
 # and the virtual keyboard and pointer the owner approved as its exceptions —

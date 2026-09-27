@@ -183,6 +183,11 @@ let
       (src + "/crates/ronoctua-segment/src/reference.txt")
       # And the hand models', the TFLite runtime's output, for the same test.
       (src + "/crates/ronoctua-segment/src/reference-hands.txt")
+      # The software centre's fixtures, every one PUBLIC data (Flathub's and
+      # F-Droid's answers, a signed `entry.jar`, a cut of the Nix index, a
+      # tiny squashfs): its tests read them with `include_bytes!` and
+      # `std::fs::read`, and like the `.wgsl` above they would only fail HERE.
+      (src + "/crates/ronoctua-software/tests/fixtures")
     ];
   };
 
@@ -212,6 +217,20 @@ let
   buildBase = {
     src = rustFont;
     strictDeps = true;
+
+    # THE SOFTWARE CLI'S TWO FEATURES, on EVERY cargo command of this file.
+    #
+    # `ronoctua-software`'s `[[bin]]` requires `net` and `draw`, and a
+    # workspace build compiles a target only when some member ENABLES its
+    # required features — so without this `${workspace}/bin/ronoctua-software`
+    # simply is not there, and nothing says so until `software` below looks
+    # for it. Here and not only on `workspace`: the dependency layers then
+    # build `image` with the ICO decoder the workspace links (one layer, not a
+    # second compilation of it in the workspace), and the tests and clippy
+    # reach the code the CLI ships instead of skipping the half of the crate
+    # that is behind the two features. `--locked` is crane's own default,
+    # restated because this line replaces it.
+    cargoExtraArgs = "--locked --features ronoctua-software/net,ronoctua-software/draw";
 
     nativeBuildInputs = [ pkg-config ];
     # These DO belong here: the dependencies themselves link against them —
@@ -341,6 +360,16 @@ let
     # `keyboard-restore`'s `systemctl`. It runs from inside a user unit, where
     # PATH is minimal — see `crates/.../keyboard.rs`.
     RONOCTUA_SYSTEMCTL = "${systemd}/bin/systemctl";
+    # THE SCOPE PROBE, and the reason a foreign app is never started twice.
+    #
+    # `foreign::launch` puts every app it opens in a scope of its own, and a
+    # scope's exit status is the APP's: a program that exits with 1 on its own
+    # and a `systemd-run` that could not make a scope look the same from here.
+    # So the shell asks once, with a program that can only succeed, whether
+    # scopes work at all — and from then on never relaunches anything. Both
+    # by path: this runs inside the footer's unit.
+    RONOCTUA_SYSTEMD_RUN = "${systemd}/bin/systemd-run";
+    RONOCTUA_TRUE = "${coreutils}/bin/true";
 
     # TOR: WHERE IT LISTENS, WHERE ITS FRAGMENT GOES, AND THE TWO BRIDGES.
     #
@@ -926,6 +955,31 @@ rec {
     patchelf --shrink-rpath $out/bin/ronoctua-transfers
   '';
 
+  # THE SOFTWARE CLI, extracted for the queue's reason and a sharper one.
+  #
+  # It is what the queue runs for every install, update and removal, and what
+  # the update sequence runs — as ROOT, for the Android image. A package
+  # manager's closure must be its tools and never the desktop: the renderer,
+  # wgpu and the wasm runtime would ride along into a root unit for a program
+  # that draws nothing. `nix/modules/software.nix` wraps THIS with the tools of
+  # the machine it lands on.
+  #
+  # ITS `[[bin]]` NEEDS TWO FEATURES (`net` and `draw`), which `buildBase`
+  # turns on for the whole workspace. The day that line goes, the refusal below
+  # says why instead of `cp` saying "cannot stat".
+  software = pkgs.runCommand "ronoctua-software-cli" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    if [ ! -x ${workspace}/bin/ronoctua-software ]; then
+      echo "the workspace built no ronoctua-software: its [[bin]] requires the" >&2
+      echo "features net and draw, and no member of the build enabled them" >&2
+      exit 1
+    fi
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-software $out/bin/
+    chmod +w $out/bin/ronoctua-software
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-software
+  '';
+
   # THE STUDIO'S DAEMON, extracted the same way: it owns the camera, the
   # encoders and the virtual camera, and draws nothing — a unit carrying the
   # renderer and the wasm runtime would keep both alive for a process whose
@@ -1039,6 +1093,13 @@ rec {
       RONOCTUA_SEGMENT_MODEL = "${segmentModel}";
       # And the hands', so `the_outputs_are_tflites_own` compares.
       RONOCTUA_HAND_MODELS = "${handModels}";
+      # AND LIBWAYLAND, for every window's test. `Ui::for_tests` opens a real
+      # `Connection` over a socket pair nobody serves, and `wayland-client`
+      # loads the library with `dlopen`: the workspace's binaries find it
+      # through the rpath `postFixup` adds, and a test binary gets no such
+      # step. Without it, every such test panics with `NoWaylandLib` here and
+      # passes in the dev shell, which has the library on its path.
+      LD_LIBRARY_PATH = lib.makeLibraryPath [ wayland ];
     }
   );
 

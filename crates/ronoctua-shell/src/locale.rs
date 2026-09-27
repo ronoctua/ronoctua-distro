@@ -49,10 +49,11 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     ("S-<right>", "locale-more"),
     ("RET", "locale-enter"),
     // BARE LETTERS, and they are free here for the power view's reason:
-    // nothing is typed into this screen, so a letter is not a query. They are
-    // the three questions, reachable without walking to their row — and it is
-    // also what makes them reachable at all, since a command the keymap
-    // cannot get to is a command `M-x` alone knows about.
+    // nothing is typed INTO the list. What is typed is typed on a line of its
+    // own — the minibuffer in the footer, the header's line in a window — and
+    // while that line asks, every key is the line's. They are the three
+    // questions, reachable without walking to their row, in both doors
+    // (`press_of_key`); `c` asks where the place under the cursor is.
     // `z` IS THIS INTERFACE'S ZONE, and `locale-zone` says so in words now:
     // this list holds COMMAND IDS, not text keys, so the hint is renamed in
     // the `.ftl` rather than here. It read `Time zone`, which is what the
@@ -75,8 +76,48 @@ pub enum Press {
     More,
     /// Act on the row: flip a switch, cycle a ring, open a question.
     Enter,
+    /// Ask for the zone this interface shows times in — `z`.
+    Zone,
+    /// Ask for a place to add to the glance — `a`.
+    Place,
+    /// Ask where the place under the cursor is — `c`.
+    Where,
     /// Close.
     Escape,
+}
+
+/// A key, by its WHOLE notation, as the view's press — the one reader both
+/// doors call, from the keyboard or from a click on the hint.
+///
+/// # Why one reader
+///
+/// Because there were two, and neither knew `z`, `a` or `c`: the table taught
+/// them on the hint line of both doors, and in both a key and a click on it
+/// did nothing. Read out of [`OF_THE_VIEW`] by notation, a key the table
+/// teaches is a key both doors answer, and a chord that is not in the table
+/// (`C-a`) is not taken for the letter under it. `Esc` is every level's way
+/// back whatever is held.
+#[must_use]
+pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
+    if key.sym == ronoctua_keymap::Sym::Esc {
+        return Some(Press::Escape);
+    }
+    let notation = key.notation();
+    let id = OF_THE_VIEW
+        .iter()
+        .find(|(taught, _)| *taught == notation)
+        .map(|(_, id)| *id)?;
+    Some(match id {
+        "locale-down" => Press::Down,
+        "locale-up" => Press::Up,
+        "locale-less" => Press::Less,
+        "locale-more" => Press::More,
+        "locale-enter" => Press::Enter,
+        "locale-zone" => Press::Zone,
+        "locale-place" => Press::Place,
+        "locale-where" => Press::Where,
+        _ => return None,
+    })
 }
 
 /// What `RET` on a row does.
@@ -171,13 +212,13 @@ impl Shown {
         }
     }
 
-    /// Flips it on a place.
-    pub const fn flip(self, place: &mut ronoctua_world::prefs::Wanted) {
+    /// Turns it on, or off, on a place.
+    pub const fn set(self, place: &mut ronoctua_world::prefs::Wanted, on: bool) {
         match self {
-            Self::Clock => place.clock = !place.clock,
-            Self::Date => place.date = !place.date,
-            Self::Weather => place.weather = !place.weather,
-            Self::Rate => place.rate = !place.rate,
+            Self::Clock => place.clock = on,
+            Self::Date => place.date = on,
+            Self::Weather => place.weather = on,
+            Self::Rate => place.rate = on,
         }
     }
 }
@@ -301,21 +342,28 @@ pub struct Row {
 
 /// What the view wants done, after a key or a click.
 ///
-/// `PartialEq` and NOT `Eq`: a place carries a latitude, which is an `f64`.
-/// Nothing here compares two glances for equality — the derive is for the
-/// tests — and claiming a total order over a float would be a claim the type
-/// cannot keep.
-#[derive(Debug, Clone, PartialEq)]
+/// # A change, and never the whole record
+///
+/// `Keep` and `Glance` carry what CHANGED, and the door lays it over what the
+/// file says at the moment of writing ([`prefs::with`], [`glance_change`]).
+/// They used to carry the view's whole copy — and the file has two writers,
+/// the footer's door and the window's: a door that wrote its copy back undid
+/// whatever the other door had written since that copy was read. A zone
+/// chosen in the footer went back to the old one at the next switch flipped
+/// in a window opened before it. Laid over the file, the two doors' changes
+/// add up instead of taking turns; the watch (`Notice::on_file`, in both
+/// doors) is what then brings the other door's rows up to date.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Errand {
     /// Nothing; redraw.
     Nothing,
     /// Speak this language everywhere: write `language.json`, which every
     /// door watches.
     Speak(&'static str),
-    /// Write the pair of date preferences.
-    Keep(Choice),
-    /// Write the glance's places and switches.
-    Glance(Box<ronoctua_world::prefs::Preferences>),
+    /// Write one of the date and number preferences.
+    Keep(Setting),
+    /// Write one change to the glance's places and switches.
+    Glance(GlanceChange),
     /// Turn the MACHINE's automatic time-keeping on, or off.
     ///
     /// The DOOR does it, and not this type: what is on the other side is a
@@ -326,10 +374,102 @@ pub enum Errand {
     /// Turn the brain's clock watch on, or off. Also the door's work — the
     /// brain's socket is on the other side of it.
     Watch(bool),
-    /// Something has to be typed, and the footer is where.
+    /// Something has to be typed: the DOOR asks, on its own line — the
+    /// footer's minibuffer, a window's header — under
+    /// [`Asking::command`], and hands what was typed to [`took`].
     Ask(Asking),
+    /// Say this on the message line — a key that cannot act where the cursor
+    /// is says why, rather than doing nothing.
+    Say(&'static str),
     /// Close the view.
     Close,
+}
+
+/// One of the four rings of this screen, turned to a value.
+///
+/// What [`Errand::Keep`] carries: the one setting that changed, laid over
+/// what `locale.json` says when it is written ([`prefs::with`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Setting {
+    /// Twelve hours or twenty-four.
+    Clock(Clock),
+    /// The order of the parts of a date.
+    Order(Order),
+    /// What separates a whole number from its fraction.
+    Decimal(Decimal),
+    /// Metric or the other one.
+    Units(Units),
+}
+
+impl Setting {
+    /// This setting, laid over a record — and nothing else of it touched.
+    pub const fn onto(self, choice: &mut Choice) {
+        match self {
+            Self::Clock(c) => choice.clock = c,
+            Self::Order(o) => choice.order = o,
+            Self::Decimal(d) => choice.decimal = d,
+            Self::Units(u) => choice.units = u,
+        }
+    }
+}
+
+/// One change to the glance's file, named by what it changes.
+///
+/// A PLACE IS NAMED BY ITS ZONE, which is its identity — the cache is keyed
+/// by it and two places cannot share one — and never by its row: the other
+/// door may have added or removed a place since this one read the list, and
+/// the third row of one door's copy is not the third row of the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GlanceChange {
+    /// One of a place's four things, turned on or off.
+    Show {
+        /// The place.
+        zone: String,
+        /// Which of the four.
+        shown: Shown,
+        /// On, or off.
+        on: bool,
+    },
+    /// A place taken off the glance.
+    Drop {
+        /// The place.
+        zone: String,
+    },
+    /// A host asked, or no longer asked.
+    Ask {
+        /// Which one.
+        source: Source,
+        /// Asked, or not.
+        on: bool,
+    },
+}
+
+impl GlanceChange {
+    /// This change, laid over what the file says. A place the file no longer
+    /// has is a change with nothing to change — the other door took it off.
+    pub fn onto(&self, prefs: &mut ronoctua_world::prefs::Preferences) {
+        match self {
+            Self::Show { zone, shown, on } => {
+                let mut places = prefs.places();
+                if let Some(place) = places.iter_mut().find(|p| &p.zone == zone) {
+                    shown.set(place, *on);
+                }
+                prefs.places = places;
+                prefs.chosen = true;
+            }
+            Self::Drop { zone } => {
+                let mut places = prefs.places();
+                places.retain(|p| &p.zone != zone);
+                prefs.places = places;
+                prefs.chosen = true;
+            }
+            Self::Ask { source, on } => {
+                if source.asked(prefs) != *on {
+                    source.flip(prefs);
+                }
+            }
+        }
+    }
 }
 
 /// What the person chose about dates and times.
@@ -531,20 +671,53 @@ impl View {
         self.cursor = self.cursor.min(acting(&rows).count().saturating_sub(1));
     }
 
-    /// Re-reads the files. Called when a watch rings.
+    /// Re-reads everything: the files, the machine's clock and the brain.
+    /// Called after this door changed something.
     pub fn reread(&mut self) {
+        self.machine = machine_clock();
+        self.machine_zone = zone_named(&self.machine.zone);
+        self.watched = watched_by_the_brain();
+        self.reread_files();
+    }
+
+    /// Re-reads the FILES alone — the language, the dates' shape and the
+    /// glance's places. What a watch ringing calls, in both doors.
+    ///
+    /// The files and nothing else, because a watch rings on a write this door
+    /// did not make, and the bus and the brain's socket are two round trips
+    /// that answer the same as a moment ago.
+    pub fn reread_files(&mut self) {
         let (speaking, from) = crate::language::resolve();
         self.speaking = speaking;
         self.from = Some(from);
         self.choice = prefs::read();
         self.glance = ronoctua_world::prefs::store().read();
         self.world = ronoctua_world::store::store().read();
-        self.machine = machine_clock();
-        self.machine_zone = zone_named(&self.machine.zone);
-        self.watched = watched_by_the_brain();
         // THE ROWS MAY HAVE CHANGED SHAPE — a place added or removed by the
         // other door — so the cursor is brought back inside them.
         self.settle();
+    }
+
+    /// The place whose rows the cursor is on — by its zone, the place's
+    /// identity — or `None` when it is on no place's rows.
+    #[must_use]
+    pub fn place_here(&self) -> Option<String> {
+        let rows = self.rows(
+            DECIDING_WIDTH,
+            &ronoctua_files::when::Zone::utc(),
+            &ronoctua_i18n::Texts::fresh(&self.speaking)
+                .unwrap_or_else(ronoctua_i18n::Texts::from_env),
+        );
+        self.place_on(&rows)
+    }
+
+    /// The same, against rows already built.
+    fn place_on(&self, rows: &[Row]) -> Option<String> {
+        let n = match acting(rows).nth(self.cursor).map(|r| &r.target)? {
+            Target::Shows(n, _) | Target::DropPlace(n) => *n,
+            _ => return None,
+        };
+        self.glance.places().get(n).map(|p| p.zone.clone())
     }
 
     /// The hint line, generated from the key table.
@@ -907,6 +1080,17 @@ impl View {
                 Errand::Nothing
             }
             Press::Escape => Errand::Close,
+            // THE THREE QUESTIONS, by their letters — the same ones the
+            // rows ask, without walking to the row.
+            Press::Zone => Errand::Ask(Asking::Zone),
+            Press::Place => Errand::Ask(Asking::Place),
+            // WHERE THE PLACE UNDER THE CURSOR IS. Not "place zero": a key
+            // that answered for a place the person is not looking at would
+            // write a coordinate onto somewhere else.
+            Press::Where => self.place_on(&rows).map_or(
+                Errand::Say(ronoctua_i18n::key::LOCALE_NO_PLACE_HERE),
+                |zone| Errand::Ask(Asking::Where(zone)),
+            ),
             // THE RING TURNS EITHER WAY, and `RET` turns it forward.
             //
             // `RET` is what a CLICK becomes — "o clique é o `RET` da linha em
@@ -932,62 +1116,63 @@ impl View {
                 let next = turn(&ronoctua_i18n::LANGUAGES, &self.speaking, step);
                 Errand::Speak(next)
             }
-            Target::Clock => {
-                self.choice.clock = turn_of(Clock::all(), self.choice.clock, step);
-                Errand::Keep(self.choice.clone())
-            }
-            Target::Order => {
-                self.choice.order = turn_of(Order::all(), self.choice.order, step);
-                Errand::Keep(self.choice.clone())
-            }
-            Target::Decimal => {
-                self.choice.decimal = turn_of(Decimal::all(), self.choice.decimal, step);
-                Errand::Keep(self.choice.clone())
-            }
-            Target::Units => {
-                self.choice.units = turn_of(Units::all(), self.choice.units, step);
-                Errand::Keep(self.choice.clone())
-            }
+            // THE VIEW'S COPY TURNS AT ONCE, so the row says the new value
+            // before any file has been written; what goes to the file is the
+            // one setting (`Setting`), laid over what the file says then.
+            Target::Clock => self.keep(Setting::Clock(turn_of(
+                Clock::all(),
+                self.choice.clock,
+                step,
+            ))),
+            Target::Order => self.keep(Setting::Order(turn_of(
+                Order::all(),
+                self.choice.order,
+                step,
+            ))),
+            Target::Decimal => self.keep(Setting::Decimal(turn_of(
+                Decimal::all(),
+                self.choice.decimal,
+                step,
+            ))),
+            Target::Units => self.keep(Setting::Units(turn_of(
+                Units::all(),
+                self.choice.units,
+                step,
+            ))),
             Target::Zone => Errand::Ask(Asking::Zone),
             Target::AddPlace => Errand::Ask(Asking::Place),
             Target::DropPlace(n) => {
-                let mut places = self.glance.places();
-                if n < places.len() {
-                    places.remove(n);
-                }
-                self.glance.places = places;
-                self.glance.chosen = true;
+                let Some(zone) = self.glance.places().get(n).map(|p| p.zone.clone()) else {
+                    return Errand::Nothing;
+                };
                 // THE CURSOR COMES BACK INSIDE THE LIST. Removing the last
                 // place leaves it past the end, and a cursor past the end is
                 // a screen where nothing is focused and every key does
                 // nothing — which is the defect this whole rebuild started
                 // from.
                 self.cursor = self.cursor.saturating_sub(1);
-                Errand::Glance(Box::new(self.glance.clone()))
+                self.glance_changes(GlanceChange::Drop { zone })
             }
             Target::Shows(n, shown) => {
-                let mut places = self.glance.places();
+                let Some(place) = self.glance.places().get(n).cloned() else {
+                    return Errand::Nothing;
+                };
                 // A COORDINATE IS WHAT THE WEATHER NEEDS, and a place somebody
                 // typed the name of has none. Asking is better than a switch
                 // that flips and does nothing.
-                if shown == Shown::Weather
-                    && places
-                        .get(n)
-                        .is_some_and(|p| !p.weather && !p.has_a_coordinate())
-                {
-                    return Errand::Ask(Asking::Where(n));
+                if shown == Shown::Weather && !place.weather && !place.has_a_coordinate() {
+                    return Errand::Ask(Asking::Weather(place.zone));
                 }
-                if let Some(place) = places.get_mut(n) {
-                    shown.flip(place);
-                }
-                self.glance.places = places;
-                self.glance.chosen = true;
-                Errand::Glance(Box::new(self.glance.clone()))
+                self.glance_changes(GlanceChange::Show {
+                    on: !shown.of(&place),
+                    zone: place.zone,
+                    shown,
+                })
             }
-            Target::Ask(source) => {
-                source.flip(&mut self.glance);
-                Errand::Glance(Box::new(self.glance.clone()))
-            }
+            Target::Ask(source) => self.glance_changes(GlanceChange::Ask {
+                source,
+                on: !source.asked(&self.glance),
+            }),
             // THE MACHINE'S HALF. Every one of these is the DOOR's work: what
             // is on the other side is a system bus or the brain's socket, and
             // a view drawn by two doors holds neither.
@@ -998,6 +1183,19 @@ impl View {
             Target::MachineZone => Errand::Ask(Asking::MachineZone),
             Target::Nothing => Errand::Nothing,
         }
+    }
+
+    /// One setting, turned in the view's copy and handed to the door to write.
+    fn keep(&mut self, setting: Setting) -> Errand {
+        setting.onto(&mut self.choice);
+        Errand::Keep(setting)
+    }
+
+    /// One change to the glance, made in the view's copy and handed to the
+    /// door to write.
+    fn glance_changes(&mut self, change: GlanceChange) -> Errand {
+        change.onto(&mut self.glance);
+        Errand::Glance(change)
     }
 
     /// Puts the cursor on the DRAWN row `n`, when it is one to stand on.
@@ -1016,7 +1214,9 @@ impl View {
         again
     }
 
-    /// Where the cursor is, counted over the rows one can stand on.
+    /// Where the cursor is, counted over the rows one can stand on — for the
+    /// tests. A door asks [`View::drawn_row`], which is the row it scrolls to.
+    #[cfg(test)]
     #[must_use]
     pub const fn cursor(&self) -> usize {
         self.cursor
@@ -1044,6 +1244,38 @@ impl View {
         } else {
             self.cursor.saturating_sub(1)
         };
+    }
+}
+
+#[cfg(test)]
+impl View {
+    /// A view over a PLANTED machine and the distro's own places, and not
+    /// this one's: a test that read the developer's own timedated, brain and
+    /// files would draw a different number of rows on a machine whose clock
+    /// is kept by hand, and its assertions would pass or fail by where it
+    /// ran. `automatic` is whether the planted clock is kept automatically.
+    pub(crate) fn planted(automatic: bool) -> Self {
+        let mut me = Self {
+            cursor: 0,
+            choice: Choice::default(),
+            speaking: ronoctua_i18n::DEFAULT.to_owned(),
+            glance: ronoctua_world::prefs::Preferences::default(),
+            world: ronoctua_world::Cache::default(),
+            machine: ronoctua_clock::Standing {
+                reachable: true,
+                zone: "Europe/London".to_owned(),
+                automatic,
+                can_be_automatic: true,
+                synchronised: true,
+                server: "3.pool.ntp.org".to_owned(),
+                now: 1_788_000_000,
+            },
+            machine_zone: ronoctua_files::when::Zone::utc(),
+            watched: Some(true),
+            from: Some(crate::language::Source::Default),
+        };
+        me.settle();
+        me
     }
 }
 
@@ -1297,6 +1529,32 @@ pub fn took_a_zone(said: &str) -> Result<(), &'static str> {
     })
 }
 
+/// What was typed for a question of this view, carried out — the one call
+/// both doors make with an answer, whichever line it was typed on.
+///
+/// `Ok(false)` is nothing typed, which is never mind: no file is written and
+/// nothing is said. `Ok(true)` is written; the door re-reads.
+///
+/// # Errors
+///
+/// The text key of what is wrong with the answer, for the message line.
+pub fn took(asking: &Asking, said: &str) -> Result<bool, &'static str> {
+    let said = said.trim();
+    if said.is_empty() {
+        return Ok(false);
+    }
+    match asking {
+        Asking::Zone => took_a_zone(said),
+        Asking::Place => took_a_place(said),
+        Asking::Where(zone) => took_a_coordinate(zone, said, false),
+        Asking::Weather(zone) => took_a_coordinate(zone, said, true),
+        Asking::MachineDate => took_a_system_date(said),
+        Asking::MachineTime => took_a_system_time(said),
+        Asking::MachineZone => took_a_system_zone(said),
+    }
+    .map(|()| true)
+}
+
 /// A new place on the glance, named by its zone.
 ///
 /// It starts with the CLOCK and nothing else — which is what a place is for
@@ -1312,7 +1570,7 @@ pub fn took_a_place(said: &str) -> Result<(), &'static str> {
         return Err(ronoctua_i18n::key::LOCALE_NO_SUCH_ZONE);
     }
     let store = ronoctua_world::prefs::store();
-    let mut prefs = store.read();
+    let mut prefs = parsed_glance(&store)?;
     let mut places = prefs.places();
     // ALREADY THERE IS NOT AN ERROR, it is a no-op: the cache is keyed by
     // zone, and two rows for one zone would share a temperature and fight
@@ -1334,10 +1592,19 @@ pub fn took_a_place(said: &str) -> Result<(), &'static str> {
 
 /// Where a place is, so it can have weather.
 ///
+/// The place is named by its ZONE — asked about when the question opened —
+/// and not by its row, which the other door may have moved since. With
+/// `and_the_weather` the weather switch goes on too: that is the switch that
+/// asked (`Asking::Weather`); `c` asks for the coordinate alone.
+///
 /// # Errors
 ///
 /// The text key of what is wrong with it.
-pub fn took_a_coordinate(n: usize, said: &str) -> Result<(), &'static str> {
+pub fn took_a_coordinate(
+    zone: &str,
+    said: &str,
+    and_the_weather: bool,
+) -> Result<(), &'static str> {
     let numbers: Vec<f64> = said
         .split([',', ' ', ';'])
         .filter(|p| !p.is_empty())
@@ -1350,15 +1617,19 @@ pub fn took_a_coordinate(n: usize, said: &str) -> Result<(), &'static str> {
         return Err(ronoctua_i18n::key::LOCALE_NOT_A_COORDINATE);
     }
     let store = ronoctua_world::prefs::store();
-    let mut prefs = store.read();
+    let mut prefs = parsed_glance(&store)?;
     let mut places = prefs.places();
-    let Some(place) = places.get_mut(n) else {
-        return Err(ronoctua_i18n::key::LOCALE_NOT_A_COORDINATE);
+    // A PLACE THE OTHER DOOR TOOK OFF while the question was open has
+    // nowhere to put the answer, and says so.
+    let Some(place) = places.iter_mut().find(|p| p.zone == zone) else {
+        return Err(ronoctua_i18n::key::LOCALE_PLACE_GONE);
     };
     place.latitude = latitude;
     place.longitude = longitude;
-    // AND THE SWITCH GOES ON, because turning it on is what asked this.
-    place.weather = true;
+    // AND THE SWITCH GOES ON when turning it on is what asked this.
+    if and_the_weather {
+        place.weather = true;
+    }
     prefs.places = places;
     prefs.chosen = true;
     store.write(&prefs).map_err(|e| {
@@ -1367,13 +1638,47 @@ pub fn took_a_coordinate(n: usize, said: &str) -> Result<(), &'static str> {
     })
 }
 
-/// Writes the glance's places and switches.
+/// The glance's file as it is NOW, for a writer — or the key of a refusal
+/// when it will not parse.
+///
+/// `parsed`, and never `read`: whoever writes the whole list back after
+/// reading the default that `read` gives for a broken file would erase the
+/// places in it (`ronoctua_store::Store::parsed`).
+fn parsed_glance(
+    store: &ronoctua_store::Store<ronoctua_world::prefs::Preferences>,
+) -> Result<ronoctua_world::prefs::Preferences, &'static str> {
+    store.parsed().ok_or_else(|| {
+        tracing::warn!("the glance's file will not parse; it is left as it is");
+        ronoctua_i18n::key::LOCALE_NOT_WRITTEN
+    })
+}
+
+/// Writes one change to the glance, laid over what the file says NOW — see
+/// [`Errand`] for why a door never writes its whole copy back.
 ///
 /// # Errors
 ///
-/// There is no configuration directory, or it cannot be written.
-pub fn glance_keep(prefs: &ronoctua_world::prefs::Preferences) -> std::io::Result<()> {
-    ronoctua_world::prefs::store().write(prefs)
+/// The text key of why nothing was written: the file will not parse, or it
+/// cannot be written.
+pub fn glance_change(change: &GlanceChange) -> Result<(), &'static str> {
+    glance_change_in(&ronoctua_world::prefs::store(), change)
+}
+
+/// [`glance_change`], with its store as a parameter.
+///
+/// # Errors
+///
+/// As [`glance_change`].
+pub fn glance_change_in(
+    store: &ronoctua_store::Store<ronoctua_world::prefs::Preferences>,
+    change: &GlanceChange,
+) -> Result<(), &'static str> {
+    let mut prefs = parsed_glance(store)?;
+    change.onto(&mut prefs);
+    store.write(&prefs).map_err(|e| {
+        tracing::warn!(error = %e, "the glance's places could not be written");
+        ronoctua_i18n::key::LOCALE_NOT_WRITTEN
+    })
 }
 
 /// One step around a ring of `&'static str`, wrapping at both ends.
@@ -1397,25 +1702,60 @@ fn turn_of<T: PartialEq + Copy>(all: impl Iterator<Item = T>, now: T, step: i32)
     all[next]
 }
 
-/// What the view needs typed, and the footer is where typing happens.
+/// What the view needs typed.
 ///
-/// A window has no minibuffer — "senha e caminho se digitam no RODAPÉ, e a
-/// janela DIZ isso" — so a window that reaches one of these says where to go
-/// rather than opening a prompt of its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// BOTH DOORS TYPE IT, on a line of their own — the footer's minibuffer and
+/// a window's header (`Ui::ask`) — under [`Asking::command`], and both hand
+/// what was typed to [`took`]. A place is named by its ZONE, read when the
+/// question opened, so an answer lands on the place that was asked about even
+/// if the other door moved the list in between.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Asking {
     /// A zone for this interface's clock.
     Zone,
     /// A zone for a new place on the glance.
     Place,
-    /// A coordinate for a place that has none, so it can have weather.
-    Where(usize),
+    /// Where this place is — `c` on its rows.
+    Where(String),
+    /// Where this place is, asked by its weather switch: a place with no
+    /// coordinate cannot have weather, and the answer turns the switch on.
+    Weather(String),
     /// A date for the MACHINE's clock.
     MachineDate,
     /// A time for the MACHINE's clock.
     MachineTime,
     /// A zone for the MACHINE.
     MachineZone,
+}
+
+impl Asking {
+    /// The command that asks — and that answers: the question is its `ask-`
+    /// key, and the answer comes back under it, in both doors.
+    #[must_use]
+    pub const fn command(&self) -> &'static str {
+        match self {
+            Self::Zone => "locale-zone",
+            Self::Place => "locale-place",
+            Self::Where(_) | Self::Weather(_) => "locale-where",
+            Self::MachineDate => "locale-system-date",
+            Self::MachineTime => "locale-system-time",
+            Self::MachineZone => "locale-system-zone",
+        }
+    }
+
+    /// The question a command asks when it names it alone — every one but
+    /// `locale-where`, which is about a place and needs to know which.
+    #[must_use]
+    pub fn named(id: &str) -> Option<Self> {
+        Some(match id {
+            "locale-zone" => Self::Zone,
+            "locale-place" => Self::Place,
+            "locale-system-date" => Self::MachineDate,
+            "locale-system-time" => Self::MachineTime,
+            "locale-system-zone" => Self::MachineZone,
+            _ => return None,
+        })
+    }
 }
 
 /// Where the choices live on disk.
@@ -1466,11 +1806,79 @@ pub mod prefs {
         }
     }
 
+    /// What the file says NOW, with one setting laid over it — what a door
+    /// writes when a ring turns, so the other door's choices in the same file
+    /// stay as it wrote them (see `Errand`).
+    #[must_use]
+    pub fn with(setting: super::Setting) -> Choice {
+        if let Some(dir) = ronoctua_store::config_dir() {
+            return with_at(&dir.join(FILE), setting);
+        }
+        let mut choice = Choice::default();
+        setting.onto(&mut choice);
+        choice
+    }
+
+    /// [`with`], with its path as a parameter.
+    #[must_use]
+    pub fn with_at(path: &std::path::Path, setting: super::Setting) -> Choice {
+        let mut choice = read_at(path);
+        setting.onto(&mut choice);
+        choice
+    }
+
+    /// A watch on the file, ringing `on_stir` from the watcher's thread — the
+    /// broadcast every door hears a choice made in another through.
+    ///
+    /// `None`, with a line in the log, when there is no configuration
+    /// directory or no inotify instance left: the door then adopts a change
+    /// at its next start, which is not silent.
+    pub fn watch<F>(on_stir: F) -> Option<ronoctua_files::notice::Notice>
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        watch_in(&ronoctua_store::config_dir()?, on_stir)
+    }
+
+    /// [`watch`], with its root as a parameter — the directory is made here,
+    /// because a watch needs one to sit on and a door that starts before
+    /// anybody ever chose is the common case.
+    pub fn watch_in<F>(dir: &std::path::Path, on_stir: F) -> Option<ronoctua_files::notice::Notice>
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            tracing::warn!(error = %e, "no configuration directory to watch locale.json in");
+            return None;
+        }
+        // AT ONCE, like the language's: what arrives is a person's hand on a
+        // ring, and the other door is on the screen beside it.
+        match ronoctua_files::notice::Notice::on_file(
+            dir,
+            FILE,
+            ronoctua_files::notice::Pace::AtOnce,
+            on_stir,
+        ) {
+            Ok(n) => Some(n),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "no locale watcher; a change reaches this door at its next start"
+                );
+                None
+            }
+        }
+    }
+
     /// What the file says, or the defaults.
     ///
-    /// It never fails: a file that will not parse costs the two preferences in
-    /// it and says so at `warn`. It is the READER's half of the rule — a
-    /// writer would have to refuse instead, and [`keep`] does not read.
+    /// It never fails: a file that will not parse costs the preferences in
+    /// it and says so at `warn`. A writer reads it too ([`with`]), and that
+    /// is the one place where the rule that a writer refuses a broken file
+    /// is not kept, on purpose: every field of this file is one of the rings
+    /// on the screen, so what a broken file loses is what the screen already
+    /// shows as the default — and refusing would leave the four rings
+    /// unturnable until somebody mended the file by hand.
     #[must_use]
     pub fn read() -> Choice {
         let Some(dir) = ronoctua_store::config_dir() else {
@@ -1788,31 +2196,7 @@ mod tests {
     }
 
     fn view() -> View {
-        let mut me = View {
-            cursor: 0,
-            choice: Choice::default(),
-            speaking: ronoctua_i18n::DEFAULT.to_owned(),
-            glance: ronoctua_world::prefs::Preferences::default(),
-            world: ronoctua_world::Cache::default(),
-            // A PLANTED MACHINE, and not this one's: a test that read the
-            // developer's own timedated would draw a different number of rows
-            // on a machine whose clock is kept by hand, and its assertions
-            // would pass or fail by where it ran.
-            machine: ronoctua_clock::Standing {
-                reachable: true,
-                zone: "Europe/London".to_owned(),
-                automatic: true,
-                can_be_automatic: true,
-                synchronised: true,
-                server: "3.pool.ntp.org".to_owned(),
-                now: 1_788_000_000,
-            },
-            machine_zone: ronoctua_files::when::Zone::utc(),
-            watched: Some(true),
-            from: Some(crate::language::Source::Default),
-        };
-        me.settle();
-        me
+        View::planted(true)
     }
 
     /// Where the cursor has to be to act on `want` — an index over the rows
@@ -1936,22 +2320,22 @@ mod tests {
         let start = v.choice.clock;
         v.cursor = at(&v, &Target::Clock);
 
-        let Errand::Keep(one) = v.press(Press::More, &z, &t) else {
+        let Errand::Keep(Setting::Clock(one)) = v.press(Press::More, &z, &t) else {
             panic!("turning the clock did not ask for it to be kept");
         };
-        assert_ne!(one.clock, start, "the ring did not turn");
+        assert_ne!(one, start, "the ring did not turn");
 
         // ROUND, for a ring of two: one more press is back where it began.
-        let Errand::Keep(two) = v.press(Press::More, &z, &t) else {
+        let Errand::Keep(Setting::Clock(two)) = v.press(Press::More, &z, &t) else {
             panic!("no errand");
         };
-        assert_eq!(two.clock, start, "the ring stopped at the end");
+        assert_eq!(two, start, "the ring stopped at the end");
 
         // AND THE OTHER WAY.
-        let Errand::Keep(back) = v.press(Press::Less, &z, &t) else {
+        let Errand::Keep(Setting::Clock(back)) = v.press(Press::Less, &z, &t) else {
             panic!("no errand");
         };
-        assert_eq!(back.clock, one.clock);
+        assert_eq!(back, one);
     }
 
     /// `RET` turns the ring forward, because `RET` is what a CLICK becomes —
@@ -1964,13 +2348,13 @@ mod tests {
         let mut b = view();
         a.cursor = at(&a, &Target::Order);
         b.cursor = a.cursor;
-        let Errand::Keep(by_enter) = a.press(Press::Enter, &z, &t) else {
-            panic!("no errand");
-        };
-        let Errand::Keep(by_more) = b.press(Press::More, &z, &t) else {
-            panic!("no errand");
-        };
-        assert_eq!(by_enter.order, by_more.order);
+        let by_enter = a.press(Press::Enter, &z, &t);
+        let by_more = b.press(Press::More, &z, &t);
+        assert!(
+            matches!(by_enter, Errand::Keep(Setting::Order(_))),
+            "{by_enter:?}"
+        );
+        assert_eq!(by_enter, by_more);
     }
 
     /// Turning one ring leaves every other value alone — the `display.json`
@@ -1981,14 +2365,61 @@ mod tests {
         let mut v = view();
         v.cursor = at(&v, &Target::Decimal);
         let before = v.choice.clone();
-        let Errand::Keep(after) = v.press(Press::More, &z, &t) else {
+        let Errand::Keep(setting) = v.press(Press::More, &z, &t) else {
             panic!("no errand");
         };
+        let mut after = before.clone();
+        setting.onto(&mut after);
         assert_ne!(after.decimal, before.decimal);
         assert_eq!(after.clock, before.clock);
         assert_eq!(after.order, before.order);
         assert_eq!(after.units, before.units);
         assert_eq!(after.zone, before.zone);
+        // AND THE VIEW'S OWN COPY TURNED, so the row says it at once.
+        assert_eq!(v.choice, after);
+    }
+
+    /// A RING TURNED IN ONE DOOR KEEPS WHAT THE OTHER DOOR WROTE.
+    ///
+    /// THE DEFECT THIS CATCHES: each door wrote its WHOLE copy of the record,
+    /// read when it opened. A zone chosen in the footer went back to the old
+    /// one the moment a clock was turned in a window opened before it.
+    #[test]
+    fn a_ring_is_laid_over_what_the_file_says_now() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-locale-with-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // THE OTHER DOOR'S WRITE, which this view never read.
+        let theirs = Choice {
+            clock: Clock::Twelve,
+            zone: Some("Europe/Lisbon".to_owned()),
+            ..Choice::default()
+        };
+        prefs::keep_in(&dir, &theirs).unwrap();
+
+        let (t, z) = (texts(), utc());
+        let mut v = view();
+        v.cursor = at(&v, &Target::Order);
+        let Errand::Keep(setting) = v.press(Press::More, &z, &t) else {
+            panic!("no errand");
+        };
+        let written = prefs::with_at(&dir.join(prefs::FILE), setting);
+        assert_eq!(
+            written.order,
+            Order::DayFirst,
+            "the ring's own change is lost"
+        );
+        assert_eq!(
+            written.clock,
+            Clock::Twelve,
+            "the other door's clock was undone"
+        );
+        assert_eq!(
+            written.zone.as_deref(),
+            Some("Europe/Lisbon"),
+            "and its zone"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The four switches of a place are INDEPENDENT, and each flips only
@@ -1997,12 +2428,15 @@ mod tests {
     fn each_of_the_four_switches_flips_only_itself() {
         let (t, z) = (texts(), utc());
         let mut v = view();
+        let mut after = v.glance.clone();
         let before = v.glance.places();
         assert!(!before.is_empty());
         v.cursor = at(&v, &Target::Shows(0, Shown::Date));
-        let Errand::Glance(after) = v.press(Press::Enter, &z, &t) else {
+        let Errand::Glance(change) = v.press(Press::Enter, &z, &t) else {
             panic!("no glance errand");
         };
+        change.onto(&mut after);
+        assert_eq!(after, v.glance, "the view's copy and the change disagree");
         let now = after.places();
         assert_eq!(now[0].date, !before[0].date, "the date did not flip");
         assert_eq!(now[0].clock, before[0].clock);
@@ -2016,12 +2450,14 @@ mod tests {
     fn a_place_can_be_removed_and_the_cursor_stays_inside() {
         let (t, z) = (texts(), utc());
         let mut v = view();
+        let mut after = v.glance.clone();
         let before = v.glance.places().len();
         assert!(before >= 2, "the distro declares more than one place");
         v.cursor = at(&v, &Target::DropPlace(1));
-        let Errand::Glance(after) = v.press(Press::Enter, &z, &t) else {
+        let Errand::Glance(change) = v.press(Press::Enter, &z, &t) else {
             panic!("no glance errand");
         };
+        change.onto(&mut after);
         assert_eq!(after.places().len(), before - 1);
         assert!(after.chosen, "removing did not make the list one's own");
         // AND THE CURSOR IS STILL ON A ROW, which is what stops the screen
@@ -2031,7 +2467,7 @@ mod tests {
     }
 
     /// AND ONE CAN BE ADDED — the other half. The row asks; the answer is
-    /// typed in the footer, which is where typing happens.
+    /// typed on the door's own line, in either door, and reaches `took`.
     #[test]
     fn adding_a_place_asks_for_a_zone() {
         let (t, z) = (texts(), utc());
@@ -2066,7 +2502,10 @@ mod tests {
         v.glance.places = places;
         v.glance.chosen = true;
         v.cursor = at(&v, &Target::Shows(n, Shown::Weather));
-        assert_eq!(v.press(Press::Enter, &z, &t), Errand::Ask(Asking::Where(n)));
+        assert_eq!(
+            v.press(Press::Enter, &z, &t),
+            Errand::Ask(Asking::Weather("Europe/Lisbon".to_owned()))
+        );
     }
 
     /// EVERY host is NAMED on screen — the fallbacks too — and each source can
@@ -2099,9 +2538,11 @@ mod tests {
         }
         assert!(named >= 4, "only {named} hosts were checked");
         v.cursor = at(&v, &Target::Ask(Source::Weather));
-        let Errand::Glance(after) = v.press(Press::Enter, &z, &t) else {
+        let mut after = v.glance.clone();
+        let Errand::Glance(change) = v.press(Press::Enter, &z, &t) else {
             panic!("no glance errand");
         };
+        change.onto(&mut after);
         assert!(!after.ask_weather);
         assert!(after.ask_rate, "the other host went off too");
     }
@@ -2282,10 +2723,10 @@ mod tests {
             v.clicked(row, &rows),
             "the second click on the same row was not"
         );
-        let Errand::Keep(after) = v.press(Press::Enter, &z, &t) else {
+        let Errand::Keep(Setting::Clock(after)) = v.press(Press::Enter, &z, &t) else {
             panic!("the second click did not act");
         };
-        assert_ne!(after.clock, before);
+        assert_ne!(after, before);
         // A HEADING IS NOT A ROW TO CLICK, and it never becomes one.
         let title = rows.iter().position(|r| r.heading).expect("no heading");
         assert!(!v.clicked(title, &rows));
@@ -2421,6 +2862,200 @@ mod tests {
         }
     }
 
+    /// `z`, `a` AND `c` ASK THEIR QUESTIONS — the three the hint line teaches.
+    ///
+    /// THE DEFECT THIS CATCHES: both doors drew the three letters on the hint
+    /// line and neither answered them — not the key, not a click on the hint,
+    /// which presses the key. `c` asks about the place UNDER THE CURSOR, and
+    /// elsewhere it says why it cannot, rather than asking about place zero.
+    #[test]
+    fn z_a_and_c_ask_their_questions() {
+        let (t, z) = (texts(), utc());
+        let read = |n: &str| press_of_key(ronoctua_keymap::Key::parse(n).expect("a key"));
+        let mut v = view();
+        assert_eq!(read("z"), Some(Press::Zone));
+        assert_eq!(v.press(Press::Zone, &z, &t), Errand::Ask(Asking::Zone));
+        assert_eq!(read("a"), Some(Press::Place));
+        assert_eq!(v.press(Press::Place, &z, &t), Errand::Ask(Asking::Place));
+
+        assert_eq!(read("c"), Some(Press::Where));
+        v.cursor = at(&v, &Target::Clock);
+        assert_eq!(
+            v.press(Press::Where, &z, &t),
+            Errand::Say(ronoctua_i18n::key::LOCALE_NO_PLACE_HERE),
+            "`c` away from any place asked about one"
+        );
+        let second = v.glance.places()[1].zone.clone();
+        for target in [Target::Shows(1, Shown::Rate), Target::DropPlace(1)] {
+            v.cursor = at(&v, &target);
+            assert_eq!(
+                v.press(Press::Where, &z, &t),
+                Errand::Ask(Asking::Where(second.clone())),
+                "`c` on {target:?} did not ask about the place it is on"
+            );
+        }
+    }
+
+    /// EVERY KEY THE TABLE TEACHES IS READ BACK AS ITS OWN PRESS, in both
+    /// doors (they call this one reader), and a chord is not the letter under
+    /// it.
+    #[test]
+    fn every_taught_key_is_read_back_as_a_press() {
+        let read = |n: &str| press_of_key(ronoctua_keymap::Key::parse(n).expect("a key"));
+        for (taught, id) in OF_THE_VIEW {
+            assert!(
+                read(taught).is_some(),
+                "`{taught}` ({id}) is taught and reads as nothing"
+            );
+        }
+        assert_eq!(read("S-<left>"), Some(Press::Less));
+        assert_eq!(read("S-<right>"), Some(Press::More));
+        assert_eq!(read("<left>"), None, "a plain arrow turned a ring");
+        assert_eq!(read("ESC"), Some(Press::Escape));
+        assert_eq!(read("C-a"), None, "a chord was taken for its letter");
+        assert_eq!(read("x"), None);
+    }
+
+    /// EVERY QUESTION IS A COMMAND WITH ITS OWN WORDS — the id both doors ask
+    /// under, a registered command, and an `ask-` key in every language, so
+    /// the line says a question and never a command's label or its id.
+    ///
+    /// THE DEFECT THIS CATCHES: the machine's date, time and zone were asked
+    /// under ids no command had. The footer drew the raw id as the question,
+    /// and the answer ran a command that did not exist — "no action".
+    #[test]
+    fn every_question_is_a_command_with_its_own_words() {
+        let (_, registry) = crate::leader::default_of().expect("the keymap");
+        let all = [
+            Asking::Zone,
+            Asking::Place,
+            Asking::Where("Europe/London".to_owned()),
+            Asking::Weather("Europe/London".to_owned()),
+            Asking::MachineDate,
+            Asking::MachineTime,
+            Asking::MachineZone,
+        ];
+        for asking in &all {
+            let id = asking.command();
+            assert!(registry.search(id).is_some(), "`{id}` is not a command");
+            for language in ronoctua_i18n::LANGUAGES {
+                let texts = ronoctua_i18n::Texts::fresh(language).expect(language);
+                let line = crate::line::Line::new(id, false, None);
+                assert_eq!(
+                    line.question(&texts),
+                    texts.t(&format!("ask-{id}")),
+                    "`{id}` has no question of its own in {language}"
+                );
+            }
+            // AND A COMMAND THAT NAMES ITS QUESTION ALONE IS READ BACK AS IT.
+            if !matches!(asking, Asking::Where(_) | Asking::Weather(_)) {
+                assert_eq!(Asking::named(id).as_ref(), Some(asking));
+            }
+        }
+        assert_eq!(Asking::named("locale-where"), None, "a place needs naming");
+    }
+
+    /// WHAT IS TYPED IS CHECKED BEFORE ANYTHING IS WRITTEN, and nothing typed
+    /// is never mind — the same answer from either door's line.
+    #[test]
+    fn an_answer_is_checked_before_it_is_kept_and_nothing_is_never_mind() {
+        use ronoctua_i18n::key;
+        for asking in [Asking::Zone, Asking::MachineDate, Asking::Place] {
+            assert_eq!(took(&asking, "   "), Ok(false), "{asking:?}");
+        }
+        let place = || Asking::Where("Europe/London".to_owned());
+        for (asking, said, refused) in [
+            (
+                Asking::Zone,
+                "No/Such_Zone_At_All",
+                key::LOCALE_NO_SUCH_ZONE,
+            ),
+            (Asking::Place, "../../etc/passwd", key::LOCALE_NO_SUCH_ZONE),
+            (place(), "north", key::LOCALE_NOT_A_COORDINATE),
+            (Asking::MachineDate, "yesterday", key::LOCALE_NOT_A_DATE),
+            (Asking::MachineTime, "25:00", key::LOCALE_NOT_A_TIME),
+            (
+                Asking::MachineZone,
+                "No/Such_Zone_At_All",
+                key::LOCALE_NO_SUCH_ZONE,
+            ),
+        ] {
+            assert_eq!(
+                took(&asking, said),
+                Err(refused),
+                "{asking:?} took `{said}`"
+            );
+        }
+    }
+
+    /// A SWITCH FLIPPED IN ONE DOOR KEEPS WHAT THE OTHER DOOR WROTE, and a
+    /// place is found by its zone, never by its row.
+    ///
+    /// THE DEFECT THIS CATCHES: each door wrote its whole copy of the places.
+    /// A place added in the footer vanished the moment a switch was flipped
+    /// in a window opened before it — and the switch, named by its row, would
+    /// have flipped whichever place had moved into that row.
+    #[test]
+    fn a_glance_change_is_laid_over_what_the_file_says_now() {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-locale-glance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = ronoctua_store::Store::<ronoctua_world::prefs::Preferences>::at(
+            Some(dir.clone()),
+            ronoctua_world::prefs::FILE,
+        );
+        // THIS VIEW READ THE DISTRO'S PLACES; THE OTHER DOOR THEN ADDED
+        // LISBON IN FRONT OF THEM.
+        let (t, z) = (texts(), utc());
+        let mut v = view();
+        let london = v.glance.places()[0].clone();
+        let mut theirs = ronoctua_world::prefs::Preferences::default();
+        let mut places = theirs.places();
+        places.insert(
+            0,
+            ronoctua_world::prefs::Wanted {
+                zone: "Europe/Lisbon".to_owned(),
+                ..ronoctua_world::prefs::Wanted::default()
+            },
+        );
+        theirs.places = places;
+        theirs.chosen = true;
+        store.write(&theirs).unwrap();
+
+        v.cursor = at(&v, &Target::Shows(0, Shown::Date));
+        let Errand::Glance(change) = v.press(Press::Enter, &z, &t) else {
+            panic!("no glance errand");
+        };
+        glance_change_in(&store, &change).expect("written");
+        let now = store.read().places();
+        assert!(
+            now.iter().any(|p| p.zone == "Europe/Lisbon"),
+            "the other door's place was undone"
+        );
+        let there = now.iter().find(|p| p.zone == london.zone).expect("london");
+        assert_eq!(
+            there.date, !london.date,
+            "the switch did not reach its own place"
+        );
+        let lisbon = now.iter().find(|p| p.zone == "Europe/Lisbon").unwrap();
+        assert!(
+            !lisbon.date,
+            "the switch flipped the place that moved into its row"
+        );
+
+        // AND A FILE THAT WILL NOT PARSE IS REFUSED AND LEFT AS IT IS: whoever
+        // wrote over it would erase every place in it.
+        let path = store.path().unwrap();
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert_eq!(
+            glance_change_in(&store, &change),
+            Err(ronoctua_i18n::key::LOCALE_NOT_WRITTEN)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"{ not json");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A coordinate is two numbers in range, however they are separated.
     #[test]
     fn a_coordinate_is_two_numbers_in_range() {
@@ -2428,7 +3063,7 @@ mod tests {
         // that does not write a file.
         for bad in ["", "x", "51.5", "51.5 0.1 3", "91,0", "0,181", "a,b"] {
             assert_eq!(
-                took_a_coordinate(0, bad),
+                took_a_coordinate("Europe/London", bad, false),
                 Err(ronoctua_i18n::key::LOCALE_NOT_A_COORDINATE),
                 "`{bad}` was accepted as a coordinate"
             );

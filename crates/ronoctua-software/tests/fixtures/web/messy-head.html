@@ -1,0 +1,19 @@
+<!doctype html>
+<!-- <link rel="icon" href="/commented.png"> -->
+<HTML><HEAD>
+<BASE HREF='https://static.example.org/assets/'>
+<META NAME=application-name CONTENT="Tom &amp; Jerry&#39;s   app">
+<title>Ignored, because the application name wins</title>
+<script>
+  var s = '<link rel="icon" href="/in-script.png">';
+  if (a < b && c > d) { s += "</head>"; }
+</script>
+<link rel=manifest href=app.json>
+<LINK REL="ICON" HREF="i.png?v=2&amp;size=big" SIZES=512x512 TYPE="Image/PNG">
+<link rel="mask-icon" href="mask.svg" color="#000">
+<link rel="icon" href="data:image/png;base64,AAAA">
+<link rel="icon" href="javascript:void(0)">
+<link rel='apple-touch-icon' href='apple.png'/>
+<link href="shortcut.ico" rel="shortcut icon">
+<style>link { color: red } /* <link rel=icon href=/in-style.png> */</style>
+<p>no body tag, and the head never closes

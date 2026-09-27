@@ -34,12 +34,18 @@
 //! freeze the whole footer for seconds — the `systemd-run --scope` trap
 //! AGENTS.md records.
 //!
-//! # The typing is the footer's
+//! # Both doors type, and the view decides what
 //!
-//! A network that is secured and not saved needs a password, and a password
-//! is typed in the minibuffer. The window has none, so there it says so —
-//! the arrangement the Bluetooth view's pairing questions already have, and
-//! for the same reason: a door that cannot ask must not pretend to.
+//! Three things here are typed: the password of a secured network with no
+//! profile, the path of a tunnel's file, and a Tor setting that has no ring
+//! to turn. The VIEW decides that a line is wanted ([`Errand::Ask`], with a
+//! [`Question`]) and remembers what it is about; each door opens its own line
+//! — the footer's minibuffer, the window's header (`door::Ui::ask`) — and
+//! hands the answer back to [`View::answered`], so the two cannot do
+//! different things with the same text. The question afterwards, whether to
+//! keep the password, is a screen of the view too ([`View::ask_remember`]):
+//! the view holds the network's name and each door holds the password, until
+//! the answer.
 
 use ronoctua_memory::net::{Counters, Socket};
 use ronoctua_network::{Link, Manager, Medium, Network, Saved, Snapshot, State};
@@ -58,9 +64,6 @@ pub const OPEN: &str = match option_env!("RONOCTUA_XDG_OPEN") {
     None => "xdg-open",
 };
 
-/// The keys this view answers to, and the hint line is generated from it —
-/// see `chrome::hint_of`. Bare letters are free here (nothing is typed), and
-/// the order is the order they are taught in.
 /// The width the tests build rows at.
 ///
 /// # Why production no longer has one
@@ -148,6 +151,12 @@ pub enum Level {
     Tor,
 }
 
+/// The keys this view answers to, and the hint line is generated from it —
+/// see `chrome::hint_of`. Bare letters are free here: what is typed is typed
+/// on a line that takes every key while it asks (the footer's minibuffer, the
+/// window's header), so a letter that reaches the view is never text. Both
+/// doors read a key against this table by its whole notation
+/// (`network_words::press_of_key`), modifiers included.
 pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<down>", "network-down", Where::Anywhere),
     ("<up>", "network-up", Where::Anywhere),
@@ -264,6 +273,8 @@ pub enum Target {
     TorDrawer,
     /// Start Tor when the session comes up, or stop doing that.
     TorAutostart(bool),
+    /// The answer to "keep this network's password?" — `true` seals it.
+    Remember(bool),
 }
 
 /// One of the switches the two tunnel sections carry.
@@ -361,9 +372,10 @@ pub enum Errand {
     /// Put this on the system clipboard — what `RET` does on an INFORMATIVE
     /// row. See `chrome::information_of` for what "this" is and why.
     Copy(String),
-    /// Join this network. Whether it needs a password typed is the DOOR's
-    /// question: only one of the two can ask.
-    Connect(Box<Network>),
+    /// Join this network — with the password that was typed for it, when one
+    /// was. A network that needs one and has none typed yet is an
+    /// [`Errand::Ask`] instead: the view decides, so both doors ask alike.
+    Connect(Box<Network>, Option<Password>),
     /// Forget this network's stored profile.
     Forget(String),
     /// Turn the radio on or off.
@@ -386,24 +398,127 @@ pub enum Errand {
     Delete(String),
     /// Send this to the tunnel thread.
     Tunnel(ronoctua_tunnel::Order),
-    /// Ask for the path of a file to bring in.
-    Ask,
+    /// Open a line for this question, in whichever door is showing: the
+    /// footer's minibuffer or the window's header. The answer comes back to
+    /// [`View::answered`] under the question's id.
+    Ask(Question),
     /// Bring this file in — it has been read and looked at.
     Bring(String, ronoctua_network::vpn::Kind),
+    /// The typed path is not a tunnel's file; the string is the file's name,
+    /// for the sentence that says so.
+    NotATunnel(String),
     /// Become an access point, or stop being one.
     Hotspot(bool),
     /// Write Tor's fragment, and make a running Tor re-read it.
     TorConfigure(Box<ronoctua_tunnel::tor::fragment::Lines>),
-    /// Ask for this Tor setting's value to be typed.
-    ///
-    /// The DOOR decides where: the footer opens its minibuffer, and the window
-    /// says so — the rule the Wi-Fi password and the VPN path already follow,
-    /// because the one place anything is typed in this system is the footer.
-    TorEdit(&'static str),
     /// Remember, or stop remembering, that Tor should come up with the session.
     TorAutostart(bool),
+    /// "Keep the password of this network?" was answered: `true` reconnects
+    /// with the password sealed, `false` leaves nothing stored. The DOOR holds
+    /// the password — the view never does — and lets go of it on both.
+    Remember(String, bool),
     /// Close the view.
     Close,
+}
+
+/// A line the view wants typed: the command that asks — and answers — and
+/// whether what is typed is hidden.
+///
+/// ONE VALUE FOR BOTH DOORS: the footer hands it to `Minibuffer::request`,
+/// the window to `door::Ui::ask`, and the question on screen is the id's own
+/// `ask-<id>` text in both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Question {
+    /// The command that asks, and the id the answer comes back under.
+    pub id: &'static str,
+    /// A password is hidden; a path and a Tor value are typed to be READ back
+    /// and corrected, which dots would forbid.
+    pub secret: bool,
+}
+
+impl Question {
+    /// Whether the line asking `id` is one of this view's questions — which
+    /// a door lets go of when a click reaches the view under it: the view
+    /// forgets what it asked on any key it hears (`View::key`), and a line
+    /// left up would take an answer for a question nobody is asking.
+    #[must_use]
+    pub fn is_the_views(id: &str) -> bool {
+        [Self::PASSWORD, Self::PATH, Self::TOR_VALUE, Self::TOR_LINE]
+            .iter()
+            .any(|q| q.id == id)
+    }
+
+    /// The password of a secured network with no profile.
+    pub const PASSWORD: Self = Self {
+        id: "network-connect",
+        secret: true,
+    };
+    /// The path of a `.conf` or `.ovpn` file.
+    pub const PATH: Self = Self {
+        id: "network-import",
+        secret: false,
+    };
+    /// One Tor setting's single value — an empty answer clears it.
+    pub const TOR_VALUE: Self = Self {
+        id: "tor-setting",
+        secret: false,
+    };
+    /// One more line of a Tor list — an empty answer clears them all.
+    ///
+    /// TWO QUESTIONS, because a list is added to and a single value is
+    /// replaced: one sentence over both would be wrong over one of them.
+    pub const TOR_LINE: Self = Self {
+        id: "tor-lines",
+        secret: false,
+    };
+}
+
+/// A typed password on its way to NetworkManager.
+///
+/// `Debug` IS WRITTEN BY HAND: an errand is a value that gets logged whole,
+/// and the password must not ride along into a log. It is read only by the
+/// door that hands it to the daemon ([`Password::as_str`]).
+#[derive(Clone, PartialEq, Eq)]
+pub struct Password(String);
+
+impl Password {
+    /// What was typed.
+    #[must_use]
+    pub fn typed(text: &str) -> Self {
+        Self(text.to_owned())
+    }
+
+    /// The password itself, for the call that hands it to the daemon.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Password {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Password(•)")
+    }
+}
+
+/// What a line that is open is about — kept by the view between the key that
+/// asked and the answer, because by the time the text comes back the only
+/// other witness is a cursor that data arriving may have moved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Asking {
+    /// The password of this network.
+    Password(Box<Network>),
+    /// This Tor setting's value.
+    Tor(&'static str),
+}
+
+/// The question after a typed password: keep it, or not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Remembering {
+    /// The network whose password it is — named in the question.
+    ssid: String,
+    /// Where the cursor was, to go back to once it is answered.
+    back_to: usize,
 }
 
 /// Everything the rows are drawn from, in one bundle.
@@ -661,6 +776,17 @@ pub struct View {
     /// breath; `Facts` replaces this whenever the file's own version differs,
     /// so the file stays the truth and this is only ever a moment ahead of it.
     tor_edits: Option<ronoctua_tunnel::tor::fragment::Lines>,
+    /// What the line that is open is about — see [`Asking`].
+    ///
+    /// LET GO BY THE NEXT KEY: while a line asks, every key is the line's in
+    /// both doors, so a key that reaches [`View::key`] means the question was
+    /// answered or cancelled.
+    asking: Option<Asking>,
+    /// The question "keep this network's password?", while it stands.
+    ///
+    /// THE NAME AND NOT THE PASSWORD: the view is drawn by two doors, and the
+    /// password stays in the one that typed it.
+    remembering: Option<Remembering>,
 }
 
 /// Where a row's cells begin and how wide they are, in the ROW's cells —
@@ -732,6 +858,71 @@ pub fn hostname() -> String {
         .unwrap_or_else(|| "hotspot".to_owned())
 }
 
+/// Reads a file that might be a tunnel, and what it would do.
+///
+/// `~/` is the person's home (`home`, which the caller reads from the
+/// environment). The answer is the path as it was read, with its reading —
+/// or, when it is neither kind of tunnel, the file's NAME for the sentence
+/// that refuses it: a refusal with a reason, and not an import left to fail
+/// inside `nmcli` with a message about somebody else's parser.
+///
+/// A CEILING ON THE READ: a `.conf` is a page and an `.ovpn` with an inline
+/// certificate is a few, so anything past a quarter of a megabyte is not one
+/// of them — and reading a whole disk image into a door's memory to look for
+/// `[Interface]` in it is the defect this line is.
+///
+/// ONE FUNCTION FOR BOTH DOORS: a copy in each would be two answers to the
+/// same path, waiting to disagree.
+///
+/// # Errors
+///
+/// The file's name, when it is not a tunnel's — or cannot be read, or is too
+/// big to be one.
+pub fn read_tunnel(
+    typed: &str,
+    home: Option<&str>,
+) -> Result<(String, ronoctua_network::vpn::Preview), String> {
+    const CEILING: u64 = 256 * 1024;
+    let path = match (typed.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => format!("{home}/{rest}"),
+        _ => typed.to_owned(),
+    };
+    let text = read_small(&path, CEILING).unwrap_or_default();
+    match ronoctua_network::vpn::preview(&path, &text) {
+        Some(preview) => Ok((path, preview)),
+        None => Err(ronoctua_network::vpn::name_of(&path)),
+    }
+}
+
+/// A REGULAR FILE's text, when it is at most `ceiling` bytes — and nothing
+/// for anything else.
+///
+/// The length a directory entry reports is not a promise: a FIFO, a device
+/// (`/dev/zero`) or a file on a hung mount report nought and are read without
+/// end — on the loop that draws, in both doors, for a path somebody typed or
+/// pasted. So it has to be a regular file, and the read itself stops one byte
+/// past the ceiling, whatever the entry said.
+fn read_small(path: &str, ceiling: u64) -> Option<String> {
+    use std::io::Read as _;
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= ceiling) {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    // AND THE FILE OPENED IS ONE: the name can have been swapped between the
+    // look and the open.
+    if !file.metadata().is_ok_and(|m| m.is_file()) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(ceiling.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > ceiling {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
 /// The signal's glyph, in four steps.
 ///
 /// Turning a number into a step is [`bars`]; here only the token is chosen.
@@ -789,6 +980,8 @@ impl View {
             drawer: false,
             tor_edits: None,
             shelves: std::collections::BTreeMap::new(),
+            asking: None,
+            remembering: None,
         }
     }
 
@@ -942,12 +1135,10 @@ impl View {
         self.cursor
     }
 
-    /// The network under the cursor, when the row is one.
-    ///
-    /// Asked by the door that has to type a password: the answer comes back
-    /// out of the minibuffer as a command argument, and by then the only
-    /// thing that says which network it was for is the cursor — which has not
-    /// moved, because the minibuffer had the keyboard.
+    /// The network under the cursor, when the row is one — what the tests
+    /// ask of where the cursor stands. A password answers only the network it
+    /// was asked about ([`Asking`]), never this one: the cursor is not a name.
+    #[cfg(test)]
     #[must_use]
     pub fn focused_network(
         &self,
@@ -971,28 +1162,160 @@ impl View {
         // THE HINT TEACHES THE LEVEL. A sheet that went on offering `s` to
         // scan and `f` to forget would teach six keys that do nothing where
         // you are — which is what the owner photographed on the radio.
+        //
+        // AND THE QUESTION "KEEP IT?" teaches only what answers it: the
+        // arrows between its two rows and `RET`, which there answers rather
+        // than connects. `Esc` is taught by the door, first, as everywhere.
+        let asking = self.remembering.is_some();
         let here: Vec<(&str, &str)> = OF_THE_VIEW
             .iter()
-            .filter(|(_, _, w)| w.shown(self.level))
+            .filter(|(_, _, w)| {
+                if asking {
+                    *w == Where::Anywhere
+                } else {
+                    w.shown(self.level)
+                }
+            })
             .map(|(k, id, _)| (*k, *id))
             .collect();
-        crate::chrome::hint_of(&here, texts)
+        crate::chrome::hint_of_with(
+            &here,
+            |id| (asking && id == "network-connect").then_some("line-answer"),
+            texts,
+        )
     }
 
-    /// A Tor setting's value, as it was typed in the footer's minibuffer.
+    /// What was typed on the line an [`Errand::Ask`] opened, in either door —
+    /// under the question's id.
     ///
-    /// The DOOR collects it — the footer is the only place anything is typed
-    /// in this system — and hands it back here, because what to do with it is
-    /// the view's to decide and both doors must decide it the same way.
+    /// ONE FUNCTION FOR BOTH DOORS. The footer reaches it from the
+    /// minibuffer's answer (`run_with`), the window from
+    /// `door::Content::answered`, and what the text does is decided here:
+    ///
+    /// - a PASSWORD joins the network it was asked about, and NOTHING when
+    ///   no password is being asked any more: the question can go while its
+    ///   line is up — a click reaches the view, which lets it go — and joining
+    ///   whatever the cursor stood on then would hand one network's password
+    ///   to another, a rogue one included;
+    /// - a PATH is read and looked at ([`read_tunnel`]), and the cursor goes
+    ///   to the row that brings it in, the question now on screen, with the
+    ///   reading above it;
+    /// - a TOR VALUE replaces the setting's value, and a TOR LINE is added to
+    ///   the list; an empty answer clears either.
     #[must_use]
-    pub fn tor_typed(&mut self, facts: &Facts<'_>, id: &str, values: Vec<String>) -> Errand {
+    pub fn answered(
+        &mut self,
+        id: &str,
+        text: &str,
+        facts: &Facts<'_>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        let asked = self.asking.take();
+        match id {
+            "network-connect" => match asked {
+                Some(Asking::Password(n)) => Errand::Connect(n, Some(Password::typed(text))),
+                _ => Errand::Nothing,
+            },
+            "network-import" => {
+                let home = std::env::var("HOME").ok();
+                match read_tunnel(text, home.as_deref()) {
+                    Ok((path, preview)) => {
+                        self.looked_at(path, preview);
+                        let rows = self.rows(facts, columns, texts);
+                        // THE CURSOR AND NOT AN ANCHOR: both doors follow
+                        // the cursor after an answer, which brings `bring it
+                        // in` onto the screen with the file's reading above
+                        // it — where a title pinned to the top of a
+                        // twelve-line region could push it off the bottom.
+                        if let Some(i) = rows.iter().position(|r| r.target == Target::Bring) {
+                            self.cursor = i;
+                        }
+                        Errand::Nothing
+                    }
+                    Err(name) => Errand::NotATunnel(name),
+                }
+            }
+            "tor-setting" | "tor-lines" => match asked {
+                Some(Asking::Tor(setting)) => self.tor_answered(facts, setting, text),
+                _ => Errand::Nothing,
+            },
+            _ => Errand::Nothing,
+        }
+    }
+
+    /// A Tor setting's typed value, put into the sheet's copy.
+    ///
+    /// A LIST IS ADDED TO and a single value is replaced, and an empty answer
+    /// clears either — "empty clears them all" is what `ask-tor-lines` says.
+    /// Here and not in a door, so both doors keep the rule by calling it.
+    fn tor_answered(&mut self, facts: &Facts<'_>, id: &'static str, said: &str) -> Errand {
         let Some(setting) = ronoctua_tunnel::options::by_id(id) else {
             return Errand::Nothing;
         };
         if setting.fixed {
             return Errand::Nothing;
         }
+        let list = matches!(setting.kind, ronoctua_options::Kind::List);
+        let mut values: Vec<String> = if list {
+            setting
+                .read(&self.tor_lines(facts))
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        if said.trim().is_empty() {
+            values.clear();
+        } else if list {
+            values.push(said.to_owned());
+        } else {
+            values = vec![said.to_owned()];
+        }
         self.tor_put(facts, setting, values)
+    }
+
+    /// The question "keep this network's password?" comes up, after a typed
+    /// password joined `ssid`.
+    ///
+    /// IT IS A SCREEN OF THE VIEW, drawn by both doors: the question at the
+    /// top, `no` and `yes` under it as rows a key or a click answers, and the
+    /// list under them for context — which network, the one just joined. The
+    /// cursor starts on `no`, the answer that stores nothing, and cannot
+    /// leave the two answers until one of them is given.
+    pub fn ask_remember(
+        &mut self,
+        ssid: String,
+        facts: &Facts<'_>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) {
+        self.remembering = Some(Remembering {
+            ssid,
+            back_to: self.cursor,
+        });
+        let rows = self.rows(facts, columns, texts);
+        self.cursor = rows
+            .iter()
+            .position(|r| r.target == Target::Remember(false))
+            .unwrap_or(0);
+        self.anchor = Some(0);
+    }
+
+    /// Is the question "keep it?" standing? Asked by the tests of both doors.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn remembering(&self) -> bool {
+        self.remembering.is_some()
+    }
+
+    /// The question is answered: back to where the cursor was.
+    fn remembered(&mut self, yes: bool) -> Errand {
+        let Some(r) = self.remembering.take() else {
+            return Errand::Nothing;
+        };
+        self.cursor = r.back_to;
+        Errand::Remember(r.ssid, yes)
     }
 
     /// What a key does to one Tor setting.
@@ -1014,8 +1337,16 @@ impl View {
         let lines = self.tor_lines(facts);
         match setting.turned(&lines, forwards) {
             Some(value) => self.tor_put(facts, setting, vec![value]),
-            // TYPED, NOT TURNED. The door decides where the typing happens.
-            None => Errand::TorEdit(id),
+            // TYPED, NOT TURNED — on the line of whichever door is showing,
+            // and the answer comes back to `answered` under this setting.
+            None => {
+                self.asking = Some(Asking::Tor(setting.id));
+                Errand::Ask(if matches!(setting.kind, ronoctua_options::Kind::List) {
+                    Question::TOR_LINE
+                } else {
+                    Question::TOR_VALUE
+                })
+            }
         }
     }
 
@@ -1044,9 +1375,8 @@ impl View {
 
     /// A file has been read: show what it would do.
     ///
-    /// The cursor goes to the row that brings it in, because that is the
-    /// question on screen — and the row above it is the sentence that says
-    /// what answering yes would mean.
+    /// Only the reading is kept here; [`View::answered`], which has the rows,
+    /// is what puts the cursor on the row that brings it in.
     pub fn looked_at(&mut self, path: String, preview: ronoctua_network::vpn::Preview) {
         self.bringing = Some((path, preview));
     }
@@ -1119,12 +1449,29 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
         let net = facts.net;
+        // A KEY THAT REACHES THE VIEW MEANS NO LINE IS ASKING: while one
+        // asks, both doors give it every key. So whatever it was about is let
+        // go here — a cancelled password does not wait for an answer that is
+        // not coming.
+        self.asking = None;
         let rows = self.rows(facts, columns, texts);
         self.settle(&rows);
         let target = rows
             .get(self.cursor)
             .map_or(Target::Nothing, |r| r.target.clone());
         let disabled = rows.get(self.cursor).is_some_and(|r| r.disabled);
+        // THE QUESTION "KEEP IT?" TAKES THE KEYS while it stands: the arrows
+        // walk its two answers (every other row is a heading while it is up),
+        // `RET` gives the one under the cursor and `Esc` is `no`. Nothing
+        // else does anything — a letter meant for the list must not act on a
+        // list the person is not answering about.
+        if self.remembering.is_some() {
+            match press {
+                Press::Up | Press::Down | Press::Enter => {}
+                Press::Escape => return self.remembered(false),
+                _ => return Errand::Nothing,
+            }
+        }
         match press {
             Press::Up | Press::Down => {
                 let step: isize = if press == Press::Down { 1 } else { -1 };
@@ -1225,7 +1572,7 @@ impl View {
             // cannot draw it, and the next `Esc` would have been swallowed
             // clearing state nobody could see.
             Press::Import if !net.daemon => Errand::Nothing,
-            Press::Import => Errand::Ask,
+            Press::Import => Errand::Ask(Question::PATH),
             Press::Radio => Errand::Radio(!net.radio),
             Press::Airplane => Errand::Airplane(!net.airplane()),
             Press::Disconnect => match carrying(net) {
@@ -1255,7 +1602,16 @@ impl View {
                     .map_or(Errand::Nothing, Errand::Copy),
                 Target::Airplane(on) => Errand::Airplane(on),
                 Target::Radio(on) => Errand::Radio(on),
-                Target::Wireless(n) => Errand::Connect(n),
+                // THREE PATHS, and the difference between them is what the
+                // person does NOT have to do: a saved network reuses its
+                // profile, an open one has no password, and only a secured
+                // network with no profile asks — in whichever door this is.
+                Target::Wireless(n) if n.secured && !n.saved => {
+                    self.asking = Some(Asking::Password(n));
+                    Errand::Ask(Question::PASSWORD)
+                }
+                Target::Wireless(n) => Errand::Connect(n, None),
+                Target::Remember(yes) => self.remembered(yes),
                 Target::Link(medium) => Errand::Disconnect(medium),
                 Target::Tunnel(at) => Errand::Drop(at),
                 Target::Saved(at) => Errand::Raise(at),
@@ -1285,8 +1641,7 @@ impl View {
                 Target::TorAutostart(on) => Errand::TorAutostart(on),
                 // `RET` TURNS WHAT CAN BE TURNED AND OPENS WHAT MUST BE TYPED.
                 // A ring and a switch have somewhere to go; a bridge line has
-                // to be typed, and the only place anything is typed in this
-                // system is the footer's minibuffer.
+                // to be typed, on the line of the door it was pressed in.
                 Target::TorSetting(id) => self.tor_key(facts, id, true),
                 Target::Tunnels(switch, on) => Errand::Tunnel(match switch {
                     Switch::Tailnet => ronoctua_tunnel::Order::Tailscale(on),
@@ -1335,6 +1690,14 @@ impl View {
             self.tor_sheet_rows(&mut b, facts);
             return b.out;
         }
+
+        // 0. THE QUESTION "KEEP IT?", when it stands — at the top, with the
+        // list under it for context: whoever has just connected needs to see
+        // which network is being talked about.
+        let question = self.remembering.as_ref().map_or(0, |r| {
+            Self::remember_rows(&mut b, &r.ssid);
+            b.out.len()
+        });
 
         // 1. WHAT THE MACHINE BELIEVES ABOUT THE WAY OUT.
         //
@@ -1595,7 +1958,64 @@ impl View {
         // 9. THE MONITOR — what is going in and out, now and since boot.
         b.heading(key::NETWORK_HEADING_MONITOR);
         Self::monitor_rows(&mut b, facts.watch);
+
+        // UNDER A QUESTION THE LIST IS CONTEXT, NOT A PLACE: every row of it
+        // is a heading while the question stands, so the cursor cannot walk
+        // onto it and a click does not take it — in both doors, because both
+        // read `heading` to decide that.
+        if question > 0 {
+            for row in b.out.iter_mut().skip(question) {
+                row.heading = true;
+            }
+        }
         b.out
+    }
+
+    /// The question "keep this network's password?" and its two answers.
+    ///
+    /// `NO` FIRST: the question appears by itself, and the answer that stores
+    /// nothing is the one drawn first and the one the cursor is born on.
+    fn remember_rows(b: &mut Builder<'_>, ssid: &str) {
+        use ronoctua_i18n::key;
+        let said = b.texts.t_with(key::NETWORK_REMEMBER, &[("network", ssid)]);
+        // THE GLYPH IS ONE CELL AND THE WORDS START AFTER IT, with a space
+        // between — and a long name WRAPS under the words, never under the
+        // glyph: a note is wrapped and never cut.
+        let words_at = b.left + 2;
+        for (n, line) in crate::chrome::note_lines(&said, b.room.saturating_sub(2))
+            .into_iter()
+            .enumerate()
+        {
+            let mut fields = Vec::with_capacity(2);
+            if n == 0 {
+                fields.push(Builder::piece(
+                    b.left,
+                    tokens::icon::KEY.to_string(),
+                    tokens::color::TEXT_HEADING,
+                ));
+            }
+            fields.push(Builder::piece(words_at, line, tokens::color::TEXT_HEADING));
+            b.out.push(Row {
+                fields,
+                focused: false,
+                heading: true,
+                target: Target::Nothing,
+                disabled: false,
+                shelf: None,
+            });
+        }
+        b.pair(
+            b.texts.t(key::NETWORK_REMEMBER_NO),
+            String::new(),
+            Target::Remember(false),
+            false,
+        );
+        b.pair(
+            b.texts.t(key::NETWORK_REMEMBER_YES),
+            String::new(),
+            Target::Remember(true),
+            false,
+        );
     }
 
     /// A file that has been read, and what it would do once it is in.
@@ -2397,6 +2817,18 @@ impl Wire {
         };
         w.reread();
         w
+    }
+
+    /// A wire with no daemon behind it, holding `seen` — what a test hands a
+    /// door: every order is refused as NetworkManager's absence, and nothing
+    /// reaches the machine's bus.
+    #[cfg(test)]
+    #[must_use]
+    pub fn offline(seen: Vec<Network>) -> Self {
+        Self {
+            manager: None,
+            seen,
+        }
     }
 
     /// The access points, as of the last read.
@@ -3572,8 +4004,11 @@ mod tests {
         );
     }
 
+    /// A SECURED NETWORK WITH NO PROFILE ASKS — the view decides, so both
+    /// doors ask alike — and the password answers the network it was asked
+    /// about, even when a reading moved the cursor in between.
     #[test]
-    fn the_focused_network_is_what_the_password_comes_back_to() {
+    fn the_password_comes_back_to_the_network_it_was_asked_for() {
         let t = texts();
         let snap = machine();
         let seen = vec![network("a house", 90), network("a café", 60)];
@@ -3591,7 +4026,342 @@ mod tests {
         );
         assert_eq!(
             v.key(Press::Enter, &facts(&snap, &seen), DECIDING_WIDTH, &t),
-            Errand::Connect(Box::new(seen[1].clone()))
+            Errand::Ask(Question::PASSWORD)
+        );
+        const {
+            assert!(
+                Question::PASSWORD.secret,
+                "a password is typed in the clear"
+            )
+        };
+        // A SCAN COMES BACK while the line asks, and the list reorders under
+        // the cursor: the answer still joins the café.
+        let moved = vec![network("a café", 60), network("a house", 90)];
+        v.settle(&v.rows(&facts(&snap, &moved), 80, &t));
+        let answer = v.answered(
+            "network-connect",
+            "s3nh4",
+            &facts(&snap, &moved),
+            DECIDING_WIDTH,
+            &t,
+        );
+        assert_eq!(
+            answer,
+            Errand::Connect(Box::new(seen[1].clone()), Some(Password::typed("s3nh4")))
+        );
+        // AND THE ERRAND DOES NOT CARRY THE PASSWORD INTO A LOG.
+        assert!(!format!("{answer:?}").contains("s3nh4"), "{answer:?}");
+    }
+
+    /// A SAVED NETWORK REUSES ITS PROFILE and an open one has no password:
+    /// neither asks, in either door.
+    #[test]
+    fn a_saved_or_open_network_joins_without_asking() {
+        let t = texts();
+        let snap = machine();
+        let mut saved = network("a house", 90);
+        saved.saved = true;
+        let mut open = network("a library", 70);
+        open.secured = false;
+        let seen = vec![saved.clone(), open.clone()];
+        for (want, one) in [(saved, "a house"), (open, "a library")] {
+            let mut v = View::fresh();
+            let rows = v.rows(&facts(&snap, &seen), 80, &t);
+            let at = rows
+                .iter()
+                .position(|r| matches!(&r.target, Target::Wireless(n) if n.ssid == one))
+                .unwrap();
+            v.clicked(at, &rows);
+            assert_eq!(
+                v.key(Press::Enter, &facts(&snap, &seen), DECIDING_WIDTH, &t),
+                Errand::Connect(Box::new(want), None),
+                "{one}"
+            );
+        }
+    }
+
+    /// A PASSWORD LET GO — `Esc` on the line, or a click that reached the
+    /// view under it — is not waiting any more, and an answer that comes
+    /// after it joins NOTHING: not what was asked about, and not what is under
+    /// the cursor, which is another network with another owner.
+    ///
+    /// FAILS IF: a password typed for one network is sent to the one the
+    /// cursor moved to — a WPA handshake made with the first one's key, handed
+    /// to whoever answers as the second.
+    #[test]
+    fn a_question_let_go_is_not_answered_later() {
+        let t = texts();
+        let snap = machine();
+        let seen = vec![network("a house", 90), network("a café", 60)];
+        let mut v = View::fresh();
+        let rows = v.rows(&facts(&snap, &seen), 80, &t);
+        let café = rows
+            .iter()
+            .position(|r| matches!(&r.target, Target::Wireless(n) if n.ssid == "a café"))
+            .unwrap();
+        v.clicked(café, &rows);
+        let _ = v.key(Press::Enter, &facts(&snap, &seen), DECIDING_WIDTH, &t);
+        let _ = v.key(Press::Up, &facts(&snap, &seen), DECIDING_WIDTH, &t);
+        let under = v
+            .focused_network(&facts(&snap, &seen), DECIDING_WIDTH, &t)
+            .map(|n| n.ssid);
+        assert!(under.is_some(), "the cursor stands on no network");
+        let answer = v.answered(
+            "network-connect",
+            "x",
+            &facts(&snap, &seen),
+            DECIDING_WIDTH,
+            &t,
+        );
+        assert_eq!(
+            answer,
+            Errand::Nothing,
+            "a password nobody asked for joined"
+        );
+        // AND WITH NO QUESTION AT ALL, the same: `command network-connect
+        // <password>` names no network, and the cursor is not a name.
+        let mut fresh = View::fresh();
+        let rows = fresh.rows(&facts(&snap, &seen), 80, &t);
+        fresh.clicked(café, &rows);
+        assert_eq!(
+            fresh.answered(
+                "network-connect",
+                "x",
+                &facts(&snap, &seen),
+                DECIDING_WIDTH,
+                &t
+            ),
+            Errand::Nothing
+        );
+        assert!(Question::is_the_views("network-connect"));
+        assert!(Question::is_the_views("tor-lines"));
+        assert!(!Question::is_the_views("bluetooth-accept"));
+    }
+
+    /// A unique scratch directory for one test's files, under the system's
+    /// temporary directory — never the person's home.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-network-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        dir
+    }
+
+    /// A TYPED PATH IS READ AND LOOKED AT — in either door, by one function —
+    /// and the cursor lands on the row that brings it in.
+    #[test]
+    fn a_typed_path_is_read_and_the_cursor_lands_on_bringing_it_in() {
+        let t = texts();
+        let snap = machine();
+        let dir = scratch("path");
+        let file = dir.join("an-office.conf");
+        std::fs::write(
+            &file,
+            "[Interface]\nAddress = 198.51.100.2/32\n\n[Peer]\nEndpoint = vpn.example.invalid:51820\n",
+        )
+        .unwrap();
+        let mut v = View::fresh();
+        assert_eq!(
+            v.key(Press::Import, &facts(&snap, &[]), DECIDING_WIDTH, &t),
+            Errand::Ask(Question::PATH)
+        );
+        const { assert!(!Question::PATH.secret, "a path is typed to be read back") };
+        let answer = v.answered(
+            "network-import",
+            &file.to_string_lossy(),
+            &facts(&snap, &[]),
+            DECIDING_WIDTH,
+            &t,
+        );
+        assert_eq!(answer, Errand::Nothing);
+        assert!(v.bringing());
+        let rows = v.rows(&facts(&snap, &[]), DECIDING_WIDTH, &t);
+        assert_eq!(rows[v.cursor()].target, Target::Bring);
+        // AND A FILE THAT IS NEITHER KIND IS REFUSED BY ITS NAME.
+        let other = dir.join("notes.txt");
+        std::fs::write(&other, "nothing here\n").unwrap();
+        let mut v = View::fresh();
+        assert_eq!(
+            v.answered(
+                "network-import",
+                &other.to_string_lossy(),
+                &facts(&snap, &[]),
+                DECIDING_WIDTH,
+                &t,
+            ),
+            Errand::NotATunnel(ronoctua_network::vpn::name_of(&other.to_string_lossy()))
+        );
+        assert!(!v.bringing());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `~/` IS THE HOME the caller names, and a file past the ceiling is not
+    /// read at all.
+    #[test]
+    fn a_path_from_home_is_read_there_and_a_big_file_is_not_read() {
+        let dir = scratch("home");
+        std::fs::write(
+            dir.join("a-house.conf"),
+            "[Interface]\nAddress = 10.9.0.2/32\n",
+        )
+        .unwrap();
+        let home = dir.to_string_lossy().into_owned();
+        let (path, preview) = read_tunnel("~/a-house.conf", Some(&home)).expect("read from home");
+        assert_eq!(path, format!("{home}/a-house.conf"));
+        assert_eq!(preview.kind, ronoctua_network::vpn::Kind::WireGuard);
+        // WITHOUT A HOME, `~/` is a name like any other — and there is none.
+        assert!(read_tunnel("~/a-house.conf", None).is_err());
+        let big = dir.join("big.conf");
+        let mut text = String::from("[Interface]\nAddress = 10.9.0.2/32\n");
+        text.push_str(&"#".repeat(300 * 1024));
+        std::fs::write(&big, text).unwrap();
+        assert!(read_tunnel(&big.to_string_lossy(), None).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: a path that is not a regular file is read — `/dev/zero`
+    /// reports a length of nought and never ends, and read to a string it
+    /// grew until the OOM killer took the door; or the ceiling trusts the
+    /// length the entry reports instead of stopping the read.
+    #[test]
+    fn only_a_small_regular_file_is_read() {
+        assert!(read_tunnel("/dev/zero", None).is_err());
+        assert_eq!(read_small("/dev/zero", 16), None);
+        let dir = scratch("regular");
+        assert_eq!(read_small(&dir.to_string_lossy(), 16), None, "a directory");
+        let exact = dir.join("exact");
+        std::fs::write(&exact, "0123456789abcdef").unwrap();
+        assert_eq!(
+            read_small(&exact.to_string_lossy(), 16).as_deref(),
+            Some("0123456789abcdef")
+        );
+        assert_eq!(read_small(&exact.to_string_lossy(), 15), None, "past it");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A TOR VALUE IS TYPED on the line of either door, and what the text
+    /// does is the view's: a list is ADDED to, a single value REPLACED, and
+    /// an empty answer clears either.
+    #[test]
+    fn a_tor_value_is_asked_and_a_list_is_added_to_and_empty_clears() {
+        let t = texts();
+        let snap = machine();
+        let f = facts(&snap, &[]);
+        let mut v = View::fresh_on_the_tor_sheet();
+        let ask = |v: &mut View, id: &'static str| v.tor_key(&f, id, true);
+        let lines_of = |e: &Errand| match e {
+            Errand::TorConfigure(lines) => (**lines).clone(),
+            other => panic!("not written: {other:?}"),
+        };
+        let bridges = ronoctua_tunnel::options::by_id("bridge-lines").unwrap();
+        assert_eq!(ask(&mut v, "bridge-lines"), Errand::Ask(Question::TOR_LINE));
+        let one = v.answered("tor-lines", "obfs4 192.0.2.1:443 A", &f, DECIDING_WIDTH, &t);
+        assert_eq!(ask(&mut v, "bridge-lines"), Errand::Ask(Question::TOR_LINE));
+        let two = v.answered("tor-lines", "obfs4 192.0.2.2:443 B", &f, DECIDING_WIDTH, &t);
+        assert_eq!(bridges.read(&lines_of(&one)).map(Vec::len), Some(1));
+        assert_eq!(
+            bridges.read(&lines_of(&two)).cloned(),
+            Some(vec![
+                "obfs4 192.0.2.1:443 A".to_owned(),
+                "obfs4 192.0.2.2:443 B".to_owned()
+            ])
+        );
+        let _ = ask(&mut v, "bridge-lines");
+        let cleared = v.answered("tor-lines", "  ", &f, DECIDING_WIDTH, &t);
+        assert!(bridges.read(&lines_of(&cleared)).is_none_or(Vec::is_empty));
+
+        let exits = ronoctua_tunnel::options::by_id("exit-nodes").unwrap();
+        assert_eq!(ask(&mut v, "exit-nodes"), Errand::Ask(Question::TOR_VALUE));
+        let _ = v.answered("tor-setting", "{de}", &f, DECIDING_WIDTH, &t);
+        let _ = ask(&mut v, "exit-nodes");
+        let replaced = v.answered("tor-setting", "{nl}", &f, DECIDING_WIDTH, &t);
+        assert_eq!(exits.one(&lines_of(&replaced)), Some("{nl}"));
+        // AN ANSWER WITH NO QUESTION BEHIND IT changes nothing.
+        assert_eq!(
+            v.answered("tor-setting", "{fr}", &f, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
+    }
+
+    /// THE QUESTION "KEEP IT?" IS A SCREEN OF THE VIEW: `no` first with the
+    /// cursor on it, the list under it for context and out of reach, only
+    /// its own keys answering, and a click answering too (invariant 19).
+    #[test]
+    fn keep_it_is_asked_by_the_view_no_first_and_answered_by_key_or_click() {
+        let t = texts();
+        let snap = machine();
+        let seen = vec![network("a house", 90)];
+        let f = facts(&snap, &seen);
+        let mut v = View::fresh();
+        let before = v.cursor();
+        v.ask_remember("a house".to_owned(), &f, DECIDING_WIDTH, &t);
+        assert!(v.remembering());
+        let rows = v.rows(&f, DECIDING_WIDTH, &t);
+        let no = rows
+            .iter()
+            .position(|r| r.target == Target::Remember(false))
+            .unwrap();
+        let yes = rows
+            .iter()
+            .position(|r| r.target == Target::Remember(true))
+            .unwrap();
+        assert!(no < yes, "`no` is not drawn first");
+        assert_eq!(v.cursor(), no, "the cursor is not born on `no`");
+        assert!(
+            rows[..no].iter().all(|r| r.heading),
+            "the question is a row to stand on"
+        );
+        assert!(
+            rows[..no]
+                .iter()
+                .any(|r| r.fields.iter().any(|f| f.text.contains("a house"))),
+            "the question does not name the network"
+        );
+        // THE LIST UNDER IT IS CONTEXT: drawn, and never a place.
+        assert!(rows.len() > yes + 5, "the list is not under the question");
+        assert!(rows[yes + 1..].iter().all(|r| r.heading));
+        let mut clicking = v.clone();
+        assert!(!clicking.clicked(yes + 3, &rows));
+        assert_eq!(clicking.cursor(), no);
+        // ONLY ITS OWN KEYS: a letter of the list does nothing here.
+        assert_eq!(v.key(Press::Scan, &f, DECIDING_WIDTH, &t), Errand::Nothing);
+        assert_eq!(
+            v.key(Press::Section, &f, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
+        assert_eq!(v.cursor(), no);
+        // THE ARROWS WALK THE TWO ANSWERS AND NO FURTHER.
+        let _ = v.key(Press::Down, &f, DECIDING_WIDTH, &t);
+        assert_eq!(v.cursor(), yes);
+        let _ = v.key(Press::Down, &f, DECIDING_WIDTH, &t);
+        assert_eq!(v.cursor(), yes, "the cursor walked off the question");
+        let _ = v.key(Press::Up, &f, DECIDING_WIDTH, &t);
+        assert_eq!(v.cursor(), no);
+        // THE HINT TEACHES WHAT ANSWERS: the arrows, and `RET` as an answer.
+        let hint: String = v.hint(&t).iter().map(|p| p.text.clone()).collect();
+        assert!(hint.contains(&t.t("line-answer")), "{hint}");
+        assert!(!hint.contains(&t.t("network-scan")), "{hint}");
+        // `RET` ON `no` answers no, and the cursor goes back to where it was.
+        assert_eq!(
+            v.key(Press::Enter, &f, DECIDING_WIDTH, &t),
+            Errand::Remember("a house".to_owned(), false)
+        );
+        assert!(!v.remembering());
+        assert_eq!(v.cursor(), before);
+        // `Esc` IS `no`.
+        v.ask_remember("a house".to_owned(), &f, DECIDING_WIDTH, &t);
+        assert_eq!(
+            v.key(Press::Escape, &f, DECIDING_WIDTH, &t),
+            Errand::Remember("a house".to_owned(), false)
+        );
+        // AND THE POINTER: the first click on `yes` selects, the second acts.
+        v.ask_remember("a house".to_owned(), &f, DECIDING_WIDTH, &t);
+        let rows = v.rows(&f, DECIDING_WIDTH, &t);
+        assert!(!v.clicked(yes, &rows), "the first click acted");
+        assert!(v.clicked(yes, &rows), "the second click is not `RET`");
+        assert_eq!(
+            v.key(Press::Enter, &f, DECIDING_WIDTH, &t),
+            Errand::Remember("a house".to_owned(), true)
         );
     }
 

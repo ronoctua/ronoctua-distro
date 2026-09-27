@@ -266,6 +266,71 @@ pub fn answer_of(raw: &[u8]) -> anyhow::Result<Answer> {
     })
 }
 
+/// What came back, as BYTES and with its headers.
+///
+/// [`Answer`] is for a daemon's JSON and turns the body into text; this is for
+/// everything that is not text — an icon, a zip, an index — and for a caller
+/// that has to read a header (`Location` for a redirect, `ETag` for a cache).
+/// Decoding a PNG through `from_utf8_lossy` replaces every invalid byte with
+/// three, and the image is gone without an error anywhere.
+#[derive(Debug, Clone, Default)]
+pub struct Reply {
+    /// The number out of the status line.
+    pub status: u16,
+    /// Every header, in order, names as sent.
+    pub headers: Vec<(String, String)>,
+    /// The body, chunk framing already off.
+    pub body: Vec<u8>,
+}
+
+impl Reply {
+    /// Whether the server said yes.
+    #[must_use]
+    pub const fn went_through(&self) -> bool {
+        self.status >= 200 && self.status < 300
+    }
+
+    /// The first header of that name, case-insensitively (HTTP names are).
+    #[must_use]
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// The status, the headers and the body, out of everything that came back.
+///
+/// # Errors
+///
+/// There was no blank line separating headers from body, or no status line.
+pub fn reply_of(raw: &[u8]) -> anyhow::Result<Reply> {
+    let split = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| anyhow::anyhow!("no HTTP response"))?;
+    let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+    let status = status_of(&head).ok_or_else(|| anyhow::anyhow!("no status line"))?;
+    Ok(Reply {
+        status,
+        headers: headers_of(&head),
+        body: dechunked(&head, &raw[split + 4..]),
+    })
+}
+
+/// The headers of a response head, after the status line.
+#[must_use]
+pub fn headers_of(head: &str) -> Vec<(String, String)> {
+    head.lines()
+        .skip(1)
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim().to_owned(), value.trim().to_owned()))
+        })
+        .collect()
+}
+
 /// The number out of `HTTP/1.1 200 OK`.
 #[must_use]
 pub fn status_of(head: &str) -> Option<u16> {
@@ -480,5 +545,30 @@ mod tests {
         assert!(answer_of(b"hello").is_err());
         // A blank line but no status line.
         assert!(answer_of(b"garbage\r\n\r\nbody").is_err());
+    }
+
+    #[test]
+    fn a_reply_keeps_every_byte_and_every_header() {
+        // A PNG's first bytes are not UTF-8; an `Answer` would have replaced
+        // the 0x89 with three bytes of U+FFFD.
+        let mut raw = b"HTTP/1.1 302 Found\r\nLocation: https://cdn.example/x.png\r\n\
+                        ETag: \"abc\"\r\n\r\n"
+            .to_vec();
+        raw.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x00, 0xff]);
+        let r = reply_of(&raw).unwrap();
+        assert_eq!(r.status, 302);
+        assert!(!r.went_through());
+        assert_eq!(r.header("location"), Some("https://cdn.example/x.png"));
+        assert_eq!(r.header("ETAG"), Some("\"abc\""));
+        assert_eq!(r.body, [0x89, b'P', b'N', b'G', 0x00, 0xff]);
+    }
+
+    #[test]
+    fn a_chunked_reply_comes_back_whole_and_binary() {
+        let raw =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n\x00\xff\r\n0\r\n\r\n";
+        let r = reply_of(raw).unwrap();
+        assert!(r.went_through());
+        assert_eq!(r.body, [0x00, 0xff]);
     }
 }

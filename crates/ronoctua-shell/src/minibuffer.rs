@@ -64,7 +64,8 @@ pub struct Minibuffer {
     universe: Vec<Item>,
     /// Which candidate is focused.
     cursor: usize,
-    /// The chosen command that is **waiting for an argument**.
+    /// The question being asked on the line — a chosen command **waiting for
+    /// an argument**, or a view asking for a name, a path, a password.
     ///
     /// # Why it exists
     ///
@@ -77,23 +78,27 @@ pub struct Minibuffer {
     /// Without this, either those actions would disappear from the list — and "all the OS's
     /// actions" would stop being true — or they would be called with no argument
     /// and the compositor would answer with an error the user did not ask for.
-    asking_for: Option<String>,
-    /// Is what is being asked for a SECRET?
     ///
-    /// It exists because the Wi-Fi password goes through here. Without it the password would appear
-    /// in the clear on the minibuffer's line, on a screen that usually has more
-    /// people looking at it than an installer's.
-    secret: bool,
+    /// THE QUESTION IS A [`crate::line::Line`], the same one a window asks
+    /// on its header (`door::Ui::ask`): one set of keys, one mask for a
+    /// secret, in both doors.
+    asking: Option<crate::line::Line>,
+    /// Whether the last answer was typed on a SECRET line — asked by whoever
+    /// logs the answer, so a password does not reach the journal through
+    /// the line that says a command ran.
+    answered_a_secret: bool,
+    /// How many times the minibuffer has opened — see [`Minibuffer::asked`].
+    asked: u64,
 }
 
 impl Minibuffer {
     /// Opens, with every command as a candidate.
     pub fn open(&mut self, registry: &ronoctua_cmd::Registry) {
+        self.asked = self.asked.wrapping_add(1);
         self.active = true;
         self.query.clear();
         self.cursor = 0;
-        self.asking_for = None;
-        self.secret = false;
+        self.asking = None;
         self.filter_by(registry);
     }
 
@@ -103,8 +108,7 @@ impl Minibuffer {
         self.query.clear();
         self.candidates.clear();
         self.cursor = 0;
-        self.asking_for = None;
-        self.secret = false;
+        self.asking = None;
     }
 
     /// The query as the filter uses it — lower case.
@@ -121,7 +125,48 @@ impl Minibuffer {
     /// Is it waiting for an argument?
     #[must_use]
     pub fn asking_for(&self) -> Option<&str> {
-        self.asking_for.as_deref()
+        self.asking.as_ref().map(|l| l.id)
+    }
+
+    /// The question on the line, whole — what the footer draws it from, with
+    /// the builder a window's header uses (`door::list::question_pieces`).
+    #[must_use]
+    pub const fn line(&self) -> Option<&crate::line::Line> {
+        self.asking.as_ref()
+    }
+
+    /// Was the last answer typed on a secret line? Then it is not logged.
+    #[must_use]
+    pub const fn answered_a_secret(&self) -> bool {
+        self.answered_a_secret
+    }
+
+    /// Is a SECRET being typed now — a password, a PIN, a key? Then no key
+    /// that reaches the line is logged either: the answer's log line was
+    /// masked and the keystrokes that spelled it went to the log one by one.
+    #[must_use]
+    pub fn typing_a_secret(&self) -> bool {
+        self.asking.as_ref().is_some_and(|l| l.secret)
+    }
+
+    /// The number of the question on the line: it changes every time one is
+    /// asked, so a paste read for an older question — off the loop, answered
+    /// later — is not typed into the one that replaced it. The window's line
+    /// keeps the same count (`door::Ui::ask`).
+    #[must_use]
+    pub const fn asked(&self) -> u64 {
+        self.asked
+    }
+
+    /// Lets the line go when it is asking for `id` — its question is over:
+    /// the pairing it asked a PIN for ended, or another replaced it. Says
+    /// whether it did.
+    pub fn let_go_of(&mut self, id: &str) -> bool {
+        if self.asking_for() == Some(id) {
+            self.close_it();
+            return true;
+        }
+        false
     }
 
     /// Is it open?
@@ -140,9 +185,23 @@ impl Minibuffer {
     /// over a secured network would have to send the person to `M-x` to type the
     /// name of a command they have already triggered.
     pub fn request(&mut self, id: &'static str, secret: bool) {
+        self.request_with(id, secret, None);
+    }
+
+    /// The same, with the line already holding `initial`.
+    ///
+    /// # Why it exists
+    ///
+    /// Because changing a name or an address starts from what it IS: a web
+    /// app called "Proton Mail" renamed to "Mail" is four `DEL`s, and asking
+    /// with an empty line would make the person type the address back from
+    /// memory to fix one letter of it. What was there is typed in the way a
+    /// paste is — one line, the ends trimmed — and `Enter` answers with
+    /// whatever the line holds then.
+    pub fn request_with(&mut self, id: &'static str, secret: bool, initial: Option<&str>) {
+        self.asked = self.asked.wrapping_add(1);
         self.active = true;
-        self.asking_for = Some(id.to_owned());
-        self.secret = secret;
+        self.asking = Some(crate::line::Line::new(id, secret, initial));
         self.query.clear();
         self.candidates.clear();
         self.cursor = 0;
@@ -159,25 +218,9 @@ impl Minibuffer {
     /// languages by construction.
     #[must_use]
     pub fn asking(&self, texts: &ronoctua_i18n::Texts) -> String {
-        let Some(id) = self.asking_for.as_deref() else {
-            return self.prompt();
-        };
-        let said = |key: &str| {
-            let text = texts.t(key);
-            // A KEY NOBODY WROTE resolves to `[key]` (`Texts::t_marked`), and
-            // that is how this asks whether it exists at all.
-            (!text.starts_with('[')).then_some(text)
-        };
-        let question = said(&format!("ask-{id}"))
-            .or_else(|| said(&format!("cmd-{id}")))
-            .unwrap_or_else(|| id.to_owned());
-        if self.secret {
-            format!(
-                "{question}: {}",
-                "•".repeat(usize::from(ronoctua_render::layout::width(&self.query)))
-            )
-        } else {
-            format!("{question}: {}", self.query)
+        match &self.asking {
+            Some(line) => line.drawn(texts),
+            None => self.prompt(),
         }
     }
 
@@ -187,19 +230,9 @@ impl Minibuffer {
         // While asking for an argument, the prompt is the COMMAND'S NAME — `focus-workspace:`
         // — and not `M-x`: whoever got here has already chosen, and what is missing is
         // saying which workspace. Repeating `M-x` would make it look as if the choice
-        // had not taken.
-        match self.asking_for.as_deref() {
-            // ONE DOT PER CELL, and not a fixed number: the length that appears
-            // is what was typed, otherwise one cannot see that the key took. By
-            // cluster, because the dots stand in for the typing on a screen and
-            // an accented letter is one thing typed and one cell wide.
-            Some(id) if self.secret => {
-                format!(
-                    "{id}: {}",
-                    "•".repeat(usize::from(ronoctua_render::layout::width(&self.query)))
-                )
-            }
-            Some(id) => format!("{id}: {}", self.query),
+        // had not taken. A secret shows one dot per cell (`Line::shown`).
+        match &self.asking {
+            Some(line) => line.prompt(),
             // `M-x ` and the typed text. The prefix does NOT go through i18n: it is
             // the key's own notation, the same in every language — the same reason
             // `ronoctua-keymap` does not translate a key's name.
@@ -280,11 +313,11 @@ impl Minibuffer {
     /// It is the same locator: same filter, same keys, same rendering. What
     /// changes is only where the universe came from.
     pub fn open_over(&mut self, items: Vec<Item>) {
+        self.asked = self.asked.wrapping_add(1);
         self.active = true;
         self.query.clear();
         self.cursor = 0;
-        self.asking_for = None;
-        self.secret = false;
+        self.asking = None;
         self.universe = items;
         self.refilter();
     }
@@ -319,6 +352,27 @@ impl Minibuffer {
     pub fn key(&mut self, t: ronoctua_keymap::Key, registry: &ronoctua_cmd::Registry) -> Action {
         use ronoctua_keymap::Sym;
 
+        // A QUESTION IS ASKED BY ITS LINE, and the line is the one a window
+        // asks on too (`crate::line`): its keys are its own, and the finder's
+        // list plays no part in it.
+        if let Some(line) = self.asking.as_mut() {
+            return match line.key(t) {
+                crate::line::Step::Nothing => Action::Nothing,
+                crate::line::Step::Changed => Action::Changed,
+                crate::line::Step::WantsPaste => Action::WantsPaste,
+                crate::line::Step::Answer(id, said) => {
+                    let secret = line.secret;
+                    self.close_it();
+                    self.answered_a_secret = secret;
+                    Action::RunWith(id.to_owned(), said)
+                }
+                crate::line::Step::Cancel => {
+                    self.close_it();
+                    Action::Closed
+                }
+            };
+        }
+
         // PASTING IS THE MINIBUFFER'S ALONE, and not a gesture of the lists
         // that share `gesture_of`: there `C-v` is the file manager's preview.
         // `C-y` is Emacs's yank, which is the notation this line is written in.
@@ -341,27 +395,21 @@ impl Minibuffer {
         }
 
         match t.sym {
-            Sym::Enter => {
-                // IT WAS ALREADY ASKING FOR AN ARGUMENT: what was typed IS the
-                // argument, and not a query.
-                if let Some(id) = self.asking_for.clone() {
-                    let arg = self.query.clone();
-                    self.close_it();
-                    return Action::RunWith(id, arg);
-                }
-                match self.chosen().cloned() {
-                    Some(item) if requires_argument(&item.id) => {
-                        // Chosen, but the argument is missing. The list disappears and the
-                        // line becomes a prompt: going on showing 170
-                        // candidates while one types a workspace number
-                        // would be offering a choice that has already been made.
-                        self.asking_for = Some(item.id);
+            Sym::Enter => match self.chosen().cloned() {
+                Some(item) => match argument_of(&item.id) {
+                    // Chosen, but the argument is missing. The list disappears and the
+                    // line becomes a prompt: going on showing 170
+                    // candidates while one types a workspace number
+                    // would be offering a choice that has already been made.
+                    Some(id) => {
+                        self.asked = self.asked.wrapping_add(1);
+                        self.asking = Some(crate::line::Line::new(id, false, None));
                         self.query.clear();
                         self.candidates.clear();
                         self.cursor = 0;
                         Action::Changed
                     }
-                    Some(item) => {
+                    None => {
                         // AN ITEM WITH A LABEL IS NOT A COMMAND. It came from a
                         // list the caller built — a buffer, a file — and running
                         // it as a command id would find nothing in the registry
@@ -374,29 +422,23 @@ impl Minibuffer {
                             Action::Run(item.id)
                         }
                     }
-                    // Confirming with no candidate does NOT close: closing would erase
-                    // what was typed, and whoever got a letter wrong would have to
-                    // start over.
-                    None => Action::Nothing,
-                }
-            }
+                },
+                // Confirming with no candidate does NOT close: closing would erase
+                // what was typed, and whoever got a letter wrong would have to
+                // start over.
+                None => Action::Nothing,
+            },
             Sym::Backspace => {
-                // ONE CLUSTER, not one `char`. `String::pop` takes a code
-                // point, and a cluster is up to six of them: backspacing an
-                // emoji left the halves of it in the query, and the password
-                // mask beside this counts CLUSTERS (`layout::width`), so the
-                // number of dots and the number of characters stopped
-                // agreeing. It is the same rule the cut has followed since the
-                // couple-with-a-heart defect; this was the one place that
-                // still typed by code point.
-                let Some(last) = ronoctua_render::layout::cells_of(&self.query).last() else {
+                // ONE CLUSTER, not one `char` — `line::pop_cluster` says why.
+                if !crate::line::pop_cluster(&mut self.query) {
                     return Action::Nothing;
-                };
-                let keep = self.query.len() - last.len();
-                self.query.truncate(keep);
+                }
                 self.filter_by(registry);
                 Action::Changed
             }
+            // A CONTROL CHARACTER IS NOT TYPED: `Delete` arrives as U+007F,
+            // a character nobody can see in the query.
+            Sym::Char(c) if c.is_control() => Action::Nothing,
             Sym::Char(c) => {
                 self.query.push(c);
                 self.filter_by(registry);
@@ -419,11 +461,13 @@ impl Minibuffer {
     /// would name a file that does not exist. Line breaks become spaces, and
     /// the ends are trimmed.
     pub fn paste(&mut self, text: &str, registry: &ronoctua_cmd::Registry) -> Action {
-        let line: String = text
-            .trim()
-            .chars()
-            .map(|c| if c.is_control() { ' ' } else { c })
-            .collect();
+        if let Some(line) = self.asking.as_mut() {
+            return match line.paste(text) {
+                crate::line::Step::Changed => Action::Changed,
+                _ => Action::Nothing,
+            };
+        }
+        let line = crate::line::one_line(text);
         if line.is_empty() {
             return Action::Nothing;
         }
@@ -498,6 +542,8 @@ pub fn gesture_of(t: ronoctua_keymap::Key) -> Gesture {
         // text cursor here: what is typed always goes at the end. Doing nothing
         // is better than doing something else.
         Sym::Left | Sym::Right | Sym::Tab => Gesture::Nothing,
+        // The page keys have no page to turn in a line.
+        Sym::PageUp | Sym::PageDown | Sym::Home | Sym::End => Gesture::Nothing,
     }
 }
 
@@ -524,12 +570,15 @@ pub enum Action {
     WantsPaste,
 }
 
-/// Does the command require a positional argument?
+/// The command's own id, when it requires a positional argument.
 ///
 /// Only the compositor's deeds do, and what knows that is the generated
-/// table — not a list of ours that would age silently.
-fn requires_argument(id: &str) -> bool {
-    ronoctua_scroll::deeds::spoken_of(id).is_some_and(|s| s.deed.argument.is_some())
+/// table — not a list of ours that would age silently. The id comes back
+/// `'static` from that table, which is what a [`crate::line::Line`] asks for.
+fn argument_of(id: &str) -> Option<&'static str> {
+    ronoctua_scroll::deeds::spoken_of(id)
+        .filter(|s| s.deed.argument.is_some())
+        .map(|s| s.deed.id)
 }
 
 /// Scores a candidate against the query. `None` = no match.
@@ -659,6 +708,74 @@ fn adjacent_window(text: &[&str], target: &[&str]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    /// FAILS IF: the footer's key log is not told a secret is being typed —
+    /// every letter of a password reached the debug log, one per line — or
+    /// is still told so once the line is answered.
+    #[test]
+    fn a_secret_line_says_it_is_being_typed() {
+        use ronoctua_keymap::{Key, Sym};
+        let registry = ronoctua_cmd::Registry::fresh();
+        let mut m = super::Minibuffer::default();
+        assert!(!m.typing_a_secret());
+        m.request("bluetooth-accept", true);
+        assert!(m.typing_a_secret());
+        m.key(Key::simple(Sym::Char('0')), &registry);
+        assert!(m.typing_a_secret());
+        m.key(Key::simple(Sym::Enter), &registry);
+        assert!(!m.typing_a_secret(), "the answer left and the mask stayed");
+        m.request("workspace-go", false);
+        assert!(!m.typing_a_secret());
+    }
+
+    /// FAILS IF: a paste read off the loop for one question can be typed into
+    /// the one that replaced it — every question the line asks has a number of
+    /// its own — or a pairing's PIN line outlives the question it asked for.
+    #[test]
+    fn every_question_has_its_number_and_a_line_is_let_go_by_its_id() {
+        let registry = ronoctua_cmd::Registry::fresh();
+        let mut m = super::Minibuffer::default();
+        m.request("bluetooth-accept", true);
+        let first = m.asked();
+        m.request("bluetooth-accept", true);
+        assert_ne!(m.asked(), first, "a new question kept the old number");
+        let second = m.asked();
+        m.open(&registry);
+        assert_ne!(m.asked(), second);
+        // LET GO ONLY BY ITS OWN ID.
+        m.request("bluetooth-accept", true);
+        assert!(!m.let_go_of("network-connect"));
+        assert_eq!(m.asking_for(), Some("bluetooth-accept"));
+        assert!(m.let_go_of("bluetooth-accept"));
+        assert_eq!(m.asking_for(), None);
+        assert!(!m.active());
+    }
+
+    /// FAILS IF: the footer draws its question without the two clicks a
+    /// window's line has — `ESC` lets it go and `RET` answers, pressed where
+    /// they are drawn (invariant 19) — or cuts what is typed at its end.
+    #[test]
+    fn the_footers_question_is_drawn_with_its_two_clicks() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let mut m = super::Minibuffer::default();
+        m.request_with("software-web-name", false, Some(&"a long name ".repeat(20)));
+        let line = m.line().expect("a question on the line");
+        let pieces = crate::door::list::question_pieces(line, &texts, 60);
+        let marks = crate::chrome::hint_marks(&pieces, 1, 0, 200);
+        let pressed: Vec<String> = marks
+            .iter()
+            .filter_map(|m| match m.press {
+                Some(crate::chrome::Act::Key(k)) => Some(k.notation()),
+                _ => None,
+            })
+            .collect();
+        assert!(pressed.iter().any(|k| k == "ESC"), "{pressed:?}");
+        assert!(pressed.iter().any(|k| k == "RET"), "{pressed:?}");
+        // THE END OF WHAT IS TYPED STAYS IN SIGHT.
+        let shown: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        assert!(shown.contains("a long name"), "{shown}");
+        assert!(shown.contains('…'), "a long answer was not cut: {shown}");
+    }
+
     /// The Wi-Fi password must NOT appear on the minibuffer's line.
     ///
     /// # The defect this test locks out
@@ -692,6 +809,29 @@ mod tests {
         assert!(m.prompt().contains('3'), "it masked what is not a secret");
     }
 
+    /// THE ANSWER OF A SECRET LINE SAYS SO, for the one line that logs every
+    /// answer (`Footer::minibuffer_key`): a Wi-Fi password used to reach the
+    /// journal there, in the clear, as the "argument" of `network-connect`.
+    #[test]
+    fn a_secret_answer_says_it_is_one_and_the_next_does_not() {
+        use ronoctua_keymap::{Key, Sym};
+        let registry = ronoctua_cmd::Registry::fresh();
+        let mut m = super::Minibuffer::default();
+        m.request("network-connect", true);
+        for c in "s3nh4".chars() {
+            m.key(Key::simple(Sym::Char(c)), &registry);
+        }
+        assert_eq!(
+            m.key(Key::simple(Sym::Enter), &registry),
+            super::Action::RunWith("network-connect".into(), "s3nh4".into())
+        );
+        assert!(m.answered_a_secret());
+        m.request("network-import", false);
+        m.key(Key::simple(Sym::Char('/')), &registry);
+        m.key(Key::simple(Sym::Enter), &registry);
+        assert!(!m.answered_a_secret(), "a path was taken for a secret");
+    }
+
     use super::{Action, Minibuffer};
     use ronoctua_keymap::{Key, Mods, Sym};
 
@@ -722,6 +862,28 @@ mod tests {
         for c in s.chars() {
             m.key(t(Sym::Char(c)), r);
         }
+    }
+
+    #[test]
+    fn a_question_can_start_from_what_is_there_and_is_edited_from_it() {
+        let r = registry();
+        let mut m = Minibuffer::default();
+        m.request_with("software-web-name", false, Some("  Proton Mail\n"));
+        assert!(m.prompt().ends_with(": Proton Mail"), "{}", m.prompt());
+        for _ in 0.."Mail".len() {
+            m.key(t(Sym::Backspace), &r);
+        }
+        type_in(&mut m, &r, "Box");
+        assert_eq!(
+            m.key(t(Sym::Enter), &r),
+            Action::RunWith("software-web-name".into(), "Proton Box".into())
+        );
+        // AND A PLAIN REQUEST STILL STARTS EMPTY, after one that did not.
+        m.request_with("software-web-address", false, None);
+        assert_eq!(
+            m.key(t(Sym::Enter), &r),
+            Action::RunWith("software-web-address".into(), String::new())
+        );
     }
 
     #[test]

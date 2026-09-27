@@ -19,24 +19,34 @@ pub fn header<C: Content>(c: &C, ui: &mut Ui, canvas: &mut Canvas<'_>) {
 /// The same header, with a LABEL and a TITLE before the shortcuts — the
 /// manual's `MANUAL: Gestures` — drawn the way every title of the system is.
 ///
-/// `hint` is asked only when there is no message: the line carries one or the
-/// other.
+/// `hint` is asked only when there is neither a question nor a message: the
+/// line carries one of the three, and a question outranks the others — it is
+/// what the keyboard is typing into ([`the_question`]).
 pub fn header_of(
     ui: &mut Ui,
     canvas: &mut Canvas<'_>,
     title: Option<crate::chrome::Title<'_>>,
     hint: impl FnOnce(&Ui) -> Vec<crate::chrome::Piece>,
 ) {
-    // A MESSAGE TAKES THIS LINE, and then there is no shortcut on it to point
-    // at. Decided BEFORE the list is measured, because the explanation's row
-    // comes out of that measurement.
-    if ui.message.is_some() {
-        ui.hinted.say(None);
-    }
-    let (pieces, hinting) = ui.message.clone().map_or_else(
-        || (hint(ui), true),
-        |text| (vec![crate::chrome::Piece::said(text)], false),
-    );
+    header_about(ui, canvas, title, None, hint);
+}
+
+/// The same header, with what the ROW UNDER THE POINTER has to add — the
+/// whole sentence a row carries for somebody who has not met the word on it
+/// (`bluetooth::Row::description`), which the footer puts on its message line
+/// under the pointer and a window puts here.
+///
+/// Below the question and the message, above the shortcuts: pointing at a row
+/// is a question asked now, and the keys are always there to come back to —
+/// the footer's own order on its line.
+pub fn header_about(
+    ui: &mut Ui,
+    canvas: &mut Canvas<'_>,
+    title: Option<crate::chrome::Title<'_>>,
+    about: Option<String>,
+    hint: impl FnOnce(&Ui) -> Vec<crate::chrome::Piece>,
+) {
+    let (pieces, hinting) = line_zero(ui, about, hint);
     let pieces = match title {
         Some(t) => t.before(pieces),
         None => pieces,
@@ -48,6 +58,79 @@ pub fn header_of(
         .extend(ui.hinted.head(&pieces, hinting, margin, columns, &texts));
     // AND THE DRAWER'S OWN BAR, when it is open and the wrap ran past it.
     canvas.over.extend(ui.hinted.bar(ui.frame(0)));
+}
+
+/// What line 0 carries, and whether its pieces are shortcuts: the question
+/// being typed, else the last order's message, else what the row under the
+/// pointer has to add, else the keys.
+pub fn line_zero(
+    ui: &mut Ui,
+    about: Option<String>,
+    hint: impl FnOnce(&Ui) -> Vec<crate::chrome::Piece>,
+) -> (Vec<crate::chrome::Piece>, bool) {
+    // ITS `ESC` AND `RET` ARE SHORTCUTS: marked where they land, lit under
+    // the pointer, pressed by a click (invariant 19).
+    if let Some(pieces) = the_question(ui) {
+        return (pieces, true);
+    }
+    // A SENTENCE TAKES THIS LINE, and then there is no shortcut on it to
+    // point at. Decided BEFORE the list is measured, because the
+    // explanation's row comes out of that measurement.
+    match ui.message.clone().or(about) {
+        Some(text) => {
+            ui.hinted.say(None);
+            (vec![crate::chrome::Piece::said(text)], false)
+        }
+        None => (hint(ui), true),
+    }
+}
+
+/// THE QUESTION ON LINE 0, while [`Ui::ask`] has one up: what is asked, what
+/// is typed — masked for a secret — and `ESC` and `RET` as clicks.
+///
+/// THE TYPED TEXT KEEPS ITS END. It is cut from the START to what the line
+/// has left after the question and the two keys, because its end is where
+/// the next letter goes: a line cut at its end would hide what the hand is
+/// doing. The question comes first and the keys after, the minibuffer's
+/// order — and at a width where not even that fits, the rest wraps into the
+/// header's drawer like any other line.
+///
+/// Public for a window that paints its own header (`hinted.head`) and asks
+/// this before its message and its shortcuts, as [`header_of`] does.
+#[must_use]
+pub fn the_question(ui: &Ui) -> Option<Vec<crate::chrome::Piece>> {
+    let line = ui.asking.as_ref()?;
+    Some(question_pieces(line, &ui.texts, ui.columns))
+}
+
+/// A question's line as pieces, `columns` wide: the ONE builder, which the
+/// footer's minibuffer draws its question with too — the two doors ask the
+/// same line, so they draw it the same way, with the same two clicks.
+#[must_use]
+pub fn question_pieces(
+    line: &crate::line::Line,
+    texts: &ronoctua_i18n::Texts,
+    columns: u16,
+) -> Vec<crate::chrome::Piece> {
+    use ronoctua_render::layout::{elide_start, width};
+    let keys = crate::chrome::hint_of(crate::line::OF_THE_LINE, texts);
+    let asked = format!("{}: ", line.question(texts));
+    let separator = crate::chrome::Piece::separator();
+    let taken = width(&asked)
+        + width(&separator.text)
+        + keys.iter().map(|p| width(&p.text)).sum::<u16>()
+        + crate::fold::WIDTH;
+    // HALF THE LINE AT LEAST, so a long question on a narrow window still
+    // shows the last letters typed; the keys then wrap into the drawer rather
+    // than hide them.
+    let room = columns.saturating_sub(taken).max(columns / 2);
+    let mut pieces = vec![
+        crate::chrome::Piece::prose(asked),
+        crate::chrome::Piece::said(elide_start(&line.shown(), room)),
+        separator,
+    ];
+    pieces.extend(keys);
+    pieces
 }
 
 /// The list under the header: its rows, every cursor's hover, and its bar.

@@ -122,8 +122,21 @@ pub fn tell(what: &Ask) -> Result<()> {
 
 /// Sends one ask and reads the answer.
 pub fn ask(what: &Ask) -> Result<Say> {
+    ask_within(what, Duration::from_secs(3))
+}
+
+/// The same, waiting up to `patience` for the answer — for an ask the player
+/// answers only after a round trip of its own: pairing waits for the other
+/// machine, and three seconds were less than that trip may take. Call it off
+/// a loop.
+///
+/// # Errors
+///
+/// The player could not be started or reached, or did not answer in time —
+/// the last is an `std::io::Error` of kind `WouldBlock` or `TimedOut` inside.
+pub fn ask_within(what: &Ask, patience: Duration) -> Result<Say> {
     let stream = UnixStream::connect(ensure()?)?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_read_timeout(Some(patience));
     let mut out = BufWriter::new(stream.try_clone()?);
     write_line(&mut out, what)?;
     read_line(&mut BufReader::new(stream))?.context("the player did not answer")

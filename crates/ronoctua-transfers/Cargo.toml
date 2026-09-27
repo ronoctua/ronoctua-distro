@@ -48,6 +48,12 @@ ronoctua-atlas-packs = { path = "../ronoctua-atlas-packs" }
 # The atomic write, and the only thing this daemon uses it for: a pack is
 # installed whole or not at all.
 ronoctua-xdg = { path = "../ronoctua-xdg" }
+# THE PERSON'S PROGRAMS, as a LIBRARY and nothing more: the order this queue
+# carries, the progress line it reads and the outcome it keeps. The work itself
+# runs in that crate's CLI, as a child, so the TLS stack and the image decoders
+# stay in the child's closure — `default-features = false` is the whole point
+# (`transfers-unit-is-narrow`).
+ronoctua-software = { path = "../ronoctua-software", default-features = false }
 
 [[bin]]
 name = "ronoctua-transfers"

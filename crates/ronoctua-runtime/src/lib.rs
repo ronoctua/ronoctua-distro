@@ -24,7 +24,7 @@
 #![warn(missing_docs)]
 
 use anyhow::{Context as _, Result};
-// In wasmtime-wasi 38 the types are at the crate's ROOT, and `WasiView::ctx`
+// Since wasmtime-wasi 38 the types are at the crate's ROOT, and `WasiView::ctx`
 // returns `ctx` and `table` together in a `WasiCtxView` — the separate `IoView`
 // from earlier versions no longer exists.
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -757,6 +757,8 @@ fn val_of_queue(q: &ronoctua_protocol::Queue) -> wasmtime::component::Val {
                 ("trouble".into(), Val::String(j.trouble.clone())),
                 ("answer".into(), Val::U64(j.answer)),
                 ("identified".into(), Val::Bool(j.identified)),
+                ("pauses".into(), Val::Bool(j.pauses)),
+                ("opens".into(), Val::Bool(j.opens)),
             ])
         })
         .collect();
@@ -1412,6 +1414,7 @@ fn demand_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol
         "cancel-job" => R::CancelJob,
         "forget-job" => R::ForgetJob,
         "sweep-jobs" => R::SweepJobs,
+        "launch-job" => R::LaunchJob,
         "run-task" => R::RunTask,
         "rehearse-task" => R::RehearseTask,
         "abort-task" => R::AbortTask,
@@ -2037,6 +2040,8 @@ mod tests {
                 trouble: String::new(),
                 answer: 0,
                 identified: true,
+                pauses: true,
+                opens: false,
             }],
         };
         let v = val_of_queue(&q);
@@ -2060,7 +2065,11 @@ mod tests {
                 "answer",
                 // The one that cannot be undone after the fact, so it is on the
                 // row and not only in a log.
-                "identified"
+                "identified",
+                // What the row's keys may offer: holding it, and opening what
+                // an install made.
+                "pauses",
+                "opens"
             ]
         );
 

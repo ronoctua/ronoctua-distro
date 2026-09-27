@@ -7,19 +7,19 @@
 //! DECIDES nothing — which rows exist and what a key does to them is
 //! `syncthing.rs`, and both doors ask the same view the same questions.
 //!
-//! # The one thing this door CANNOT do
+//! # It types what the footer types
 //!
-//! **Type.** Adding a machine means a 63-character id, and adding a folder
-//! means a path; the one place anything is typed in this system is the
-//! footer's minibuffer, and this window has none. So it forwards the request
-//! down the control socket and SAYS SO on its message line — the rule the
-//! network view's password and the glance's time zone already follow.
+//! A machine's 63-character id, a folder's path, where an offered folder
+//! goes and a text or list setting are asked on this window's own line
+//! (`Ui::ask`), where `C-v` pastes — an id is nearly always pasted — and
+//! answered through the same `View::answered` the footer's minibuffer
+//! reaches. The order goes to this process's own Syncthing thread.
 
 use crate::door::{Content, Door, Ui};
 use anyhow::Result;
 use smithay_client_toolkit::{
     reexports::calloop::channel,
-    seat::keyboard::{KeyEvent, Keysym, Modifiers},
+    seat::keyboard::{KeyEvent, Modifiers},
 };
 
 /// The window's `app_id`.
@@ -158,15 +158,12 @@ impl SyncthingWindow {
                 }
             }
             Errand::Web(address) => Self::open_the_page(ui, &address),
-            // TYPING IS THE FOOTER'S, and this window says so. Sending the
-            // request down the control socket would open the minibuffer over
-            // there while the person is looking at here, which is worse than
-            // a sentence: it is a prompt on another screen.
-            Errand::Ask(_) => {
-                ui.message = Some(
-                    ui.texts
-                        .t(ronoctua_i18n::key::SYNCTHING_TYPED_IN_THE_FOOTER),
-                );
+            // ON THIS WINDOW'S OWN LINE, and the view is told WHAT it is being
+            // asked, so that the answer knows what it answers.
+            Errand::Ask(ask) => {
+                let id = ask.command();
+                self.view.asked(ask);
+                ui.ask(crate::line::Line::new(id, false, None));
             }
         }
         ui.ask_paint();
@@ -183,19 +180,10 @@ impl SyncthingWindow {
             ui.message = Some(ui.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED));
             return;
         }
-        // DETACHED, and never waited on: this runs inside the calloop
-        // callback, and a browser that takes a second to start would freeze
-        // the window for that second.
-        match std::process::Command::new(opener)
-            .arg(format!("http://{address}"))
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(child) => drop(child),
-            Err(e) => tracing::warn!(error = %e, "could not open the page"),
-        }
+        // IN A SCOPE OF ITS OWN, off the loop, by the path every door opens
+        // by — the footer's `open_foreign` — and one that could not start is
+        // a sentence on this window's line, as it is on the footer's.
+        ui.launch(opener, &[format!("http://{address}")], None);
     }
 
     /// What one key means — from the keyboard, or `RET` from a second click
@@ -225,10 +213,31 @@ impl Content for SyncthingWindow {
         format!("*{}*", texts.t(ronoctua_i18n::key::SYNCTHING_TITLE))
     }
 
+    /// The key read whole — the door's one reader, then the view's
+    /// (`syncthing::press_of_key`), which the footer calls too.
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
-        if let Some(press) = press_of(event, mods.shift) {
+        if let Some(press) =
+            crate::door::keys::key_of(event, mods).and_then(crate::syncthing::press_of_key)
+        {
             self.pressed(ui, press);
         }
+    }
+
+    /// What was typed on this window's line: the same `View::answered` the
+    /// footer's minibuffer reaches, and the order it gives goes to this
+    /// window's own thread.
+    fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
+        ui.message = None;
+        if let Some(order) = self.view.answered(id, text, self.snapshot.as_ref()) {
+            self.apply(ui, crate::syncthing::Errand::Order(Box::new(order)));
+        }
+        ui.ask_paint();
+    }
+
+    /// The line was let go, and the view forgets the question.
+    fn unanswered(&mut self, ui: &mut Ui, _: &'static str) {
+        self.view.let_go();
+        ui.ask_paint();
     }
 
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
@@ -263,36 +272,184 @@ impl Content for SyncthingWindow {
     }
 }
 
-/// A `KeyEvent` as the view sees it — the same mapping the footer does.
-///
-/// BOTH DOORS GO THROUGH `syncthing::OF_THE_VIEW`. This one turns SCTK's keysym
-/// into the table's notation and asks the view; the footer turns its own
-/// `Key` into the same notation and asks the same question. A key written in
-/// only one of the two would be a key one door answers and the other does
-/// not, which is the defect `bluetooth-keys-reach-both-doors` was written for.
-fn press_of(event: &KeyEvent, shifted: bool) -> Option<crate::syncthing::Press> {
-    // THE NOTATION CARRIES SHIFT, unlike the sound window's. This view's value
-    // keys ARE the shifted arrows, and a notation built without the modifier
-    // turns `S-<right>` into a plain one — which walks the list instead of
-    // turning the ring, silently.
-    let notation = match event.keysym {
-        Keysym::Escape => return Some(crate::syncthing::Press::Escape),
-        Keysym::Return | Keysym::KP_Enter => "RET".to_owned(),
-        Keysym::Up => "<up>".to_owned(),
-        Keysym::Down => "<down>".to_owned(),
-        Keysym::Left | Keysym::Right => {
-            let arrow = if event.keysym == Keysym::Left {
-                "<left>"
-            } else {
-                "<right>"
-            };
-            if shifted {
-                format!("S-{arrow}")
-            } else {
-                arrow.to_owned()
-            }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syncthing::{Ask, Press, Spot};
+    use ronoctua_syncthing::{Invitation, Snapshot};
+
+    /// A window with no Syncthing thread behind it: every order it gives is
+    /// answered with "Syncthing is not running" on its own line — which is
+    /// what a test of the wiring can see — and nothing reaches the footer.
+    fn a_window(snap: Snapshot) -> (SyncthingWindow, Ui) {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let me = SyncthingWindow {
+            view: crate::syncthing::View::fresh(ronoctua_syncthing::prefs::Preferences::default()),
+            snapshot: Some(snap),
+            syncthing: None,
+            _watch: None,
+        };
+        (me, Ui::for_tests(texts))
+    }
+
+    /// A service that is up, with one folder, one other machine and an
+    /// offered folder waiting.
+    fn offered() -> Snapshot {
+        let folder = ronoctua_syncthing::Folder {
+            id: "papers".to_owned(),
+            kind: "sendreceive".to_owned(),
+            completion: 100,
+            raw: serde_json::json!({
+                "id": "papers",
+                "label": "",
+                "path": "/somewhere",
+                "type": "sendreceive",
+                "devices": [],
+            }),
+            ..ronoctua_syncthing::Folder::default()
+        };
+        let device = |id: &str, me: bool| ronoctua_syncthing::Device {
+            id: id.to_owned(),
+            name: id.to_lowercase(),
+            me,
+            raw: serde_json::json!({ "deviceID": id, "name": id }),
+            ..ronoctua_syncthing::Device::default()
+        };
+        Snapshot {
+            service: ronoctua_syncthing::Service::Up(Box::new(ronoctua_syncthing::Running {
+                id: "ME".to_owned(),
+                address: "127.0.0.1:8384".to_owned(),
+                ..ronoctua_syncthing::Running::default()
+            })),
+            folders: vec![folder],
+            devices: vec![device("ME", true), device("THEM", false)],
+            invitations: vec![Invitation::Folder {
+                folder: "shared".to_owned(),
+                label: "the shared one".to_owned(),
+                from: "THEM".to_owned(),
+                who: String::new(),
+            }],
+            unit: ronoctua_syncthing::unit::Standing::Running,
+            ..Snapshot::default()
         }
-        _ => event.utf8.as_deref()?.to_owned(),
-    };
-    crate::syncthing::pressed(&notation)
+    }
+
+    /// Puts the cursor on the row that is `spot`, by a click.
+    fn stand_on(w: &mut SyncthingWindow, ui: &mut Ui, spot: &Spot) {
+        let rows = w.view_rows(ui);
+        let at = rows
+            .iter()
+            .position(|r| r.spot == *spot)
+            .unwrap_or_else(|| panic!("no row is {spot:?}"));
+        w.clicked(ui, at);
+        assert!(ui.asking.is_none(), "the first click acted");
+    }
+
+    /// The sentence an order gets here with no Syncthing thread: the order
+    /// left for this window's own thread.
+    fn ordered(ui: &Ui) -> bool {
+        ui.message.as_deref()
+            == Some(
+                ui.texts
+                    .t(ronoctua_i18n::key::ECHO_SYNCTHING_NOT_RUNNING)
+                    .as_str(),
+            )
+    }
+
+    /// Answers the line that is open, as the door does: the line leaves
+    /// `ui.asking` first, and the window hears the text under its id.
+    fn answer(w: &mut SyncthingWindow, ui: &mut Ui, text: &str) {
+        let line = ui.asking.take().expect("no line is open");
+        w.answered(ui, line.id, text);
+    }
+
+    /// EVERY QUESTION OF THE VIEW IS ASKED ON THIS WINDOW'S OWN LINE — a
+    /// machine's id, a folder's path, where an offered folder goes, a text
+    /// setting — and none is sent to the footer or answered with a sentence.
+    #[test]
+    fn every_question_is_asked_on_the_windows_own_line() {
+        let cases: [(Spot, Press, Ask); 3] = [
+            (Spot::Device("THEM".to_owned()), Press::Add, Ask::NewDevice),
+            (
+                Spot::Folder("papers".to_owned()),
+                Press::Add,
+                Ask::NewFolder,
+            ),
+            (Spot::Invitation(0), Press::Enter, Ask::Invited(0)),
+        ];
+        for (spot, press, ask) in cases {
+            let (mut w, mut ui) = a_window(offered());
+            stand_on(&mut w, &mut ui, &spot);
+            w.pressed(&mut ui, press);
+            let line = ui.asking.as_ref().expect("the question is not asked here");
+            assert_eq!(line.id, ask.command(), "{spot:?}");
+            assert!(!line.secret);
+            assert_eq!(w.view.asking(), Some(&ask));
+            assert!(ui.message.is_none(), "{:?}", ui.message);
+            assert!(ui.orders().is_empty(), "the question went to the footer");
+        }
+
+        // A TEXT SETTING, on a folder's sheet: `RET` and `S-<right>` both.
+        for press in [Press::Enter, Press::More] {
+            let (mut w, mut ui) = a_window(offered());
+            stand_on(&mut w, &mut ui, &Spot::Folder("papers".to_owned()));
+            w.pressed(&mut ui, Press::Enter);
+            stand_on(&mut w, &mut ui, &Spot::Setting("folder-path"));
+            w.pressed(&mut ui, press);
+            let line = ui.asking.as_ref().expect("the setting is not asked here");
+            assert_eq!(line.id, "syncthing-enter");
+            assert_eq!(
+                w.view.asking(),
+                Some(&Ask::Setting("folder-path", Some("papers".to_owned())))
+            );
+            assert!(ui.orders().is_empty());
+        }
+    }
+
+    /// WHAT IS TYPED HERE IS ORDERED FROM HERE — a pasted machine id
+    /// included, which is how an id arrives — and nothing typed is never
+    /// mind.
+    #[test]
+    fn what_is_typed_in_the_window_is_ordered_from_the_window() {
+        let (mut w, mut ui) = a_window(offered());
+        stand_on(&mut w, &mut ui, &Spot::Device("THEM".to_owned()));
+        w.pressed(&mut ui, Press::Add);
+        // A COPIED ID, with its trailing line break: the line takes it as
+        // one line.
+        let line = ui.asking.as_mut().expect("the id is asked here");
+        let _ = line.paste("ABCDEFG-HIJKLMN-OPQRSTU\n");
+        assert_eq!(line.text, "ABCDEFG-HIJKLMN-OPQRSTU");
+        let text = line.text.clone();
+        answer(&mut w, &mut ui, &text);
+        assert!(ordered(&ui), "{:?}", ui.message);
+        assert!(ui.orders().is_empty(), "the order went to the footer");
+        assert_eq!(w.view.asking(), None);
+
+        // THE OFFERED FOLDER, taken where the person says.
+        let (mut w, mut ui) = a_window(offered());
+        stand_on(&mut w, &mut ui, &Spot::Invitation(0));
+        w.pressed(&mut ui, Press::Enter);
+        answer(&mut w, &mut ui, "/home/somebody/shared");
+        assert!(ordered(&ui), "{:?}", ui.message);
+
+        // NOTHING TYPED orders nothing.
+        let (mut w, mut ui) = a_window(offered());
+        stand_on(&mut w, &mut ui, &Spot::Folder("papers".to_owned()));
+        w.pressed(&mut ui, Press::Add);
+        answer(&mut w, &mut ui, "  ");
+        assert!(ui.message.is_none(), "{:?}", ui.message);
+    }
+
+    /// A QUESTION LET GO HERE is let go by the view too, as the footer's
+    /// `Esc` lets it go there — `view::a_question_let_go_is_not_answered_later`
+    /// holds what an answer arriving afterwards then means.
+    #[test]
+    fn a_question_let_go_in_the_window_is_let_go_by_the_view() {
+        let (mut w, mut ui) = a_window(offered());
+        stand_on(&mut w, &mut ui, &Spot::Invitation(0));
+        w.pressed(&mut ui, Press::Enter);
+        let line = ui.asking.take().expect("the path is asked here");
+        w.unanswered(&mut ui, line.id);
+        assert_eq!(w.view.asking(), None);
+    }
 }

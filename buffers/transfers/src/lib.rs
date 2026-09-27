@@ -4,10 +4,18 @@
 //!
 //! `LEADER t t` already draws this list inside the footer, under a ceiling of
 //! twelve rows. This is the same list with room to breathe: every job at once,
-//! a detail screen, and a bar wide enough to read. Both faces ask the same
-//! unit over the same socket, and neither of them owns anything — a copy of
-//! forty gibibytes belongs to `ronoctua-transfers`, which is why restarting
-//! the footer does not touch it.
+//! and a bar wide enough to read. Both faces ask the same unit over the same
+//! socket, and neither of them owns anything — a copy of forty gibibytes
+//! belongs to `ronoctua-transfers`, which is why restarting the footer does
+//! not touch it.
+//!
+//! # The same keys, the same pages, the same question
+//!
+//! What a key does is the footer panel's too: ONE table
+//! (`ronoctua_protocol::TRANSFERS_KEYS`), bound here under the local leader,
+//! and one answer about which keys a row teaches (`transfers_taught`). Both
+//! doors open a job's own page with `RET` — the second click's meaning — and
+//! both ask before giving up, `no` first.
 //!
 //! # It reads nothing
 //!
@@ -49,6 +57,9 @@
 
 use std::cell::RefCell;
 
+use ronoctua_design::frame::{
+    TRANSFERS_ANSWER, TRANSFERS_KEYS, TransferRow, local_binding, transfers_taught,
+};
 use ronoctua_design::guest::Wit;
 use ronoctua_design::types::{
     AIR, Amount, Binding, BufferState, Capability, Column, Command, Context, Demand, Descriptor,
@@ -73,10 +84,9 @@ type Frame = Screen<Wit>;
 mod key {
     pub const TITLE: &str = "transfers-window-title";
     pub const EMPTY: &str = "transfers-window-empty";
-    pub const HINT: &str = "transfers-window-hint";
-    pub const HINT_DETAIL: &str = "transfers-window-hint-detail";
     pub const CONFIRM_CANCEL: &str = "transfers-window-confirm-cancel";
-    pub const ASKED: &str = "transfers-window-asked";
+    pub const GIVE_UP_NO: &str = "transfers-give-up-no";
+    pub const GIVE_UP_YES: &str = "transfers-give-up-yes";
     pub const DETAIL: &str = "transfers-window-detail";
     pub const UNKNOWN: &str = "transfers-window-unknown";
 
@@ -124,17 +134,51 @@ mod key {
     pub const WORK_TORRENT: &str = "transfers-work-torrent";
 }
 
-/// The commands this buffer registers, and the keys that reach them.
-///
-/// Data, and under `m ` only: the host refuses at load whoever binds under a
-/// global prefix. Each id needs `cmd-<id>` in both languages.
-const KEYMAP: &[(&str, &str)] = &[
-    (", p", "transfers-hold"),
-    (", c", "transfers-give-up"),
-    (", k", "transfers-drop"),
-    (", l", "transfers-clear"),
-    (", d", "transfers-detail"),
-];
+/// The keys this window answers to — the queue's ONE table, the footer
+/// panel's too (`TRANSFERS_KEYS`). Every chord of it is bound under the local
+/// leader (`, c` is `C-c` in this window); the arrows, `RET`, `TAB` and `SPC`
+/// arrive as the intents the host sends. So a key means the same thing in both
+/// doors — they used to disagree about `RET` and about `C-p`.
+fn keymap() -> Vec<Binding> {
+    TRANSFERS_KEYS
+        .iter()
+        .filter_map(|(notation, id)| {
+            local_binding(notation).map(|keys| Binding {
+                keys,
+                command: (*id).into(),
+            })
+        })
+        .collect()
+}
+
+/// The commands the keymap names, each once.
+fn commands() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for b in keymap() {
+        if !out.contains(&b.command) {
+            out.push(b.command);
+        }
+    }
+    out
+}
+
+/// Every phrase the foot may teach, asked of the host so the pairs can be
+/// MEASURED — a phrase reserved blind is a gap the eye reads as a defect.
+fn taught_phrases() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (_, id) in TRANSFERS_KEYS.iter().chain(TRANSFERS_ANSWER) {
+        if !out.iter().any(|o| o == id) {
+            out.push((*id).to_owned());
+        }
+    }
+    out
+}
+
+/// How wide a phrase is reserved before the host has said it.
+const TEACH_CELLS: u16 = 13;
+
+/// A separator between two pairs of the foot: the air, and the dot.
+const SEPARATOR_CELLS: u16 = ronoctua_design::GAP + ICON;
 
 /// Which screen is on.
 ///
@@ -149,14 +193,24 @@ enum Face {
     Detail,
 }
 
-/// A question waiting for `Enter`.
-///
-/// Inline, on the last line — never a popup (invariant 14). Any other key
-/// clears it, which is why it is a field and not a modal.
+/// The give-up question on screen: which job, and whether the cursor is on
+/// `yes`. It is born on `no`, as the footer's panel's is — giving up deletes
+/// what was already written, and a question about something that cannot be
+/// undone starts on the answer that keeps it. Its own screen, never a popup
+/// (invariant 14).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Pending {
-    /// Give up on the job with this id, deleting what was already written.
-    GiveUp(u64),
+struct GiveUp {
+    id: u64,
+    yes: bool,
+}
+
+/// One pair of the foot, as it was DRAWN: where, and what a click on it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Pair {
+    at: u16,
+    cells: u16,
+    keys: &'static str,
+    id: &'static str,
 }
 
 /// Everything this buffer remembers between calls.
@@ -171,15 +225,21 @@ struct State {
     on: Option<u64>,
     /// First visible job, for the scroll.
     top: usize,
-    pending: Option<Pending>,
-    /// Whether the last ask was accepted, so the screen can say so.
-    asked: bool,
+    /// The give-up question, while it is on screen.
+    asking: Option<GiveUp>,
     /// The line the list starts on, so a click can be resolved.
     list_top: Option<u16>,
     /// How many rows of it the last frame drew, for the wheel and the bar.
     list_lines: u16,
+    /// The line the question's `no` was drawn on; `yes` is the one under it.
+    answers_at: Option<u16>,
+    /// The foot's pairs as the last frame drew them, and its line.
+    foot: Vec<Pair>,
+    foot_line: u16,
     /// The cell the pointer is on, if it is on one.
     hover: ronoctua_design::Hovers,
+    /// The words the host resolved for the phrases the foot teaches.
+    phrases: ronoctua_design::Phrases,
 }
 
 impl State {
@@ -189,11 +249,14 @@ impl State {
             face: Face::List,
             on: None,
             top: 0,
-            pending: None,
-            asked: false,
+            asking: None,
             list_top: None,
             list_lines: 0,
+            answers_at: None,
+            foot: Vec::new(),
+            foot_line: 0,
             hover: ronoctua_design::Hovers::new(),
+            phrases: ronoctua_design::Phrases::empty(),
         }
     }
 }
@@ -869,20 +932,129 @@ impl State {
         fields.put(id::PERCENT, Run::datum(&percent(per)));
     }
 
-    /// The last line: the question if there is one, otherwise the hint.
-    fn foot(&self, screen: &mut Frame) {
+    /// The question, on a screen of its own: the job it is about, what giving
+    /// up does, and `no` before `yes` — the footer panel's question, line for
+    /// line.
+    fn question(&mut self, screen: &mut Frame, q: GiveUp) {
+        let mut line = screen.heading(Icon::Transfer, key::TITLE);
+        let foot = screen.lines().saturating_sub(1);
+        self.list_top = None;
+        self.list_lines = 0;
+        self.answers_at = None;
+        let body = screen.columns().saturating_sub(1);
+        if let Some(job) = self.queue.jobs.iter().find(|j| j.id == q.id)
+            && line < foot
+        {
+            let layout = row_layout(body);
+            line = line.saturating_add(row(screen, line, job, &layout));
+        }
+        // THE SENTENCE WRAPS, and the host wraps it: this side has only the
+        // key (invariant 11).
+        let sentence = 2;
+        if line.saturating_add(sentence) >= foot {
+            return;
+        }
+        screen.paragraph(
+            line,
+            sentence,
+            Run::label(key::CONFIRM_CANCEL).playing(Role::Body),
+        );
+        line = line.saturating_add(sentence);
+        if line.saturating_add(2) >= foot {
+            return;
+        }
+        self.answers_at = Some(line);
+        for (yes, said) in [(false, key::GIVE_UP_NO), (true, key::GIVE_UP_YES)] {
+            if q.yes == yes {
+                screen.ground_in(line, 0, 0, Role::Band);
+            } else if let Some(seat) = self.hover.first(|(_, at)| at == line) {
+                screen.ground_in(line, 0, 0, Role::hover_of(seat));
+            }
+            screen.put(line, Run::label(said).names(true));
+            line = line.saturating_add(1);
+        }
+    }
+
+    /// The foot's pairs, laid out from the left: every one that fits, WHOLE,
+    /// and where it went — the ONE walk the drawing and the click both read.
+    fn lay_foot(&self, columns: u16) -> Vec<Pair> {
+        let edge = columns.saturating_sub(1);
+        let mut out: Vec<Pair> = Vec::new();
+        let mut column = 0;
+        for (keys, id) in self.taught() {
+            let said = self.phrases.or(id, "");
+            let phrase = if said.is_empty() {
+                TEACH_CELLS
+            } else {
+                ronoctua_design::wide(&said)
+            };
+            let cells = ronoctua_design::wide(keys) + ronoctua_design::GAP + phrase;
+            let lead = if out.is_empty() { 0 } else { SEPARATOR_CELLS };
+            if column + lead + cells > edge {
+                break;
+            }
+            out.push(Pair {
+                at: column + lead,
+                cells,
+                keys,
+                id,
+            });
+            column += lead + cells;
+        }
+        out
+    }
+
+    /// The keys the foot teaches — the question's answer, or what this page
+    /// and the row under the cursor allow: `transfers_taught`, the answer the
+    /// footer's panel reads too.
+    fn taught(&self) -> Vec<(&'static str, &'static str)> {
+        if self.asking.is_some() {
+            return TRANSFERS_ANSWER.to_vec();
+        }
+        transfers_taught(self.face == Face::Detail, self.focused().map(facts))
+            .into_iter()
+            .map(|(keys, id, _)| (keys, id))
+            .collect()
+    }
+
+    /// The last line: the keys this page answers to, every one a CONTROL —
+    /// the notation lights under the pointer, and a click does what the key
+    /// does.
+    fn foot(&mut self, screen: &mut Frame) {
         let line = screen.lines().saturating_sub(1);
-        let (text, role) = match (self.pending, self.asked) {
-            // A question waiting on you is the one thing to look at, which is
-            // what `accent` is for; it used to name `state-warning`.
-            (Some(Pending::GiveUp(_)), _) => (key::CONFIRM_CANCEL, Role::Accent),
-            (None, true) => (key::ASKED, Role::Body),
-            (None, false) => match self.face {
-                Face::List => (key::HINT, Role::Dim),
-                Face::Detail => (key::HINT_DETAIL, Role::Dim),
-            },
-        };
-        screen.put(line, Run::label(text).playing(role));
+        let pairs = self.lay_foot(screen.columns());
+        for (n, pair) in pairs.iter().enumerate() {
+            if n > 0 {
+                screen.put(
+                    line,
+                    Run::glyph(Icon::Separator)
+                        .playing(Role::Faint)
+                        .at(pair.at - SEPARATOR_CELLS + ronoctua_design::GAP),
+                );
+            }
+            let lit = self
+                .hover
+                .first(|(column, at)| {
+                    at == line && column >= pair.at && column < pair.at + pair.cells
+                })
+                .is_some();
+            let wide = ronoctua_design::wide(pair.keys);
+            screen.put(
+                line,
+                Run::datum(pair.keys)
+                    .playing(if lit { Role::KeyLit } else { Role::Key })
+                    .at(pair.at),
+            );
+            screen.put(
+                line,
+                Run::label(pair.id)
+                    .playing(if lit { Role::ProseLit } else { Role::Prose })
+                    .at(pair.at + wide + ronoctua_design::GAP)
+                    .within(pair.cells.saturating_sub(wide + ronoctua_design::GAP)),
+            );
+        }
+        self.foot = pairs;
+        self.foot_line = line;
     }
 
     /// The job under the cursor.
@@ -922,8 +1094,6 @@ impl State {
             at.saturating_sub(1)
         };
         self.on = Some(self.queue.jobs[next].id);
-        self.pending = None;
-        self.asked = false;
         vec![Effect::Redraw]
     }
 
@@ -944,98 +1114,107 @@ impl State {
             .is_some_and(|id| self.queue.jobs.iter().any(|j| j.id == id));
         if !still_there {
             self.on = self.queue.jobs.first().map(|j| j.id);
-            self.pending = None;
+        }
+        // A QUESTION ABOUT A JOB THAT ENDED goes: there is nothing left to
+        // give up, and a `yes` taken later would be about nothing.
+        if let Some(q) = self.asking
+            && !self
+                .queue
+                .jobs
+                .iter()
+                .any(|j| j.id == q.id && facts(j).afoot)
+        {
+            self.asking = None;
         }
         vec![Effect::Redraw]
     }
 
-    /// A named command from the keymap.
-    fn command(&mut self, id: &str) -> Vec<Effect> {
-        self.asked = false;
+    /// What a command of the queue's table does, on the row under the
+    /// cursor — the same answers the footer's panel gives.
+    fn run(&mut self, id: &str) -> Vec<Effect> {
+        let row = self.focused().map(facts);
+        let target = self.on.unwrap_or(0);
+        let ask = |what| vec![Effect::Ask(Demand { what, target }), Effect::Redraw];
         match id {
-            "transfers-detail" => {
-                self.face = match self.face {
-                    Face::List => Face::Detail,
-                    Face::Detail => Face::List,
-                };
-                self.pending = None;
-                vec![Effect::Redraw]
-            }
-            "transfers-hold" => self.hold(),
-            "transfers-give-up" => {
-                // The one irreversible key here, and it asks first — the same
-                // discipline the memory panel uses before closing a process.
-                match self.focused() {
-                    Some(j) if j.stage != Stage::Done => {
-                        self.pending = Some(Pending::GiveUp(j.id));
-                        vec![Effect::Redraw]
-                    }
-                    _ => Vec::new(),
+            "transfers-down" => self.step(true),
+            "transfers-up" => self.step(false),
+            // THE JOB'S OWN PAGE, and back — what a second click on a row does.
+            "transfers-detail" => match self.face {
+                Face::List if row.is_some() => {
+                    self.face = Face::Detail;
+                    vec![Effect::Redraw]
                 }
-            }
-            "transfers-drop" => self.simple(Request::ForgetJob),
-            "transfers-clear" => {
-                self.asked = true;
-                vec![
-                    Effect::Ask(Demand {
-                        what: Request::SweepJobs,
-                        target: 0,
-                    }),
-                    Effect::Redraw,
-                ]
-            }
+                Face::List => Vec::new(),
+                Face::Detail => {
+                    self.face = Face::List;
+                    vec![Effect::Redraw]
+                }
+            },
+            // PAUSE WHAT IS RUNNING, LET GO OF WHAT IS HELD — one key for
+            // both, because the state is on screen. Only where the engine can
+            // hold: a program's install is one run nothing freezes halfway.
+            "transfers-pause" => match row {
+                Some(r) if r.held => ask(Request::ResumeJob),
+                Some(r) if r.afoot && r.pauses => ask(Request::PauseJob),
+                _ => Vec::new(),
+            },
+            // THE ONE IRREVERSIBLE KEY HERE, and it asks first.
+            "transfers-cancel" => match (self.on, row) {
+                (Some(id), Some(r)) if r.afoot => {
+                    self.asking = Some(GiveUp { id, yes: false });
+                    vec![Effect::Redraw]
+                }
+                _ => Vec::new(),
+            },
+            "transfers-forget" => match row {
+                Some(r) if !r.afoot => ask(Request::ForgetJob),
+                _ => Vec::new(),
+            },
+            "transfers-sweep" => ask(Request::SweepJobs),
+            // WHAT AN INSTALL MADE, opened by the host — which alone knows the
+            // entry, and hands it to the footer that starts every program.
+            "transfers-launch" => match row {
+                Some(r) if r.opens => ask(Request::LaunchJob),
+                _ => Vec::new(),
+            },
             _ => Vec::new(),
         }
     }
 
-    /// Pause what is running, let go of what is held.
-    ///
-    /// One key for both, because the state is on screen: a row that shows
-    /// `paused` and a key called "pause" would be a question about what
-    /// pressing it does.
-    fn hold(&mut self) -> Vec<Effect> {
-        let Some(job) = self.focused() else {
-            return Vec::new();
-        };
-        let what = match job.stage {
-            Stage::Paused => Request::ResumeJob,
-            Stage::Weighing | Stage::Running => Request::PauseJob,
-            // Finished: there is nothing to hold, and saying nothing is better
-            // than sending a request the host will refuse.
-            Stage::Done | Stage::Failed | Stage::Cancelled => return Vec::new(),
-        };
-        let target = job.id;
-        self.asked = true;
-        vec![Effect::Ask(Demand { what, target }), Effect::Redraw]
-    }
-
-    /// A request that needs the focused job and no confirmation.
-    fn simple(&mut self, what: Request) -> Vec<Effect> {
-        let Some(job) = self.focused() else {
-            return Vec::new();
-        };
-        let target = job.id;
-        self.asked = true;
-        vec![Effect::Ask(Demand { what, target }), Effect::Redraw]
-    }
-
-    /// `Enter`: answer the question if there is one.
-    fn confirm(&mut self) -> Vec<Effect> {
-        match self.pending.take() {
-            Some(Pending::GiveUp(target)) => {
-                self.asked = true;
-                vec![
-                    Effect::Ask(Demand {
-                        what: Request::CancelJob,
-                        target,
-                    }),
-                    Effect::Redraw,
-                ]
-            }
-            // No question pending: `Enter` opens the detail, which is the
-            // obvious meaning of confirming a row.
-            None => self.command("transfers-detail"),
+    /// The question's answer, the one the cursor is on.
+    fn answer(&mut self) -> Vec<Effect> {
+        match self.asking.take() {
+            Some(GiveUp { id, yes: true }) => vec![
+                Effect::Ask(Demand {
+                    what: Request::CancelJob,
+                    target: id,
+                }),
+                Effect::Redraw,
+            ],
+            Some(GiveUp { yes: false, .. }) => vec![Effect::Redraw],
+            None => Vec::new(),
         }
+    }
+
+    /// A key that walks while the question is up: between its two answers.
+    fn walk_the_answers(&mut self, down: bool) -> Vec<Effect> {
+        match self.asking.as_mut() {
+            Some(q) if q.yes != down => {
+                q.yes = down;
+                vec![Effect::Redraw]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// What a job allows, as the queue's shared table reads it.
+const fn facts(job: &Job) -> TransferRow {
+    TransferRow {
+        afoot: matches!(job.stage, Stage::Weighing | Stage::Running | Stage::Paused),
+        held: matches!(job.stage, Stage::Paused),
+        pauses: job.pauses,
+        opens: job.opens,
     }
 }
 
@@ -1062,31 +1241,27 @@ impl Guest for Component {
                     tone: Tone::Standard,
                 },
             ],
-            keymap: KEYMAP
-                .iter()
-                .map(|(keys, command)| Binding {
-                    keys: (*keys).into(),
-                    command: (*command).into(),
-                })
-                .collect(),
-            commands: KEYMAP.iter().map(|(_, c)| (*c).into()).collect(),
+            keymap: keymap(),
+            commands: commands(),
             segments: vec![],
             // THE ONE THAT MATTERS: without it the host neither subscribes to
             // the queue nor forwards a demand, and this buffer is an empty
             // screen with a keymap that does nothing.
             capabilities: vec![Capability::Transfers],
-            // Nothing it holds is text of the interface: everything this buffer
-            // shows goes out as a key and the host translates it when it draws.
-            phrases: vec![],
+            // THE PHRASES THE FOOT TEACHES, asked so its pairs can be MEASURED.
+            // Everything else this buffer shows goes out as a key and the host
+            // translates it when it draws.
+            phrases: taught_phrases(),
         }
     }
 
     fn render(ctx: Context) -> Vec<Command> {
         STATE.with_borrow_mut(|s| {
             let mut screen = Frame::of(&ctx);
-            match s.face {
-                Face::List => s.list(&mut screen),
-                Face::Detail => s.detail(&mut screen),
+            match (s.asking, s.face) {
+                (Some(q), _) => s.question(&mut screen, q),
+                (None, Face::List) => s.list(&mut screen),
+                (None, Face::Detail) => s.detail(&mut screen),
             }
             // ONE PLACE, and after both faces: the last line says the same
             // thing whichever of them is up, and a face that forgot to draw it
@@ -1136,34 +1311,56 @@ impl State {
         match e {
             // THE HOST SENDS THE ID THIS BUFFER DECLARED, so an id from anywhere
             // else is a bug on the other side and is ignored rather than guessed
-            // at. `normal` also clears the question: leaving a `pending` alive
-            // under the list is a key waiting for an `Enter` nobody can see.
+            // at. A state entered also lets the question go: a `yes` waiting
+            // under a page nobody is looking at is a key nobody can see.
             Input::EnterState(id) => {
                 s.face = match id.as_str() {
                     "detail" => Face::Detail,
                     _ => Face::List,
                 };
-                s.pending = None;
-                s.asked = false;
+                s.asking = None;
                 vec![Effect::Redraw]
             }
             Input::Queue(queue) => s.receive(queue),
-            Input::Command(id) => s.command(&id),
+            // WHILE THE QUESTION IS UP it takes the keys: the arrows walk its
+            // two answers, `RET` takes one, `Esc` is `no`, and nothing else
+            // reaches the list under it.
+            Input::Command(id) if s.asking.is_some() => match id.as_str() {
+                "transfers-down" => s.walk_the_answers(true),
+                "transfers-up" => s.walk_the_answers(false),
+                _ => Vec::new(),
+            },
+            Input::Down if s.asking.is_some() => s.walk_the_answers(true),
+            Input::Up if s.asking.is_some() => s.walk_the_answers(false),
+            Input::Confirm if s.asking.is_some() => s.answer(),
+            Input::Cancel if s.asking.is_some() => {
+                s.asking = None;
+                vec![Effect::Redraw]
+            }
+            Input::Toggle | Input::Character(_) if s.asking.is_some() => Vec::new(),
+            Input::Command(id) => s.run(&id),
             Input::Down => s.step(true),
             Input::Up => s.step(false),
-            Input::Confirm => s.confirm(),
+            // `RET` IS THE JOB'S PAGE, the second click's meaning — the
+            // table's (`TRANSFERS_KEYS`), in both doors.
+            Input::Confirm | Input::Toggle => s.run("transfers-detail"),
+            Input::Character(' ') => s.run("transfers-pause"),
             Input::Cancel => {
-                if s.pending.take().is_some() || s.asked {
-                    s.asked = false;
-                    vec![Effect::Redraw]
-                } else if s.face == Face::Detail {
+                if s.face == Face::Detail {
                     s.face = Face::List;
                     vec![Effect::Redraw]
                 } else {
                     vec![Effect::Close]
                 }
             }
-            Input::Toggle => s.command("transfers-detail"),
+            // THE WORDS FOR THE KEYS THE FOOT TEACHES, so its pairs can be
+            // measured. They arrive once, before the first frame.
+            Input::Phrases(said) => {
+                s.phrases = ronoctua_design::Phrases::of(
+                    said.into_iter().map(|p| (p.key, p.text)).collect(),
+                );
+                vec![Effect::Redraw]
+            }
             // THE POINTER AT REST, and the two gestures that move the window.
             Input::Hover(p) => {
                 // PER CURSOR: `p.seat` says which hand, and each keeps its own cell.
@@ -1201,32 +1398,52 @@ impl State {
                 s.top = (d.first as usize).min(total.saturating_sub(room.min(total)));
                 vec![Effect::Redraw]
             }
-            Input::Click(p) => {
-                let Some(first) = s.list_top else {
-                    return Vec::new();
-                };
-                if p.line < first {
-                    return Vec::new();
-                }
-                let n = s.top + usize::from(p.line - first);
-                match s.queue.jobs.get(n) {
-                    Some(job) => {
-                        // THE SECOND CLICK ON THE SAME ROW IS ITS `RET`, which
-                        // here opens the job's own page — the rule the file
-                        // manager already has written down, and the one the
-                        // owner asked to be absolute.
-                        if s.on == Some(job.id) {
-                            return s.confirm();
-                        }
-                        s.on = Some(job.id);
-                        s.pending = None;
-                        s.asked = false;
-                        vec![Effect::Redraw]
-                    }
-                    None => Vec::new(),
-                }
-            }
+            Input::Click(p) => s.clicked(p.line, p.column),
             _ => Vec::new(),
+        }
+    }
+
+    /// A click: a pair of the foot does what its key does; a row, or an
+    /// answer, is selected by the FIRST click and taken by the SECOND — its
+    /// `RET` (invariant 19), the footer panel's rule too.
+    fn clicked(&mut self, line: u16, column: u16) -> Vec<Effect> {
+        if line == self.foot_line
+            && let Some(pair) = self
+                .foot
+                .iter()
+                .find(|p| column >= p.at && column < p.at + p.cells)
+                .copied()
+        {
+            return match pair.id {
+                "transfers-answer" => self.answer(),
+                id => self.run(id),
+            };
+        }
+        if let (Some(q), Some(at)) = (self.asking, self.answers_at) {
+            let yes = match line.checked_sub(at) {
+                Some(0) => false,
+                Some(1) => true,
+                _ => return Vec::new(),
+            };
+            if q.yes == yes {
+                return self.answer();
+            }
+            return self.walk_the_answers(yes);
+        }
+        let Some(first) = self.list_top else {
+            return Vec::new();
+        };
+        if line < first {
+            return Vec::new();
+        }
+        let n = self.top + usize::from(line - first);
+        match self.queue.jobs.get(n) {
+            Some(job) if self.on == Some(job.id) => self.run("transfers-detail"),
+            Some(job) => {
+                self.on = Some(job.id);
+                vec![Effect::Redraw]
+            }
+            None => Vec::new(),
         }
     }
 }
@@ -1272,6 +1489,8 @@ mod tests {
             trouble: String::new(),
             answer: 0,
             identified: false,
+            pauses: true,
+            opens: false,
         }
     }
 
@@ -1305,12 +1524,13 @@ mod tests {
             s.on = on;
         }
         if pending {
-            s.pending = s.on.map(Pending::GiveUp);
+            s.asking = s.on.map(|id| GiveUp { id, yes: false });
         }
         let mut screen = Frame::of(ctx);
-        match s.face {
-            Face::List => s.list(&mut screen),
-            Face::Detail => s.detail(&mut screen),
+        match (s.asking, s.face) {
+            (Some(q), _) => s.question(&mut screen, q),
+            (None, Face::List) => s.list(&mut screen),
+            (None, Face::Detail) => s.detail(&mut screen),
         }
         s.foot(&mut screen);
         screen
@@ -1500,39 +1720,170 @@ mod tests {
         );
     }
 
+    /// FAILS IF: giving up stops asking first, or the question opens on
+    /// `yes`, or `Esc` gives up, or the answer names the row and not the id,
+    /// or a click takes an answer it did not select first.
     #[test]
-    fn giving_up_asks_before_it_acts() {
+    fn giving_up_asks_first_with_no_under_the_cursor() {
         let mut s = State::fresh();
         s.receive(Queue {
-            jobs: vec![job(7, Stage::Running, 1, 10)],
+            jobs: vec![job(7, Stage::Running, 1, 10), job(8, Stage::Paused, 1, 10)],
         });
         // The first press only puts the question up; nothing crosses.
-        let out = s.command("transfers-give-up");
+        let out = s.act(Input::Command("transfers-cancel".into()));
         assert!(matches!(out.as_slice(), [Effect::Redraw]));
-        assert_eq!(s.pending, Some(Pending::GiveUp(7)));
-        // The second one sends it, and names the id and not the row.
-        let out = s.confirm();
-        assert!(asks(&out, Request::CancelJob, 7));
-        assert_eq!(s.pending, None);
+        assert_eq!(s.asking, Some(GiveUp { id: 7, yes: false }));
+        // `RET` ON NO keeps it, and so does `Esc`.
+        assert!(
+            !s.act(Input::Confirm)
+                .iter()
+                .any(|e| matches!(e, Effect::Ask(_)))
+        );
+        assert_eq!(s.asking, None);
+        s.act(Input::Command("transfers-cancel".into()));
+        s.act(Input::Cancel);
+        assert_eq!(s.asking, None);
+        // `↓` AND `RET` send it, naming the id and not the row.
+        s.act(Input::Command("transfers-cancel".into()));
+        s.act(Input::Down);
+        assert!(asks(&s.act(Input::Confirm), Request::CancelJob, 7));
+        // BY THE POINTER, on the drawn answers: the first click selects.
+        s.act(Input::Command("transfers-cancel".into()));
+        let ctx = context(80, 24);
+        let mut screen = Frame::of(&ctx);
+        s.question(&mut screen, s.asking.expect("asking"));
+        let at = s.answers_at.expect("the answers were drawn");
+        assert!(
+            s.clicked(at + 1, 2)
+                .iter()
+                .all(|e| !matches!(e, Effect::Ask(_)))
+        );
+        assert_eq!(s.asking, Some(GiveUp { id: 7, yes: true }));
+        assert!(asks(&s.clicked(at + 1, 2), Request::CancelJob, 7));
+        // WHAT HAS ENDED is not asked about.
+        s.receive(Queue {
+            jobs: vec![job(7, Stage::Done, 10, 10), job(8, Stage::Paused, 1, 10)],
+        });
+        assert!(s.run("transfers-cancel").is_empty());
     }
 
+    /// FAILS IF: the one key that holds and lets go sends the wrong verb, holds
+    /// what its engine cannot hold, or holds what has ended — the footer
+    /// panel's answers, key for key.
     #[test]
     fn hold_reads_the_stage_and_never_sends_the_wrong_verb() {
         let mut s = State::fresh();
         s.receive(Queue {
             jobs: vec![job(3, Stage::Running, 1, 10)],
         });
-        assert!(asks(&s.hold(), Request::PauseJob, 3));
+        assert!(asks(&s.act(Input::Character(' ')), Request::PauseJob, 3));
         s.receive(Queue {
             jobs: vec![job(3, Stage::Paused, 1, 10)],
         });
-        assert!(asks(&s.hold(), Request::ResumeJob, 3));
+        assert!(asks(&s.run("transfers-pause"), Request::ResumeJob, 3));
         // Finished: nothing is sent at all, rather than a request the host
         // would have to refuse.
         s.receive(Queue {
             jobs: vec![job(3, Stage::Done, 10, 10)],
         });
-        assert!(s.hold().is_empty());
+        assert!(s.run("transfers-pause").is_empty());
+        // A PROGRAM'S INSTALL cannot be held.
+        let mut install = job(4, Stage::Running, 1, 10);
+        install.pauses = false;
+        s.receive(Queue {
+            jobs: vec![install],
+        });
+        assert!(s.run("transfers-pause").is_empty());
+    }
+
+    /// FAILS IF: the window loses the footer panel's launch — a finished
+    /// install's row opening what it made, through the host — or teaches it
+    /// on a row that made nothing.
+    #[test]
+    fn a_finished_install_opens_from_its_row_here_too() {
+        let mut s = State::fresh();
+        let mut installed = job(5, Stage::Done, 1, 1);
+        installed.opens = true;
+        s.receive(Queue {
+            jobs: vec![installed],
+        });
+        assert!(asks(
+            &s.act(Input::Command("transfers-launch".into())),
+            Request::LaunchJob,
+            5
+        ));
+        assert!(
+            s.taught()
+                .iter()
+                .any(|(k, id)| *k == "C-o" && *id == "transfers-launch")
+        );
+        s.receive(Queue {
+            jobs: vec![job(6, Stage::Done, 1, 1)],
+        });
+        assert!(s.run("transfers-launch").is_empty());
+        assert!(!s.taught().iter().any(|(_, id)| *id == "transfers-launch"));
+    }
+
+    /// FAILS IF: the window's keys stop being the footer panel's table — a
+    /// chord of it unbound here — or `RET` stops opening the job's page, or
+    /// the second click stops doing what `RET` does.
+    #[test]
+    fn the_keys_are_the_panels_and_ret_is_the_page() {
+        let bound: Vec<String> = keymap().into_iter().map(|b| b.keys).collect();
+        for (notation, id) in TRANSFERS_KEYS {
+            if let Some(local) = local_binding(notation) {
+                assert!(
+                    bound.contains(&local),
+                    "{notation} ({id}) is not bound here"
+                );
+            }
+        }
+        assert!(commands().contains(&"transfers-cancel".to_owned()));
+        let mut s = State::fresh();
+        s.receive(Queue {
+            jobs: vec![job(1, Stage::Running, 1, 10), job(2, Stage::Running, 1, 10)],
+        });
+        s.act(Input::Confirm);
+        assert_eq!(s.face, Face::Detail);
+        s.act(Input::Cancel);
+        assert_eq!(s.face, Face::List);
+        // THE FIRST CLICK SELECTS, the second opens.
+        let ctx = context(80, 24);
+        let mut screen = Frame::of(&ctx);
+        s.list(&mut screen);
+        let first = s.list_top.expect("the list was drawn");
+        s.clicked(first + 1, 4);
+        assert_eq!((s.on, s.face), (Some(2), Face::List));
+        s.clicked(first + 1, 4);
+        assert_eq!(s.face, Face::Detail);
+    }
+
+    /// FAILS IF: a pair of the foot stops being a control — a click on it
+    /// not doing what its key does — or the foot teaches what the row does
+    /// not allow.
+    #[test]
+    fn the_foot_is_the_keys_and_every_pair_is_a_click() {
+        let mut s = State::fresh();
+        s.receive(Queue {
+            jobs: vec![job(1, Stage::Running, 1, 10)],
+        });
+        let ctx = context(110, 24);
+        let mut screen = Frame::of(&ctx);
+        s.list(&mut screen);
+        s.foot(&mut screen);
+        let ids: Vec<&str> = s.foot.iter().map(|p| p.id).collect();
+        assert_eq!(
+            ids,
+            [
+                "transfers-detail",
+                "transfers-pause",
+                "transfers-cancel",
+                "transfers-sweep"
+            ]
+        );
+        let cancel = s.foot[2];
+        s.clicked(s.foot_line, cancel.at);
+        assert_eq!(s.asking, Some(GiveUp { id: 1, yes: false }));
     }
 
     /// `Effect` is a WIT variant and `wit-bindgen` gives it `Clone` and a

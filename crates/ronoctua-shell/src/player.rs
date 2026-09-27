@@ -23,13 +23,22 @@
 //! puts one in the queue — a folder whole — `DEL` goes up, and `Esc` goes
 //! back to the view, the bluetooth view's way with its levels.
 //!
-//! # What is typed, is typed in the footer
+//! # Every door types
 //!
-//! A file or an address to play, one to add to the queue and a video to
-//! follow are asked in the minibuffer (`ask-player-play-file`,
-//! `ask-player-enqueue`, `ask-player-follow`); a
-//! window runs the command and says so, because letters typed there would go
-//! nowhere (the network view's rule).
+//! A file or an address to play, one to add to the queue, a video to follow
+//! and the other machine a pairing is with are a [`Question`] the view hands
+//! its door (`Errand::Ask`): the footer asks it on its minibuffer, a window
+//! and the column on their own header's line (`door::Ui::ask`) — the view
+//! stays open under it in both. What was typed comes back to ONE function,
+//! [`answered`], whichever door typed it, and a pairing's code is a secret
+//! there: asked masked, never logged, and only ever sent to the player.
+//!
+//! # The bars are controls in every door
+//!
+//! The position and the volume are drawn as bars ([`Slider`]), and a press on
+//! one sets the value there and holding drags it — [`slider_at`] and
+//! [`slid`], the one arithmetic both doors ask, beside the window's own time
+//! bar and volume track.
 
 use crate::files::{Field, Hit as FilesHit, Ink};
 use ronoctua_player::{
@@ -46,6 +55,7 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<right>", "player-more", Where::OnAValue),
     ("RET", "player-enter", Where::OnARow),
     ("SPC", "player-toggle", Where::Anywhere),
+    ("s", "player-stop", Where::Anywhere),
     ("n", "player-next", Where::Anywhere),
     ("p", "player-previous", Where::Anywhere),
     ("d", "player-remove", Where::OnRemovable),
@@ -116,6 +126,8 @@ pub enum Press {
     Enter,
     /// Play or pause, wherever the cursor is.
     Toggle,
+    /// Stop: the queue stays, and nothing plays.
+    Stop,
     /// The next item of the queue.
     Next,
     /// The previous one.
@@ -186,8 +198,10 @@ pub enum Target {
     Sponsors,
     /// One of SponsorBlock's categories, skipped or not.
     Skip(&'static str),
-    /// A door or a question: a command of the registry.
+    /// A door: a command of the registry.
     Run(&'static str),
+    /// Pair with another machine: its name, then the code it shows.
+    Pair,
     /// Open the files.
     Browse,
     /// Which of the three places the files start from: a ring.
@@ -202,7 +216,7 @@ pub enum Target {
     Folder(std::path::PathBuf),
     /// A file of the listing: `RET` puts it in the queue, `P` plays it alone.
     File(std::path::PathBuf),
-    /// A path or an address, typed: the question in the footer.
+    /// A path or an address, typed: a [`Question`] the door asks.
     Typed,
     /// Pick another video to play in step with this sound — the files, for
     /// that purpose.
@@ -268,6 +282,82 @@ pub struct Row {
     /// or carries a control beside its title: where each one is, and what it
     /// does. `target` is then the one the cursor is on.
     pub cells: Vec<Cell>,
+    /// The bar the value is drawn as, when it is one — a control a press
+    /// sets and a drag turns ([`slider_at`]).
+    pub slider: Option<Slider>,
+}
+
+/// Which value a bar of the view turns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slid {
+    /// Where in the item: a press seeks there.
+    Position,
+    /// The volume, up to [`VOLUME_MOST`].
+    Volume,
+}
+
+/// A bar on a row: where it is drawn, in the row's own cells (a field's
+/// `at`), and which value it turns.
+///
+/// ONE ANSWER for the painter and the pointer: the bar is the value's first
+/// cells, placed by `chrome::field_pair`, and this is read back from the field
+/// that was placed — so a press is taken where the bar was drawn, in both
+/// doors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Slider {
+    /// The value it turns.
+    pub of: Slid,
+    /// Its first cell.
+    pub from: u16,
+    /// How many cells it takes.
+    pub cells: u16,
+}
+
+impl Slider {
+    /// Whether `column` — fractional cells from the rows' origin — is on it.
+    #[must_use]
+    pub fn under(self, column: f64) -> bool {
+        column >= f64::from(self.from) && column < f64::from(self.from + self.cells)
+    }
+
+    /// How far along it `column` is, clamped to its two ends: a drag that
+    /// leaves the bar keeps the end it left by.
+    #[must_use]
+    pub fn along(self, column: f64) -> f64 {
+        ((column - f64::from(self.from)) / f64::from(self.cells.max(1))).clamp(0.0, 1.0)
+    }
+}
+
+/// The bar on row `n` under `column` (fractional cells from the rows'
+/// origin), when there is one there — what a press in either door asks.
+#[must_use]
+pub fn slider_at(rows: &[Row], n: usize, column: f64) -> Option<Slider> {
+    rows.get(n)?.slider.filter(|b| b.under(column))
+}
+
+/// What turning a bar to `fraction` of its length asks the player — the same
+/// arithmetic as the window's time bar and volume track.
+#[must_use]
+pub fn slid(of: Slid, fraction: f64, state: Option<&State>) -> Errand {
+    let fraction = fraction.clamp(0.0, 1.0);
+    match of {
+        Slid::Position => {
+            state
+                .and_then(|s| s.duration)
+                .filter(|d| *d > 0.0)
+                .map_or(Errand::Nothing, |d| {
+                    Errand::Tell(Ask::Seek {
+                        seconds: d * fraction,
+                        relative: false,
+                    })
+                })
+        }
+        Slid::Volume => {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let percent = (fraction * f64::from(VOLUME_MOST)).round() as u8;
+            Errand::Tell(Ask::Volume { percent })
+        }
+    }
 }
 
 /// One entry of a row laid out in columns, or a control on a title's line.
@@ -293,9 +383,9 @@ pub enum Purpose {
     Follow,
 }
 
-/// A question on screen, and what each answer does.
+/// A yes-or-no question on screen, and what each answer does.
 #[derive(Debug, Clone, PartialEq)]
-struct Question {
+struct Choice {
     /// What is asked, already in words.
     sentence: String,
     /// Where the cursor was, to go back to once it is answered.
@@ -306,6 +396,119 @@ struct Question {
     no: Box<Errand>,
 }
 
+/// The command that plays a path or an address in place of the queue.
+pub const PLAY: &str = "player-play-file";
+/// The one that adds a path or an address to the queue.
+pub const ENQUEUE: &str = "player-enqueue";
+/// The one that plays another video in step with this sound.
+pub const FOLLOW: &str = "player-follow";
+/// The one that pairs with another machine: its name, first.
+pub const PAIR: &str = "player-pair";
+/// The pairing's second question: the code the other machine shows.
+pub const PAIR_CODE: &str = "player-pair-code";
+
+/// A line the door asks — its minibuffer in the footer, its header's line in
+/// a window — and whether what is typed on it is a secret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Question {
+    /// Which question: the `ask-<id>` it is drawn with, and the id its answer
+    /// comes back to [`answered`] under.
+    pub id: &'static str,
+    /// Masked on screen, left out of every log, and never in an argv.
+    pub secret: bool,
+}
+
+/// The question a command of the registry asks, when it asks one — what the
+/// footer opens for `LEADER p o` and its siblings, typed from no view.
+#[must_use]
+pub fn question(id: &str) -> Option<Question> {
+    Some(match id {
+        PLAY => Question {
+            id: PLAY,
+            secret: false,
+        },
+        ENQUEUE => Question {
+            id: ENQUEUE,
+            secret: false,
+        },
+        FOLLOW => Question {
+            id: FOLLOW,
+            secret: false,
+        },
+        PAIR => Question {
+            id: PAIR,
+            secret: false,
+        },
+        PAIR_CODE => Question {
+            id: PAIR_CODE,
+            secret: true,
+        },
+        _ => return None,
+    })
+}
+
+/// A pairing's code: six digits read off another screen, exchanged for the
+/// key two machines share. A secret — its `Debug` says nothing, so no log line
+/// that prints an errand prints it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Code(String);
+
+impl std::fmt::Debug for Code {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Code(…)")
+    }
+}
+
+/// What a door remembers between a pairing's two questions: the machine's
+/// name, until its code is typed. The DOOR's and not the view's, because the
+/// footer asks it from the leader (`LEADER p m`) with no view open.
+#[derive(Debug, Default)]
+pub struct Pairing {
+    name: Option<String>,
+}
+
+impl Pairing {
+    /// The question was let go: the name goes with it, so a code typed later
+    /// under another question is not taken for this one.
+    pub fn let_go(&mut self) {
+        self.name = None;
+    }
+}
+
+/// What was typed for one of the player's questions, from whichever door
+/// typed it — the ONE place an answer turns into an order.
+///
+/// An empty answer is never mind, in both doors. A path or an address is
+/// [`typed`]'s; a machine's name asks for its code next; the code pairs with
+/// the name asked before it, and nothing else.
+pub fn answered(id: &str, said: &str, pairing: &mut Pairing) -> Errand {
+    match id {
+        PAIR => {
+            let name = said.trim();
+            if name.is_empty() {
+                pairing.let_go();
+                return Errand::Nothing;
+            }
+            pairing.name = Some(name.to_owned());
+            Errand::Ask(Question {
+                id: PAIR_CODE,
+                secret: true,
+            })
+        }
+        PAIR_CODE => {
+            let code = said.trim();
+            match pairing.name.take() {
+                Some(to) if !code.is_empty() => Errand::Pair {
+                    to,
+                    code: Code(code.to_owned()),
+                },
+                _ => Errand::Nothing,
+            }
+        }
+        _ => typed(id, said).map_or(Errand::Nothing, Errand::Tell),
+    }
+}
+
 /// What the door has to do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Errand {
@@ -313,8 +516,17 @@ pub enum Errand {
     Nothing,
     /// Shut the view.
     Close,
-    /// Run a command of the registry (a question in the footer, or a door).
+    /// Run a command of the registry: a door.
     Run(&'static str),
+    /// Ask a line of the door — see [`Question`].
+    Ask(Question),
+    /// Pair with another machine: its name and the code it shows.
+    Pair {
+        /// Its name on the tailnet.
+        to: String,
+        /// The code, a secret.
+        code: Code,
+    },
     /// Tell the player.
     Tell(Ask),
     /// Tell the player, and say what was done — the sentence already in
@@ -339,6 +551,47 @@ pub enum Show {
     /// Alone, in a small window floating in the bottom-right corner —
     /// picture-in-picture.
     Small,
+}
+
+/// Where the footer puts the picture, in the region's cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Panel {
+    /// Its first column.
+    pub from: u16,
+    /// How many columns it takes.
+    pub cells: u16,
+}
+
+/// The footer's picture: beside the rows, or the whole region.
+///
+/// # Beside the rows, the column's width
+///
+/// The window has a band above its rows for the picture; the footer's region
+/// is the other shape — the whole screen across, a few lines down — so the
+/// picture goes at the right end of it, beside the rows, as wide as the
+/// column the player sits in (`space.column.width`), and the region's own bar
+/// keeps its last cell. Only the picture (`o`) takes the whole region, the
+/// window's `Only` in this door. A region too narrow to spare the column —
+/// the rows would keep less than half — shows the rows whole and no picture.
+///
+/// A FUNCTION OF THE WIDTH ALONE: the rows are laid out at what is left
+/// ([`Panel::from`]), and how many rows there are is what sizes the region —
+/// a panel that asked the region's height back would be the footer asking
+/// itself.
+#[must_use]
+pub fn footer_panel(columns: u16, only: bool) -> Option<Panel> {
+    let usable = columns.saturating_sub(tokens::space::FILES_EDGERIGHT);
+    if only {
+        return (usable > 0).then_some(Panel {
+            from: 0,
+            cells: usable,
+        });
+    }
+    let cells = tokens::space::COLUMN_WIDTH;
+    (usable >= cells.saturating_mul(2)).then_some(Panel {
+        from: usable - cells,
+        cells,
+    })
 }
 
 /// How far `←`/`→` move the position, in seconds.
@@ -370,8 +623,8 @@ pub struct View {
     came_from: Option<std::path::PathBuf>,
     /// Which entry of a grid row the cursor is on.
     cell: usize,
-    /// The question on screen, when one is.
-    asking: Option<Question>,
+    /// The yes-or-no question on screen, when one is.
+    asking: Option<Choice>,
     /// A control on a title's line, clicked: what the next `RET` does.
     clicked_control: Option<Target>,
 }
@@ -611,6 +864,23 @@ impl View {
         again
     }
 
+    /// A press on the bar of row `n`: the row becomes the cursor's, and the
+    /// door sets the value where the press landed ([`slid`]) — a bar acts on
+    /// the press, as the window's time bar does, and holding drags it.
+    pub fn grabbed(&mut self, n: usize) {
+        self.cursor = n;
+        self.cell = 0;
+        self.moved = true;
+    }
+
+    /// The files, open on `at` for `purpose` — what a test of a door stands
+    /// on, with no folder of the machine's read.
+    #[cfg(test)]
+    pub fn files_at(&mut self, at: &std::path::Path, purpose: Purpose) {
+        self.left_at = Some((0, at.to_path_buf()));
+        self.open_the_files(purpose);
+    }
+
     /// A click anywhere on row `n` — the first column.
     #[cfg(test)]
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
@@ -825,6 +1095,7 @@ impl View {
             // the value of the row, below.
             Press::Less | Press::More if self.across(&rows, press) => return Errand::Nothing,
             Press::Toggle => return Errand::Tell(Ask::Toggle),
+            Press::Stop => return Errand::Tell(Ask::Stop),
             Press::Only => return Errand::Show(Show::Only),
             Press::Maximize => return Errand::Show(Show::Maximized),
             Press::Pip => return Errand::Show(Show::Small),
@@ -950,11 +1221,15 @@ impl View {
                 }
                 Errand::Nothing
             }
-            // THE TYPED PATH OR ADDRESS is the question in the footer, for the
-            // same purpose the files are open for.
-            (Target::Typed, Press::Enter) => Errand::Run(match purpose {
-                Purpose::Queue => "player-enqueue",
-                Purpose::Follow => "player-follow",
+            // THE TYPED PATH OR ADDRESS is a question of the door's own line,
+            // for the same purpose the files are open for — and the files stay
+            // open under it.
+            (Target::Typed, Press::Enter) => Errand::Ask(Question {
+                id: match purpose {
+                    Purpose::Queue => ENQUEUE,
+                    Purpose::Follow => FOLLOW,
+                },
+                secret: false,
             }),
             (Target::Folder(p), Press::Enter) => {
                 self.go_to(&p.clone(), None);
@@ -1081,7 +1356,7 @@ impl View {
     /// Puts a question on screen; `no` is where the cursor starts, and what
     /// `Esc` answers — a question that appears on its own answers no.
     fn ask(&mut self, sentence: String, yes: Errand, no: Errand) -> Errand {
-        self.asking = Some(Question {
+        self.asking = Some(Choice {
             sentence,
             back: (self.cursor, self.cell),
             yes: Box::new(yes),
@@ -1303,25 +1578,39 @@ impl View {
                 Target::Playing,
                 "playing",
             );
-            b.pair(
-                b.t(key::PLAYER_POSITION),
-                s.duration.map_or_else(
-                    || clock(s.position),
-                    |d| format!("{} / {}", clock(s.position), clock(d)),
+            // THE POSITION IS A BAR when the item has a length: a press
+            // seeks there, as on the window's time bar. A stream has none,
+            // and says only where it is.
+            match s.duration.filter(|d| *d > 0.0) {
+                Some(d) => b.slider_pair(
+                    b.t(key::PLAYER_POSITION),
+                    share(s.position, d),
+                    &format!("{} / {}", clock(s.position), clock(d)),
+                    Target::Position,
+                    "position",
+                    Slid::Position,
                 ),
-                Target::Position,
-                "position",
-            );
+                None => b.pair(
+                    b.t(key::PLAYER_POSITION),
+                    clock(s.position),
+                    Target::Position,
+                    "position",
+                ),
+            }
         }
-        b.pair(
+        // THE VOLUME IS A BAR up to the loudest the ring goes, the window's
+        // track's length.
+        b.slider_pair(
             b.t(key::PLAYER_VOLUME),
-            if s.muted {
+            share(f64::from(s.volume), f64::from(VOLUME_MOST)),
+            &if s.muted {
                 b.t(key::PLAYER_MUTED)
             } else {
                 format!("{}%", s.volume)
             },
             Target::Volume,
             "volume",
+            Slid::Volume,
         );
         b.pair(
             b.t(key::PLAYER_SPEED),
@@ -1552,12 +1841,7 @@ fn machines(b: &mut Builder<'_>, s: &State) {
         Target::Invite,
         "invite",
     );
-    b.pair(
-        b.t(key::PLAYER_PAIR),
-        String::new(),
-        Target::Run("player-pair"),
-        "pair",
-    );
+    b.pair(b.t(key::PLAYER_PAIR), String::new(), Target::Pair, "pair");
 }
 
 /// A role's name.
@@ -1604,6 +1888,10 @@ fn turn(target: &Target, press: Press, state: Option<&State>) -> Errand {
         (Target::Nothing, _) => Errand::Nothing,
         (Target::Run(id), Press::Enter) => Errand::Run(id),
         (Target::Run(_), _) => Errand::Nothing,
+        (Target::Pair, Press::Enter) => Errand::Ask(Question {
+            id: PAIR,
+            secret: false,
+        }),
         (Target::Playing, _) => Errand::Tell(Ask::Toggle),
         (Target::Position, Press::Enter) => Errand::Tell(Ask::Seek {
             seconds: JUMP_STEP,
@@ -1706,7 +1994,12 @@ fn turn(target: &Target, press: Press, state: Option<&State>) -> Errand {
 pub fn carry_out(errand: Errand, texts: &ronoctua_i18n::Texts) -> Result<Option<String>, Errand> {
     match errand {
         Errand::Nothing => Ok(None),
-        Errand::Run(_) | Errand::Close | Errand::Show(_) => Err(errand),
+        // A PAIRING IS THE DOOR'S TOO: it is sent off the loop
+        // ([`pair_then`]), because the player answers it only after a round
+        // trip to the other machine.
+        Errand::Run(_) | Errand::Close | Errand::Show(_) | Errand::Ask(_) | Errand::Pair { .. } => {
+            Err(errand)
+        }
         Errand::Said(sentence) => Ok(Some(sentence)),
         // THE SENTENCE UNLESS THE PLAYER REFUSED: then the refusal is what is
         // true, and it is what is said.
@@ -1722,6 +2015,80 @@ pub fn carry_out(errand: Errand, texts: &ronoctua_i18n::Texts) -> Result<Option<
                 &[("why", &e.to_string())],
             )),
         }),
+    }
+}
+
+/// How long a pairing may take: the player answers only once the other
+/// machine has — its own patience is five seconds to connect and five to
+/// hear back — and the three seconds every other ask gets ended the wait
+/// while the pairing went on, and said the player was not running.
+const PAIR_PATIENCE: std::time::Duration = std::time::Duration::from_secs(12);
+
+/// How a pairing sent off the loop ended — the words are said on the loop,
+/// where the language is ([`paired_said`]).
+#[derive(Debug)]
+pub enum Paired {
+    /// The player answered: paired, or refused with its reason.
+    Answered(ronoctua_player::wire::Say),
+    /// No player on this machine to pair.
+    NotInstalled,
+    /// The player could not be started or reached.
+    NotRunning,
+    /// The player was asked and had not answered by [`PAIR_PATIENCE`].
+    NoAnswer,
+}
+
+/// Pairs with `to`, OFF THE LOOP — both doors send the code this way — and
+/// hands `done` how it ended, on the thread that waited.
+///
+/// THE CODE LEAVES FOR THE PLAYER, and only there: it is the one path it has,
+/// down the player's socket, and it is never printed on the way.
+pub fn pair_then(to: String, code: Code, done: impl FnOnce(Paired) + Send + 'static) {
+    let born = std::thread::Builder::new()
+        .name("player-pair".to_owned())
+        .spawn(move || {
+            let paired = match ronoctua_player::client::ensure() {
+                Err(e) if e.is::<ronoctua_player::client::NotInstalled>() => Paired::NotInstalled,
+                Err(_) => Paired::NotRunning,
+                Ok(_) => match ronoctua_player::client::ask_within(
+                    &Ask::PairWith { to, code: code.0 },
+                    PAIR_PATIENCE,
+                ) {
+                    Ok(say) => Paired::Answered(say),
+                    Err(e) if timed_out(&e) => Paired::NoAnswer,
+                    Err(_) => Paired::NotRunning,
+                },
+            };
+            done(paired);
+        });
+    if let Err(e) = born {
+        tracing::error!(error = %e, "could not start the thread that pairs");
+    }
+}
+
+/// Whether an ask ended because the answer did not come in time.
+fn timed_out(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<std::io::Error>().is_some_and(|io| {
+        matches!(
+            io.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        )
+    })
+}
+
+/// What a door says of a pairing that ended: nothing when it paired, the
+/// player's reason when it refused, and which of the other three it was.
+#[must_use]
+pub fn paired_said(paired: &Paired, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    use ronoctua_i18n::key;
+    match paired {
+        Paired::Answered(ronoctua_player::wire::Say::Refused(t)) => {
+            Some(trouble_sentence(t, texts))
+        }
+        Paired::Answered(_) => None,
+        Paired::NotInstalled => Some(texts.t(key::PLAYER_NOT_INSTALLED)),
+        Paired::NotRunning => Some(texts.t(key::PLAYER_NOT_RUNNING)),
+        Paired::NoAnswer => Some(texts.t(key::PLAYER_PAIR_NO_ANSWER)),
     }
 }
 
@@ -1743,7 +2110,8 @@ pub fn tell(ask: &Ask, texts: &ronoctua_i18n::Texts) -> Option<String> {
     }
 }
 
-/// What was typed for one of the player's questions, turned into an order.
+/// A path or an address typed for one of the player's questions, turned into
+/// an order — [`answered`]'s, for the three that type one.
 ///
 /// A path that exists is made absolute against home rather than against the
 /// footer's working directory, which is nobody's; anything else is handed to
@@ -1751,20 +2119,11 @@ pub fn tell(ask: &Ask, texts: &ronoctua_i18n::Texts) -> Option<String> {
 #[must_use]
 pub fn typed(id: &str, said: &str) -> Option<Ask> {
     let said = said.trim();
-    if said.is_empty() {
+    if said.is_empty() || !matches!(id, PLAY | ENQUEUE | FOLLOW) {
         return None;
     }
-    if id == "player-pair" {
-        // THE NAME AND THE CODE, in that order: the name is what is on the
-        // other screen's heading, and the code is under it.
-        let (to, code) = said.rsplit_once(char::is_whitespace)?;
-        return Some(Ask::PairWith {
-            to: to.trim().to_owned(),
-            code: code.trim().to_owned(),
-        });
-    }
     let item = expand(said);
-    if id == "player-follow" {
+    if id == FOLLOW {
         return Some(Ask::Follow { item });
     }
     // A FOLDER IS EVERY FILE UNDER IT the player plays; one with none goes
@@ -1775,7 +2134,7 @@ pub fn typed(id: &str, said: &str) -> Option<Ask> {
     }
     Some(Ask::Open {
         items,
-        replace: id != "player-enqueue",
+        replace: id != ENQUEUE,
     })
 }
 
@@ -1854,6 +2213,15 @@ fn shown_path(p: &std::path::Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// `part` of `whole`, in per cent, for a bar.
+fn share(part: f64, whole: f64) -> u8 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let percent = (part / whole.max(f64::MIN_POSITIVE) * 100.0)
+        .clamp(0.0, 100.0)
+        .round() as u8;
+    percent
+}
+
 fn trim_float(x: f64) -> String {
     let s = format!("{x:.2}");
     s.trim_end_matches('0').trim_end_matches('.').to_owned()
@@ -1877,6 +2245,7 @@ pub fn press_of(id: &str) -> Option<Press> {
         "player-more" => Press::More,
         "player-enter" => Press::Enter,
         "player-toggle" => Press::Toggle,
+        "player-stop" => Press::Stop,
         "player-next" => Press::Next,
         "player-previous" => Press::Previous,
         "player-remove" => Press::Remove,
@@ -1893,6 +2262,27 @@ pub fn press_of(id: &str) -> Option<Press> {
         "player-mute" => Press::Mute,
         _ => return None,
     })
+}
+
+/// A key, as the view's press — the ONE reader every door calls: the window
+/// and the column with `door::keys::key_of`, the footer with the key its own
+/// reader built.
+///
+/// `Esc` is every level's way back, and the arrows, `RET`, `SPC` and `DEL`
+/// are read by their symbol whatever is held, as both doors always read them.
+/// A LETTER is read by its whole notation: `C-s` is not `s`. The footer used
+/// to drop every modifier and answer a letter held with `Ctrl` as the bare
+/// letter, while the window read xkb's control character and answered
+/// nothing — one key, two answers.
+#[must_use]
+pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
+    use ronoctua_keymap::{Key, Sym};
+    let notation = match key.sym {
+        Sym::Esc => return Some(Press::Escape),
+        Sym::Char(_) => key.notation(),
+        other => Key::simple(other).notation(),
+    };
+    pressed(&notation)
 }
 
 /// Which press a notation is, through [`OF_THE_VIEW`].
@@ -1938,6 +2328,7 @@ impl Builder<'_> {
             target: Target::Nothing,
             spot: String::new(),
             cells: Vec::new(),
+            slider: None,
         });
     }
 
@@ -1971,7 +2362,37 @@ impl Builder<'_> {
             target,
             spot: spot.to_owned(),
             cells: Vec::new(),
+            slider: None,
         });
+    }
+
+    /// A pair whose value is a BAR, `filled` per cent of it, and `text` after
+    /// it — the bar is a control, and the row says where it was drawn.
+    fn slider_pair(
+        &mut self,
+        label: String,
+        filled: u8,
+        text: &str,
+        target: Target,
+        spot: &str,
+        of: Slid,
+    ) {
+        let cells = tokens::space::PLAYER_VOLUMEBAR;
+        let bar = crate::chrome::meter(filled, cells);
+        self.pair(label, format!("{bar} {text}"), target, spot);
+        // WHERE THE VALUE WAS PLACED is where the bar begins — read back from
+        // the field, and never worked out a second time — and a value cut
+        // short keeps only the cells it drew.
+        if let Some(row) = self.out.last_mut()
+            && let Some(value) = row.fields.get(1)
+        {
+            let drawn = ronoctua_render::layout::width(&value.text).min(cells);
+            row.slider = (drawn > 0).then_some(Slider {
+                of,
+                from: value.at,
+                cells: drawn,
+            });
+        }
     }
 
     /// The files' entries in up to three columns, filled DOWN each column
@@ -2049,6 +2470,7 @@ impl Builder<'_> {
                 target,
                 spot,
                 cells,
+                slider: None,
             });
         }
     }
@@ -2060,8 +2482,14 @@ impl Builder<'_> {
         self.heading(key);
         if let Some(row) = self.out.last_mut() {
             let at = self.left + self.room.saturating_sub(2);
-            row.fields
-                .push(Self::piece(at, glyph.to_string(), tokens::color::TEXT_DIM));
+            // THE GLYPH WEARS ITS TITLE'S TONE, as the drawers' chevrons do
+            // (`network::drawer`): a second, quieter text tone on a title
+            // line is the title read as body text.
+            row.fields.push(Self::piece(
+                at,
+                glyph.to_string(),
+                tokens::color::TEXT_HEADING,
+            ));
             row.cells.push(Cell {
                 from: at,
                 width: 2,
@@ -2093,6 +2521,7 @@ impl Builder<'_> {
             target,
             spot: spot.to_owned(),
             cells: Vec::new(),
+            slider: None,
         });
     }
 }
@@ -2584,14 +3013,245 @@ mod tests {
             turn(&Target::Host("den".into()), Press::Enter, Some(&s)),
             Errand::Tell(Ask::Leave)
         );
+    }
+
+    /// FAILS IF: a pairing is sent on a door's loop — `carry_out` telling
+    /// the player, which answers only after the other machine does — or a
+    /// wait that ran out is said as "the player is not running" while the
+    /// pairing may still succeed.
+    #[test]
+    fn a_pairing_is_the_doors_to_send_off_the_loop_and_a_slow_one_is_said_so() {
+        let t = texts();
+        let pair = Errand::Pair {
+            to: "den".into(),
+            code: Code("123456".into()),
+        };
+        assert_eq!(carry_out(pair.clone(), &t), Err(pair));
+        let slow = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::WouldBlock));
+        assert!(timed_out(&slow));
+        let also = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::TimedOut));
+        assert!(timed_out(&also));
+        let gone = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::ConnectionRefused));
+        assert!(!timed_out(&gone));
+        assert!(!timed_out(&anyhow::anyhow!("the player did not answer")));
+        let said = |p: Paired| paired_said(&p, &t);
         assert_eq!(
-            typed("player-pair", " den  123456 "),
-            Some(Ask::PairWith {
-                to: "den".into(),
-                code: "123456".into()
+            said(Paired::NoAnswer),
+            Some(t.t(ronoctua_i18n::key::PLAYER_PAIR_NO_ANSWER))
+        );
+        assert_ne!(said(Paired::NoAnswer), said(Paired::NotRunning));
+        assert_eq!(
+            said(Paired::NotRunning),
+            Some(t.t(ronoctua_i18n::key::PLAYER_NOT_RUNNING))
+        );
+    }
+
+    /// FAILS IF: pairing stops being two questions — the name in the clear,
+    /// then the code MASKED — or the code pairs with no name asked before it,
+    /// or a code's `Debug` prints the digits.
+    #[test]
+    fn pairing_asks_the_name_and_then_the_secret_code() {
+        let t = texts();
+        let mut s = playing();
+        s.tailnet = Some("here".into());
+        let mut v = View::fresh();
+        let rows = v.rows(Some(&s), 80, &t);
+        let at = rows
+            .iter()
+            .position(|r| r.target == Target::Pair)
+            .expect("the pairing row");
+        v.clicked(at, &rows);
+        assert_eq!(
+            v.key(Press::Enter, Some(&s), 80, &t),
+            Errand::Ask(Question {
+                id: PAIR,
+                secret: false
             })
         );
-        assert_eq!(typed("player-pair", "123456"), None, "a name and a code");
+        let mut pairing = Pairing::default();
+        assert_eq!(
+            answered(PAIR, " den ", &mut pairing),
+            Errand::Ask(Question {
+                id: PAIR_CODE,
+                secret: true
+            })
+        );
+        let paired = answered(PAIR_CODE, " 123456 ", &mut pairing);
+        assert_eq!(
+            paired,
+            Errand::Pair {
+                to: "den".into(),
+                code: Code("123456".into())
+            }
+        );
+        assert!(!format!("{paired:?}").contains("123456"), "{paired:?}");
+        // A CODE WITH NO NAME BEFORE IT is never mind, and so is an empty one.
+        assert_eq!(answered(PAIR_CODE, "123456", &mut pairing), Errand::Nothing);
+        answered(PAIR, "den", &mut pairing);
+        pairing.let_go();
+        assert_eq!(answered(PAIR_CODE, "123456", &mut pairing), Errand::Nothing);
+        answered(PAIR, "den", &mut pairing);
+        assert_eq!(answered(PAIR_CODE, "  ", &mut pairing), Errand::Nothing);
+        assert_eq!(question(PAIR_CODE).map(|q| q.secret), Some(true));
+    }
+
+    /// FAILS IF: the typed path or address row stops being a question of the
+    /// door's own line — for the purpose the files are open for — or closes
+    /// the files under it, or an answer stops becoming the same order in
+    /// whichever door typed it.
+    #[test]
+    fn a_typed_path_is_asked_with_the_files_still_open() {
+        let t = texts();
+        let root = a_library("typed");
+        let mut v = among(&root);
+        let rows = v.rows(None, 80, &t);
+        let at = rows
+            .iter()
+            .position(|r| r.target == Target::Typed)
+            .expect("the typed row");
+        v.clicked(at, &rows);
+        assert_eq!(
+            v.key(Press::Enter, None, 80, &t),
+            Errand::Ask(Question {
+                id: ENQUEUE,
+                secret: false
+            })
+        );
+        assert!(v.files.is_some(), "the files closed under the question");
+        let mut pairing = Pairing::default();
+        assert_eq!(
+            answered(ENQUEUE, "https://example.org/a", &mut pairing),
+            Errand::Tell(Ask::Open {
+                items: vec!["https://example.org/a".into()],
+                replace: false
+            })
+        );
+        assert_eq!(answered(ENQUEUE, "   ", &mut pairing), Errand::Nothing);
+        assert_eq!(
+            answered(FOLLOW, "/v/b.mkv", &mut pairing),
+            Errand::Tell(Ask::Follow {
+                item: "/v/b.mkv".into()
+            })
+        );
+        // IN STEP, the same row asks the other question.
+        v.files = None;
+        v.open_the_files(Purpose::Follow);
+        v.settle_in(None, 80, &t);
+        let rows = v.rows(None, 80, &t);
+        let at = rows
+            .iter()
+            .position(|r| r.target == Target::Typed)
+            .expect("the typed row");
+        v.clicked(at, &rows);
+        assert!(matches!(
+            v.key(Press::Enter, None, 80, &t),
+            Errand::Ask(Question { id: FOLLOW, .. })
+        ));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// FAILS IF: the position and the volume stop being bars a press sets —
+    /// the bar found where the value was drawn, the press read along it, and
+    /// the order the same arithmetic as the window's time bar and track.
+    #[test]
+    fn the_position_and_the_volume_are_bars_a_press_sets() {
+        let t = texts();
+        let s = playing();
+        let v = View::fresh();
+        let rows = v.rows(Some(&s), 80, &t);
+        let position = rows
+            .iter()
+            .position(|r| r.target == Target::Position)
+            .expect("the position row");
+        let bar = rows[position].slider.expect("the position is a bar");
+        assert_eq!(bar.of, Slid::Position);
+        assert_eq!(
+            Some(bar.from),
+            rows[position].fields.get(1).map(|f| f.at),
+            "the bar is not where the value was drawn"
+        );
+        let middle = f64::from(bar.from) + f64::from(bar.cells) / 2.0;
+        let found = slider_at(&rows, position, middle).expect("a press on the bar");
+        assert_eq!(
+            slid(found.of, found.along(middle), Some(&s)),
+            Errand::Tell(Ask::Seek {
+                seconds: 3725.0 / 2.0,
+                relative: false
+            })
+        );
+        // OFF THE BAR, it is the row's click, and not the bar's.
+        assert_eq!(slider_at(&rows, position, f64::from(bar.from) - 1.0), None);
+        // A DRAG PAST ITS END keeps the end.
+        assert_eq!(bar.along(f64::from(bar.from + bar.cells) + 40.0), 1.0);
+        let volume = rows
+            .iter()
+            .position(|r| r.target == Target::Volume)
+            .expect("the volume row");
+        let bar = rows[volume].slider.expect("the volume is a bar");
+        assert_eq!(
+            slid(bar.of, 1.0, Some(&s)),
+            Errand::Tell(Ask::Volume {
+                percent: VOLUME_MOST
+            })
+        );
+        // A STREAM HAS NO LENGTH, and its position is no bar.
+        let mut live = playing();
+        live.duration = None;
+        let rows = v.rows(Some(&live), 80, &t);
+        assert!(
+            rows.iter()
+                .find(|r| r.target == Target::Position)
+                .is_some_and(|r| r.slider.is_none())
+        );
+        assert_eq!(slid(Slid::Position, 0.5, Some(&live)), Errand::Nothing);
+    }
+
+    /// FAILS IF: the footer's picture stops being the column's width at the
+    /// region's right end with the bar's cell left free, or leaves the rows
+    /// less than half, or Only stops taking the whole region.
+    #[test]
+    fn the_footers_picture_is_beside_the_rows_or_the_whole_region() {
+        let wide = 200;
+        let beside = footer_panel(wide, false).expect("room for the picture");
+        assert_eq!(beside.cells, tokens::space::COLUMN_WIDTH);
+        assert_eq!(
+            beside.from + beside.cells,
+            wide - tokens::space::FILES_EDGERIGHT,
+            "the bar's cell is taken"
+        );
+        assert!(beside.from >= beside.cells, "the rows keep less than half");
+        let narrow = tokens::space::COLUMN_WIDTH * 2 - 1;
+        assert_eq!(footer_panel(narrow, false), None);
+        let only = footer_panel(wide, true).expect("the whole region");
+        assert_eq!(
+            (only.from, only.cells),
+            (0, wide - tokens::space::FILES_EDGERIGHT)
+        );
+    }
+
+    /// FAILS IF: the view stops being able to stop — the key the window's
+    /// transport glyph runs — or a chord is read as the letter under it.
+    #[test]
+    fn stop_is_a_key_of_the_view_and_a_chord_is_not_its_letter() {
+        use ronoctua_keymap::{Key, Mods, Sym};
+        let t = texts();
+        let s = playing();
+        let mut v = View::fresh();
+        let stop = press_of_key(Key::simple(Sym::Char('s')));
+        assert_eq!(stop, Some(Press::Stop));
+        assert_eq!(
+            v.key(Press::Stop, Some(&s), 80, &t),
+            Errand::Tell(Ask::Stop)
+        );
+        let chord = Key {
+            sym: Sym::Char('s'),
+            mods: Mods {
+                ctrl: true,
+                ..Mods::default()
+            },
+        };
+        assert_eq!(press_of_key(chord), None, "C-s was read as s");
+        assert_eq!(press_of_key(Key::simple(Sym::Esc)), Some(Press::Escape));
     }
 
     #[test]

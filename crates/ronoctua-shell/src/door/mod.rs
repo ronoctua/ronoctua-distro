@@ -67,6 +67,10 @@ pub const LEFT_BUTTON: u32 = 0x110;
 /// `BTN_RIGHT`.
 pub const RIGHT_BUTTON: u32 = 0x111;
 
+/// `BTN_SIDE`, the mouse's Back button. Over a window it is `Esc`, as it is
+/// over the footer: the pointer's way back, beside the `ESC` a header teaches.
+pub const BACK_BUTTON: u32 = 0x113;
+
 /// The first line of a list, under the header.
 ///
 /// Everything asks [`Ui::first_of_list`] instead: the header's drawer and
@@ -136,15 +140,322 @@ pub struct Ui {
     pub pointer_on: Option<smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat>,
     /// Whether the key being handled is a REPEAT of a held one.
     pub repeating: bool,
+    /// Whether the compositor has CONFIGURED the surface this door draws to —
+    /// the toolkit acks a configure before the door hears it — which is what
+    /// lets a buffer be committed to it. See [`Ui::may_draw`].
+    ///
+    /// # Why having a size is not the answer
+    ///
+    /// It was: a door drew once it had a width, and a width came only from a
+    /// configure. Then a window OWNED its size (`Content::own_size`, the
+    /// player's corner): that size is laid out on the first turn, before the
+    /// compositor has said anything, and the first frame went out on it — a
+    /// buffer committed to an `xdg_surface` never configured, which is a
+    /// protocol error (`unconfigured_buffer`). The compositor closed the
+    /// connection and `ronoctua-shell player pip` died on its first frame.
+    configured: bool,
     /// The window's own size changed (`Content::own_size`), and the door is to
     /// lay it out again without waiting for a configure that may not come.
     size_owed: bool,
+    /// THE QUESTION BEING TYPED, on line 0 — see [`Ui::ask`].
+    ///
+    /// While it is here every key is its own (`Door::typed`), as every key is
+    /// the footer's minibuffer's while it asks: a question is answered or
+    /// let go, and a letter meant for it never reaches the view under it.
+    pub asking: Option<crate::line::Line>,
+    /// How many questions this window has asked — the number of the one on
+    /// the line, so a paste read for an older one is not typed into this one.
+    questions: u64,
+    /// The clipboard's text is wanted, and for whom — read off the loop on
+    /// the next turn (`Door::settle`).
+    paste_owed: Option<PasteFor>,
+    /// Orders for the footer, sent off the loop on the next turn — see
+    /// [`Ui::tell_the_footer`].
+    orders: Vec<String>,
+    /// Programs to start, off the loop on the next turn — see [`Ui::launch`].
+    launches: Vec<Launching>,
+}
+
+/// A program a window starts — see [`Ui::launch`] and [`Ui::launch_entry`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Launching {
+    /// A program and its words, in a directory of its own choosing.
+    Program {
+        /// The program, by path.
+        program: String,
+        /// Its words.
+        args: Vec<String>,
+        /// Where it starts.
+        cwd: Option<String>,
+    },
+    /// An entry of the launcher, by its desktop id.
+    Entry(String),
+}
+
+/// Who a paste read off the loop is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PasteFor {
+    /// The question on line 0 — the one asked that many questions in.
+    Line(u64),
+    /// The window itself: [`Content::pasted`].
+    Content,
+}
+
+/// What a key did while the line asked — what the window is told.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Routed {
+    /// The line kept it: typed, erased, a paste asked for, or nothing.
+    Kept,
+    /// Answered, under the id that asked.
+    Answered(&'static str, String),
+    /// Let go.
+    Cancelled(&'static str),
+}
+
+/// What a launch's verdict says on a window's line: only a failure is said,
+/// in the footer's own sentence (`echo-no-opened`); the rest is the log's.
+fn launch_said(verdict: &crate::foreign::Launch, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    use crate::foreign::Launch;
+    match verdict {
+        Launch::WithScope { scope, program } => {
+            tracing::info!(scope, program, "opened from a window");
+            None
+        }
+        Launch::Orphan { program, reason } => {
+            tracing::warn!(program, reason, "opened WITHOUT a cgroup of its own");
+            None
+        }
+        Launch::Failed { program, error } => {
+            tracing::error!(error, program, "could not open");
+            Some(texts.t_with(
+                ronoctua_i18n::key::ECHO_NO_OPENED,
+                &[("program", program.as_str())],
+            ))
+        }
+    }
+}
+
+/// What a thread of the door hands back to its loop.
+enum Back {
+    /// The clipboard's text, read.
+    Pasted {
+        /// Who asked for it.
+        to: PasteFor,
+        /// The text, or why there is none.
+        text: Result<String>,
+    },
+    /// The footer did not take an order: nothing listens on its socket.
+    Unheard,
+    /// How a program this window started went.
+    Launched(crate::foreign::Launch),
+    /// The launcher has no entry by the id this window asked to open.
+    NotInLauncher,
 }
 
 impl Ui {
     /// Asks for a frame. It is drawn when the event queue empties.
     pub const fn ask_paint(&mut self) {
         self.owed = true;
+    }
+
+    /// Whether a frame may be drawn — a buffer committed — now: the surface
+    /// was configured, and there is a size to draw at. A window that knows
+    /// its size before the compositor has spoken still waits for it.
+    const fn may_draw(&self) -> bool {
+        self.configured && self.width != 0
+    }
+
+    /// ASKS, on the header's line: a name, an address, a path, a password.
+    ///
+    /// The window types what the footer types (the owner's rule: the two
+    /// doors do the same things). The line takes line 0 in place of the
+    /// message and the shortcuts, with `ESC` and `RET` on it as clicks; every
+    /// key is the line's until it is answered — [`Content::answered`], with
+    /// the text — or let go ([`Content::unanswered`]). `C-v` pastes into it,
+    /// read off the loop. A SECRET is masked on the screen and in the log,
+    /// and its answer reaches `answered` and nothing else: it never leaves
+    /// this process by the door's hand.
+    ///
+    /// A question already on the line is replaced, unanswered.
+    pub fn ask(&mut self, line: crate::line::Line) {
+        self.questions = self.questions.wrapping_add(1);
+        self.asking = Some(line);
+        self.message = None;
+        self.ask_paint();
+    }
+
+    /// Starts `program` with `args` in a scope of its own, OFF THE LOOP — the
+    /// one launch path (`foreign::start_in_scope`) — and a program that could
+    /// not be started is a sentence on this window's line (`echo-no-opened`),
+    /// as it is on the footer's. Every window that opens something opens it
+    /// here, so none of them is left starting a bare child and only logging
+    /// what went wrong.
+    pub fn launch(&mut self, program: &str, args: &[String], cwd: Option<&str>) {
+        self.launches.push(Launching::Program {
+            program: program.to_owned(),
+            args: args.to_vec(),
+            cwd: cwd.map(ToOwned::to_owned),
+        });
+    }
+
+    /// Starts the launcher's entry `desktop_id`, as the footer starts it —
+    /// the catalogue read off the loop (`apps::launch_entry`) — and says on
+    /// THIS window's line when there is no such entry yet
+    /// (`software-not-in-launcher`) or it could not be started.
+    pub fn launch_entry(&mut self, desktop_id: &str) {
+        self.launches.push(Launching::Entry(desktop_id.to_owned()));
+    }
+
+    /// The clipboard's text is wanted by the window: it is read OFF THE LOOP
+    /// (`crate::pasting`), with a deadline, and handed to
+    /// [`Content::pasted`] when it arrives. A window never waits for the
+    /// program that copied.
+    pub const fn paste(&mut self) {
+        self.paste_owed = Some(PasteFor::Content);
+    }
+
+    /// A key, while a question is on the line. Every key is the line's: it
+    /// is typed, answered, let go, or asks for the clipboard — and the answer
+    /// leaves the line before the window hears it.
+    fn line_key(&mut self, key: ronoctua_keymap::Key) -> Routed {
+        use crate::line::Step;
+        let Some(line) = self.asking.as_mut() else {
+            return Routed::Kept;
+        };
+        let asked_for = line.id;
+        match line.key(key) {
+            Step::Nothing => Routed::Kept,
+            Step::Changed => {
+                self.ask_paint();
+                Routed::Kept
+            }
+            Step::WantsPaste => {
+                self.paste_owed = Some(PasteFor::Line(self.questions));
+                Routed::Kept
+            }
+            Step::Answer(id, text) => {
+                self.asking = None;
+                self.ask_paint();
+                Routed::Answered(id, text)
+            }
+            Step::Cancel => {
+                self.asking = None;
+                self.ask_paint();
+                Routed::Cancelled(asked_for)
+            }
+        }
+    }
+
+    /// A paste read off the loop, typed into the line when it was read FOR
+    /// the line. `Some(false)` when it is the window's (`Content::pasted`);
+    /// `Some(true)` when the line took it; `None` when it was for a question
+    /// that is gone — answered or replaced since — which a late clipboard
+    /// must not type into.
+    fn pasted_into_the_line(&mut self, to: PasteFor, text: &str) -> Option<bool> {
+        match to {
+            PasteFor::Content => Some(false),
+            PasteFor::Line(n) if n == self.questions => {
+                let line = self.asking.as_mut()?;
+                if line.paste(text) == crate::line::Step::Changed {
+                    self.ask_paint();
+                }
+                Some(true)
+            }
+            PasteFor::Line(_) => None,
+        }
+    }
+
+    /// Whether the clipboard is wanted on the next turn — for a test of a
+    /// window's paste.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn wants_the_clipboard(&self) -> bool {
+        self.paste_owed.is_some()
+    }
+
+    /// The orders waiting for the footer — for a test of a window's.
+    #[cfg(test)]
+    #[must_use]
+    pub fn orders(&self) -> &[String] {
+        &self.orders
+    }
+
+    /// The programs waiting to be started — for a test of a window's.
+    #[cfg(test)]
+    #[must_use]
+    pub fn launches(&self) -> &[Launching] {
+        &self.launches
+    }
+
+    /// A `Ui` with no compositor behind it: a connection over a socket pair
+    /// nobody serves, and an inert surface — what a test hands a window.
+    #[cfg(test)]
+    #[must_use]
+    pub fn for_tests(texts: ronoctua_i18n::Texts) -> Self {
+        let (ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
+        let conn = Connection::from_socket(ours).expect("a connection over the pair");
+        let surface = wl_surface::WlSurface::inert(conn.backend().downgrade());
+        Self {
+            texts: std::rc::Rc::new(texts),
+            width: 900,
+            height: 600,
+            scale: 1,
+            columns: 80,
+            lines: 24,
+            margin: 1,
+            message: None,
+            quit: false,
+            owed: false,
+            offset: 0,
+            hinted: crate::chrome::Hinted::default(),
+            room: crate::chrome::Room::default(),
+            conn,
+            surface,
+            pointer_seat: 0,
+            many_pointers: false,
+            keyboard_seat: 0,
+            pointer_mods: Modifiers::default(),
+            pointer_on: None,
+            repeating: false,
+            // A TEST'S WINDOW IS ONE ON THE SCREEN, sized and configured.
+            configured: true,
+            size_owed: false,
+            asking: None,
+            questions: 0,
+            paste_owed: None,
+            orders: Vec::new(),
+            launches: Vec::new(),
+        }
+    }
+
+    /// Hands command `id` — with its argument — to the footer, the way
+    /// `ronoctua-shell command` does, OFF THE LOOP: the order goes down the
+    /// control socket from a thread, and a footer that is not there is a
+    /// sentence on this window's line (`door-no-footer`), never silence.
+    ///
+    /// A SECRET GOES ONLY WHERE IT IS FOR. A password for this window's own
+    /// daemon never takes this path: the footer's line is read by another
+    /// process, and such a secret stays in the one that typed it. The one
+    /// secret it carries is a pairing's PIN or passkey, because the agent
+    /// that answers bluetoothd IS the footer's — and on this path it is in
+    /// no argv and in no log (the id is logged, never the argument).
+    ///
+    /// ONE LINE IS ONE ORDER: an id or an argument carrying a line break would
+    /// be read as two, so it is not sent.
+    pub fn tell_the_footer(&mut self, id: &str, argument: Option<&str>) {
+        if id
+            .chars()
+            .chain(argument.unwrap_or_default().chars())
+            .any(char::is_control)
+        {
+            tracing::warn!(id, "an order for the footer that is not one line; not sent");
+            return;
+        }
+        let order = match argument {
+            Some(a) => format!("command {id} {a}"),
+            None => format!("command {id}"),
+        };
+        self.orders.push(order);
     }
 
     /// The window's own size changed (`Content::own_size`): lay it out again.
@@ -392,7 +703,37 @@ pub trait Content: Sized + 'static {
 
     /// One key, from the keyboard, from a REPEAT or from a click on the
     /// header's shortcut for it — the three arrive here the same way.
+    ///
+    /// Read already as every window reads a key (`keys::as_read`): Caps Lock
+    /// undone and `Delete` without its U+007F. [`keys::key_of`] turns it into
+    /// the keymap's notation.
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers);
+
+    /// What was typed on the line [`Ui::ask`] opened, under the id that
+    /// asked. The window does with it what the footer does with the same
+    /// answer — the same call on the same view.
+    fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
+        let _ = (ui, id, text);
+    }
+
+    /// The question `id` was let go — `Esc`, `C-g`, or a click on `ESC`.
+    fn unanswered(&mut self, ui: &mut Ui, id: &'static str) {
+        let _ = (ui, id);
+    }
+
+    /// The clipboard's text, read for [`Ui::paste`]. Empty when nothing — or
+    /// nothing that is text — was copied.
+    fn pasted(&mut self, ui: &mut Ui, text: &str) {
+        let _ = (ui, text);
+    }
+
+    /// Whether this window TYPES TEXT where Caps Lock means capitals — a
+    /// terminal, a buffer's editor. Every other window reads its keys with
+    /// the Lock undone, as the footer does (`keys::as_read`); a chord is read
+    /// without it in every window.
+    fn types_capitals(&self) -> bool {
+        false
+    }
 
     /// How the window appears. By default, a window of its own.
     ///
@@ -540,6 +881,14 @@ pub trait Content: Sized + 'static {
         let _ = ui;
     }
 
+    /// The date's shape, the clock, the decimal mark, the units or the zone
+    /// changed (`locale.json`), and `locale::prefs::current` already says so
+    /// — every date this window draws from now on is written the new way. A
+    /// window that keeps a copy of the file re-reads it here.
+    fn locale_changed(&mut self, ui: &mut Ui) {
+        let _ = ui;
+    }
+
     /// The compositor asked the window to close. `true` to close.
     fn closing(&mut self, ui: &mut Ui) -> bool {
         let _ = ui;
@@ -619,6 +968,9 @@ pub struct Door<C: Content> {
     _watches: Vec<ronoctua_files::notice::Notice>,
     /// The queue, for a window that makes Wayland objects of its own.
     pub qh: QueueHandle<Self>,
+    /// What the door's own threads hand back — a paste, a footer that did
+    /// not answer.
+    back: channel::Sender<Back>,
 }
 
 /// Opens a window and runs it until it closes.
@@ -652,6 +1004,17 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
 
     let watches = hang_the_watches(&handle)?;
 
+    // THE DOOR'S OWN THREADS answer here: a paste, an order the footer did
+    // not take.
+    let (back, came_back) = channel::channel::<Back>();
+    handle
+        .insert_source(came_back, |event, (), door: &mut Door<C>| {
+            if let channel::Event::Msg(back) = event {
+                door.came_back(back);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the door's channel: {e}"))?;
+
     let margin = content.margin();
     let mut door = Door {
         ui: Ui {
@@ -678,7 +1041,14 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             pointer_mods: Modifiers::default(),
             pointer_on: None,
             repeating: false,
+            // NOTHING SAID YET: the surface was just made.
+            configured: false,
             size_owed: false,
+            asking: None,
+            questions: 0,
+            paste_owed: None,
+            orders: Vec::new(),
+            launches: Vec::new(),
         },
         content,
         handle,
@@ -705,6 +1075,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
         selection: None,
         _watches: watches,
         qh: qh.clone(),
+        back,
     };
 
     WaylandSource::new(conn, queue)
@@ -724,15 +1095,19 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
     Ok(())
 }
 
-/// The theme, the language and the size of the text, watched — so a choice
-/// made anywhere reaches this window without it being reopened.
+/// The theme, the language, the size of the text and the shape of a date,
+/// watched — so a choice made anywhere reaches this window without it being
+/// reopened.
 ///
-/// # Why every door has all three
+/// # Why every door has all four
 ///
 /// Because a door that adopted a choice only at its next start is the
 /// incomplete preview the owner read off the screen when the theme did
 /// exactly that. The language watch was missing from three doors; here it
-/// cannot be.
+/// cannot be. And the date's shape was read once, when the process started:
+/// a clock turned to twelve hours in the footer left every open window
+/// writing twenty-four — the language view's own window included, which then
+/// wrote its stale copy back over the footer's choice.
 fn hang_the_watches<C: Content>(
     handle: &calloop::LoopHandle<'static, Door<C>>,
 ) -> Result<Vec<ronoctua_files::notice::Notice>> {
@@ -773,6 +1148,20 @@ fn hang_the_watches<C: Content>(
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the text size channel: {e}"))?;
+
+    let (locale_sender, locale_changed) = channel::channel::<()>();
+    kept.extend(crate::locale::prefs::watch(move || {
+        locale_sender.send(()).is_ok()
+    }));
+    handle
+        .insert_source(locale_changed, |event, (), door: &mut Door<C>| {
+            if let channel::Event::Msg(()) = event {
+                crate::locale::prefs::adopt();
+                door.content.locale_changed(&mut door.ui);
+                door.ui.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the locale channel: {e}"))?;
     Ok(kept)
 }
 
@@ -809,6 +1198,9 @@ impl<C: Content> Door<C> {
         self.scale_told = 1;
         self.ui.width = 0;
         self.ui.height = 0;
+        // AND THE NEW SURFACE WAITS FOR ITS OWN FIRST CONFIGURE — the old
+        // one's says nothing about it (`Ui::may_draw`).
+        self.ui.configured = false;
         self.ui.ask_paint();
     }
 
@@ -898,8 +1290,28 @@ impl<C: Content> Door<C> {
         self.gpu = Some(g);
     }
 
-    /// Draws the owed frame, if one is owed.
+    /// Draws the owed frame, if one is owed — and starts what the turn asked
+    /// of the door's threads: a paste, an order for the footer.
     fn settle(&mut self) {
+        if let Some(to) = self.ui.paste_owed.take() {
+            self.read_the_clipboard(to);
+        }
+        for launching in std::mem::take(&mut self.ui.launches) {
+            self.start(launching);
+        }
+        for order in std::mem::take(&mut self.ui.orders) {
+            // THE LAST ORDERS ARE SENT HERE, and not from a thread: the loop
+            // stops at the end of this turn and the process with it, and a
+            // thread would die before it connected — an order given as the
+            // window closes would be lost without a word.
+            if self.ui.quit {
+                if let Err(e) = crate::leader::send_it(&order) {
+                    tracing::warn!(error = %e, "the footer did not take the last order");
+                }
+            } else {
+                self.send_to_the_footer(order);
+            }
+        }
         if std::mem::take(&mut self.ui.size_owed) {
             self.take_the_size();
         }
@@ -928,7 +1340,11 @@ impl<C: Content> Door<C> {
     }
 
     fn paint(&mut self) {
-        if self.ui.width == 0 {
+        // NOT BEFORE THE FIRST CONFIGURE, whatever size is already laid out:
+        // a frame is a buffer committed, and one committed to a surface the
+        // compositor has not configured closes the connection. The configure
+        // lays the size out again and asks for this frame (`take_the_size`).
+        if !self.ui.may_draw() {
             return;
         }
         if self.gpu.is_none() {
@@ -1032,6 +1448,8 @@ impl<C: Content> Door<C> {
     /// list follows the cursor, on the EVENT and never in the paint.
     fn typed(&mut self, event: &KeyEvent, mods: Modifiers) {
         self.ui.keyboard_seat = self.keyboards.colour_number_here();
+        // EVERY WINDOW READS A KEY THE SAME WAY — see `keys::as_read`.
+        let (event, mods) = keys::as_read(event, mods, self.content.types_capitals());
         // A SWEEP OF TEXT IS THE DOOR'S, and so are the two keys that answer
         // it: `Ctrl+C` copies it and `Esc` lets it go. Asked before the
         // window, and only while there is a sweep — every other `Esc` and
@@ -1051,8 +1469,30 @@ impl<C: Content> Door<C> {
                 return;
             }
         }
-        self.content.typed(&mut self.ui, event, mods);
+        // A QUESTION ON THE LINE TAKES EVERY KEY — the footer's
+        // `minibuffer_key` intercept, in every window.
+        if self.ui.asking.is_some() {
+            self.line_key(&event, mods);
+            return;
+        }
+        self.content.typed(&mut self.ui, &event, mods);
         self.follow();
+    }
+
+    /// A key while the line asks — [`Ui::line_key`], and what the window
+    /// is told of the answer.
+    fn line_key(&mut self, event: &KeyEvent, mods: Modifiers) {
+        let Some(key) = keys::key_of(event, mods) else {
+            return;
+        };
+        match self.ui.line_key(key) {
+            Routed::Kept => {}
+            Routed::Answered(id, text) => {
+                self.content.answered(&mut self.ui, id, &text);
+                self.follow();
+            }
+            Routed::Cancelled(id) => self.content.unanswered(&mut self.ui, id),
+        }
     }
 
     /// The list follows the keyboard's cursor.
@@ -1067,20 +1507,141 @@ impl<C: Content> Door<C> {
     ///
     /// A key is pressed through the SAME path the keyboard takes, so the click
     /// does exactly what the key does in the state the window is in. A command
-    /// of the registry is handed to the footer, which is where commands run.
+    /// of the registry is handed to the footer, which is where commands run —
+    /// off the loop, and a footer that is not there says so
+    /// ([`Ui::tell_the_footer`]).
     fn act(&mut self, act: crate::chrome::Act) {
         match act {
             crate::chrome::Act::Key(key) => {
                 let (event, mods) = keys::event_of(key);
                 self.typed(&event, mods);
+                // A CLICK IS A PRESS AND A RELEASE. A window that acts on
+                // the release — the buffer host's `Esc`, which is a tap only
+                // once it comes up, because held it chooses a state — heard
+                // the press alone: the Back button did nothing over a buffer
+                // window, and left its `Esc` held for the next key.
+                self.content.released(&mut self.ui, &event);
             }
-            crate::chrome::Act::Run(id) => {
-                if !forward(id) {
-                    self.ui.message = Some(self.ui.texts.t(ronoctua_i18n::key::DOOR_NO_FOOTER));
-                }
-            }
+            crate::chrome::Act::Run(id) => self.ui.tell_the_footer(id, None),
         }
         self.ui.ask_paint();
+    }
+
+    /// THE BACK BUTTON IS `Esc`, by the path the `Esc` key takes: the
+    /// header's drawer shuts first, and then the window's own `Esc` — the
+    /// line's, when a question is up.
+    fn went_back(&mut self) {
+        if self.header_took(Keysym::Escape, true) {
+            self.ui.ask_paint();
+            return;
+        }
+        if let Ok(esc) = ronoctua_keymap::Key::parse("ESC") {
+            self.act(crate::chrome::Act::Key(esc));
+        }
+    }
+
+    /// What one of the door's threads handed back.
+    fn came_back(&mut self, back: Back) {
+        match back {
+            Back::Pasted { to, text } => {
+                let text = match text {
+                    Ok(text) => text,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "the clipboard could not be read");
+                        self.ui.message =
+                            Some(self.ui.texts.t(ronoctua_i18n::key::DOOR_PASTE_FAILED));
+                        self.ui.ask_paint();
+                        return;
+                    }
+                };
+                if self.ui.pasted_into_the_line(to, &text) == Some(false) {
+                    self.content.pasted(&mut self.ui, &text);
+                    self.follow();
+                    self.ui.ask_paint();
+                }
+            }
+            Back::Unheard => {
+                self.ui.message = Some(self.ui.texts.t(ronoctua_i18n::key::DOOR_NO_FOOTER));
+                self.ui.ask_paint();
+            }
+            Back::Launched(verdict) => {
+                if let Some(said) = launch_said(&verdict, &self.ui.texts) {
+                    self.ui.message = Some(said);
+                    self.ui.ask_paint();
+                }
+            }
+            Back::NotInLauncher => {
+                self.ui.message = Some(
+                    self.ui
+                        .texts
+                        .t(ronoctua_i18n::key::SOFTWARE_NOT_IN_LAUNCHER),
+                );
+                self.ui.ask_paint();
+            }
+        }
+    }
+
+    /// Starts what a window asked to start, on a thread — and the verdict
+    /// comes back on the door's channel.
+    fn start(&mut self, launching: Launching) {
+        let back = self.back.clone();
+        match launching {
+            Launching::Program { program, args, cwd } => {
+                let started = crate::foreign::start_in_scope(
+                    "door-launch",
+                    &program,
+                    &args,
+                    cwd.as_deref(),
+                    move |verdict| {
+                        let _ = back.send(Back::Launched(verdict));
+                    },
+                );
+                if let Err(e) = started {
+                    tracing::error!(error = %e, program, "nothing opened");
+                    let failed = crate::foreign::Launch::Failed {
+                        program,
+                        error: e.to_string(),
+                    };
+                    self.ui.message = launch_said(&failed, &self.ui.texts);
+                    self.ui.ask_paint();
+                }
+            }
+            Launching::Entry(desktop_id) => {
+                let language = self.ui.texts.language().to_owned();
+                crate::apps::launch_entry(&desktop_id, &language, move |opened| {
+                    let _ = back.send(match opened {
+                        crate::apps::Opened::Started(verdict) => Back::Launched(verdict),
+                        crate::apps::Opened::NotInLauncher => Back::NotInLauncher,
+                    });
+                });
+            }
+        }
+    }
+
+    /// The clipboard's text, read on a thread with a deadline
+    /// (`crate::pasting`) and handed back through the door's channel.
+    fn read_the_clipboard(&self, to: PasteFor) {
+        let back = self.back.clone();
+        crate::pasting::text_then(move |text| {
+            let _ = back.send(Back::Pasted { to, text });
+        });
+    }
+
+    /// One order down the footer's control socket, from a thread: a connect
+    /// to a footer whose listener is stuck would otherwise stop this loop.
+    fn send_to_the_footer(&self, order: String) {
+        let back = self.back.clone();
+        let born = std::thread::Builder::new()
+            .name("door-order".to_owned())
+            .spawn(move || {
+                if let Err(e) = crate::leader::send_it(&order) {
+                    tracing::warn!(error = %e, "the footer did not take the order");
+                    let _ = back.send(Back::Unheard);
+                }
+            });
+        if let Err(e) = born {
+            tracing::error!(error = %e, "could not start the thread that tells the footer");
+        }
     }
 
     /// One pointer's frame — from a mouse, or from a finger played as one.
@@ -1090,7 +1651,8 @@ impl<C: Content> Door<C> {
     fn pointer_frame_here(&mut self, events: &[PointerEvent]) {
         use smithay_client_toolkit::seat::pointer::PointerEventKind;
         let mut rest: Vec<PointerEvent> = Vec::with_capacity(events.len());
-        let mut acts: Vec<crate::chrome::Act> = Vec::new();
+        // WHAT THE HEADER'S CONTROLS WERE ASKED — `None` is the Back button.
+        let mut acts: Vec<Option<crate::chrome::Act>> = Vec::new();
         for e in events {
             // THE SHORTCUT UNDER THE POINTER LIGHTS, in every door — the header
             // is the door's (`chrome::Hinted::light_at`).
@@ -1180,7 +1742,14 @@ impl<C: Content> Door<C> {
                 && button == LEFT_BUTTON
                 && let Some(act) = self.ui.hinted.press_under(e.position.0, e.position.1)
             {
-                acts.push(act);
+                acts.push(Some(act));
+                continue;
+            }
+            // THE BACK BUTTON, over any part of the window — see `went_back`.
+            if let PointerEventKind::Press { button, .. } = e.kind
+                && button == BACK_BUTTON
+            {
+                acts.push(None);
                 continue;
             }
             rest.push(e.clone());
@@ -1198,7 +1767,10 @@ impl<C: Content> Door<C> {
             self.content.pointer(&mut self.ui, &mut self.here, &rest);
         }
         for act in acts {
-            self.act(act);
+            match act {
+                Some(act) => self.act(act),
+                None => self.went_back(),
+            }
         }
     }
 
@@ -1206,28 +1778,6 @@ impl<C: Content> Door<C> {
     fn header_took(&mut self, sym: Keysym, down: bool) -> bool {
         self.content.header_keys() && self.ui.hinted.took_a_key(sym, down)
     }
-}
-
-/// Hands command `id` to the footer, where commands run.
-///
-/// NOT `status()`, WHICH WAITS: this runs inside the loop, and waiting for a
-/// child there freezes the window for as long as the child takes. The child
-/// writes one line to the footer's socket and exits, and it is let go of.
-/// `false` when it could not even be started — which is a sentence on the
-/// window, never silence.
-pub fn forward(id: &str) -> bool {
-    std::env::current_exe()
-        .ok()
-        .and_then(|me| {
-            std::process::Command::new(me)
-                .args(["command", id])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .ok()
-        })
-        .is_some()
 }
 
 /// A layer shell, for a door that is a column (`Content::open`).
@@ -1239,4 +1789,202 @@ pub fn layer_shell<C: Content>(wiring: &Wiring<'_, C>) -> Result<std::rc::Rc<Lay
     LayerShell::bind(wiring.globals, wiring.qh)
         .map(std::rc::Rc::new)
         .context("the compositor does not expose layer-shell")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::line::Line;
+    use ronoctua_keymap::Key;
+
+    fn ui() -> Ui {
+        Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB"))
+    }
+
+    fn key(notation: &str) -> Key {
+        Key::parse(notation).expect(notation)
+    }
+
+    /// EVERY KEY IS THE LINE'S while it asks, and the answer leaves the line
+    /// before the window hears it — under the id that asked.
+    #[test]
+    fn a_question_takes_every_key_and_answers_under_its_id() {
+        let mut ui = ui();
+        ui.message = Some("an earlier order said this".into());
+        ui.ask(Line::new("software-web-new", false, Some("exa")));
+        assert!(ui.message.is_none(), "the question takes the line");
+        for k in ["m", "p", "l", "e", "DEL"] {
+            assert_eq!(ui.line_key(key(k)), Routed::Kept, "{k}");
+        }
+        // A KEY OF THE VIEW UNDER IT is the line's too: `TAB` does nothing.
+        assert_eq!(ui.line_key(key("TAB")), Routed::Kept);
+        assert_eq!(
+            ui.line_key(key("RET")),
+            Routed::Answered("software-web-new", "exampl".into())
+        );
+        assert!(ui.asking.is_none());
+        // AND WITH NO QUESTION UP, nothing is the line's.
+        assert_eq!(ui.line_key(key("x")), Routed::Kept);
+    }
+
+    #[test]
+    fn esc_and_c_g_let_the_question_go() {
+        for k in ["ESC", "C-g"] {
+            let mut ui = ui();
+            ui.ask(Line::new("software-icon-path", false, None));
+            assert_eq!(
+                ui.line_key(key(k)),
+                Routed::Cancelled("software-icon-path"),
+                "{k}"
+            );
+            assert!(ui.asking.is_none(), "{k}");
+        }
+    }
+
+    /// FAILS IF: a window starts a program on its loop, hands an installed
+    /// program to the footer, or keeps quiet when a start fails — the footer
+    /// says `echo-no-opened` on its line, and so does every window on its own.
+    #[test]
+    fn a_window_launches_off_the_loop_and_says_what_failed() {
+        let mut ui = ui();
+        ui.launch("/bin/gimp", &["-n".to_owned()], Some("/srv"));
+        ui.launch_entry("org.gimp.GIMP.desktop");
+        assert_eq!(
+            ui.launches(),
+            [
+                Launching::Program {
+                    program: "/bin/gimp".to_owned(),
+                    args: vec!["-n".to_owned()],
+                    cwd: Some("/srv".to_owned()),
+                },
+                Launching::Entry("org.gimp.GIMP.desktop".to_owned()),
+            ]
+        );
+        assert!(ui.orders().is_empty(), "the footer was asked to open it");
+        let failed = crate::foreign::Launch::Failed {
+            program: "/bin/gimp".to_owned(),
+            error: "No such file or directory".to_owned(),
+        };
+        let said = launch_said(&failed, &ui.texts).expect("a failure is said");
+        assert!(said.contains("/bin/gimp"), "{said}");
+        let opened = crate::foreign::Launch::WithScope {
+            scope: "a-scope".to_owned(),
+            program: "/bin/gimp".to_owned(),
+        };
+        assert_eq!(launch_said(&opened, &ui.texts), None);
+    }
+
+    /// `C-v` ASKS THE DOOR for the clipboard, and what comes back is typed
+    /// into THAT question — never into one asked since.
+    #[test]
+    fn a_paste_goes_into_the_question_it_was_read_for() {
+        let mut ui = ui();
+        ui.ask(Line::new("software-file-path", false, None));
+        assert!(!ui.wants_the_clipboard());
+        assert_eq!(ui.line_key(key("C-v")), Routed::Kept);
+        assert!(ui.wants_the_clipboard());
+        let to = ui.paste_owed.take().expect("a paste owed");
+        assert_eq!(
+            ui.pasted_into_the_line(to, "/tmp/a b.AppImage\n"),
+            Some(true)
+        );
+        assert_eq!(
+            ui.asking.as_ref().map(|l| l.text.as_str()),
+            Some("/tmp/a b.AppImage")
+        );
+        // A LATE PASTE, for a question replaced since, is dropped.
+        ui.line_key(key("C-y"));
+        let late = ui.paste_owed.take().expect("a paste owed");
+        ui.ask(Line::new("software-web-name", false, None));
+        assert_eq!(ui.pasted_into_the_line(late, "stale"), None);
+        assert_eq!(ui.asking.as_ref().map(|l| l.text.as_str()), Some(""));
+        // AND THE WINDOW'S OWN PASTE is the window's.
+        ui.paste();
+        let mine = ui.paste_owed.take().expect("a paste owed");
+        assert_eq!(ui.pasted_into_the_line(mine, "gimp"), Some(false));
+        assert_eq!(ui.asking.as_ref().map(|l| l.text.as_str()), Some(""));
+    }
+
+    /// THE QUESTION ON LINE 0: what is asked, what is typed — masked when it
+    /// is a secret — and `ESC` and `RET` as CLICKS that press those keys.
+    #[test]
+    fn the_question_is_drawn_with_esc_and_ret_as_clicks() {
+        let mut ui = ui();
+        assert!(list::the_question(&ui).is_none());
+        ui.ask(Line::new("network-connect", true, Some("s3nh4")));
+        let pieces = list::the_question(&ui).expect("a question on the line");
+        let said: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        assert!(!said.contains("s3nh4"), "the secret was drawn: {said}");
+        assert!(said.contains("•••••"), "{said}");
+        assert!(said.contains(&ui.texts.t("ask-network-connect")), "{said}");
+        for (notation, id) in crate::line::OF_THE_LINE {
+            let k = key(notation);
+            assert!(
+                pieces
+                    .iter()
+                    .any(|p| p.id == Some(*id) && p.press == Some(crate::chrome::Act::Key(k))),
+                "{notation} is not a click on the line"
+            );
+        }
+    }
+
+    /// THE END OF WHAT IS TYPED STAYS ON THE LINE, however long it gets: it
+    /// is where the next letter goes.
+    #[test]
+    fn a_long_answer_keeps_its_end_on_the_line() {
+        let mut ui = ui();
+        let long = format!("https://example.org/{}/end", "a".repeat(200));
+        ui.ask(Line::new("software-web-new", false, Some(&long)));
+        let pieces = list::the_question(&ui).expect("a question");
+        let typed = pieces
+            .iter()
+            .find(|p| p.register == crate::chrome::Register::Said)
+            .expect("the typed text");
+        assert!(typed.text.ends_with("/end"), "{}", typed.text);
+        assert!(
+            ronoctua_render::layout::width(&typed.text) <= ui.columns,
+            "{}",
+            typed.text
+        );
+    }
+
+    /// FAILS IF: a door may draw — commit a buffer — before the compositor
+    /// configured its surface. A window that OWNS its size (the player's
+    /// corner, `ronoctua-shell player pip`) lays it out on its first turn,
+    /// before any configure; a door that took "it has a size" for "it was
+    /// configured" committed that frame, and the compositor closed the
+    /// connection: `xdg_surface has never been configured` (player-vm).
+    #[test]
+    fn nothing_is_drawn_before_the_first_configure() {
+        let mut ui = ui();
+        // AS `run` BUILDS IT: a surface just made, nothing said about it.
+        (ui.configured, ui.width, ui.height) = (false, 0, 0);
+        assert!(!ui.may_draw());
+        // ITS OWN SIZE, laid out on the first turn as `take_the_size` does.
+        (ui.width, ui.height) = (384, 216);
+        ui.recount();
+        assert!(ui.columns > 0 && ui.lines > 0, "the size was not laid out");
+        assert!(!ui.may_draw(), "a frame before the first configure");
+        // THE CONFIGURE, acked by the toolkit before the door hears it.
+        ui.configured = true;
+        assert!(ui.may_draw());
+    }
+
+    /// AN ORDER FOR THE FOOTER is the control socket's own line — the one
+    /// `ronoctua-shell command` writes — sent on the next turn, off the loop.
+    #[test]
+    fn an_order_for_the_footer_is_the_command_line() {
+        let mut ui = ui();
+        ui.tell_the_footer("software-launch-latest", Some("org.gimp.GIMP"));
+        ui.tell_the_footer("files-window", None);
+        // A LINE BREAK would be a second order, read by the footer as one.
+        ui.tell_the_footer("software-launch-latest", Some("x\ncommand quit"));
+        assert_eq!(
+            ui.orders(),
+            [
+                "command software-launch-latest org.gimp.GIMP".to_owned(),
+                "command files-window".to_owned()
+            ]
+        );
+    }
 }

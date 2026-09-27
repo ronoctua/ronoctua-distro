@@ -129,6 +129,7 @@ fn answer(shared: &Arc<Shared>, ask: &Ask, out: &mut impl Write) -> Result<()> {
                     Engine::Media => crate::media::run(&mine, id, &switch, work),
                     Engine::Torrent => crate::torrent::run(&mine, id, &switch, work),
                     Engine::Atlas => crate::atlas::run(&mine, id, &switch, work),
+                    Engine::Software => crate::software::run(&mine, id, &switch, work),
                 })
             {
                 tracing::error!(error = %e, "could not start the job's thread");
@@ -170,7 +171,15 @@ fn answer(shared: &Arc<Shared>, ask: &Ask, out: &mut impl Write) -> Result<()> {
 }
 
 /// Sets the switch and the row together.
+///
+/// Only for an engine that honours a pause: flipping the row of one that does
+/// not would draw a HELD job that is still working, which is a lie about the
+/// one thing the person can act on. The ask is dropped instead, the way an ask
+/// for a job that ended is.
 fn flip(shared: &Arc<Shared>, id: u64, flow: Flow, stage: Stage) {
+    if !shared.engine_of(id).is_some_and(Engine::pauses) {
+        return;
+    }
     let Some(switch) = shared.switch(id) else {
         return;
     };
@@ -381,6 +390,33 @@ mod tests {
         assert_eq!(job.answer, Some(1024), "the answer is not the size");
         assert_eq!(job.measure, crate::job::Measure::Items);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_pause_is_dropped_for_an_engine_that_does_not_honour_one() {
+        // A HELD row that is still working is a lie about the one thing the
+        // person can act on: the software engine does not pause, so the ask
+        // changes neither the row nor the switch — and cancel still reaches it.
+        let shared = Arc::new(Shared::fresh_one());
+        let (id, switch) = shared.take(
+            Engine::Software,
+            Work::Software {
+                order: Box::new(ronoctua_software::Order::AndroidErase),
+                label: String::new(),
+            },
+        );
+        let mut out = Vec::new();
+        answer(&shared, &Ask::Pause { id }, &mut out).unwrap();
+        let (jobs, _) = shared.snapshot();
+        assert_eq!(jobs[0].stage, Stage::Weighing);
+        assert_eq!(switch.flow(), Flow::Run);
+        answer(&shared, &Ask::Cancel { id }, &mut out).unwrap();
+        assert_eq!(switch.flow(), Flow::Stop);
+
+        // And an engine that does pause still does.
+        let (local, held) = shared.take(Engine::Local, Work::Measure { path: "/x".into() });
+        answer(&shared, &Ask::Pause { id: local }, &mut out).unwrap();
+        assert_eq!(held.flow(), Flow::Pause);
     }
 
     #[test]

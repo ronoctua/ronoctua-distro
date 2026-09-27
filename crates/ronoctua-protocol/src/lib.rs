@@ -834,6 +834,10 @@ pub enum Request {
     ForgetJob,
     /// Drop every finished job at once. The target is ignored.
     SweepJobs,
+    /// Open what the finished install the target names put in the launcher.
+    /// The HOST finds the entry: the buffer knows only that there is one
+    /// ([`Job::opens`]).
+    LaunchJob,
 
     /// Run the task the target names, for real.
     ///
@@ -879,7 +883,8 @@ impl Request {
             | Self::ResumeJob
             | Self::CancelJob
             | Self::ForgetJob
-            | Self::SweepJobs => Capability::Transfers,
+            | Self::SweepJobs
+            | Self::LaunchJob => Capability::Transfers,
             Self::RunTask
             | Self::RehearseTask
             | Self::AbortTask
@@ -1029,6 +1034,13 @@ pub struct Job {
     /// anonymous download can be repeated as oneself, and the reverse is not
     /// true — the request already carried who was asking.
     pub identified: bool,
+    /// Whether it can be held and let go — a program's order is one run that
+    /// nothing can freeze halfway, and a window that offered to hold it would
+    /// be offering a key the queue refuses.
+    pub pauses: bool,
+    /// Whether it is a finished install that put an entry in the launcher,
+    /// which [`Request::LaunchJob`] opens.
+    pub opens: bool,
 }
 
 impl Job {
@@ -1547,6 +1559,98 @@ pub struct Binding {
 /// menu. A local leader is a prefix no group of the system may ever want,
 /// and punctuation is where letters run out last.
 pub const LOCAL_PREFIX: &str = ",";
+
+/// The transfer queue's keys — ONE table for its two doors.
+///
+/// The footer's panel (`LEADER t t`) reads a key by these notations. The
+/// window (`LEADER t w`) is a buffer: it declares every chord here under
+/// [`LOCAL_PREFIX`] ([`local_binding`]) — `C-c` is `, c` there, which its
+/// host turns back into `C-c` — and receives the rest, the arrows, `RET`,
+/// `TAB` and `SPC`, as the intents its host already sends. So a key means the
+/// same thing in both doors, and a key added here is added to both; the two
+/// used to disagree about `RET` (it held a job in one and opened it in the
+/// other) and about `C-p` (up, and hold).
+///
+/// `RET` is what a second click on a row does, in both: it opens the job, one
+/// field a line — and, with the give-up question on screen, answers it.
+pub const TRANSFERS_KEYS: &[(&str, &str)] = &[
+    ("<down>", "transfers-down"),
+    ("C-n", "transfers-down"),
+    ("<up>", "transfers-up"),
+    ("C-p", "transfers-up"),
+    ("RET", "transfers-detail"),
+    ("TAB", "transfers-detail"),
+    ("C-d", "transfers-detail"),
+    ("SPC", "transfers-pause"),
+    ("C-c", "transfers-cancel"),
+    ("C-k", "transfers-forget"),
+    ("C-o", "transfers-launch"),
+    ("C-l", "transfers-sweep"),
+];
+
+/// The key that answers the give-up question in both doors of the queue —
+/// the arrows walk its two rows, `no` first, and `RET` takes the one the
+/// cursor is on.
+pub const TRANSFERS_ANSWER: &[(&str, &str)] = &[("RET", "transfers-answer")];
+
+/// What a row of the transfer queue allows — the facts [`transfers_taught`]
+/// reads, which each door works out from its own copy of the job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TransferRow {
+    /// Still under way: weighing, running or held.
+    pub afoot: bool,
+    /// Held, and so let go by the same key.
+    pub held: bool,
+    /// Its engine can hold it at all.
+    pub pauses: bool,
+    /// A finished install that put an entry in the launcher.
+    pub opens: bool,
+}
+
+/// The keys a door of the queue TEACHES, in [`TRANSFERS_KEYS`]'s order:
+/// `(notation, id, contextual)` — contextual when only the row under the
+/// cursor makes it do something. ONE answer for both doors, so the two lines
+/// of keys cannot disagree about what a row allows.
+///
+/// The walk is not taught (the arrows are every list's), and on a job's own
+/// page neither is the key that opened it: `Esc` is the way back there.
+#[must_use]
+pub fn transfers_taught(
+    detail: bool,
+    row: Option<TransferRow>,
+) -> Vec<(&'static str, &'static str, bool)> {
+    let mut out: Vec<(&'static str, &'static str, bool)> = Vec::new();
+    for (notation, id) in TRANSFERS_KEYS {
+        if out.iter().any(|(_, said, _)| said == id) {
+            continue;
+        }
+        let taught = match *id {
+            "transfers-detail" => row.is_some() && !detail,
+            "transfers-pause" => row.is_some_and(|r| r.pauses && r.afoot),
+            "transfers-cancel" => row.is_some_and(|r| r.afoot),
+            "transfers-forget" => row.is_some_and(|r| !r.afoot),
+            "transfers-launch" => row.is_some_and(|r| r.opens),
+            "transfers-sweep" => true,
+            _ => false,
+        };
+        if taught {
+            let contextual = !matches!(*id, "transfers-detail" | "transfers-sweep");
+            out.push((notation, id, contextual));
+        }
+    }
+    out
+}
+
+/// A chord of a view's table as a buffer binds it: `C-c` is `, c` — the local
+/// leader and the letter, which the buffer's host turns back into `C-c` in
+/// its window. `None` for a key that is not a chord.
+#[must_use]
+pub fn local_binding(notation: &str) -> Option<String> {
+    notation
+        .strip_prefix("C-")
+        .filter(|rest| rest.chars().count() == 1)
+        .map(|rest| alloc::format!("{LOCAL_PREFIX} {rest}"))
+}
 
 /// The id every buffer's BASE state carries.
 ///
@@ -2832,6 +2936,89 @@ mod tests {
         Binding, Capability, Color, Command, Demand, Descriptor, DisplayList, Effect, Knob,
         Request, Setting,
     };
+
+    /// FAILS IF: the queue's table stops being one the window can bind — a
+    /// chord that is not `C-` and one letter would be dropped from the buffer
+    /// in silence — or a chord stops becoming the local leader and its letter.
+    #[test]
+    fn every_chord_of_the_queue_is_a_local_key_of_its_window() {
+        use super::{LOCAL_PREFIX, TRANSFERS_KEYS, local_binding};
+        for (notation, id) in TRANSFERS_KEYS {
+            if notation.starts_with("C-") {
+                let bound = local_binding(notation).unwrap_or_default();
+                assert!(bound.starts_with(LOCAL_PREFIX), "{notation} → {bound}");
+                assert_eq!(
+                    bound.chars().count(),
+                    3,
+                    "{notation} ({id}) is not one letter"
+                );
+            } else {
+                assert!(
+                    matches!(*notation, "<up>" | "<down>" | "RET" | "TAB" | "SPC"),
+                    "{notation} ({id}) reaches the window as no intent its host sends"
+                );
+            }
+        }
+        assert_eq!(local_binding("C-c").as_deref(), Some(", c"));
+        assert_eq!(local_binding("RET"), None);
+        // ONE MEANING A KEY: no notation is listed twice.
+        let mut seen: Vec<&str> = TRANSFERS_KEYS.iter().map(|(k, _)| *k).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), TRANSFERS_KEYS.len());
+    }
+
+    /// FAILS IF: a door teaches a key its row does nothing with — holding a
+    /// program's install, giving up what has ended, forgetting what is afoot,
+    /// opening what made nothing — or stops teaching the page and the sweep.
+    #[test]
+    fn a_row_teaches_what_it_allows_and_nothing_else() {
+        use super::{TransferRow, transfers_taught};
+        let ids = |detail, row| -> Vec<&'static str> {
+            transfers_taught(detail, row)
+                .into_iter()
+                .map(|(_, id, _)| id)
+                .collect()
+        };
+        let running = TransferRow {
+            afoot: true,
+            held: false,
+            pauses: true,
+            opens: false,
+        };
+        assert_eq!(
+            ids(false, Some(running)),
+            [
+                "transfers-detail",
+                "transfers-pause",
+                "transfers-cancel",
+                "transfers-sweep"
+            ]
+        );
+        let install = TransferRow {
+            pauses: false,
+            ..running
+        };
+        assert!(!ids(false, Some(install)).contains(&"transfers-pause"));
+        let installed = TransferRow {
+            afoot: false,
+            held: false,
+            pauses: false,
+            opens: true,
+        };
+        assert_eq!(
+            ids(false, Some(installed)),
+            [
+                "transfers-detail",
+                "transfers-forget",
+                "transfers-launch",
+                "transfers-sweep"
+            ]
+        );
+        // ON THE JOB'S OWN PAGE the key that opened it is not taught.
+        assert!(!ids(true, Some(running)).contains(&"transfers-detail"));
+        assert_eq!(ids(false, None), ["transfers-sweep"]);
+    }
 
     /// The SAME gate, on the way out.
     ///

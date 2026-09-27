@@ -256,6 +256,25 @@ pub fn elide_end(s: &str, max: u16) -> String {
     out
 }
 
+/// Elides at the START, keeping the end.
+///
+/// For a line being TYPED: its end is where the next letter lands, and a line
+/// that kept its start and cut its end would hide exactly what the hand is
+/// doing.
+#[must_use]
+pub fn elide_start(s: &str, max: u16) -> String {
+    let n = width(s);
+    if n <= max {
+        return s.to_owned();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out = String::from('…');
+    out.push_str(suffix_of(s, max - 1));
+    out
+}
+
 /// The window of `max` cells starting at cell `from`.
 ///
 /// # Why this is not `&s[from..from + max]`
@@ -889,7 +908,21 @@ mod tests {
         for max in 0_u16..40 {
             assert!(width(&elide_middle("abcdefghijklmnopqrstuvwxyz", max)) <= max);
             assert!(width(&elide_end("abcdefghijklmnopqrstuvwxyz", max)) <= max);
+            assert!(width(&elide_start("abcdefghijklmnopqrstuvwxyz", max)) <= max);
         }
+    }
+
+    /// A LINE BEING TYPED keeps its end — where the next letter goes — and
+    /// counts cells, not bytes.
+    #[test]
+    fn eliding_the_start_keeps_the_end() {
+        assert_eq!(elide_start("curto", 20), "curto");
+        assert_eq!(elide_start("https://example.org/mail", 6), "…/mail");
+        assert_eq!(
+            elide_start("\u{65E5}\u{672C}\u{8A9E}", 5),
+            "…\u{672C}\u{8A9E}"
+        );
+        assert_eq!(elide_start("abc", 0), "");
     }
 
     #[test]

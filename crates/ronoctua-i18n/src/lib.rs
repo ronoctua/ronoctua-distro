@@ -467,19 +467,25 @@ mod tests {
     fn a_marked_sentence_says_where_its_arguments_are() {
         // The whole point of `t_marked`: the pieces concatenate back to the
         // sentence, and the ones flagged `true` are exactly what was passed in.
-        // THE TRANSFER PANEL'S HINT, which is still a SENTENCE with keys in
-        // it. The file manager's used to be the example here and is not one
-        // any more: it is generated out of its key table now, one shortcut per
-        // chunk, and nothing about it passes through Fluent's arguments.
+        // THE THEME CHOOSER'S HINT, which is still a SENTENCE with keys in
+        // it. The file manager's and the transfer panel's used to be the
+        // example here and are not any more: both are generated out of their
+        // key tables now, one shortcut per chunk, and nothing about them
+        // passes through Fluent's arguments.
         let t = Texts::fresh("en-GB").unwrap();
-        let arg = [("pause", "C-p"), ("cancel", "C-c"), ("sweep", "C-s")];
-        let m = t.t_marked(key::TRANSFERS_HINT, &arg);
-        assert_eq!(m.text, t.t_with(key::TRANSFERS_HINT, &arg));
+        let arg = [
+            ("apply", "C-a"),
+            ("left", "C-h"),
+            ("right", "C-l"),
+            ("close", "C-g"),
+        ];
+        let m = t.t_marked(key::THEME_HINT, &arg);
+        assert_eq!(m.text, t.t_with(key::THEME_HINT, &arg));
         let pieces = m.pieces();
         let rebuilt: String = pieces.iter().map(|(s, _)| *s).collect();
         assert_eq!(rebuilt, m.text, "the pieces have to be the sentence");
         let keys: Vec<&str> = pieces.iter().filter(|(_, k)| *k).map(|(s, _)| *s).collect();
-        assert_eq!(keys, vec!["C-p", "C-c", "C-s"]);
+        assert_eq!(keys, vec!["C-a", "C-h", "C-l", "C-g"]);
     }
 
     #[test]
@@ -515,12 +521,17 @@ mod tests {
         // offsets, and both are right.
         let en = Texts::fresh("en-GB").unwrap();
         let pt = Texts::fresh("pt-BR").unwrap();
-        let arg = [("pause", "C-p"), ("cancel", "C-c"), ("sweep", "C-s")];
-        let a = en.t_marked(key::TRANSFERS_HINT, &arg);
-        let b = pt.t_marked(key::TRANSFERS_HINT, &arg);
+        let arg = [
+            ("apply", "C-a"),
+            ("left", "C-h"),
+            ("right", "C-l"),
+            ("close", "C-g"),
+        ];
+        let a = en.t_marked(key::THEME_HINT, &arg);
+        let b = pt.t_marked(key::THEME_HINT, &arg);
         assert_ne!(a.at, b.at, "the two languages cannot agree on every offset");
         for m in [&a, &b] {
-            assert_eq!(m.at.len(), 3);
+            assert_eq!(m.at.len(), 4);
             for r in &m.at {
                 assert!(m.text.get(r.clone()).is_some_and(|s| s.starts_with("C-")));
             }

@@ -156,11 +156,33 @@ pub fn connect(host: &str, port: u16, patience: Duration) -> Result<Stream> {
         std::net::ToSocketAddrs::to_socket_addrs(&(host, port))
             .with_context(|| format!("`{host}` did not resolve"))?
             .collect();
-    let address = addresses
-        .first()
-        .with_context(|| format!("`{host}` resolved to nothing"))?;
-    let socket = TcpStream::connect_timeout(address, patience)
-        .with_context(|| format!("could not reach {host}:{port}"))?;
+    // EVERY ADDRESS, IN TURN. A host that lists IPv6 first on a network with
+    // no IPv6 route answers the first attempt with "unreachable" and the
+    // second with the page; taking only the first made the whole host look
+    // down.
+    if addresses.is_empty() {
+        bail!("`{host}` resolved to nothing");
+    }
+    let mut last = None;
+    let mut reached = None;
+    for address in &addresses {
+        match TcpStream::connect_timeout(address, patience) {
+            Ok(s) => {
+                reached = Some(s);
+                break;
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    let socket = match reached {
+        Some(s) => s,
+        None => {
+            return Err(last.map_or_else(
+                || anyhow::anyhow!("could not reach {host}:{port}"),
+                |e| anyhow::Error::new(e).context(format!("could not reach {host}:{port}")),
+            ));
+        }
+    };
     socket.set_read_timeout(Some(patience))?;
     socket.set_write_timeout(Some(patience))?;
     // NAGLE OFF. Every frame this writes is a whole message the other side is
@@ -187,13 +209,250 @@ pub fn over_tls(host: &str, port: u16, call: &crate::Call<'_>) -> Result<crate::
 
     let mut raw = Vec::new();
     // BOUNDED, and by bytes rather than by trust.
-    Read::take(&mut stream, MOST + 1)
-        .read_to_end(&mut raw)
-        .with_context(|| format!("could not read {host}'s answer"))?;
+    ended(
+        Read::take(&mut stream, MOST + 1).read_to_end(&mut raw),
+        &raw,
+    )
+    .with_context(|| format!("could not read {host}'s answer"))?;
     if raw.len() as u64 > MOST {
         bail!("{host} answered more than {MOST} bytes; it is not the API this expects");
     }
     crate::answer_of(&raw)
+}
+
+/// The most a caller may ask [`fetch`] to read, whatever it asks for.
+///
+/// Above this a body is a PACKAGE — an AppImage, an APK, an index — and goes
+/// through the queue's downloader, which resumes, shows progress and can be
+/// cancelled; holding it in memory here would be none of those.
+pub const MOST_EVER: u64 = 32 << 20;
+
+/// One call over TLS, and the whole reply as BYTES with its headers.
+///
+/// `most` is the caller's ceiling for this answer — a web manifest is small, a
+/// catalogue is not — clamped to [`MOST_EVER`]. Redirects are NOT followed
+/// here: the caller reads `Location` and decides (a downgrade to plain HTTP is
+/// its refusal to make, not the framer's).
+///
+/// # Errors
+///
+/// The connection failed (see [`connect`]), the host answered more than the
+/// ceiling, or what came back is not an HTTP response.
+pub fn fetch(host: &str, port: u16, call: &crate::Call<'_>, most: u64) -> Result<crate::Reply> {
+    let most = most.min(MOST_EVER);
+    let mut stream = connect(host, port, call.patience)?;
+    std::io::Write::write_all(&mut stream, crate::request_of(call).as_bytes())
+        .with_context(|| format!("could not send the request to {host}"))?;
+    std::io::Write::flush(&mut stream).ok();
+    let mut raw = Vec::new();
+    // The head is not counted against the ceiling a caller thinks of as the
+    // BODY's, so the read allows a little over it.
+    let allowance = most + (64 << 10);
+    ended(
+        Read::take(&mut stream, allowance + 1).read_to_end(&mut raw),
+        &raw,
+    )
+    .with_context(|| format!("could not read {host}'s answer"))?;
+    if raw.len() as u64 > allowance {
+        bail!("{host} answered more than {most} bytes");
+    }
+    let reply = crate::reply_of(&raw)?;
+    if reply.body.len() as u64 > most {
+        bail!("{host} answered more than {most} bytes");
+    }
+    whole(&reply, host)?;
+    Ok(reply)
+}
+
+/// A read that ended, accepting the one "error" that is an ordinary end.
+///
+/// Many servers close a TLS connection without sending `close_notify`, and
+/// rustls reports that as `UnexpectedEof` — after the whole answer arrived.
+/// Treated as a failure, every such site read as "offline" (measured: WhatsApp
+/// Web, google.com). What makes accepting it safe is [`whole`]: a body that
+/// was really cut short is caught against its announced length.
+fn ended(read: std::io::Result<usize>, raw: &[u8]) -> std::io::Result<()> {
+    match read {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof && !raw.is_empty() => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// A body shorter than its `Content-Length` is a connection cut short, never
+/// an answer.
+fn whole(reply: &crate::Reply, host: &str) -> Result<()> {
+    let chunked = reply
+        .header("transfer-encoding")
+        .is_some_and(|v| v.eq_ignore_ascii_case("chunked"));
+    if chunked {
+        return Ok(());
+    }
+    if let Some(length) = reply
+        .header("content-length")
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        && (reply.body.len() as u64) < length
+    {
+        bail!(
+            "{host} announced {length} bytes and sent {}",
+            reply.body.len()
+        );
+    }
+    Ok(())
+}
+
+/// One GET over TLS whose body is WRITTEN AWAY as it arrives, never held.
+///
+/// For a package — an AppImage, an APK, an index — which is hundreds of
+/// megabytes: [`fetch`] would hold all of it in memory, and a person watching
+/// a bar needs it to move before the end. `heard` is told the head once
+/// (`None` means the body is chunked or has no length) and then every chunk
+/// as it is written; returning `false` stops the download, which is how a
+/// cancel reaches the socket.
+///
+/// A redirect or any non-2xx answer is returned with an EMPTY body and nothing
+/// written: following it is the caller's decision.
+///
+/// # Errors
+///
+/// The connection failed, the body passed `most`, the stop was asked for, or
+/// what came back is not an HTTP response.
+pub fn download(
+    host: &str,
+    port: u16,
+    call: &crate::Call<'_>,
+    most: u64,
+    to: &mut dyn std::io::Write,
+    heard: &mut dyn FnMut(Option<u64>, u64) -> bool,
+) -> Result<crate::Reply> {
+    let mut stream = connect(host, port, call.patience)?;
+    std::io::Write::write_all(&mut stream, crate::request_of(call).as_bytes())
+        .with_context(|| format!("could not send the request to {host}"))?;
+    std::io::Write::flush(&mut stream).ok();
+
+    // THE HEAD FIRST, byte by byte up to the blank line: it is small, and
+    // reading past it would put body bytes where the head parser looks.
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        if head.len() > 64 << 10 {
+            bail!("{host} sent a head longer than 64 KiB");
+        }
+        let n = stream
+            .read(&mut byte)
+            .with_context(|| format!("could not read {host}'s answer"))?;
+        if n == 0 {
+            bail!("{host} closed the connection before its head ended");
+        }
+        head.push(byte[0]);
+    }
+    let text = String::from_utf8_lossy(&head).into_owned();
+    let status = crate::status_of(&text).ok_or_else(|| anyhow::anyhow!("no status line"))?;
+    let headers = crate::headers_of(&text);
+    let reply = crate::Reply {
+        status,
+        headers,
+        body: Vec::new(),
+    };
+    if !reply.went_through() {
+        return Ok(reply);
+    }
+    let chunked = reply
+        .header("transfer-encoding")
+        .is_some_and(|v| v.eq_ignore_ascii_case("chunked"));
+    let length = if chunked {
+        None
+    } else {
+        reply
+            .header("content-length")
+            .and_then(|v| v.trim().parse::<u64>().ok())
+    };
+    if length.is_some_and(|l| l > most) {
+        bail!(
+            "{host} announced {} bytes, more than {most}",
+            length.unwrap_or(0)
+        );
+    }
+    if !heard(length, 0) {
+        bail!("stopped");
+    }
+
+    let mut written = 0u64;
+    let mut buffer = vec![0u8; 64 << 10];
+    if chunked {
+        // CHUNKED: one hexadecimal length per line, the chunk, a CRLF; zero
+        // ends it. Read through a small reader so a length line split across
+        // two reads is still one line.
+        let mut reader = std::io::BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            std::io::BufRead::read_line(&mut reader, &mut line)
+                .with_context(|| format!("could not read {host}'s answer"))?;
+            let size = u64::from_str_radix(line.trim().split(';').next().unwrap_or(""), 16)
+                .with_context(|| format!("{host} sent a chunk length that is not a number"))?;
+            if size == 0 {
+                break;
+            }
+            let mut left = size;
+            while left > 0 {
+                let want = usize::try_from(left.min(buffer.len() as u64)).unwrap_or(buffer.len());
+                let n = reader
+                    .read(&mut buffer[..want])
+                    .with_context(|| format!("could not read {host}'s answer"))?;
+                if n == 0 {
+                    bail!("{host} closed the connection inside a chunk");
+                }
+                written += n as u64;
+                if written > most {
+                    bail!("{host} sent more than {most} bytes");
+                }
+                to.write_all(&buffer[..n])?;
+                left -= n as u64;
+                if !heard(None, written) {
+                    bail!("stopped");
+                }
+            }
+            let mut crlf = [0u8; 2];
+            reader.read_exact(&mut crlf).ok();
+        }
+    } else {
+        loop {
+            // THE ANNOUNCED LENGTH IS THE END, when there is one: waiting for
+            // the server to close would be waiting on a peer that may never
+            // send `close_notify` (see `ended`).
+            if length.is_some_and(|l| written >= l) {
+                break;
+            }
+            let n = match stream.read(&mut buffer) {
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof && length.is_none() => 0,
+                Err(e) => {
+                    return Err(
+                        anyhow::Error::new(e).context(format!("could not read {host}'s answer"))
+                    );
+                }
+            };
+            if n == 0 {
+                break;
+            }
+            written += n as u64;
+            if written > most {
+                bail!("{host} sent more than {most} bytes");
+            }
+            to.write_all(&buffer[..n])?;
+            if !heard(length, written) {
+                bail!("stopped");
+            }
+        }
+        if length.is_some_and(|l| l != written) {
+            bail!(
+                "{host} announced {} bytes and sent {written}",
+                length.unwrap_or(0)
+            );
+        }
+    }
+    to.flush()?;
+    Ok(reply)
 }
 
 #[cfg(test)]
@@ -231,6 +490,23 @@ mod tests {
                 "`{good}` was refused as a server name"
             );
         }
+    }
+
+    #[test]
+    fn a_close_without_notify_is_an_end_and_a_short_body_is_not() {
+        let eof = || std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "peer closed");
+        assert!(ended(Err(eof()), b"HTTP/1.1 200 OK\r\n\r\nx").is_ok());
+        assert!(
+            ended(Err(eof()), b"").is_err(),
+            "nothing arrived: that is a failure"
+        );
+        let short = crate::reply_of(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nabc").unwrap();
+        assert!(
+            whole(&short, "h").is_err(),
+            "a body cut short is never an answer"
+        );
+        let full = crate::reply_of(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc").unwrap();
+        assert!(whole(&full, "h").is_ok());
     }
 
     #[test]

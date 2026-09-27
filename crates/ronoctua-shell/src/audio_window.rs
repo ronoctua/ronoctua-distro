@@ -18,7 +18,7 @@ use crate::door::{Content, Door, Ui};
 use anyhow::Result;
 use smithay_client_toolkit::{
     reexports::calloop::channel,
-    seat::keyboard::{KeyEvent, Keysym, Modifiers},
+    seat::keyboard::{KeyEvent, Modifiers},
 };
 
 /// The window's `app_id`.
@@ -225,8 +225,13 @@ impl Content for AudioWindow {
         format!("*{}*", texts.t(ronoctua_i18n::key::AUDIO_TITLE))
     }
 
-    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, _: Modifiers) {
-        if let Some(press) = press_of(event) {
+    /// A key, read by its whole notation through the reader the footer
+    /// calls too (`audio::press_of_key`): a letter held with `Ctrl` or `Alt`
+    /// is not the letter, in either door.
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+        if let Some(press) =
+            crate::door::keys::key_of(event, mods).and_then(crate::audio::press_of_key)
+        {
             self.pressed(ui, press);
         }
     }
@@ -262,32 +267,4 @@ impl Content for AudioWindow {
             self.pressed(ui, crate::audio::Press::Enter);
         }
     }
-}
-
-/// A `KeyEvent` as the view sees it — the same mapping the footer does.
-///
-/// BOTH DOORS GO THROUGH `audio::OF_THE_VIEW`. This one turns SCTK's keysym
-/// into the table's notation and asks the view; the footer turns its own
-/// `Key` into the same notation and asks the same question. A key written in
-/// only one of the two would be a key one door answers and the other does
-/// not, which is the defect `bluetooth-keys-reach-both-doors` was written for.
-fn press_of(event: &KeyEvent) -> Option<crate::audio::Press> {
-    let notation = match event.keysym {
-        // ESCAPE IS NOT IN THE TABLE, and deliberately: every view of this
-        // shape leaves one level on it, and the hint line does not teach a
-        // key that is the same everywhere.
-        Keysym::Escape => return Some(crate::audio::Press::Escape),
-        Keysym::Return | Keysym::KP_Enter => "RET",
-        Keysym::Up => "<up>",
-        Keysym::Down => "<down>",
-        Keysym::Left => "<left>",
-        Keysym::Right => "<right>",
-        // AND THE BARE LETTERS, by the character SCTK hands this door. The
-        // footer matches `Key::simple(sym).notation()`, which is what ITS
-        // toolkit hands it; the two expressions agree on exactly the
-        // unmodified lowercase letters the table holds, which is why the
-        // table is the only place a letter is written.
-        _ => event.utf8.as_deref()?,
-    };
-    crate::audio::pressed(notation)
 }

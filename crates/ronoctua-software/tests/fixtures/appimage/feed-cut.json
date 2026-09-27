@@ -1,0 +1,199 @@
+{
+ "version": 1,
+ "home_page_url": "https://appimage.github.io/",
+ "feed_url": "https://appimage.github.io/feed.json",
+ "description": "AppImage applications for Linux without installation",
+ "icon": "https://appimage.github.io/apple-touch-icon.png",
+ "favicon": "https://appimage.github.io/favicon.ico",
+ "expired": false,
+ "items": [
+  {
+   "name": "Audacity",
+   "description": "<p>Audacity® is a free, easy-to-use, multi-track audio editor and recorder for Windows, macOS, GNU/Linux and other operating systems. The interface is translated into many languages.</p>\n<p>You can use Audacity to:</p>\n<ul>\n  <li>Record live audio</li>\n  <li>Convert tapes and records into digital recordings or CDs</li>\n  <li>Edit WAV, AIFF, FLAC, MP2, MP3 or Ogg Vorbis sound files</li>\n  <li>Cut, copy, splice or mix sounds together</li>\n  <li>Change the speed or pitch of a recording</li>\n  <li>Apply a wide range of other effects to audio recordings</li>\n</ul>",
+   "categories": [
+    "AudioVideo"
+   ],
+   "authors": [
+    {
+     "name": "audacity",
+     "url": "https://github.com/audacity"
+    }
+   ],
+   "license": "GPL-3.0-only",
+   "links": [
+    {
+     "type": "GitHub",
+     "url": "audacity/audacity"
+    },
+    {
+     "type": "Download",
+     "url": "https://github.com/audacity/audacity/releases"
+    }
+   ],
+   "icons": [
+    "Audacity/icons/scalable/audacity.svg"
+   ],
+   "screenshots": [
+    "https://www.audacityteam.org/wp-content/uploads/2016/01/audacity-212-linux.png"
+   ]
+  },
+  {
+   "name": "FreeCAD2",
+   "description": "<p>FreeCAD is a parametric 3D modeler. Parametric modeling\n      allows you to easily modify your design by going back into\n      your model history and changing its parameters. FreeCAD is\n      open source (LGPL license) and completely modular, allowing\n      for very advanced extension and customization.</p>\n<p>FreeCAD is multiplatfom, and reads and writes many open\n      file formats such as STEP, IGES, STL and others.</p>",
+   "categories": [
+    "Engineering"
+   ],
+   "authors": [
+    {
+     "name": "FreeCAD",
+     "url": "https://github.com/FreeCAD"
+    }
+   ],
+   "license": "LGPL-2.1",
+   "links": [
+    {
+     "type": "GitHub",
+     "url": "FreeCAD/FreeCAD"
+    },
+    {
+     "type": "Download",
+     "url": "https://github.com/FreeCAD/FreeCAD/releases"
+    }
+   ],
+   "icons": [
+    "FreeCAD2/icons/64x64/freecad_conda.png"
+   ],
+   "screenshots": [
+    "https://www.freecadweb.org/wiki/images/2/2d/FreeCAD011.png"
+   ]
+  },
+  {
+   "name": "Inkscape",
+   "description": "<p>A Free and open source vector graphics editor. It offers a rich set of features and is widely used for both artistic and technical illustrations such as cartoons, clip art, logos, typography, diagramming and flowcharting.</p>\n<p>It uses vector graphics to allow for sharp printouts and renderings at unlimited resolution and is not bound to a fixed number of pixels like raster graphics. Inkscape uses the standardized SVG file format as its main format, which is supported by many other applications including web browsers.</p>\n<p>Inkscape supports many advanced SVG features (markers, clones, alpha blending,\n      etc.) and great care is taken in designing a streamlined interface.\n      It is very easy to edit nodes, perform complex path operations, trace\n      bitmaps and much more.\n      We also aim to maintain a thriving user and developer community by using\n      open, community-oriented development.</p>",
+   "categories": [
+    "Graphics"
+   ],
+   "authors": null,
+   "license": "GPL-2.0-or-later",
+   "links": null,
+   "icons": [
+    "Inkscape/icons/scalable/org.inkscape.Inkscape.svg"
+   ],
+   "screenshots": [
+    "https://media.inkscape.org/media/resources/file/Screenshot_Freedom_Machine_Inkscape_master_FB3NeUU.png"
+   ]
+  },
+  {
+   "name": "Krita",
+   "description": "<p>Krita is the full-featured digital art studio.</p>\n<p>It is perfect for sketching and painting, and presents an end–to–end solution for creating digital painting files from scratch by masters.</p>\n<p>Krita is a great choice for creating concept art, comics, textures for rendering and matte paintings. Krita supports many colorspaces like RGB and CMYK\n      at 8 and 16 bits integer channels, as well as 16 and 32 bits floating point channels.</p>\n<p>Have fun painting with the advanced brush engines, amazing filters and many handy features that make Krita enormously productive.</p>",
+   "categories": [
+    "Qt"
+   ],
+   "authors": null,
+   "license": "GPL-3.0-only",
+   "links": null,
+   "icons": [
+    "Krita/icons/scalable/krita.svgz"
+   ],
+   "screenshots": [
+    "https://cdn.kde.org/screenshots/krita/2018-03-17_screenshot_001.png"
+   ]
+  },
+  {
+   "name": "Obsidian",
+   "description": "Obsidian",
+   "categories": [
+    "Office"
+   ],
+   "authors": [
+    {
+     "name": "obsidianmd",
+     "url": "https://github.com/obsidianmd"
+    }
+   ],
+   "license": null,
+   "links": [
+    {
+     "type": "GitHub",
+     "url": "obsidianmd/obsidian-releases"
+    },
+    {
+     "type": "Download",
+     "url": "https://github.com/obsidianmd/obsidian-releases/releases"
+    }
+   ],
+   "icons": [
+    "Obsidian/icons/128x128/obsidian.png"
+   ],
+   "screenshots": [
+    "Obsidian/screenshot.png"
+   ]
+  },
+  {
+   "name": "Upscayl",
+   "description": "Upscayl - Free and Open Source AI Image Upscaler",
+   "categories": [
+    "Graphics"
+   ],
+   "authors": [
+    {
+     "name": "upscayl",
+     "url": "https://github.com/upscayl"
+    }
+   ],
+   "license": null,
+   "links": [
+    {
+     "type": "GitHub",
+     "url": "upscayl/upscayl"
+    },
+    {
+     "type": "Download",
+     "url": "https://github.com/upscayl/upscayl/releases"
+    }
+   ],
+   "icons": [
+    "Upscayl/icons/512x512/upscayl.png"
+   ],
+   "screenshots": [
+    "Upscayl/screenshot.png"
+   ]
+  },
+  {
+   "name": "OpenAudible",
+   "description": "<p>OpenAudible is an audiobook manager that catalogs and organizes your audiobooks. It can automatically download and backup your Audible content.</p>\n<p>Features:</p>\n<ul>\n  <li>Convert AAX to MP3</li>\n  <li>Export your audiobooks in CSV, json, html</li>\n  <li>Split and join audio files</li>\n</ul>\n<p>OpenAudible loves, but is unaffilated with audible.com.</p>",
+   "categories": [
+    null
+   ],
+   "authors": [
+    {
+     "name": "openaudible",
+     "url": "https://github.com/openaudible"
+    }
+   ],
+   "license": "GPL-2.0+",
+   "links": [
+    {
+     "type": "GitHub",
+     "url": "openaudible/openaudible"
+    },
+    {
+     "type": "Download",
+     "url": "https://github.com/openaudible/openaudible/releases"
+    }
+   ],
+   "icons": [
+    "OpenAudible/icons/128x128/OpenAudible.png"
+   ],
+   "screenshots": [
+    "https://openaudible.org/images/open_audible_linux.png"
+   ]
+  },
+  {
+   "name": 5,
+   "categories": [
+    "Office"
+   ]
+  }
+ ]
+}

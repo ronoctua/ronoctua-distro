@@ -67,6 +67,17 @@ pub struct DesktopEntry {
     /// alongside — and the symptom is the worst kind: it opens and dies, with
     /// nothing on screen.
     pub working_directory: Option<String>,
+    /// The `StartupWMClass=`: the window class — on Wayland, the `app_id` —
+    /// the entry promises its window will carry. `None` when it says nothing.
+    ///
+    /// It is what turns a WINDOW back into the entry that opened it, which
+    /// the `app_id` alone cannot do for every program. A web app is the case
+    /// that made it necessary: Chrome names an `--app=` window
+    /// `chrome-web.whatsapp.com__-Default`, and the modeline's rule for a
+    /// foreign `app_id` — keep the last dotted component — would draw
+    /// `com__-Default`. The entry that launched it declares that string here,
+    /// next to the `Name=` a person reads.
+    pub startup_wm_class: Option<String>,
     /// The folded form of `name` — the key the search matches on.
     ///
     /// Computed ONCE during the scan. Folding per keystroke would redo the
@@ -101,12 +112,19 @@ pub fn directories() -> Vec<PathBuf> {
     out
 }
 
-/// How many subdirectory levels to descend.
+/// How many directory levels the scan reads — the `applications` directory
+/// itself and two below it.
 ///
 /// Distribution themes put files in `applications/kde4/`; three levels
 /// cover what exists. The ceiling is here so the loop terminates, not to
 /// limit anyone.
-const DEPTH: usize = 3;
+///
+/// Public because a second reader has to agree with it: the launcher's
+/// staleness stamp (`apps::stamp` in the shell) looks at exactly the
+/// directories this scan reads. One level fewer there and a `.desktop` added
+/// two folders down would never trigger a rescan; one more and it would stat
+/// directories whose files nobody reads.
+pub const DEPTH: usize = 3;
 
 /// Scans the given directories and returns the entries, sorted.
 ///
@@ -146,6 +164,47 @@ pub fn scan_in(dirs: &[PathBuf], language: &str) -> Vec<DesktopEntry> {
 #[must_use]
 pub fn scan(language: &str) -> Vec<DesktopEntry> {
     scan_in(&directories(), language)
+}
+
+/// The entry that declares it opens a window with this `app_id`.
+///
+/// Matched against `StartupWMClass=` — see
+/// [`DesktopEntry::startup_wm_class`] for the window that needs it.
+///
+/// # Exact first, and only then ignoring case
+///
+/// The key predates Wayland: it was written for X11's `WM_CLASS`, whose
+/// class half is capitalised by convention (`StartupWMClass=Gimp`), while the
+/// same program's Wayland `app_id` is usually the lower-case one. Refusing the
+/// second form would leave half the entries that bother to declare a class
+/// unmatched; accepting it only after an exact pass keeps an exact match from
+/// ever losing to a looser one.
+///
+/// When two entries declare the same class the first in the catalogue wins,
+/// which is the catalogue's own rule: it is deduplicated with
+/// `$XDG_DATA_HOME` first, so the person's override is the one found.
+///
+/// A linear walk, and on purpose: it runs when the modeline is drawn, over a
+/// few hundred entries of which a handful declare a class — an index would be
+/// a second structure to keep in step with every rescan for microseconds.
+#[must_use]
+pub fn declared_window<'a>(
+    catalogue: &'a [DesktopEntry],
+    app_id: &str,
+) -> Option<&'a DesktopEntry> {
+    if app_id.is_empty() {
+        return None;
+    }
+    catalogue
+        .iter()
+        .find(|e| e.startup_wm_class.as_deref() == Some(app_id))
+        .or_else(|| {
+            catalogue.iter().find(|e| {
+                e.startup_wm_class
+                    .as_deref()
+                    .is_some_and(|c| c.eq_ignore_ascii_case(app_id))
+            })
+        })
 }
 
 /// Gathers `dir`'s `.desktop` files, descending to [`DEPTH`].
@@ -253,6 +312,12 @@ fn read(path: &Path, root: &Path, language: &str) -> Option<(String, DesktopEntr
             working_directory: desktop::raw_bytes(&fields, "Path")
                 .map(str::trim)
                 .filter(|p| !p.is_empty())
+                .map(str::to_owned),
+            // A plain string, never localized: it names a window, and a
+            // window's class is the same whatever language is on screen.
+            startup_wm_class: desktop::raw_bytes(&fields, "StartupWMClass")
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
                 .map(str::to_owned),
         },
     ))
@@ -463,6 +528,63 @@ mod tests {
             "[Desktop Entry]\nType=Application\nName=Ghost\nExec=zzz-really-does-not-exist\n",
         )]);
         assert_eq!(r[0].command.0, "zzz-really-does-not-exist");
+    }
+
+    /// A web app's window, named back from the entry that opened it. The
+    /// `app_id` is the one Chrome gives an `--app=` window; the modeline's
+    /// fallback for it would be `com__-Default`.
+    #[test]
+    fn the_window_class_is_read_and_names_the_window() {
+        let r = with_it(&[
+            (
+                "ronoctua-web-whatsapp.desktop",
+                "[Desktop Entry]\nType=Application\nName=WhatsApp\nExec=web-open whatsapp\n\
+                 StartupWMClass= chrome-web.whatsapp.com__-Default \n",
+            ),
+            (
+                "gimp.desktop",
+                "[Desktop Entry]\nType=Application\nName=GIMP\nExec=gimp\nStartupWMClass=Gimp\n",
+            ),
+            (
+                "plain.desktop",
+                "[Desktop Entry]\nType=Application\nName=Plain\nExec=plain\n",
+            ),
+        ]);
+        let web = r.iter().find(|e| e.name == "WhatsApp").expect("scanned");
+        // TRIMMED: a stray space is invisible in the file and would make the
+        // class match nothing, which on screen is the fallback name again.
+        assert_eq!(
+            web.startup_wm_class.as_deref(),
+            Some("chrome-web.whatsapp.com__-Default")
+        );
+        let plain = r.iter().find(|e| e.name == "Plain").expect("scanned");
+        assert_eq!(plain.startup_wm_class, None, "no key is no class");
+
+        let found = |id: &str| super::declared_window(&r, id).map(|e| e.name.as_str());
+        assert_eq!(found("chrome-web.whatsapp.com__-Default"), Some("WhatsApp"));
+        // The X11 capital against the Wayland lower case.
+        assert_eq!(found("gimp"), Some("GIMP"));
+        // Nothing declares these, and nothing is invented for them.
+        assert_eq!(found("plain"), None, "a desktop id is not a window class");
+        assert_eq!(found("chrome-web.whatsapp.com__-Profile_1"), None);
+        assert_eq!(found(""), None);
+    }
+
+    /// An exact match is never beaten by a looser one that comes first.
+    #[test]
+    fn an_exact_class_beats_one_that_only_differs_in_case() {
+        let r = with_it(&[
+            (
+                "a.desktop",
+                "[Desktop Entry]\nType=Application\nName=Aaa\nExec=a\nStartupWMClass=Tool\n",
+            ),
+            (
+                "b.desktop",
+                "[Desktop Entry]\nType=Application\nName=Bbb\nExec=b\nStartupWMClass=tool\n",
+            ),
+        ]);
+        let found = super::declared_window(&r, "tool").map(|e| e.name.as_str());
+        assert_eq!(found, Some("Bbb"));
     }
 
     #[test]

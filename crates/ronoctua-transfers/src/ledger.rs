@@ -113,6 +113,17 @@ impl Shared {
         self.locked().switches.get(&id).map(Arc::clone)
     }
 
+    /// Who is doing a job, for the asks that depend on it — a pause is only
+    /// flipped for an engine that honours one ([`Engine::pauses`]).
+    #[must_use]
+    pub fn engine_of(&self, id: u64) -> Option<Engine> {
+        self.locked()
+            .jobs
+            .iter()
+            .find(|j| j.id == id)
+            .map(|j| j.engine)
+    }
+
     /// The list as everybody should draw it, and the version it is.
     ///
     /// **The order is decided here**, once: what is still happening comes

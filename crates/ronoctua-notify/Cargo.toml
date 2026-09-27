@@ -24,7 +24,14 @@ serde_json.workspace = true
 # superpackage is 335,031 SVGs against 53 PNGs, so the vector rasteriser is not
 # optional — see `icon::rasterize`.
 resvg.workspace = true
-image.workspace = true
+# `ico` on top of the workspace's decoders, and HERE rather than there: a
+# program's own icon is where the format still lives. A hand-made `.desktop`
+# points `Icon=` at the `favicon.ico` it came with, and a web app's icon comes
+# off a site whose last resort is exactly that file. Without the feature those
+# were `None` — the row kept its category glyph, and nothing said why. It is a
+# BMP or PNG in a directory header, so it costs the two decoders already here
+# and no store path.
+image = { workspace = true, features = [ "ico" ] }
 
 # The probe that exercises the chain against the REAL superpackage. It is a binary,
 # and not a `#[test]`, because the Nix check has to pass the store path in.

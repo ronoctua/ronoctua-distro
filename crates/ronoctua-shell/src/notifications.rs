@@ -423,7 +423,9 @@ pub enum Errand {
     /// module holds no book, and giving it one would be the second copy that
     /// goes stale — see the header.
     Adjusted(String, Option<Verdict>),
-    /// The draft wants something TYPED. The footer asks; the window says where.
+    /// The draft wants something TYPED. Each door asks on its own line —
+    /// the footer's minibuffer, the window's header — the question
+    /// [`View::typing`] gives, and hands the answer to [`View::typed`].
     Ask(Asking),
     /// Save this filter of the person's own. `was` is the id it replaces.
     Filter {
@@ -451,6 +453,136 @@ pub enum Asking {
     Name,
     /// What condition `n` compares against.
     Value(usize),
+}
+
+impl Asking {
+    /// The line a door opens for it — the command whose argument the answer
+    /// is, and whose `ask-<id>` is the question drawn on the line.
+    ///
+    /// TWO IDS AND NOT ONE: the line said the command's label, "answer the
+    /// filter sheet's question", which does not say whether a name or a text
+    /// is wanted.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Name => "notif-filter-name",
+            Self::Value(_) => "notif-filter-value",
+        }
+    }
+}
+
+/// What running action `which` of a record COMES TO — decided here, once,
+/// for both doors, so the two cannot disagree about what a button does.
+///
+/// Two of the five are the FOOTER'S to do, and the window hands them over
+/// (`notif-act`, [`act_order`]): a foreign app's button is `ActionInvoked`
+/// said by the process that owns the bus name the sender is waiting on, and
+/// a command of the registry is run where commands run. The other three a
+/// window does itself — the clipboard is one call from any process, and a
+/// program starts in a scope of its own from any door (`foreign`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Deed {
+    /// A foreign app's button: `ActionInvoked` with this action's id.
+    Invoke(String),
+    /// A command of the registry, by id.
+    Command(String),
+    /// This path, on the clipboard as text.
+    CopyPath(String),
+    /// This image file, on the clipboard as an image.
+    CopyImage(std::path::PathBuf),
+    /// This program, with these arguments.
+    Run(ronoctua_notify::Program, Vec<String>),
+}
+
+impl Deed {
+    /// Whether only the footer can do it — the bus name, the registry.
+    #[must_use]
+    pub const fn the_footers(&self) -> bool {
+        matches!(self, Self::Invoke(_) | Self::Command(_))
+    }
+}
+
+/// What action `which` of `record` does — `None` when it has no such action,
+/// or wants the file the notification did not carry (an action like that is
+/// not run, and the record is not marked read for it).
+#[must_use]
+pub fn deed_of(record: &Record, which: usize) -> Option<Deed> {
+    use ronoctua_notify::{Doing, action::Arg};
+    let action = record.notification.actions.get(which)?;
+    let file = record.notification.file();
+    Some(match &action.doing {
+        Doing::Invoke => Deed::Invoke(action.id.clone()),
+        Doing::Command(id) => Deed::Command(id.clone()),
+        Doing::CopyPath => Deed::CopyPath(file?.to_string_lossy().into_owned()),
+        Doing::CopyImage => Deed::CopyImage(file?),
+        Doing::Run { program, args } => {
+            let mut argv = Vec::with_capacity(args.len());
+            for a in args {
+                argv.push(match a {
+                    Arg::Literal(s) => s.clone(),
+                    Arg::File => file.as_ref()?.to_string_lossy().into_owned(),
+                    Arg::Folder => file.as_ref()?.parent()?.to_string_lossy().into_owned(),
+                });
+            }
+            Deed::Run(*program, argv)
+        }
+    })
+}
+
+/// Puts what a copying deed carries on the clipboard, and says how it went:
+/// the text key both doors put on their line. `None` for a deed that copies
+/// nothing.
+#[must_use]
+pub fn copy_it(deed: &Deed) -> Option<&'static str> {
+    use ronoctua_i18n::key;
+    let done = match deed {
+        Deed::CopyPath(text) => crate::buffer::copy_to_clipboard(text).map(|()| key::ECHO_COPIED),
+        Deed::CopyImage(file) => {
+            crate::buffer::copy_image_to_clipboard(file).map(|()| key::ECHO_IMAGE_COPIED)
+        }
+        Deed::Invoke(_) | Deed::Command(_) | Deed::Run(..) => return None,
+    };
+    Some(done.unwrap_or_else(|e| {
+        tracing::error!(error = %e, "copying for a notification FAILED");
+        key::ECHO_COPY_FAILED
+    }))
+}
+
+/// The footer's command that runs an action — with [`act_order`] as its
+/// argument, the record's; bare, the one under the manager's cursor.
+pub const ACT: &str = "notif-act";
+
+/// Action `which` of the record `key`, as the argument of `notif-act` — what
+/// the window sends the footer for a deed only the footer can do.
+///
+/// THE RECORD BY ITS WHOLE NAME, the id and when it arrived: the id alone
+/// names every record that was ever given that number (`RecordKey`).
+#[must_use]
+pub fn act_order(key: RecordKey, which: usize) -> String {
+    let nanos = key
+        .at
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!("{} {nanos} {which}", key.id)
+}
+
+/// [`act_order`], read back — `None` for anything else, which the footer
+/// refuses rather than taking for the row its own cursor is on.
+#[must_use]
+pub fn act_of(argument: &str) -> Option<(RecordKey, usize)> {
+    let mut words = argument.split_whitespace();
+    let id = words.next()?.parse().ok()?;
+    let nanos: u128 = words.next()?.parse().ok()?;
+    let which = words.next()?.parse().ok()?;
+    if words.next().is_some() {
+        return None;
+    }
+    let whole = std::time::Duration::new(
+        u64::try_from(nanos / 1_000_000_000).ok()?,
+        u32::try_from(nanos % 1_000_000_000).ok()?,
+    );
+    let at = std::time::UNIX_EPOCH.checked_add(whole)?;
+    Some((RecordKey { id, at }, which))
 }
 
 /// The manager's state.
@@ -486,6 +618,14 @@ pub struct View {
     /// (a ratchet), and a height that followed the offsets would move the
     /// modeline while somebody scrolls.
     open_room: std::cell::Cell<usize>,
+    /// What the draft is waiting for somebody to type, while a door's line
+    /// asks for it.
+    ///
+    /// The VIEW keeps it and not either door: the answer comes back as text
+    /// alone, and both doors hand it to [`View::typed`]. The next key that
+    /// reaches the view lets it go — while a line asks, every key is the
+    /// line's, in both doors.
+    asking: Option<Asking>,
 }
 
 /// Which of two lists side by side (or stacked): an open record's message
@@ -649,7 +789,7 @@ pub enum Level {
     ///
     /// It is the only level that holds anything but a cursor, and it has to:
     /// a filter half-written is not saved anywhere yet, and a person naming it
-    /// in the minibuffer is a round trip through the door and back.
+    /// on a door's line is a round trip through the door and back.
     Draft(Draft),
     /// The question before a filter goes to EVERYBODY.
     ///
@@ -2749,6 +2889,7 @@ impl View {
     /// `columns` is the width the rows were drawn at: an open record's height
     /// depends on it, and the arrows stop at the last line of it.
     pub fn key(&mut self, press: Press, lists: &Lists<'_>, book: &Book, columns: u16) -> Errand {
+        self.asking = None;
         let errand = self.key_here(press, lists, book, columns);
         // THE COLUMN FOLLOWS THE CURSOR, side by side: the region does not
         // scroll, so what keeps the cursor on screen is its own column.
@@ -3355,16 +3496,19 @@ impl View {
                 }
                 Errand::Nothing
             }
-            // WHAT CANNOT BE TURNED IS TYPED, and typing happens in the
-            // footer's minibuffer — the one place this system takes text. The
-            // window says so instead of growing a second one.
-            Press::Enter => match here {
-                Some(Line::Name) => Errand::Ask(Asking::Name),
-                Some(Line::Value(i)) if !d.when[i].test.is_numeric() => {
-                    Errand::Ask(Asking::Value(i))
-                }
-                _ => Errand::Nothing,
-            },
+            // WHAT CANNOT BE TURNED IS TYPED — on the line of whichever door
+            // this is: the footer's minibuffer, or the window's header. The
+            // view remembers what it asked, and the answer comes back to
+            // `typed`.
+            Press::Enter => {
+                let asking = match here {
+                    Some(Line::Name) => Asking::Name,
+                    Some(Line::Value(i)) if !d.when[i].test.is_numeric() => Asking::Value(i),
+                    _ => return Errand::Nothing,
+                };
+                self.asking = Some(asking);
+                Errand::Ask(asking)
+            }
             Press::Letter('a') => {
                 d.when.push(ronoctua_notify::Term {
                     field: ronoctua_notify::Field::Summary,
@@ -3400,8 +3544,35 @@ impl View {
         }
     }
 
-    /// What the person typed in the minibuffer, back into the draft.
-    pub fn typed(&mut self, what: Asking, text: &str) {
+    /// The line a door opens for what the draft asked: its id, and what the
+    /// line starts from — the name or the text the draft holds now, so that
+    /// fixing one letter is one `DEL` and not the whole of it typed again.
+    #[must_use]
+    pub fn typing(&self) -> Option<(&'static str, String)> {
+        let what = self.asking?;
+        let Level::Draft(d) = &self.level else {
+            return None;
+        };
+        let now = match what {
+            Asking::Name => d.name.clone(),
+            Asking::Value(i) => d.when.get(i)?.test.against(),
+        };
+        Some((what.id(), now))
+    }
+
+    /// What the person typed on a door's line, back into the draft — the
+    /// one call both doors make with the answer.
+    ///
+    /// AN EMPTY ANSWER IS A NO: the line was left with nothing on it, and
+    /// the draft keeps what it had. An answer nobody asked for (no question
+    /// under way) is nothing too.
+    pub fn typed(&mut self, text: &str) {
+        let Some(what) = self.asking.take() else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
         let Level::Draft(d) = &mut self.level else {
             return;
         };
@@ -5197,13 +5368,15 @@ mod tests {
         );
         assert!(v.note(&t).is_some(), "and it said nothing about refusing");
 
-        // NAMED AND FILLED IN — the two things that are typed come in through
-        // the minibuffer, which is what `Errand::Ask` sends the door to do.
+        // NAMED AND FILLED IN — the two things that are typed come in on a
+        // door's own line, which is what `Errand::Ask` sends the door to open,
+        // and go back through `typed`.
         assert_eq!(
             v.key(Press::Enter, &lists, &b, 200),
             Errand::Ask(Asking::Name)
         );
-        v.typed(Asking::Name, "quiet backups");
+        assert_eq!(v.typing(), Some(("notif-filter-name", String::new())));
+        v.typed("quiet backups");
         // Down to the value of the first condition: name, field, test, value.
         for _ in 0..3 {
             let _ = v.key(Press::Down, &lists, &b, 200);
@@ -5212,7 +5385,8 @@ mod tests {
             v.key(Press::Enter, &lists, &b, 200),
             Errand::Ask(Asking::Value(0))
         );
-        v.typed(Asking::Value(0), "backup");
+        assert_eq!(v.typing(), Some(("notif-filter-value", String::new())));
+        v.typed("backup");
 
         // AND THE ARROWS TURN WHAT CANNOT BE TYPED. Up to the field, one step
         // on, and the condition is about the sender instead of the title.
@@ -5233,6 +5407,152 @@ mod tests {
         assert_eq!(rule.id, "quiet backups");
         assert_eq!(rule.when.len(), 1);
         assert_eq!(v.level, Level::List);
+    }
+
+    /// THE LINE STARTS FROM WHAT THE DRAFT HOLDS, in both doors; an empty
+    /// answer keeps it; and an answer nobody asked for — or asked before a
+    /// key let the line go — writes nothing.
+    #[test]
+    fn a_typed_answer_starts_from_the_draft_and_an_empty_one_keeps_it() {
+        let b = Book::distro();
+        let lists = Lists::of(&[], &b);
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+        let _ = v.key(Press::Letter('n'), &lists, &b, 200);
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        v.typed("backups");
+        v.typed("nobody asked for this");
+        let name = |v: &View| match &v.level {
+            Level::Draft(d) => d.name.clone(),
+            other => panic!("the draft closed: {other:?}"),
+        };
+        assert_eq!(name(&v), "backups");
+
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        assert_eq!(
+            v.typing(),
+            Some(("notif-filter-name", "backups".to_owned()))
+        );
+        v.typed("");
+        assert_eq!(name(&v), "backups", "an empty answer wiped the name");
+
+        // A LINE LET GO: the next key reaches the view, and the question is
+        // over.
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        let _ = v.key(Press::Down, &lists, &b, 200);
+        assert_eq!(v.typing(), None);
+        v.typed("late");
+        assert_eq!(name(&v), "backups");
+
+        // AND A VALUE starts from its own text.
+        for _ in 0..2 {
+            let _ = v.key(Press::Down, &lists, &b, 200);
+        }
+        assert_eq!(
+            v.key(Press::Enter, &lists, &b, 200),
+            Errand::Ask(Asking::Value(0))
+        );
+        v.typed("backup");
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        assert_eq!(
+            v.typing(),
+            Some(("notif-filter-value", "backup".to_owned()))
+        );
+    }
+
+    /// A record with one action of each kind, about a file.
+    fn acting() -> Record {
+        use ronoctua_notify::action::{Action, Arg, Doing, Label};
+        let mut r = record(7, Show::Brief, false);
+        r.notification.icon = Some("file:///home/a/shots/one%20shot.png".into());
+        let one = |id: &str, doing: Doing| Action {
+            id: id.into(),
+            label: Label::Text(id.into()),
+            doing,
+        };
+        r.notification.actions = vec![
+            one("reply", Doing::Invoke),
+            one("see", Doing::Command("bluetooth-open".into())),
+            one("path", Doing::CopyPath),
+            one("image", Doing::CopyImage),
+            one(
+                "folder",
+                Doing::Run {
+                    program: ronoctua_notify::Program::Open,
+                    args: vec![Arg::Literal("--".into()), Arg::Folder, Arg::File],
+                },
+            ),
+        ];
+        r
+    }
+
+    /// EVERY KIND OF ACTION COMES TO ONE DEED, the same in both doors — and
+    /// only the bus's button and a command are the footer's to do.
+    #[test]
+    fn every_action_comes_to_one_deed() {
+        let r = acting();
+        let file = std::path::PathBuf::from("/home/a/shots/one shot.png");
+        let deeds: Vec<Deed> = (0..5).filter_map(|i| deed_of(&r, i)).collect();
+        assert_eq!(
+            deeds,
+            [
+                Deed::Invoke("reply".into()),
+                Deed::Command("bluetooth-open".into()),
+                Deed::CopyPath("/home/a/shots/one shot.png".into()),
+                Deed::CopyImage(file),
+                Deed::Run(
+                    ronoctua_notify::Program::Open,
+                    vec![
+                        "--".into(),
+                        "/home/a/shots".into(),
+                        "/home/a/shots/one shot.png".into()
+                    ]
+                ),
+            ]
+        );
+        let footers: Vec<bool> = deeds.iter().map(Deed::the_footers).collect();
+        assert_eq!(footers, [true, true, false, false, false]);
+        assert_eq!(deed_of(&r, 5), None, "an action that is not there");
+
+        // WITHOUT THE FILE, what needs it is not run at all.
+        let mut bare = acting();
+        bare.notification.icon = None;
+        let kept: Vec<Deed> = (0..5).filter_map(|i| deed_of(&bare, i)).collect();
+        assert_eq!(
+            kept,
+            [
+                Deed::Invoke("reply".into()),
+                Deed::Command("bluetooth-open".into())
+            ]
+        );
+    }
+
+    /// A COPY IS ONE CALL, from either door, and says how it went.
+    #[test]
+    fn a_copying_deed_copies_and_says_so() {
+        crate::buffer::COPIED.with(|c| c.borrow_mut().clear());
+        assert_eq!(
+            copy_it(&Deed::CopyPath("/tmp/a b".into())),
+            Some(ronoctua_i18n::key::ECHO_COPIED)
+        );
+        let copied = crate::buffer::COPIED.with(|c| c.borrow().clone());
+        assert_eq!(copied, [(None, b"/tmp/a b".to_vec())]);
+        assert_eq!(copy_it(&Deed::Command("x".into())), None);
+    }
+
+    /// THE WINDOW'S ORDER NAMES THE RECORD WHOLE and reads back as it was
+    /// written; anything else is refused, not taken for the focused row.
+    #[test]
+    fn an_action_order_names_the_record_and_reads_back() {
+        let key = RecordKey {
+            id: 42,
+            at: std::time::UNIX_EPOCH + std::time::Duration::new(1_790_000_000, 123_456_789),
+        };
+        let order = act_order(key, 3);
+        assert_eq!(act_of(&order), Some((key, 3)), "{order}");
+        for wrong in ["", "42", "42 1", "x 1 2", "42 1 2 3", "42 -1 2"] {
+            assert_eq!(act_of(wrong), None, "{wrong}");
+        }
     }
 
     #[test]

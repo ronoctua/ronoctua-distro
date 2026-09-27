@@ -17,8 +17,10 @@
 //! something changed. Orders go to those daemons directly — a profile, a
 //! threshold, a suspend are the same call from any process — EXCEPT the two
 //! inhibitor locks, which are file descriptors and have to live in the process
-//! that outlives this window: those are forwarded to the footer as the
-//! commands `LEADER s p k` and `LEADER s p l` run.
+//! that outlives this window: those are handed to the footer down the control
+//! socket (`Ui::tell_the_footer`), as the commands the leader runs with the
+//! state WANTED as their argument, and a footer that is not there is a
+//! sentence on the header.
 
 use crate::door::{Content, Door, Ui};
 use anyhow::Result;
@@ -147,30 +149,6 @@ impl Power {
         }
     }
 
-    /// "The lock is the footer's to hold", with the two sequences RESOLVED.
-    ///
-    /// The keys are an ARGUMENT and never text in the `.ftl`: a sentence that
-    /// carried them went stale the day either moved, and the word "LEADER" is
-    /// nobody's key — `nix/modules/scroll.nix` says `SUPER` and `nix/dev.nix`
-    /// says `CTRL ALT SPC`. `crate::leader()` is the one place that knows.
-    ///
-    /// `leader()` and not `leader_chord()`: these are sequences typed after
-    /// the leader, and the chord's label is the modifier held for the arrows —
-    /// in the nested loop the two are not the same key.
-    fn answer_in_the_footer(texts: &ronoctua_i18n::Texts) -> String {
-        let leader = crate::leader();
-        texts.t_with(
-            ronoctua_i18n::key::POWER_ANSWER_IN_THE_FOOTER,
-            &[
-                (
-                    "awake",
-                    &format!("{leader} {}", crate::leader::KEEP_AWAKE_KEYS),
-                ),
-                ("lid", &format!("{leader} {}", crate::leader::KEEP_LID_KEYS)),
-            ],
-        )
-    }
-
     /// Carries out what the view asked for.
     fn apply(&mut self, ui: &mut Ui, errand: crate::power::Errand) {
         use crate::power::Errand;
@@ -186,24 +164,17 @@ impl Power {
                 ui.quit = true;
                 return;
             }
-            // THE LOCKS ARE THE FOOTER'S TO HOLD: an inhibitor is an fd, and
-            // this window will close. The command the footer runs for the same
-            // key is what is asked for — one door, through the other.
-            Errand::Order(ronoctua_power::Order::KeepAwake(keep, _)) => {
-                // NOT `status()`, WHICH WAITS. This runs inside the calloop
-                // callback, and waiting for a child there freezes the window
-                // for as long as the child takes — the same trap `AGENTS.md`
-                // records about `systemd-run --scope` in the footer's loop. A
-                // footer socket that is gone or slow made this window stop
-                // painting; a `connect(2)` to a dead socket is fast, and a
-                // busy one is not.
-                //
-                // AND A FAILURE IS A SENTENCE, not silence: `current_exe`
-                // failing used to drop the whole thing with no message, which
-                // from the outside is a key that did nothing.
-                if !crate::door::forward(crate::power_words::keep_command(keep)) {
-                    ui.message = Some(Self::answer_in_the_footer(&ui.texts));
-                }
+            // THE LOCKS ARE HELD BY THE FOOTER: an inhibitor is an fd, and
+            // this window will close. So the order goes there — off the loop,
+            // down the control socket — as the leader's own command with the
+            // state this row decided (`keep_word`), and never a flip the footer
+            // would decide again from a reading a moment older or newer. A
+            // footer that is not there is a sentence on the header.
+            Errand::Order(ronoctua_power::Order::KeepAwake(keep, on)) => {
+                ui.tell_the_footer(
+                    crate::power_words::keep_command(keep),
+                    Some(crate::power_words::keep_word(on)),
+                );
             }
             Errand::Order(order) => match &self.power {
                 Some(h) => h.send(order),
@@ -307,4 +278,42 @@ fn press_of(event: &KeyEvent) -> Option<crate::power::Press> {
         Keysym::Down => Press::Down,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A window with no daemons and no footer behind it.
+    fn a_window() -> (Power, Ui) {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let me = Power {
+            view: crate::power::View::fresh(),
+            snapshot: None,
+            power: None,
+            wanted: ronoctua_power::Profile::Balanced,
+            _watch: None,
+        };
+        (me, Ui::for_tests(texts))
+    }
+
+    /// A LOCK IS ASKED OF THE FOOTER WITH THE STATE WANTED, off the loop, and
+    /// nothing tells the person to go anywhere.
+    #[test]
+    fn a_lock_goes_to_the_footer_with_the_state_wanted() {
+        use ronoctua_power::{Keep, Order};
+        for (keep, on, order) in [
+            (Keep::Sleep, true, "command power-keep-awake on"),
+            (Keep::Sleep, false, "command power-keep-awake off"),
+            (Keep::Lid, true, "command power-keep-lid on"),
+        ] {
+            let (mut w, mut ui) = a_window();
+            w.apply(
+                &mut ui,
+                crate::power::Errand::Order(Order::KeepAwake(keep, on)),
+            );
+            assert_eq!(ui.orders(), [order.to_owned()]);
+            assert!(ui.message.is_none(), "{:?}", ui.message);
+        }
+    }
 }

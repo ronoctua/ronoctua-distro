@@ -19,19 +19,22 @@
 //! tunnel are the same call from any process, and NetworkManager keeps no
 //! per-client state.
 //!
-//! # Except a password, which is typed in the footer
+//! # And what is typed, it types here
 //!
-//! A window has no minibuffer. A secured network with no stored profile
-//! needs a password typed, so here the row says where to type it instead of
-//! opening a prompt that cannot exist — the arrangement the Bluetooth
-//! window's pairing questions already have.
+//! A password, a tunnel's path and a Tor value are asked on this window's own
+//! header (`door::Ui::ask`) — the password hidden — and the answer goes to the
+//! same `network::View::answered` the footer's minibuffer reaches, pasted
+//! into or typed. The password never leaves this process except to
+//! NetworkManager: not to the footer, not to an `argv`, not to a log. The
+//! question afterwards, whether to keep it, is the view's own screen, and the
+//! password waits for its answer here ([`Network::remember`]).
 
 use crate::door::{Canvas, Content, Door, Hand, LEFT_BUTTON, Ui};
 use anyhow::Result;
 use smithay_client_toolkit::{
     reexports::calloop::{self, channel},
     seat::{
-        keyboard::{KeyEvent, Keysym, Modifiers},
+        keyboard::{KeyEvent, Modifiers},
         pointer::{PointerEvent, PointerEventKind},
     },
 };
@@ -151,6 +154,7 @@ pub fn host_it() -> Result<()> {
             lan_sender: Some(lan_sender),
             tunnels: ronoctua_tunnel::Scene::default(),
             hand,
+            remember: None,
         })
     })
 }
@@ -172,6 +176,11 @@ struct Network {
     tunnels: ronoctua_tunnel::Scene,
     /// The thread that reads them and carries out their orders.
     hand: Option<ronoctua_tunnel::Hand>,
+    /// The network just joined with a typed password, and the password —
+    /// held for the span of one question ("keep it?") and TAKEN on either
+    /// answer: a password left behind would be a password in memory with no
+    /// owner and no deadline.
+    remember: Option<(String, crate::network::Password)>,
 }
 
 /// What this window keeps for ONE pointer, past what every door keeps.
@@ -215,11 +224,11 @@ impl Network {
                 }
             }
             // THE LOGIN'S PAGE, opened with whatever the person's desktop
-            // opens links with — this window has no browser of its own.
+            // opens links with — this window has no browser of its own — in a
+            // scope, off the loop, as the footer opens it; a start that fails
+            // replaces this sentence with the one that says so.
             ronoctua_tunnel::Event::Login(url) => {
-                let _ = std::process::Command::new(crate::network::OPEN)
-                    .arg(&url)
-                    .spawn();
+                ui.launch(crate::network::OPEN, std::slice::from_ref(&url), None);
                 ui.message = Some(
                     ui.texts
                         .t_with(ronoctua_i18n::key::ECHO_NETWORK_LOGIN, &[("url", &url)]),
@@ -259,10 +268,17 @@ impl Network {
                 ui.quit = true;
                 return;
             }
-            // A PATH IS TYPED IN THE MINIBUFFER, which this window has not
-            // got — the pairing question's own arrangement, and its reason.
-            Errand::Ask => {
-                ui.message = Some(ui.texts.t(ronoctua_i18n::key::NETWORK_ANSWER_IN_THE_FOOTER));
+            // A LINE ON THIS WINDOW'S HEADER — the password hidden, the path
+            // and the Tor value in the clear — and the answer comes back to
+            // `answered`, the footer's minibuffer's own path.
+            Errand::Ask(question) => {
+                ui.ask(crate::line::Line::new(question.id, question.secret, None));
+            }
+            Errand::NotATunnel(name) => {
+                ui.message = Some(
+                    ui.texts
+                        .t_with(key::ECHO_NETWORK_NOT_A_TUNNEL, &[("file", &name)]),
+                );
             }
             Errand::Bring(path, kind) => {
                 let name = ronoctua_network::vpn::name_of(&path);
@@ -389,23 +405,58 @@ impl Network {
                     ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE)
                 });
             }
-            // A PASSWORD IS TYPED IN THE FOOTER, which this window has not
-            // got. A network that is saved or open joins from here; the one
-            // that needs typing says where, rather than looking broken.
-            Errand::Connect(target) => {
-                if target.secured && !target.saved {
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::NETWORK_ANSWER_IN_THE_FOOTER));
+            // JOINING, with the password typed on this window's line when
+            // there was one. It connects WITHOUT STORING (`psk-flags=2`) and
+            // asks afterwards — storing first and deleting on a `no` would
+            // leave the password on disk in between.
+            Errand::Connect(target, password) => {
+                let result =
+                    self.wire
+                        .connect(&target.ssid, password.as_ref().map(|p| p.as_str()), false);
+                ui.message = Some(match result {
+                    Ok(()) => {
+                        if let Some(typed) = password.filter(|_| target.secured) {
+                            self.remember = Some((target.ssid.clone(), typed));
+                            let mut view = std::mem::take(&mut self.view);
+                            view.ask_remember(
+                                target.ssid.clone(),
+                                &self.facts(),
+                                ui.columns,
+                                &ui.texts,
+                            );
+                            self.view = view;
+                        }
+                        ui.texts
+                            .t_with(key::ECHO_NETWORK_CONNECTED, &[("network", &target.ssid)])
+                    }
+                    Err(e) => ui.texts.t_with(
+                        key::ECHO_NETWORK_FAILED,
+                        &[("network", &target.ssid), ("reason", &e.to_string())],
+                    ),
+                });
+            }
+            // THE ANSWER TO "KEEP IT?". The password is taken out of this
+            // window on BOTH answers, before anything can fail.
+            Errand::Remember(ssid, yes) => {
+                let kept = self.remember.take();
+                ui.message = Some(if yes {
+                    match kept.filter(|(named, _)| *named == ssid) {
+                        Some((_, password)) => {
+                            match self.wire.connect(&ssid, Some(password.as_str()), true) {
+                                Ok(()) => ui
+                                    .texts
+                                    .t_with(key::ECHO_NETWORK_STORED, &[("network", &ssid)]),
+                                Err(e) => ui.texts.t_with(
+                                    key::ECHO_NETWORK_STORE_FAILED,
+                                    &[("reason", &e.to_string())],
+                                ),
+                            }
+                        }
+                        None => ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE),
+                    }
                 } else {
-                    ui.message = Some(match self.wire.connect(&target.ssid, None, false) {
-                        Ok(()) => ui
-                            .texts
-                            .t_with(key::ECHO_NETWORK_CONNECTED, &[("network", &target.ssid)]),
-                        Err(e) => ui.texts.t_with(
-                            key::ECHO_NETWORK_FAILED,
-                            &[("network", &target.ssid), ("reason", &e.to_string())],
-                        ),
-                    });
-                }
+                    ui.texts.t(key::ECHO_NETWORK_NO_STORED)
+                });
             }
             Errand::Drop(at) => {
                 let name = name_of(
@@ -471,13 +522,6 @@ impl Network {
                     ui.message = Some(ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
                 }
             },
-            // THE ONE THING THIS DOOR CANNOT DO IS TYPE. The minibuffer is the
-            // footer's, and this window has none — so it says where to go,
-            // which is what it already does for a Wi-Fi password and a VPN
-            // path.
-            Errand::TorEdit(_) => {
-                ui.message = Some(ui.texts.t(key::NETWORK_ANSWER_IN_THE_FOOTER));
-            }
             Errand::Delete(at) => {
                 let name = name_of(
                     self.net.saved.iter().find(|s| s.at == at).map(|s| &s.id),
@@ -514,6 +558,17 @@ impl Network {
     /// on the row the cursor is already on (invariant 19).
     fn pressed(&mut self, ui: &mut Ui, press: crate::network::Press) {
         ui.message = None;
+        // A PRESS THAT REACHES THE VIEW WHILE THE LINE ASKS came from a click
+        // — every key is the line's — and the view lets go of what it asked
+        // on any press it hears. So the line goes with it: left up, it would
+        // take a password for a question nobody is asking any more.
+        if ui
+            .asking
+            .as_ref()
+            .is_some_and(|l| crate::network::Question::is_the_views(l.id))
+        {
+            ui.asking = None;
+        }
         let errand = {
             let mut view = std::mem::take(&mut self.view);
             let errand = view.key(press, &self.facts(), ui.columns, &ui.texts);
@@ -617,10 +672,27 @@ impl Content for Network {
         format!("*{}*", texts.t(ronoctua_i18n::key::NETWORK_TITLE))
     }
 
-    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, _: Modifiers) {
-        if let Some(press) = press_of(event) {
+    /// A key, read against the view's table by its whole notation — the one
+    /// reader the footer calls too (`network_words::press_of_key`).
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+        if let Some(press) =
+            crate::door::keys::key_of(event, mods).and_then(crate::network_words::press_of_key)
+        {
             self.pressed(ui, press);
         }
+    }
+
+    /// What was typed on this window's line: the same `View::answered` the
+    /// footer's minibuffer reaches, and the same errands after it.
+    fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
+        ui.message = None;
+        let errand = {
+            let mut view = std::mem::take(&mut self.view);
+            let errand = view.answered(id, text, &self.facts(), ui.columns, &ui.texts);
+            self.view = view;
+            errand
+        };
+        self.apply(ui, errand);
     }
 
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
@@ -821,29 +893,334 @@ fn name_of(found: Option<&String>, at: &str) -> String {
     found.cloned().unwrap_or_else(|| at.to_owned())
 }
 
-/// A `KeyEvent` as the view sees it — the same mapping the footer does.
-fn press_of(event: &KeyEvent) -> Option<crate::network::Press> {
-    use crate::network::Press;
-    Some(match event.keysym {
-        Keysym::Escape => Press::Escape,
-        Keysym::Return | Keysym::KP_Enter => Press::Enter,
-        Keysym::Up => Press::Up,
-        Keysym::Down => Press::Down,
-        // `ISO_Left_Tab` IS `S-TAB`: xkb has already applied the shift, and a
-        // door that tested for a modifier would never see one.
-        Keysym::Tab => Press::Section,
-        Keysym::ISO_Left_Tab => Press::SectionBack,
-        // AND THE BARE LETTERS, out of the view's own table — the footer
-        // reads it the same way, so the two doors cannot teach different
-        // keys. A letter with no press there is a letter that does nothing,
-        // and the test beside `network_words` is what says so.
-        _ => {
-            let typed = event.utf8.as_deref()?;
-            let id = crate::network::OF_THE_VIEW
-                .iter()
-                .find(|(notation, _, _)| *notation == typed)
-                .map(|(_, id, _)| *id)?;
-            crate::network_words::press_of(id)?
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network::{Password, Press, Question, Target};
+    use ronoctua_network::{Band, Link, Medium, Snapshot, State, Way};
+
+    /// A machine with a radio that is on and the daemon answering.
+    fn machine() -> Snapshot {
+        Snapshot {
+            daemon: true,
+            networking: true,
+            radio: true,
+            way: Way::Full,
+            links: vec![Link {
+                medium: Medium::Radio,
+                interface: "wlan0".into(),
+                network: None,
+                state: State::Connected,
+                rate_kbps: 400_000,
+                signal: 70,
+                band: Band::Other,
+                address: Some("10.0.0.2/24".to_owned()),
+                gateway: Some("10.0.0.1".to_owned()),
+                dns: Vec::new(),
+                serving: false,
+            }],
+            active: Vec::new(),
+            saved: Vec::new(),
         }
-    })
+    }
+
+    fn café() -> ronoctua_network::Network {
+        ronoctua_network::Network {
+            ssid: "a café".into(),
+            signal: 80,
+            band: Band::Ghz5,
+            secured: true,
+            wpa3_only: false,
+            saved: false,
+            active_one: false,
+            max_rate_kbps: 0,
+        }
+    }
+
+    /// A window with no session behind it: a wire with no daemon (every
+    /// order is refused as its absence), no tunnel thread, no sweep — the
+    /// view and the door's own line, which is all a test of the wiring needs.
+    fn a_window() -> (Network, Ui) {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let me = Network {
+            view: crate::network::View::fresh(),
+            wire: crate::network::Wire::offline(vec![café()]),
+            net: machine(),
+            watch: crate::network::Watch::default(),
+            lan_sender: None,
+            tunnels: ronoctua_tunnel::Scene::default(),
+            hand: None,
+            remember: None,
+        };
+        (me, Ui::for_tests(texts))
+    }
+
+    /// Puts the cursor on the first row whose target `wanted` accepts.
+    fn stand_on(w: &mut Network, ui: &Ui, wanted: impl Fn(&Target) -> bool) {
+        let rows = w.view_rows(ui);
+        let at = rows
+            .iter()
+            .position(|r| wanted(&r.target))
+            .expect("a row to stand on");
+        w.view.clicked(at, &rows);
+    }
+
+    /// EVERY TYPED QUESTION IS ASKED ON THIS WINDOW'S OWN LINE — the
+    /// password hidden — and none is sent to the footer.
+    #[test]
+    fn every_typed_question_is_asked_on_the_windows_own_line() {
+        // THE PASSWORD of a secured network with no profile.
+        let (mut w, mut ui) = a_window();
+        stand_on(&mut w, &ui, |t| matches!(t, Target::Wireless(_)));
+        w.pressed(&mut ui, Press::Enter);
+        let line = ui.asking.as_ref().expect("the password is asked here");
+        assert_eq!(line.id, Question::PASSWORD.id);
+        assert!(line.secret, "the password is typed in the clear");
+        assert!(ui.orders().is_empty(), "the password went to the footer");
+        assert!(ui.message.is_none(), "{:?}", ui.message);
+
+        // THE PATH of a tunnel's file, in the clear.
+        let (mut w, mut ui) = a_window();
+        w.pressed(&mut ui, Press::Import);
+        let line = ui.asking.as_ref().expect("the path is asked here");
+        assert_eq!(line.id, Question::PATH.id);
+        assert!(!line.secret);
+        assert!(ui.orders().is_empty());
+
+        // A TOR VALUE that has no ring to turn.
+        let (mut w, mut ui) = a_window();
+        w.view = crate::network::View::fresh_on_the_tor_sheet();
+        stand_on(&mut w, &ui, |t| *t == Target::TorSetting("exit-nodes"));
+        w.pressed(&mut ui, Press::Enter);
+        let line = ui.asking.as_ref().expect("the Tor value is asked here");
+        assert_eq!(line.id, Question::TOR_VALUE.id);
+        assert!(ui.orders().is_empty());
+    }
+
+    /// THE PASSWORD TYPED HERE JOINS the network it was asked about, from
+    /// this process: the refusal names the network and never the password,
+    /// and nothing is handed to the footer.
+    #[test]
+    fn the_password_typed_in_the_window_joins_from_the_window() {
+        let (mut w, mut ui) = a_window();
+        stand_on(&mut w, &ui, |t| matches!(t, Target::Wireless(_)));
+        w.pressed(&mut ui, Press::Enter);
+        ui.asking = None;
+        w.answered(&mut ui, "network-connect", "s3nh4-ç");
+        let said = ui.message.clone().expect("the join says what happened");
+        assert!(said.contains("a café"), "{said}");
+        assert!(!said.contains("s3nh4"), "the password reached the screen");
+        assert!(ui.orders().is_empty(), "the password went to the footer");
+        // THE DAEMON REFUSED, so there is nothing to keep and no question.
+        assert!(w.remember.is_none());
+        assert!(!w.view.remembering());
+    }
+
+    /// FAILS IF: a click that reaches the view while the password is asked
+    /// leaves the line up — the view has let go of its question, and the
+    /// password typed next would be for nobody, or for whatever the cursor
+    /// stands on.
+    #[test]
+    fn a_click_on_the_view_takes_the_password_line_with_it() {
+        let (mut w, mut ui) = a_window();
+        stand_on(&mut w, &ui, |t| matches!(t, Target::Wireless(_)));
+        w.pressed(&mut ui, Press::Enter);
+        assert!(ui.asking.is_some(), "the password is asked here");
+        // TWO CLICKS ON ANOTHER ROW: the first selects, the second is its
+        // `RET`, through `pressed` — here the first fact of the page, which
+        // asks nothing.
+        let other = w
+            .view_rows(&ui)
+            .iter()
+            .enumerate()
+            .position(|(i, r)| i != w.view.cursor() && r.target == Target::Nothing && !r.heading)
+            .expect("a fact to click");
+        w.clicked(&mut ui, other);
+        assert!(ui.asking.is_some(), "the first click only selects");
+        w.clicked(&mut ui, other);
+        assert!(
+            ui.asking.is_none(),
+            "the password line outlived the question it asked"
+        );
+        // AND AN ANSWER THAT COMES ANYWAY JOINS NOTHING.
+        ui.asking = None;
+        let mut view = std::mem::take(&mut w.view);
+        let _ = view.key(Press::Up, &w.facts(), ui.columns, &ui.texts);
+        let errand = view.answered(
+            "network-connect",
+            "s3nh4",
+            &w.facts(),
+            ui.columns,
+            &ui.texts,
+        );
+        assert_eq!(errand, crate::network::Errand::Nothing);
+    }
+
+    /// A PATH TYPED HERE SHOWS THE FILE'S READING — the level with `bring it
+    /// in` and `leave it` — and a file that is not a tunnel says so.
+    #[test]
+    fn a_path_typed_in_the_window_shows_the_files_reading() {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-network-window-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("an-office.conf");
+        std::fs::write(&file, "[Interface]\nAddress = 198.51.100.2/32\n").unwrap();
+        let (mut w, mut ui) = a_window();
+        w.pressed(&mut ui, Press::Import);
+        ui.asking = None;
+        // THE OFFLINE WIRE READS AS NO DAEMON after every order, so the
+        // machine is put back where a real reading would have left it.
+        w.net = machine();
+        w.answered(&mut ui, "network-import", &file.to_string_lossy());
+        assert!(w.view.bringing(), "the file was not looked at");
+        w.net = machine();
+        let rows = w.view_rows(&ui);
+        assert!(rows.iter().any(|r| r.target == Target::Bring));
+        assert!(rows.iter().any(|r| r.target == Target::Drop));
+        // `RET` BRINGS IT IN from here too — the daemon is absent, and the
+        // sentence says the import failed rather than nothing at all.
+        stand_on(&mut w, &ui, |t| *t == Target::Bring);
+        w.pressed(&mut ui, Press::Enter);
+        assert!(
+            !w.view.bringing(),
+            "the file was not put down after answering"
+        );
+        assert!(ui.message.is_some());
+        // A FILE THAT IS NOT A TUNNEL is refused by its name.
+        let other = dir.join("notes.txt");
+        std::fs::write(&other, "nothing\n").unwrap();
+        w.answered(&mut ui, "network-import", &other.to_string_lossy());
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(
+                ui.texts
+                    .t_with(
+                        ronoctua_i18n::key::ECHO_NETWORK_NOT_A_TUNNEL,
+                        &[(
+                            "file",
+                            &ronoctua_network::vpn::name_of(&other.to_string_lossy())
+                        )]
+                    )
+                    .as_str()
+            )
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A TOR VALUE TYPED HERE is the sheet's new value, as in the footer.
+    #[test]
+    fn a_tor_value_typed_in_the_window_is_the_sheets_value() {
+        let (mut w, mut ui) = a_window();
+        w.view = crate::network::View::fresh_on_the_tor_sheet();
+        stand_on(&mut w, &ui, |t| *t == Target::TorSetting("exit-nodes"));
+        w.pressed(&mut ui, Press::Enter);
+        ui.asking = None;
+        w.answered(&mut ui, "tor-setting", "{nl}");
+        // NO TUNNEL THREAD in a test, and the line says so rather than
+        // pretending it was written.
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(
+                ui.texts
+                    .t(ronoctua_i18n::key::ECHO_NETWORK_UNAVAILABLE)
+                    .as_str()
+            )
+        );
+        let rows = w.view_rows(&ui);
+        assert!(
+            rows.iter()
+                .any(|r| r.fields.iter().any(|f| f.text.contains("{nl}"))),
+            "the value typed in the window is not on the sheet"
+        );
+    }
+
+    /// `S-<right>` AND `S-<left>` TURN A TOR SETTING in the window, from the
+    /// keyboard and from a click on the hint — the same event either way.
+    #[test]
+    fn shifted_arrows_turn_a_tor_setting_in_the_window() {
+        let (mut w, mut ui) = a_window();
+        w.view = crate::network::View::fresh_on_the_tor_sheet();
+        stand_on(&mut w, &ui, |t| {
+            *t == Target::TorSetting("bridge-transport")
+        });
+        let value = |w: &Network, ui: &Ui| {
+            let rows = w.view_rows(ui);
+            rows[w.view.cursor()]
+                .fields
+                .iter()
+                .map(|f| f.text.clone())
+                .collect::<Vec<_>>()
+        };
+        let press = |w: &mut Network, ui: &mut Ui, notation: &str| {
+            let (event, mods) =
+                crate::door::keys::event_of(ronoctua_keymap::Key::parse(notation).unwrap());
+            w.typed(ui, &event, mods);
+        };
+        // FROM NOTHING WRITTEN, the first turn lands on the ring's first word
+        // — `none`, which is also what nothing written reads as — and the
+        // second on the next one.
+        let before = value(&w, &ui);
+        press(&mut w, &mut ui, "S-<right>");
+        press(&mut w, &mut ui, "S-<right>");
+        let turned = value(&w, &ui);
+        assert_ne!(turned, before, "S-<right> did not turn the setting");
+        press(&mut w, &mut ui, "S-<left>");
+        assert_eq!(value(&w, &ui), before, "S-<left> did not turn it back");
+    }
+
+    /// "KEEP IT?" IS ANSWERED HERE, by key or by click, and the password
+    /// leaves this window on either answer.
+    #[test]
+    fn keep_it_is_answered_in_the_window_and_the_password_is_let_go() {
+        // `no`, with `RET` on the row the cursor is born on.
+        let (mut w, mut ui) = a_window();
+        w.apply(
+            &mut ui,
+            crate::network::Errand::Remember("a café".into(), false),
+        );
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(
+                ui.texts
+                    .t(ronoctua_i18n::key::ECHO_NETWORK_NO_STORED)
+                    .as_str()
+            )
+        );
+        let ask = |w: &mut Network, ui: &Ui| {
+            w.remember = Some(("a café".into(), Password::typed("s3nh4")));
+            let mut view = std::mem::take(&mut w.view);
+            view.ask_remember("a café".into(), &w.facts(), ui.columns, &ui.texts);
+            w.view = view;
+        };
+        ask(&mut w, &ui);
+        let rows = w.view_rows(&ui);
+        assert_eq!(rows[w.view.cursor()].target, Target::Remember(false));
+        w.pressed(&mut ui, Press::Enter);
+        assert!(w.remember.is_none(), "the password stayed after `no`");
+        assert!(!w.view.remembering());
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(
+                ui.texts
+                    .t(ronoctua_i18n::key::ECHO_NETWORK_NO_STORED)
+                    .as_str()
+            )
+        );
+        // `yes`, BY THE POINTER: the first click selects, the second acts.
+        ask(&mut w, &ui);
+        let rows = w.view_rows(&ui);
+        let yes = rows
+            .iter()
+            .position(|r| r.target == Target::Remember(true))
+            .unwrap();
+        w.clicked(&mut ui, yes);
+        assert!(w.view.remembering(), "the first click answered");
+        w.clicked(&mut ui, yes);
+        assert!(!w.view.remembering(), "the second click did not answer");
+        assert!(w.remember.is_none(), "the password stayed after `yes`");
+        // NO DAEMON, so sealing it fails — and says why.
+        let said = ui.message.clone().unwrap_or_default();
+        assert!(!said.contains("s3nh4"), "{said}");
+        assert!(ui.orders().is_empty());
+    }
 }

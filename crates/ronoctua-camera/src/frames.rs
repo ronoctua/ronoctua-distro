@@ -107,11 +107,11 @@ mod tests {
 
     #[test]
     fn a_whole_frame_is_read_and_a_short_one_is_refused() {
-        let mut child = Command::new("sh")
+        let mut child = Command::new("/bin/sh")
             .args(["-c", "printf abcdefg"])
             .stdout(Stdio::piped())
             .spawn()
-            .expect("sh");
+            .expect("/bin/sh");
         let mut out = child.stdout.take().expect("pipe");
         let _guard = Reaped(child);
         let mut frame = [0u8; 4];
@@ -129,11 +129,11 @@ mod tests {
 
     #[test]
     fn a_silent_child_starves_instead_of_hanging() {
-        let mut child = Command::new("sh")
+        let mut child = Command::new("/bin/sh")
             .args(["-c", "sleep 5"])
             .stdout(Stdio::piped())
             .spawn()
-            .expect("sh");
+            .expect("/bin/sh");
         let mut out = child.stdout.take().expect("pipe");
         let _guard = Reaped(child);
         let began = Instant::now();
@@ -147,11 +147,11 @@ mod tests {
 
     #[test]
     fn a_stop_is_heard_inside_a_tick() {
-        let mut child = Command::new("sh")
+        let mut child = Command::new("/bin/sh")
             .args(["-c", "sleep 5"])
             .stdout(Stdio::piped())
             .spawn()
-            .expect("sh");
+            .expect("/bin/sh");
         let mut out = child.stdout.take().expect("pipe");
         let _guard = Reaped(child);
         let mut frame = [0u8; 4];

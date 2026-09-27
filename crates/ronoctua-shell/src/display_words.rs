@@ -29,6 +29,37 @@ pub fn press_of(id: &str) -> Option<crate::display::Press> {
     })
 }
 
+/// A key as the view's press — the ONE reader both doors call, from the
+/// keyboard or from a click on the hint.
+///
+/// The arrows, `RET` and `Esc` are read whatever is held, as both doors
+/// always read them. A LETTER is read by its whole notation out of
+/// `display::OF_THE_VIEW`, and that is where the two doors used to part: the
+/// footer dropped the modifiers and took `C-a` for `a`, while the window read
+/// the character xkb typed and took `C-a` for nothing. A chord that is not in
+/// the table is now nothing in both.
+#[must_use]
+pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<crate::display::Press> {
+    use crate::display::Press;
+    use ronoctua_keymap::Sym;
+    Some(match key.sym {
+        Sym::Esc => Press::Escape,
+        Sym::Up => Press::Up,
+        Sym::Down => Press::Down,
+        Sym::Left => Press::Less,
+        Sym::Right => Press::More,
+        Sym::Enter => Press::Enter,
+        _ => {
+            let notation = key.notation();
+            let id = crate::display::OF_THE_VIEW
+                .iter()
+                .find(|(taught, _, _)| *taught == notation)
+                .map(|(_, id, _)| *id)?;
+            press_of(id)?
+        }
+    })
+}
+
 /// What a door says when the screen a question was about is not there.
 ///
 /// HERE, because the two doors were formatting it themselves — the one
@@ -219,6 +250,23 @@ mod tests {
                 "`{notation}` teaches `{id}` and it does `{press:?}`"
             );
         }
+    }
+
+    /// THE TWO DOORS READ A KEY ONE WAY: every row of the table is its own
+    /// press, the arrows and `RET` are read whatever is held, and a chord is
+    /// not the letter under it.
+    #[test]
+    fn both_doors_read_a_key_one_way() {
+        use crate::display::Press;
+        let read = |n: &str| press_of_key(ronoctua_keymap::Key::parse(n).expect("a key"));
+        for (taught, id, _) in crate::display::OF_THE_VIEW {
+            assert_eq!(read(taught), press_of(id), "`{taught}`");
+        }
+        assert_eq!(read("S-<left>"), Some(Press::Less));
+        assert_eq!(read("ESC"), Some(Press::Escape));
+        assert_eq!(read("C-a"), None, "a chord was taken for its letter");
+        assert_eq!(read("M-d"), None, "a chord was taken for its letter");
+        assert_eq!(read("x"), None);
     }
 
     #[test]

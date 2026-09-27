@@ -21,12 +21,23 @@
 //! memory with the footer — they are two processes, and a socket for a list
 //! that changes a few times an hour would be a mechanism to keep in step for
 //! nothing.
+//!
+//! # It does what the footer does
+//!
+//! Every level, key and click, the filter's name and texts typed on this
+//! window's own line (`Ui::ask`, with paste), and every kind of action: a
+//! copy and a program are done here, and the two only the footer can do — a
+//! foreign app's button on the bus, a command of the registry — are handed to
+//! it down the control socket (`notif-act`), with a footer that is not there
+//! said on the header. Marking read is written to the history, and the footer
+//! takes it from the file as its own `r` does: off the band, and closed on
+//! the bus.
 
 use crate::door::{Canvas, Content, Door, Hand, Ui};
 use anyhow::Result;
 use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
-    reexports::calloop::timer,
+    reexports::calloop::{channel, timer},
     seat::{
         keyboard::{KeyEvent, Keysym, Modifiers},
         pointer::{PointerEvent, PointerEventKind},
@@ -66,6 +77,16 @@ pub fn host_it() -> Result<()> {
                 },
             )
             .map_err(|e| anyhow::anyhow!("could not hang the clock: {e}"))?;
+        // HOW A PROGRAM STARTED BY AN ACTION WENT — only a failure is said,
+        // as the footer says it.
+        let (launched, launches) = channel::channel::<crate::foreign::Launch>();
+        w.handle
+            .insert_source(launches, |event, (), door: &mut Door<Notifications>| {
+                if let channel::Event::Msg(verdict) = event {
+                    Notifications::launched(&mut door.ui, verdict);
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the launch channel: {e}"))?;
         let mut content = Notifications {
             // THE MACHINE'S CLOCK, read once and carried — an open record
             // shows when it arrived, and a `View` that read `/etc/localtime`
@@ -80,6 +101,7 @@ pub fn host_it() -> Result<()> {
             pointers: std::collections::HashMap::new(),
             hands: 0,
             click_cell: None,
+            launched: Some(launched),
         };
         content.reread();
         Ok(content)
@@ -111,6 +133,9 @@ struct Notifications {
     /// The cell of the last press — `View::clicked` needs it and the row
     /// alone cannot say it.
     click_cell: Option<u16>,
+    /// Where a program an action started says how it went. `None` in a
+    /// test, which starts nothing.
+    launched: Option<channel::Sender<crate::foreign::Launch>>,
 }
 
 /// What this window keeps for ONE pointer.
@@ -331,6 +356,11 @@ impl Notifications {
             // the footer read the history once, at start-up, and wrote its
             // whole vector over the file on every change, so this door's `d`
             // came undone the moment any notification arrived.
+            //
+            // AND A RECORD READ HERE IS READ BY HAND THERE: the footer names
+            // what the file made read (`Queue::read_there`) and does with it
+            // what its own `r` does — off the band, `NotificationClosed` on
+            // the bus — for one record and for all of them alike.
             Errand::Read(key) => {
                 self.set_read(key, true);
             }
@@ -357,50 +387,19 @@ impl Notifications {
                 self.records.retain(|r| r.key() != key);
                 self.save_history();
             }
-            // AN ACTION IS THE FOOTER'S TO RUN — and this door SENDS it there
-            // rather than telling somebody to go and do it themselves.
-            //
-            // The owner pressed one here and was told the action runs from the
-            // footer, which is true and useless: the control socket exists for
-            // exactly this, the buffer host already writes to it, and a
-            // command of ours is a command id the footer knows how to run.
-            //
-            // The other three kinds stay the footer's alone and say so: a bus
-            // reply belongs to the process that owns the name, the clipboard
-            // is the footer's, and spawning into a scope of its own is section
-            // 9.1. A second implementation of any of them here is the second
-            // door disagreeing with the first.
-            Errand::Act(key, which) => {
-                let sent = self
-                    .records
-                    .iter()
-                    .find(|r| r.key() == key)
-                    .and_then(|r| r.notification.actions.get(which))
-                    .and_then(|a| match &a.doing {
-                        ronoctua_notify::Doing::Command(id) => Some(id.clone()),
-                        _ => None,
-                    })
-                    .map(|id| crate::leader::send_it(&format!("command {id}")));
-                match sent {
-                    Some(Ok(())) => {}
-                    Some(Err(e)) => {
-                        tracing::warn!(error = %e, "the footer did not take the action");
-                        ui.message = Some(ui.texts.t(ronoctua_i18n::key::NOTIF_ACT_NO_FOOTER));
-                    }
-                    None => Self::act_in_the_footer(ui),
-                }
-            }
-
-            // TYPING HAPPENS IN THE FOOTER, and this door says so rather
-            // than growing a minibuffer of its own — the same answer it gives
-            // about running an action, and the same reason: a second place to
-            // type is a second thing that can disagree.
+            // AN ACTION IS DONE WHERE IT CAN BE — see `notifications::Deed`.
+            // The one implementation of what a button comes to is the view
+            // module's; this door does the three any process can, and hands
+            // the other two to the footer by the record's whole name.
+            Errand::Act(key, which) => self.act(ui, key, which),
+            // THE FILTER'S NAME AND TEXTS ARE TYPED HERE, on this window's
+            // own line — the question the footer's minibuffer asks, starting
+            // from what the draft holds, with paste — and the answer goes to
+            // the same `View::typed`.
             Errand::Ask(_) => {
-                let keys = format!("{} {}", crate::leader(), crate::leader::NOTIF_OPEN_KEYS);
-                ui.message = Some(ui.texts.t_with(
-                    ronoctua_i18n::key::NOTIF_TYPE_IN_THE_FOOTER,
-                    &[("keys", &keys)],
-                ));
+                if let Some((id, now)) = self.view.typing() {
+                    ui.ask(crate::line::Line::new(id, false, Some(&now)));
+                }
             }
             // THE PERSON'S OWN FILTERS. This door writes the same file the
             // footer does, and the footer is watching it — the arrangement
@@ -473,18 +472,84 @@ impl Notifications {
         ronoctua_i18n::key::NOTIF_SHARED_WRITTEN
     }
 
-    /// Says the action is the footer's to run, and where the footer is.
+    /// Runs action `which` of the record `key`, as the footer runs it.
     ///
-    /// THE KEYS ARE AN ARGUMENT, read from the same constant the keymap binds:
-    /// a sentence that carried `n h` as text went stale the day the key moved.
-    /// `leader()` and not `leader_chord()`: the sequence is typed after the
-    /// LEADER (`SPC`, or `CTRL ALT SPC` in the nested loop).
-    fn act_in_the_footer(ui: &mut Ui) {
-        let keys = format!("{} {}", crate::leader(), crate::leader::NOTIF_OPEN_KEYS);
-        ui.message = Some(ui.texts.t_with(
-            ronoctua_i18n::key::NOTIF_ACT_IN_THE_FOOTER,
-            &[("keys", &keys)],
-        ));
+    /// A foreign app's button and a command go to the footer (`notif-act`),
+    /// which marks the record read as it acts. A copy and a program are done
+    /// here, and the record is marked read in the file — which the footer
+    /// takes as it takes its own `r`.
+    fn act(&mut self, ui: &mut Ui, key: ronoctua_notify::RecordKey, which: usize) {
+        use crate::notifications::Deed;
+        let Some(deed) = self
+            .records
+            .iter()
+            .find(|r| r.key() == key)
+            .and_then(|r| crate::notifications::deed_of(r, which))
+        else {
+            return;
+        };
+        if deed.the_footers() {
+            ui.tell_the_footer(
+                crate::notifications::ACT,
+                Some(&crate::notifications::act_order(key, which)),
+            );
+            return;
+        }
+        if let Some(said) = crate::notifications::copy_it(&deed) {
+            ui.message = Some(ui.texts.t(said));
+        }
+        if let Deed::Run(program, argv) = &deed {
+            let Some(path) = crate::actions::notification_program(*program) else {
+                // THE FOOTER'S GUARD, for the same day: an action whose program
+                // is missing is not offered, and the profile can change under
+                // a running shell.
+                tracing::warn!(
+                    program = program.id(),
+                    "the action's program is not installed"
+                );
+                return;
+            };
+            tracing::info!(program = %path, ?argv, "a notification action");
+            self.start(&path, argv);
+        }
+        // ACTING ON IT IS HAVING SEEN IT.
+        self.set_read(key, true);
+    }
+
+    /// Starts a program an action runs, in a scope of its own and off the
+    /// loop — the path every door launches by.
+    fn start(&self, program: &str, args: &[String]) {
+        let Some(launched) = self.launched.clone() else {
+            return;
+        };
+        if let Err(e) =
+            crate::foreign::start_in_scope("notif-action", program, args, None, move |verdict| {
+                let _ = launched.send(verdict);
+            })
+        {
+            tracing::error!(error = %e, program, "nothing opened");
+        }
+    }
+
+    /// How a start went: only a failure is said, as the footer says it.
+    fn launched(ui: &mut Ui, verdict: crate::foreign::Launch) {
+        use crate::foreign::Launch;
+        match verdict {
+            Launch::WithScope { scope, program } => {
+                tracing::info!(scope, program, "opened from the notifications window");
+            }
+            Launch::Orphan { program, reason } => {
+                tracing::warn!(program, reason, "opened WITHOUT a cgroup of its own");
+            }
+            Launch::Failed { program, error } => {
+                tracing::error!(error, program, "could not open");
+                ui.message = Some(ui.texts.t_with(
+                    ronoctua_i18n::key::ECHO_NO_OPENED,
+                    &[("program", program.as_str())],
+                ));
+                ui.ask_paint();
+            }
+        }
     }
 
     /// Writes the person's half of the filter book: their filters and their
@@ -548,6 +613,15 @@ impl Content for Notifications {
         // never in the paint.
         self.follow(ui);
         self.apply(ui, errand);
+    }
+
+    /// The filter's name or text, typed on this window's line: the view
+    /// takes it as it takes the footer's minibuffer's (`View::typed`).
+    fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
+        if self.view.typing().is_some_and(|(asked, _)| asked == id) {
+            self.view.typed(text);
+        }
+        ui.ask_paint();
     }
 
     fn rows(&self, ui: &Ui) -> Vec<Vec<crate::files::Field>> {
@@ -657,25 +731,30 @@ impl Content for Notifications {
                 let lists = crate::notifications::Lists::of(&self.records, &self.book);
                 self.view.about_at(&lists, ui.columns, row, cell, &ui.texts)
             });
+        // A QUESTION BEING TYPED OUTRANKS THEM ALL — it is what the keyboard
+        // is typing into (`door::list::the_question`).
+        let question = crate::door::list::the_question(ui);
         // A MESSAGE TAKES THIS LINE, and then there is no shortcut on it to
         // point at. Asked BEFORE the list is measured, because the
         // explanation's row comes out of that measurement.
-        if said.is_some() {
+        if question.is_none() && said.is_some() {
             ui.hinted.say(None);
         }
-        let (pieces, hinting) = said.map_or_else(
-            || {
-                // THE KEYS, in two registers, from the SAME table the footer's
-                // minibuffer reads. AND WHERE IN THE LIST THE CURSOR IS: this
-                // window draws no rectangle for the cursor, so with a
-                // fortnight of records there was no sign that anything lay
-                // below the last drawn row.
-                let lists = crate::notifications::Lists::of(&self.records, &self.book);
-                let place = Some((self.view.cursor(), lists.len(self.view.pane())));
-                (self.view.hint_of(place, &lists, &ui.texts), true)
-            },
-            |text| (vec![crate::chrome::Piece::said(text)], false),
-        );
+        let (pieces, hinting) = question.map(|q| (q, true)).unwrap_or_else(|| {
+            said.map_or_else(
+                || {
+                    // THE KEYS, in two registers, from the SAME table the footer's
+                    // minibuffer reads. AND WHERE IN THE LIST THE CURSOR IS: this
+                    // window draws no rectangle for the cursor, so with a
+                    // fortnight of records there was no sign that anything lay
+                    // below the last drawn row.
+                    let lists = crate::notifications::Lists::of(&self.records, &self.book);
+                    let place = Some((self.view.cursor(), lists.len(self.view.pane())));
+                    (self.view.hint_of(place, &lists, &ui.texts), true)
+                },
+                |text| (vec![crate::chrome::Piece::said(text)], false),
+            )
+        });
         let (margin, columns) = (ui.margin, ui.columns);
         let texts = ui.texts.clone();
         canvas
@@ -795,6 +874,146 @@ fn press_of(event: &KeyEvent) -> Option<crate::notifications::Press> {
         Keysym::Right => Press::Right,
         Keysym::Up => Press::Up,
         Keysym::Down => Press::Down,
-        otherwise => Press::Letter(otherwise.key_char()?),
+        // A KEY THAT TYPES NOTHING is no letter — `Delete`'s U+007F above all
+        // (`door::keys::char_of`).
+        otherwise => Press::Letter(crate::door::keys::char_of(otherwise)?),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::notifications::{Deed, Pane, View};
+
+    /// A window with no footer and no home behind it: nothing it writes
+    /// reaches a disk, and nothing it starts is started.
+    fn a_window() -> (Notifications, Ui) {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let me = Notifications {
+            view: View::fresh(),
+            records: Vec::new(),
+            book: ronoctua_notify::Book::distro(),
+            notes: ronoctua_notify::store::Where {
+                config: None,
+                state: None,
+            },
+            pointed: None,
+            pointers: std::collections::HashMap::new(),
+            hands: 0,
+            click_cell: None,
+            launched: None,
+        };
+        (me, Ui::for_tests(texts))
+    }
+
+    fn press(w: &mut Notifications, ui: &mut Ui, notation: &str) {
+        let key = ronoctua_keymap::Key::parse(notation).expect(notation);
+        let (event, mods) = crate::door::keys::event_of(key);
+        w.typed(ui, &event, mods);
+    }
+
+    /// THE FILTER'S NAME IS TYPED ON THIS WINDOW'S OWN LINE, from what the
+    /// draft holds, and lands in the draft — nothing is sent anywhere.
+    #[test]
+    fn a_filter_is_typed_on_this_windows_own_line() {
+        let (mut w, mut ui) = a_window();
+        w.view = View::fresh().reopened(Pane::Catalogue);
+        press(&mut w, &mut ui, "n");
+        press(&mut w, &mut ui, "RET");
+        let line = ui.asking.clone().expect("the name is asked here");
+        assert_eq!(line.id, "notif-filter-name");
+        assert!(!line.secret);
+        assert_eq!(line.text, "");
+        assert!(ui.message.is_none(), "{:?}", ui.message);
+        ui.asking = None;
+        w.answered(&mut ui, "notif-filter-name", "quiet backups");
+        assert!(ui.orders().is_empty());
+
+        // AND ASKED AGAIN, it starts from the name it has.
+        press(&mut w, &mut ui, "RET");
+        let line = ui.asking.clone().expect("asked again");
+        assert_eq!(line.text, "quiet backups");
+        // A NAME FOR ANOTHER QUESTION is not this one's.
+        ui.asking = None;
+        w.answered(&mut ui, "notif-filter-value", "wrong line");
+        assert_eq!(
+            w.view.typing(),
+            Some(("notif-filter-name", "quiet backups".to_owned()))
+        );
+    }
+
+    /// A record with a foreign app's button, a command of ours and a path to
+    /// copy.
+    fn acting() -> ronoctua_notify::Record {
+        use ronoctua_notify::action::{Action, Doing, Label};
+        let mut n = ronoctua_notify::Notification::fresh_one(
+            7,
+            "app".into(),
+            Some("file:///tmp/a%20b.png".into()),
+            "shot".into(),
+            String::new(),
+            ronoctua_notify::Urgency::Normal,
+        );
+        n.at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(7);
+        let one = |id: &str, doing: Doing| Action {
+            id: id.into(),
+            label: Label::Text(id.into()),
+            doing,
+        };
+        n.actions = vec![
+            one("reply", Doing::Invoke),
+            one("see", Doing::Command("bluetooth-open".into())),
+            one("path", Doing::CopyPath),
+        ];
+        ronoctua_notify::Record {
+            notification: n,
+            presentation: ronoctua_notify::Presentation::from_urgency(
+                ronoctua_notify::Urgency::Normal,
+            ),
+            read: false,
+        }
+    }
+
+    /// EVERY KIND OF ACTION WORKS FROM HERE: the bus's button and a command
+    /// are handed to the footer by the record's whole name, and a copy is
+    /// done here and marks the record read — nothing says "the footer".
+    #[test]
+    fn every_action_is_done_here_or_handed_to_the_footer() {
+        let r = acting();
+        let key = r.key();
+        for which in [0, 1] {
+            let (mut w, mut ui) = a_window();
+            w.records = vec![r.clone()];
+            w.act(&mut ui, key, which);
+            assert_eq!(
+                ui.orders(),
+                [format!(
+                    "command notif-act {}",
+                    crate::notifications::act_order(key, which)
+                )]
+            );
+            assert!(ui.message.is_none(), "{:?}", ui.message);
+            // THE FOOTER MARKS IT as it acts: marking it here too would be
+            // two writers racing to say the same thing.
+            assert!(!w.records[0].read);
+        }
+        let (mut w, mut ui) = a_window();
+        w.records = vec![r.clone()];
+        crate::buffer::COPIED.with(|c| c.borrow_mut().clear());
+        w.act(&mut ui, key, 2);
+        assert!(ui.orders().is_empty(), "a copy went to the footer");
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(ui.texts.t(ronoctua_i18n::key::ECHO_COPIED).as_str())
+        );
+        let copied = crate::buffer::COPIED.with(|c| c.borrow().clone());
+        assert_eq!(copied, [(None, b"/tmp/a b.png".to_vec())]);
+        assert!(w.records[0].read, "acting on it is having seen it");
+
+        // THE ONE THE FOOTER WOULD ACT ON is the one the deed names.
+        assert_eq!(
+            crate::notifications::deed_of(&r, 0),
+            Some(Deed::Invoke("reply".into()))
+        );
+    }
 }

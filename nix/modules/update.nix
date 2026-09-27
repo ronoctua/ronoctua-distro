@@ -82,6 +82,14 @@ let
       systemd = pkgs.systemd;
       fontconfig = pkgs.fontconfig;
       tealdeer = pkgs.tealdeer;
+      # The machine's own Flatpak, for the root half's `flatpak-system`.
+      flatpak = config.services.flatpak.package;
+      # THE SOFTWARE CLI, WRAPPED for this machine (`nix/modules/software.nix`):
+      # a runner sees no unit environment, so the wrapper is the only thing
+      # that tells the CLI where Flatpak, Waydroid and `appimage-run` are — and
+      # it names only the ones this machine has, so a reduced profile carries
+      # no Waydroid through this unit.
+      software = config.ronoctua.software.package;
     };
     wiring = {
       shell = pkgs.runtimeShell;
@@ -285,8 +293,19 @@ in
     # A user unit needs no polkit: the manager belongs to the person already.
     # This is where the whole sequence is started from, and the root half is one
     # step inside it.
+    #
+    # AND WITH THE SESSION'S `PATH`, not a unit's. NixOS gives every unit five
+    # packages on `PATH` unless told otherwise, and the person's half exists
+    # precisely to find what the PERSON has: every `binary` step (`doom-sync`,
+    # the language managers) was skipped from here, always, because `command
+    # -v` asked those five. Off and with no `path`, the unit writes no
+    # `Environment=PATH` (`nixos/lib/systemd-lib.nix`) and inherits the user
+    # manager's, built from `environment.profiles`. The consequence is
+    # deliberate and worth saying: a `binary` step that is switched on now
+    # really runs.
     systemd.user.services.ronoctua-update = {
       description = "Updates everything: the privileged half and then the caches";
+      enableDefaultPath = false;
       serviceConfig = {
         Type = "oneshot";
         TimeoutStartSec = "infinity";
@@ -298,6 +317,8 @@ in
 
     systemd.user.services.ronoctua-update-rehearsal = {
       description = "Rehearses the whole update, running nothing";
+      # The same `PATH` as the run it rehearses, or its skips would be lies.
+      enableDefaultPath = false;
       serviceConfig = {
         Type = "oneshot";
         TimeoutStartSec = "infinity";
