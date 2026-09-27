@@ -1,0 +1,37 @@
+[package]
+name = "ronoctua-browser"
+description = "The running Chrome: the extension's bridge, native messaging, a profile's pinned extensions and the kiosk windows."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ONE BORDER, ONE CRATE — the person's RUNNING Chrome. What this one owns is
+# the bridge between our extension and the footer: Chrome's native-messaging
+# framing and the caller-origin argument it passes, the wire both ends speak,
+# the footer's socket, a profile's `Preferences` (the pinned extensions, which
+# no extension API reveals) and the argument vector that opens a kiosk window.
+# `ronoctua-software` keeps Chrome's `Local State`, which is about web apps.
+#
+# Small on purpose: the host binary is started by Chrome for every kiosk, and
+# its closure must stay a JSON parser and a socket — no renderer, no TLS.
+[dependencies]
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+rustix.workspace = true
+# The host's log, on stderr (Chrome passes it through to its own). The queue's
+# host already carries the same crate.
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
+
+# THE HOST, as its own binary, so `nix/rust.nix` can extract JUST this: Chrome
+# starts it for every kiosk, and a derivation references what its bytes cite.
+[[bin]]
+name = "ronoctua-browser"
+path = "src/bin/host.rs"

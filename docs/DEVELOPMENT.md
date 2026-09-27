@@ -86,6 +86,20 @@ freedesktop, os apps instalados, o histórico do shell. São os seus arquivos, e
 mostra os arquivos da mesma pessoa. O mesmo vale para a máquina: rede, Bluetooth, som, brilho e
 teclados são os de verdade, no laço como na sessão.
 
+**O laço não dirige o quiosque do Chrome.** O Chrome é o da sessão de verdade, e o host que ele
+sobe (`ronoctua-browser`) conecta no rodapé de verdade: o `RONOCTUA_INSTANCE` do laço não chega ao
+Chrome. A prova do quiosque é o `kiosk-vm`, com o Chrome real, offline; para olhar a modeline dele,
+veja [Olhar antes de dizer "pronto"](#olhar-antes-de-dizer-pronto).
+
+**Testar em outra tela.** O grupo de desenvolvimento da leader tem um redimensionador: duas
+cortinas cortam a tela pela direita e por baixo, e o sistema inteiro passa a caber no que sobra.
+Arraste a borda ou o canto, ou clique numa cortina e use as teclas que a linha dela ensina; ela diz
+o tamanho em pixels lógicos e em colunas × linhas. Ele continua de pé entre um hot reload e outro,
+e funciona igual no `.#vm` e na máquina instalada. Janela em tela cheia ignora as cortinas. Para
+medir uma coluna num tamanho e num espaço, ela abre pela linha de comando:
+`ronoctua-shell column [player] [--on <espaço>] [--size large|medium|small|bar]`; outra do mesmo
+inquilino encerra a anterior.
+
 ### `.#vm` — a distro inteira, com boot de verdade
 
 Initrd, impermanência, unidades do systemd, o instalado como ele é. Usuário `noctua`, senha
@@ -173,6 +187,27 @@ nix run .#shot -- <cena.py>        fotografa a feature do momento numa VM, pela 
 ```
 
 Teste verde não vê espaço em branco, sobreposição nem uma faixa no lugar errado. A foto vê.
+
+**A modeline do quiosque, sem Chrome.** A cena monta as duas metades do par à mão (`<N>` é o nonce,
+`<W>` o id da janela no Chrome, e os arquivos de runtime levam o nome da instância,
+`ronoctua[-dev]-…`):
+
+1. `RONOCTUA_BROWSER_MANIFEST` aponta para um JSON com
+   `{"allowed_origins":["chrome-extension://<32 letras de a a p>/"]}`;
+2. uma janela com `app_id` `google-chrome`, em foco, com `<N>` no título, aberta ANTES do rodapé;
+3. `$XDG_RUNTIME_DIR/ronoctua-kiosk.json` com
+   `[{"nonce":"<N>","compositor":0,"chrome":<W>,"ui":"hidden"}]`;
+4. um host falso que conecta em `$XDG_RUNTIME_DIR/ronoctua-browser.sock`, escreve uma linha só e
+   mantém a conexão aberta (cada aba tem `id`, `index`, `active`, `title`, `url` e
+   `zoom_percent`):
+
+   ```
+   {"said":"state","v":1,"kiosks":[{"window":<W>,"nonce":"<N>","state":"fullscreen","tabs":[…]}],"extensions":[…],"focused_window":<W>}
+   ```
+
+Com `"state":"normal"` o rodapé entende um F11 e mostra as barras do Chrome. `modeline.json`, no
+diretório de ajustes, com `{"address_line":true}` mostra a linha de endereço; fechar o host mostra
+a marca de sem conexão.
 
 ## Os outros comandos
 

@@ -603,7 +603,10 @@ let
                     "selection reset": "wm-select-none",
                     "selection move": "wm-select-move",
                     "selection workspace": "wm-select-workspace",
-                    "selection to_trail": "wm-select-to-trail"}
+                    "selection to_trail": "wm-select-to-trail",
+                    # AND A WINDOW'S BARS, which the Chrome kiosk keeps a copy
+                    # of for the same reason (`kiosk::Kiosks::deed_ran`).
+                    "fullscreen application": "wm-full-application"}
 
       def ours_as(command):
           if command in THROUGH_US:
@@ -2705,6 +2708,9 @@ let
         # AND THE CAMERA'S SECOND, the recording: `camera-settings-open`, the
         # camera's own door, `LEADER s c c`.
         "recording",
+        # AND THE SCREEN RESIZER'S: it runs `dev-resizer`, `LEADER d r`, which
+        # gives the screen back whole.
+        "resizer",
     }
     if acted != agreed:
         gaps.append(
@@ -2796,6 +2802,7 @@ let
         ("player", 'run_command("player-column")'),
         ("software-trial", 'run_command("software-trials")'),
         ("software-android", 'run_command("software-android")'),
+        ("resizer", 'run_command("dev-resizer")'),
     ):
         if needle not in branch(mark):
             gaps.append(f"clicking `{mark}` does not run {needle}")
@@ -2805,6 +2812,7 @@ let
         ("s c c", "camera-settings-open"),
         ("p c", "player-column"),
         ("i a", "software-android"),
+        ("d r", "dev-resizer"),
     ):
         if f'("{seq}", "{command}"' not in keymap:
             gaps.append(f"`{command}` has no key at LEADER {seq}")
@@ -2851,6 +2859,69 @@ let
             gaps.append(f"a workspace number does not run {id}")
         if id not in keymap:
             gaps.append(f"the workspace numbers' {id} has no equivalent key")
+
+    # 1b) AND WHAT A MODELINE ADAPTED TO A PROGRAM CAN DO (`crate::adapt`).
+    #
+    # An adapter's segments are not compared by id above: ONE branch, first in
+    # `segment_clicked`, hands them to their adapter by what was DRAWN
+    # (`adapter_clicked`), and the middle button, the wheel and a drop reach
+    # the same adapter. So the promise is held here, adapter by adapter:
+    # everything its pointer runs is a command of the registry that a KEY
+    # reaches too — the kiosk's grid (which IS its `,` group, generated from
+    # it), a press of one of its view's lists, or the window menu's `B`
+    # (`LEADER w B`, generated from the menu).
+    #
+    # FIRST, and not merely somewhere: a mark's own `if id == …` asked before
+    # it would answer for a segment its adapter drew under the same id.
+    handed = clicked.find("self.adapter_clicked(id, button)")
+    asked = [m.start() for m in re.finditer(r"\bid\s*[!=]=|\w+\(id\)", clicked)]
+    if handed < 0:
+        gaps.append("`segment_clicked` no longer hands an adapter's segment to its adapter")
+    elif asked and min(asked) < handed:
+        gaps.append("`segment_clicked` asks a mark of its own before the adapter")
+    kiosk = read(shell / "kiosk.rs")
+    # THE PRODUCT ONLY: the tests name the commands they expect a row to run,
+    # and a test's literal would answer for a mapping the product lost.
+    kiosk_view = without_tests(read(shell / "kiosk_view.rs"))
+    acts = set()
+    for fn in ("clicked", "wheeled", "dropped"):
+        body = must(body_of(kiosk, fn), "the kiosk adapter's `" + fn + "`")
+        acts |= set(re.findall(r'Act::Run(?:With)?\(\s*"([a-z0-9-]+)"', body))
+    floor(len(acts), 10, "commands the kiosk's modeline runs")
+    registered = set(re.findall(r'id:\s*"([a-z0-9-]+)"', keymap))
+    # A TABLE IS A SLICE, `&[ … ]`, and `scope` walks braces: each is taken
+    # from its name to the `];` that closes it, the shape the hint tables'
+    # own census reads them in.
+    def table_of(name):
+        m = re.search(r"pub const " + name + r":[^=]*=\s*&\[(.*?)\n\];", kiosk_view, re.S)
+        return must(m and m.group(1), "`kiosk_view::" + name + "`")
+    grid = table_of("ROOT")
+    by_key = set(re.findall(r'"([a-z]+-[a-z0-9-]+)"', grid))
+    floor(len(by_key), 15, "commands of the kiosk's grid")
+    for table in ("OF_THE_TABS", "OF_THE_EXTENSIONS"):
+        by_key |= set(re.findall(r'\(\s*"[^"]*"\s*,\s*"([a-z0-9-]+)"', table_of(table)))
+    # WHAT A LIST'S ROW RUNS, with the row's tab or extension as the argument:
+    # what `acted` answers a key of the list with, and nothing else.
+    rows = must(body_of(kiosk_view, "acted"), "`kiosk_view::acted`")
+    by_key |= set(re.findall(r'id:\s*"([a-z0-9-]+)"', rows))
+    by_key |= set(re.findall(r'run\("B", key::\w+, "([a-z0-9-]+)"\)', menu))
+    for act in sorted(acts):
+        if act not in registered:
+            gaps.append(f"the kiosk's modeline runs `{act}`, which is not a command of the registry")
+        if act not in by_key:
+            gaps.append(f"the kiosk's modeline runs `{act}`, and no key of its view, its `,` group or `LEADER w B` does")
+    # THE GRID IS THE `,` GROUP, generated and not written twice.
+    local = must(body_of(kiosk_view, "local_bindings"), "`kiosk_view::local_bindings`")
+    if "ROOT.iter()" not in local or "LOCAL_PREFIX" not in local:
+        gaps.append("the kiosk's `,` group is no longer generated from its grid")
+    # AND ITS TWO POOLS, by name for the reason the devices give: `kiosk-tab-1`
+    # to `kiosk-tab-16` and `kiosk-ext-1` to `kiosk-ext-8` carry digits, which
+    # the `acted` pattern above cannot see — and they never reach it anyway:
+    # they are the adapter's, answered by what was drawn.
+    if 'pub const TABS: [&str; 16] = [' not in kiosk or '"kiosk-tab-16"' not in kiosk or '"kiosk-tab-17"' in kiosk:
+        gaps.append("the kiosk's tab pool is not the sixteen ids this check knows")
+    if 'pub const EXTENSIONS: [&str; 8] = [' not in kiosk or '"kiosk-ext-8"' not in kiosk or '"kiosk-ext-9"' in kiosk:
+        gaps.append("the kiosk's extension pool is not the eight ids this check knows")
 
     # 2) WHAT A CLICK ON THE NOTIFICATION BAND CAN DO.
     #
@@ -4349,13 +4420,17 @@ let
     # glob is how `buffer.rs` sat outside the fence, painting inside its
     # pointer handler, one blocked present per cell the mouse crossed — the
     # same trailing highlight reported a third time, in a door the check could
-    # not see.
+    # not see. AND A GENERIC ONE IS ONE: `impl<T: Tenant> Content for
+    # Column<T>` is the content every right column goes through, and the
+    # census that wanted `impl` right before a space walked past it.
     contents = [
         f for f in sorted(home.rglob("*.rs"))
         if door_dir not in f.parents
-        and re.search(r"impl\s+(?:[\w:]+::)?Content\s+for\s+\w+", code_of(f.read_text()))
+        and re.search(r"impl(?:<[^>]*>)?\s+(?:[\w:]+::)?Content\s+for\s+\w+", code_of(f.read_text()))
     ]
     floor(len(contents), 20, "contents of a door")
+    if not any(f.name == "column.rs" for f in contents):
+        wrong.append("column.rs is not counted as a content, and every column's pointer, keys and paint go through it")
     for f in contents:
         text = code_of(without_tests(f.read_text()))
         if re.search(r"\.run\(None", text):
@@ -5377,6 +5452,15 @@ let
         text = code_of(f.read_text())
         if "RULE_STRONG" not in text:
             continue
+        # THE RESIZER'S EDGES are `rule.strong` by the plan, and they are not a
+        # thumb: they are the curtains' grips, drawn from the rectangles the
+        # pointer takes (`resizer::edges` over `resizer::grips`). Excused only
+        # while `edges` is the one place that file paints the tone.
+        if f.name == "resizer.rs":
+            own = code_of(without_tests(f.read_text()))
+            painted = body_of(own, "edges") or ""
+            if own.count("RULE_STRONG") == painted.count("RULE_STRONG") > 0:
+                continue
         if not re.search(r"ronoctua_design::Scroll|\bbar_box\b|\bbar_boxes\(|\bbars\(|\bregion_bar\b", text):
             wrong.append(f.name + " paints a thumb without asking `Scroll`")
     # `notifications::bar_boxes` is the fourth way in (8fc9e4a): an open
@@ -6324,14 +6408,21 @@ let
   # checks the GENERATED tree, so a broken `generated.js` fails here too.
   extension-parses = mkCheck "extension-parses" [ pkgs.esbuild ] ''
     failed=0
+    swept=0
     for f in ${extension}/share/ronoctua-extension/*.js; do
+      swept=$((swept + 1))
       if ! esbuild --log-level=warning --format=esm --target=chrome116 "$f" > /dev/null; then
         echo "ERROR: $(basename "$f") does not compile — the service worker would never come up" >&2
         failed=1
       fi
     done
+    # A FLOOR: a glob that stopped matching compiles nothing and says OK.
+    if [ "$swept" -lt 7 ]; then
+      echo "ERROR: only $swept scripts in the extension; the worker, the bridge and the kiosk page are seven" >&2
+      failed=1
+    fi
     [ "$failed" = 0 ] || exit 1
-    echo "OK: the extension's four files compile for chrome116"
+    echo "OK: the extension's $swept scripts compile for chrome116"
   '';
 
   # AND NO TEXT AND NO COLOUR WRITTEN BY HAND.
@@ -6386,6 +6477,251 @@ let
         sys.exit(1)
     print("OK: the extension carries neither a word nor a colour of its own")
     PY
+  '';
+
+  # THE KIOSK'S BRIDGE, RUN — the extension's half, which no VM step can race.
+  #
+  # `bridge.js` imported under a Chrome made of plain objects, each case in a
+  # module instance of its own (the query in the address). What it proves is
+  # behaviour the kiosk VM only meets by luck, because it waits between its
+  # orders:
+  #
+  #   1. the footer's orders are obeyed ONE AT A TIME, in the order they came.
+  #      Side by side they finished in whatever order Chrome answered —
+  #      `activate` asks for its tab before it acts, `create` acts at once —
+  #      so [activate X, create] left X in front;
+  #   2. a kiosk window that closed while no port was open is forgotten when
+  #      the next state is gathered, and the last one takes the port (the
+  #      host, the worker) with it — a dead id kept them alive until Chrome
+  #      restarted;
+  #   3. a host that ended while kiosks were open is started again, after a
+  #      pause that grows when it ends at once — never, before; and never in
+  #      a loop.
+  #
+  # The GENERATED tree is imported, as `extension-parses` compiles it: the
+  # `generated.js` beside it is the one Chrome loads.
+  kiosk-bridge-obeys-in-order = mkCheck "kiosk-bridge-obeys-in-order" [ pkgs.deno ] ''
+    export DENO_NO_PROMPT=1 DENO_NO_UPDATE_CHECK=1 NO_COLOR=1
+    export DENO_DIR="$TMPDIR/deno" XDG_CACHE_HOME="$TMPDIR/cache"
+    cp -r ${extension}/share/ronoctua-extension ext
+    chmod -R u+w ext
+    cat > test.js <<'JS'
+    // The kiosk's bridge, RUN: `bridge.js` imported under a Chrome made of
+    // plain objects, each case in a module instance of its own.
+    const bridge = new URL(Deno.args[0], "file://" + Deno.cwd() + "/").href;
+
+    function event() {
+      const listeners = new Set();
+      return {
+        addListener: (f) => listeners.add(f),
+        removeListener: (f) => listeners.delete(f),
+        fire: (...a) => {
+          for (const f of [...listeners]) f(...a);
+        },
+      };
+    }
+
+    const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    // A Chrome with the windows, tabs and remembered kiosks a case gives it.
+    // `tabs.get` answers a moment later, as Chrome does over its own IPC.
+    function fakeChrome({ kept, windows, tabs }) {
+      const calls = [];
+      const stored = { kiosks: kept };
+      const open = new Set(windows);
+      const tabsById = new Map(tabs.map((t) => [t.id, { ...t }]));
+      const ports = [];
+      let next = 100;
+      const chrome = {
+        runtime: {
+          onStartup: event(),
+          lastError: undefined,
+          getURL: (path) => "chrome-extension://" + "a".repeat(32) + "/" + path,
+          connectNative(name) {
+            const port = {
+              name,
+              open: true,
+              sent: [],
+              onMessage: event(),
+              onDisconnect: event(),
+              postMessage(m) {
+                if (!this.open) throw new Error("the port is closed");
+                this.sent.push(m);
+              },
+              disconnect() {
+                this.open = false;
+              },
+            };
+            ports.push(port);
+            return port;
+          },
+        },
+        storage: {
+          local: {
+            get: async (key) => ({ [key]: stored[key] }),
+            set: async (o) => Object.assign(stored, JSON.parse(JSON.stringify(o))),
+          },
+        },
+        tabs: {
+          onCreated: event(),
+          onRemoved: event(),
+          onUpdated: event(),
+          onMoved: event(),
+          onActivated: event(),
+          onAttached: event(),
+          onDetached: event(),
+          onReplaced: event(),
+          onZoomChange: event(),
+          query: async ({ windowId }) => [...tabsById.values()].filter((t) => t.windowId === windowId),
+          getZoom: async () => 1,
+          get: async (id) => {
+            await pause(5);
+            if (!tabsById.has(id)) throw new Error("No tab with id " + id);
+            return tabsById.get(id);
+          },
+          update: async (id, change) => {
+            calls.push(["update", id, change]);
+            return tabsById.get(id);
+          },
+          create: async (props) => {
+            calls.push(["create", props]);
+            const t = { id: next++, windowId: props.windowId, index: 0, active: true, url: props.url || "" };
+            tabsById.set(t.id, t);
+            return t;
+          },
+          remove: async (id) => {
+            calls.push(["remove", id]);
+            tabsById.delete(id);
+          },
+          move: async (id, where) => calls.push(["move", id, where]),
+          reload: async (id) => calls.push(["reload", id]),
+          goBack: async (id) => calls.push(["back", id]),
+          goForward: async (id) => calls.push(["forward", id]),
+          setZoom: async (id, z) => calls.push(["zoom", id, z]),
+        },
+        windows: {
+          onFocusChanged: event(),
+          onBoundsChanged: event(),
+          onRemoved: event(),
+          get: async (id) => {
+            if (!open.has(id)) throw new Error("No window with id " + id);
+            return { id, state: "fullscreen" };
+          },
+          getLastFocused: async () => ({ id: 0, focused: false }),
+        },
+        management: {
+          onEnabled: event(),
+          onDisabled: event(),
+          onInstalled: event(),
+          onUninstalled: event(),
+          getAll: async () => [],
+        },
+        search: { query: async (q) => calls.push(["search", q]) },
+      };
+      return { chrome, calls, stored, ports };
+    }
+
+    // A fresh instance of the bridge under `fake`: the query makes it a module
+    // of its own, with its own kiosks and its own port.
+    async function start(name, fake) {
+      globalThis.chrome = fake.chrome;
+      await import(bridge + "?" + name);
+      await pause(30);
+    }
+
+    const failures = [];
+    function expect(ok, what) {
+      if (!ok) failures.push(what);
+    }
+
+    const KIOSK = { nonce: "n".repeat(32), profile: "Default" };
+    const TABS = [
+      { id: 1, windowId: 7, index: 0, active: true, url: "https://a.example/" },
+      { id: 2, windowId: 7, index: 1, active: false, url: "https://b.example/" },
+    ];
+
+    // 1. THE ORDERS ARE OBEYED ONE AT A TIME, in the order they came: an
+    //    `activate` asks Chrome for its tab before it acts, a `create` acts at
+    //    once — side by side, the new tab was made first and the old one then
+    //    brought in front of it.
+    {
+      const fake = fakeChrome({ kept: { 7: KIOSK }, windows: [7], tabs: TABS });
+      await start("in-order", fake);
+      const port = fake.ports[0];
+      expect(port && port.open, "a remembered kiosk opens the port");
+      port.onMessage.fire({ serial: 1, order: "activate", tab: 2 });
+      port.onMessage.fire({ serial: 2, order: "create", window: 7, url: "https://c.example/" });
+      port.onMessage.fire({ serial: 3, order: "reload", tab: 2 });
+      await pause(100);
+      const did = fake.calls.map((c) => c[0]).filter((c) => c !== "remove");
+      expect(
+        JSON.stringify(did) === JSON.stringify(["update", "create", "reload"]),
+        "the orders were obeyed as " + JSON.stringify(did) + ", not update, create, reload",
+      );
+      const answered = port.sent.filter((m) => m.said === "done").map((m) => m.serial);
+      expect(
+        JSON.stringify(answered) === "[1,2,3]",
+        "the answers came as " + JSON.stringify(answered),
+      );
+    }
+
+    // 2. A KIOSK THAT CLOSED WHILE NO PORT WAS OPEN is forgotten: it stays out
+    //    of storage, and when it was the last, the port — the host, the worker —
+    //    goes with it.
+    {
+      const fake = fakeChrome({ kept: { 5: KIOSK, 7: KIOSK }, windows: [7], tabs: TABS });
+      await start("one-gone", fake);
+      expect(
+        JSON.stringify(Object.keys(fake.stored.kiosks)) === '["7"]',
+        "the closed window is still remembered: " + JSON.stringify(fake.stored.kiosks),
+      );
+      expect(fake.ports[0] && fake.ports[0].open, "the live kiosk keeps its port");
+    }
+    {
+      const fake = fakeChrome({ kept: { 5: KIOSK }, windows: [], tabs: [] });
+      await start("all-gone", fake);
+      expect(
+        Object.keys(fake.stored.kiosks).length === 0,
+        "the last closed window is still remembered: " + JSON.stringify(fake.stored.kiosks),
+      );
+      expect(
+        fake.ports.length === 1 && !fake.ports[0].open,
+        "the port stays open for a window that is gone",
+      );
+    }
+
+    // 3. A HOST THAT ENDED is started again while a kiosk needs it — after a
+    //    pause, and a longer one each time it ends at once.
+    {
+      const fake = fakeChrome({ kept: { 7: KIOSK }, windows: [7], tabs: TABS });
+      await start("again", fake);
+      const end = (port) => {
+        if (!port) return;
+        port.open = false;
+        port.onDisconnect.fire();
+      };
+      // THE FIRST PAUSE is a second, the next one two: each check stands at
+      // least half a second from the moment it asks about.
+      end(fake.ports[0]);
+      await pause(300);
+      expect(fake.ports.length === 1, "the host was started again at once");
+      await pause(1200);
+      expect(fake.ports.length === 2, "the host was not started again: " + fake.ports.length + " ports");
+      end(fake.ports[1]);
+      await pause(1000);
+      expect(fake.ports.length === 2, "a host that ended at once was restarted without a longer pause");
+      await pause(1600);
+      expect(fake.ports.length === 3, "the host was not started again the second time");
+    }
+
+    if (failures.length) {
+      for (const f of failures) console.error("ERROR: " + f);
+      Deno.exit(1);
+    }
+    console.log("OK: orders in order, closed kiosks forgotten, an ended host started again");
+    Deno.exit(0);
+    JS
+    deno run --no-prompt --allow-read test.js ext/bridge.js
   '';
 
   # ===================================================================
@@ -17295,6 +17631,7 @@ let
     inherit pkgs lib extension;
     ronoctua-shell = rust.shell;
     ronoctua-transfers = rust.transfers;
+    ronoctua-browser = rust.browser;
   };
 
   keyboardVm = import ./keyboard-vm.nix {
@@ -17356,6 +17693,25 @@ let
       software = rust.software;
       softwareIndex = self.packages.${system}.software-nix-index;
       iconNames = self.packages.${system}.icon-names;
+    };
+  };
+
+  # THE CHROME KIOSK ON A BOOTED SESSION, with the REAL Chrome, offline: the
+  # extension force-installed from `file://`, a download handed to the queue
+  # by Chrome's own call of the host, and a kiosk paired, driven and let go —
+  # the only place the bridge meets a browser. Chrome is let in by name, the
+  # `uade` precedent (`nix/player-tools.nix`).
+  kioskVm = import ./kiosk-vm.nix {
+    inherit pkgs lib inputs;
+    ronoctua = {
+      inherit fonts fontconfigConf iconSuperpack;
+      inherit themes themed defaultTheme;
+      inherit cursors;
+      inherit scroll;
+      inherit extension;
+      shell = rust.shell;
+      transfers = rust.transfers;
+      browser = rust.browser;
     };
   };
 
@@ -24016,17 +24372,72 @@ let
     if "web::open_argv(" not in opener:
         wrong.append("the CLI's `web-open` no longer opens through `web::open_argv`")
 
+    # 6. AND THE KIOSK (`LEADER m b`) IS NOT CHROMIUM'S KIOSK EITHER. It is a
+    #    window of the person's Chrome whose bars the COMPOSITOR hides, opened
+    #    by `ronoctua-browser`'s one argument vector: the profile, a new window,
+    #    and our extension's page. FILE-WIDE over that crate's product, like
+    #    part 1; then the vector's own literals, which are exactly these.
+    bsrc = pathlib.Path("${../crates/ronoctua-browser/src}")
+    bswept = 0
+    for f in sorted(bsrc.rglob("*.rs")):
+        text = product(f.read_text())
+        bswept += 1
+        for at, _, s in strings_of(text):
+            for flag in FLAGS:
+                if flag in s:
+                    wrong.append(f"ronoctua-browser/{f.name}: `{s}` in `{whose(text, at)}`")
+    floor(bswept, 8, "sources of ronoctua-browser")
+    kiosk = must(body_of(product((bsrc / "launch.rs").read_text()), "argv"), "`launch::argv`")
+    kiosk_made = sorted(s for _, _, s in strings_of(kiosk))
+    kiosk_wanted = sorted([
+        "chrome-extension://{}/{PAGE}#n={}&p={}",
+        "&u=",
+        "--profile-directory={}",
+        "--new-window",
+    ])
+    if kiosk_made != kiosk_wanted:
+        wrong.append(f"`launch::argv` hands Chrome {kiosk_made}, and a kiosk is {kiosk_wanted}")
+
+    # 7. AND THE VECTOR THAT RUNS IS THAT ONE. The footer execs it from
+    #    `Footer::kiosk_launch`, which splits `launch::argv` into a program and
+    #    its arguments — so a word added THERE reaches Chrome as surely as one
+    #    added in `launch.rs`, and parts 1 and 6 would not see it. The body
+    #    names `launch::argv` and writes no argument of its own: no literal
+    #    that starts with `-`. The kiosk's own modules, product-wide, carry
+    #    none of the four either.
+    shell_src = pathlib.Path("${../crates/ronoctua-shell/src}")
+    launching = must(
+        body_of(product((shell_src / "surface.rs").read_text()), "kiosk_launch"),
+        "`Footer::kiosk_launch`",
+    )
+    if "ronoctua_browser::launch::argv(" not in uncommented(launching):
+        wrong.append("`kiosk_launch` no longer runs the vector `launch::argv` makes")
+    for _, _, s in strings_of(launching):
+        if s.startswith("-") or any(flag in s for flag in FLAGS):
+            wrong.append(f"`kiosk_launch` adds `{s}` to the vector Chrome runs")
+    kswept = 0
+    for name in ("kiosk.rs", "kiosk_view.rs", "adapt.rs"):
+        text = product((shell_src / name).read_text())
+        kswept += 1
+        for at, _, s in strings_of(text):
+            for flag in FLAGS:
+                if flag in s:
+                    wrong.append(f"ronoctua-shell/{name}: `{s}` in `{whose(text, at)}`")
+    floor(kswept, 3, "kiosk modules of the shell")
+
     if wrong:
-        print("ERROR: a web app could open as something other than a window of the person's Chrome.", file=sys.stderr)
+        print("ERROR: a web app or a kiosk could open as something other than a window of the person's Chrome.", file=sys.stderr)
         print("", file=sys.stderr)
         for w in wrong:
             print("       " + w, file=sys.stderr)
         print("", file=sys.stderr)
-        print("       `--kiosk` and `--start-fullscreen` lock the whole Chrome of the session,", file=sys.stderr)
-        print("       `--user-data-dir` loses the person's logins, `--enable-features` replaces", file=sys.stderr)
-        print("       the wrapper's own. A web app is `--profile-directory` and `--app=`.", file=sys.stderr)
+        print("       Chromium's `--kiosk` and `--start-fullscreen` switches lock the whole Chrome", file=sys.stderr)
+        print("       of the session, `--user-data-dir` loses the person's logins,", file=sys.stderr)
+        print("       `--enable-features` replaces the wrapper's own. A web app is", file=sys.stderr)
+        print("       `--profile-directory` and `--app=`; a kiosk is `--profile-directory`,", file=sys.stderr)
+        print("       `--new-window` and our extension's page.", file=sys.stderr)
         raise SystemExit(1)
-    print(f"OK: {swept} sources, one argument vector, http and https only, the CLI by its stable path")
+    print(f"OK: {swept} + {bswept} + {kswept} sources, two argument vectors and the footer runs the kiosk's as made, http and https only, the CLI by its stable path")
     END
   '';
 
@@ -25081,6 +25492,8 @@ let
     disks-vm = disksVm;
     transfers-vm = transfersVm;
     extension-vm = extensionVm;
+    kiosk-vm = kioskVm;
+    inherit kiosk-bridge-obeys-in-order;
     inherit
       files-actions-have-text
       files-everything-has-a-key

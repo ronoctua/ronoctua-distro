@@ -69,6 +69,7 @@ members = [
   "crates/ronoctua-inspect",
   "crates/ronoctua-torrent",
   "crates/ronoctua-software",
+  "crates/ronoctua-browser",
   "crates/ronoctua-transfers",
   "crates/ronoctua-rescue",
   "crates/ronoctua-shell",

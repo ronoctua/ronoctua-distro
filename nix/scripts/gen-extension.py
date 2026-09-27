@@ -162,7 +162,7 @@ def manifest(version: str) -> dict:
         # nothing about it reaches a website.
         "name": "ronoctua",
         "version": version,
-        "description": "Sends downloads to ronoctua's queue.",
+        "description": "Sends downloads to ronoctua's queue, and bridges its kiosk windows.",
         # THE WHOLE PERMISSION LIST, and why each one is here:
         #
         #   downloads      the interception: see it start, and stop it
@@ -172,8 +172,15 @@ def manifest(version: str) -> dict:
         #                  standing host permission
         #   scripting      to run `find-media.js` under that grant, on demand
         #   contextMenus   the right-click entries
-        #   storage        one switch: whether downloads are handed over
-        #   tabs           the active tab's URL for the media menu
+        #   storage        one switch: whether downloads are handed over; and
+        #                  which windows are kiosks, across a worker restart
+        #   tabs           the active tab's URL for the media menu; and a
+        #                  kiosk's tabs — titles and addresses the footer draws
+        #                  in the modeline, and the orders it sends them
+        #   management     the kiosk's list of extensions — `getAll` and
+        #                  nothing else: never turned on, off or away
+        #   search         the kiosk's address line searches the person's own
+        #                  engine for words that are not an address
         "permissions": [
             "downloads",
             "nativeMessaging",
@@ -182,6 +189,8 @@ def manifest(version: str) -> dict:
             "contextMenus",
             "storage",
             "tabs",
+            "management",
+            "search",
         ],
         "background": {"service_worker": "worker.js", "type": "module"},
         "action": {"default_popup": "popup.html"},
@@ -230,6 +239,9 @@ def main() -> None:
     parser.add_argument("--space", required=True, type=pathlib.Path)
     parser.add_argument("--i18n", required=True, type=pathlib.Path)
     parser.add_argument("--host", required=True)
+    # The kiosk's bridge (`ronoctua-browser`), from the same table as `--host`:
+    # `nix/browser-hosts.nix`.
+    parser.add_argument("--browser-host", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--out", required=True, type=pathlib.Path)
     # The languages, from `assets/i18n/languages.nix`. The FIRST is the base:
@@ -264,6 +276,7 @@ def main() -> None:
             "// change at the next build.",
             "",
             f"export const HOST = {json.dumps(args.host)};",
+            f"export const BROWSER_HOST = {json.dumps(args.browser_host)};",
             "",
             "const ALL = " + json.dumps(all_texts, ensure_ascii=False, indent=2) + ";",
             "",

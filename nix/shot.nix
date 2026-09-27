@@ -93,6 +93,12 @@ pkgs.testers.runNixOSTest {
       pkgs.swappy
       # `gdbus`, to send the compositor's own `Notify` by hand.
       pkgs.glib
+      # A WINDOW OF ANY NAME: `foot --app-id <id> --title <t>` stands in for a
+      # program the stage does not carry (the Chrome kiosk's window, whose
+      # modeline is decided by its `app_id` and a nonce in its title). It
+      # draws through `wl_shm`, so it needs no GPU — `tests/modeline-vm.nix`
+      # uses it for the same reason.
+      pkgs.foot
     ]
     ++ xvfb.packages;
 
@@ -112,8 +118,19 @@ pkgs.testers.runNixOSTest {
 
 
     def token_hex(key, table=None):
-        """`RRGGBB` of a token, for ImageMagick. The alpha is dropped."""
-        return (table or TOKENS)[key][2:8]
+        """`#RRGGBB` of a token, for ImageMagick. The alpha is dropped.
+
+        THE HASH IS PART OF THE COLOUR. Without it ImageMagick does not fail:
+        it WARNS "unrecognized color" and `-opaque` then answers for every
+        pixel, so `has_colour` passed on any picture and `lacks_colour` failed
+        on every one (measured on the column's focus line: 920 of 920 pixels
+        "matched" on a strip with none of the colour)."""
+        return "#" + (table or TOKENS)[key][2:8]
+
+
+    def _colour(hex_value):
+        """A colour as ImageMagick reads it: `#RRGGBB`, whatever was passed."""
+        return hex_value if hex_value.startswith("#") else "#" + hex_value
 
     ${xvfb.prelude}
 
@@ -198,7 +215,7 @@ pkgs.testers.runNixOSTest {
         antialiased and may have no pixel of the exact colour at all.
         """
         machine.succeed(f"magick {path} -depth 8 txt:- > /tmp/pixels.txt")
-        want = hex_value.lower()[:7]
+        want = _colour(hex_value).lower()[:7]
         found = []
         for pixel in machine.succeed("cat /tmp/pixels.txt").splitlines()[1:]:
             head, _, colour = pixel.partition(": ")
@@ -232,11 +249,12 @@ pkgs.testers.runNixOSTest {
         about a filled region passes a small `fuzz` and stops being answerable
         by text.
         """
+        colour = _colour(hex_value)
         n = int(
             machine.succeed(
                 f"magick {of} -fuzz {fuzz}% "
-                f"-fill '#000000' +opaque '{hex_value}' -fill '#FFFFFF' "
-                f"-opaque '{hex_value}' -format '%[fx:int(mean*w*h+0.5)]' info:"
+                f"-fill '#000000' +opaque '{colour}' -fill '#FFFFFF' "
+                f"-opaque '{colour}' -format '%[fx:int(mean*w*h+0.5)]' info:"
             ).strip()
         )
         assert n >= at_least, (
@@ -257,11 +275,12 @@ pkgs.testers.runNixOSTest {
         midnight 9.5, industrial 10.2, owl 6.6, darkside 5.9, all measured. So
         the assertion "the row below has not appeared yet" was reading the
         chooser's own headings and failing about the wrong thing."""
+        colour = _colour(hex_value)
         n = int(
             machine.succeed(
                 f"magick {of} -fuzz {fuzz}% "
-                f"-fill '#000000' +opaque '{hex_value}' -fill '#FFFFFF' "
-                f"-opaque '{hex_value}' -format '%[fx:int(mean*w*h+0.5)]' info:"
+                f"-fill '#000000' +opaque '{colour}' -fill '#FFFFFF' "
+                f"-opaque '{colour}' -format '%[fx:int(mean*w*h+0.5)]' info:"
             ).strip()
         )
         assert n == 0, f"{hex_value} still covers {n} pixel(s) of {of}"

@@ -732,6 +732,14 @@ pub const BY_NAME_ONLY: &[&str] = &[
     // gestures themselves are one key away: a second sequence for it would
     // be a line of the list spent on something done once.
     "gestures-calibrate",
+    // THE KIOSK'S THREE THAT TAKE WHAT ONLY THE POINTER POINTS AT: a tab by
+    // its id, a tab dragged to a place, an extension by its id. The keyboard
+    // reaches the same deeds through the kiosk's view — `RET` on a tab's row,
+    // `K`/`J` and `{`/`}`, `RET` on an extension's row — and `LEADER :` runs
+    // each with its argument.
+    "kiosk-tab",
+    "kiosk-tab-move",
+    "kiosk-extension",
 ];
 
 /// And for the button a standing notice offers.
@@ -1093,6 +1101,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "gestures-calibrate",
             label: key::CMD_GESTURES_CALIBRATE,
+        },
+        // THE SCREEN RESIZER, `d r` — the first tool of the development
+        // group: two curtains cut the screen, and everything is laid out in
+        // what they leave (`crate::resizer`). On, or off when it is on.
+        Command {
+            id: "dev-resizer",
+            label: key::CMD_DEV_RESIZER,
         },
         Command {
             id: "camera-settings-open",
@@ -2512,6 +2527,138 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "syncthing-add-folder",
             label: key::CMD_SYNCTHING_ADD_FOLDER,
         },
+        // THE CHROME KIOSK (`LEADER m b`, `crate::kiosk`): the door, what
+        // its modeline, its view and the `,` group run — one table, three
+        // doors (`kiosk_view::ROOT`) — and the switch of the modeline's
+        // adaptation to it (`crate::adapt`).
+        Command {
+            id: "kiosk-open",
+            label: key::CMD_KIOSK_OPEN,
+        },
+        Command {
+            id: "kiosk-back",
+            label: key::CMD_KIOSK_BACK,
+        },
+        Command {
+            id: "kiosk-forward",
+            label: key::CMD_KIOSK_FORWARD,
+        },
+        Command {
+            id: "kiosk-reload",
+            label: key::CMD_KIOSK_RELOAD,
+        },
+        Command {
+            id: "kiosk-tab",
+            label: key::CMD_KIOSK_TAB,
+        },
+        Command {
+            id: "kiosk-tab-next",
+            label: key::CMD_KIOSK_TAB_NEXT,
+        },
+        Command {
+            id: "kiosk-tab-previous",
+            label: key::CMD_KIOSK_TAB_PREVIOUS,
+        },
+        Command {
+            id: "kiosk-tab-close",
+            label: key::CMD_KIOSK_TAB_CLOSE,
+        },
+        Command {
+            id: "kiosk-tab-left",
+            label: key::CMD_KIOSK_TAB_LEFT,
+        },
+        Command {
+            id: "kiosk-tab-right",
+            label: key::CMD_KIOSK_TAB_RIGHT,
+        },
+        Command {
+            id: "kiosk-tab-move",
+            label: key::CMD_KIOSK_TAB_MOVE,
+        },
+        Command {
+            id: "kiosk-new-tab",
+            label: key::CMD_KIOSK_NEW_TAB,
+        },
+        Command {
+            id: "kiosk-address",
+            label: key::CMD_KIOSK_ADDRESS,
+        },
+        Command {
+            id: "kiosk-zoom",
+            label: key::CMD_KIOSK_ZOOM,
+        },
+        Command {
+            id: "kiosk-zoom-in",
+            label: key::CMD_KIOSK_ZOOM_IN,
+        },
+        Command {
+            id: "kiosk-zoom-out",
+            label: key::CMD_KIOSK_ZOOM_OUT,
+        },
+        Command {
+            id: "kiosk-zoom-reset",
+            label: key::CMD_KIOSK_ZOOM_RESET,
+        },
+        Command {
+            id: "kiosk-chrome-ui",
+            label: key::CMD_KIOSK_CHROME_UI,
+        },
+        Command {
+            id: "kiosk-address-line",
+            label: key::CMD_KIOSK_ADDRESS_LINE,
+        },
+        Command {
+            id: "kiosk-more",
+            label: key::CMD_KIOSK_MORE,
+        },
+        Command {
+            id: "kiosk-tabs",
+            label: key::CMD_KIOSK_TABS,
+        },
+        Command {
+            id: "kiosk-extensions",
+            label: key::CMD_KIOSK_EXTENSIONS,
+        },
+        Command {
+            id: "kiosk-extension",
+            label: key::CMD_KIOSK_EXTENSION,
+        },
+        Command {
+            id: "kiosk-extension-options",
+            label: key::CMD_KIOSK_EXTENSION_OPTIONS,
+        },
+        Command {
+            id: "kiosk-extension-details",
+            label: key::CMD_KIOSK_EXTENSION_DETAILS,
+        },
+        Command {
+            id: "kiosk-release",
+            label: key::CMD_KIOSK_RELEASE,
+        },
+        Command {
+            id: "modeline-adapt-kiosk",
+            label: key::CMD_MODELINE_ADAPT_KIOSK,
+        },
+        Command {
+            id: "kiosk-list-down",
+            label: key::CMD_KIOSK_LIST_DOWN,
+        },
+        Command {
+            id: "kiosk-list-up",
+            label: key::CMD_KIOSK_LIST_UP,
+        },
+        Command {
+            id: "kiosk-list-enter",
+            label: key::CMD_KIOSK_LIST_ENTER,
+        },
+        Command {
+            id: "kiosk-tab-earlier",
+            label: key::CMD_KIOSK_TAB_EARLIER,
+        },
+        Command {
+            id: "kiosk-tab-later",
+            label: key::CMD_KIOSK_TAB_LATER,
+        },
     ];
 
     // `(sequence, command)`. The sequence does NOT include the leader: it has already
@@ -2720,6 +2867,9 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // the physical keyboards' settings, which are another thing.
         ("m k", "onscreen-keyboard", None),
         ("m g", "gestures", None),
+        // `b` for BROWSER — the person's own Chrome as a kiosk, without its
+        // bars. Everything it does is then under `,` while it has the focus.
+        ("m b", "kiosk-open", None),
         // `i` for ICONS, and not `g` for glyphs: the Nerd Fonts browser is the
         // first collection, and others are going to come in — the group is born with the
         // name of what it is going to hold, and not with the first item's.
@@ -2831,9 +2981,14 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // sentence the `s` group is defined by.
         ("s g g", "geo-open", None),
         ("s g w", "geo-window", None),
-        // `d` for DATE — the first free letter of the first level, and a
-        // glance is asked for often enough to earn one.
-        ("d", "world-glance", None),
+        // `g` for GLANCE, at the first level: it was `d`, for date, until the
+        // owner gave `d` to the development group. Bound through the constant
+        // the sentences teach it by, so the two cannot drift apart.
+        (GLANCE_KEYS, "world-glance", None),
+        // `d` FOR DEVELOPMENT, the tools for whoever builds this distro, and
+        // `r` resizes the screen. Written out, and not through a constant, so
+        // the check that every key reaches an arm of `run_with` reads it.
+        ("d r", "dev-resizer", None),
         // `s q` — THE WAYS OUT, under SYSTEM at the owner's word.
         //
         // They held a letter of their own at the first level, and what they do
@@ -2966,6 +3121,10 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("n", key::GROUP_NOTIFICATION),
         // `i` FOR THE PERSON'S OWN PROGRAMS — see the bindings.
         ("i", key::GROUP_SOFTWARE),
+        // `d` FOR DEVELOPMENT: tools for whoever builds this distro — the
+        // screen resizer today, and more to come. It held the glance, which
+        // went to `g`.
+        ("d", key::GROUP_DEV),
         // `s` for SYSTEM — what the machine is doing to itself, as opposed to
         // what one is doing with it: memory, disks, the update, the theme —
         // and the network and Syncthing, which moved in from the first level.
@@ -3108,7 +3267,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
 /// A sentence that needs to teach it interpolates this plus `crate::leader()`
 /// — never the letters written out. A key spelt into a `.ftl` ages the day the
 /// key moves, and `n h` taught `n h` for weeks after it became `n n`.
-pub const GLANCE_KEYS: &str = "d";
+pub const GLANCE_KEYS: &str = "g";
 
 /// The software view's keys in the footer, BESIDE its binding.
 pub const SOFTWARE_KEYS: &str = "i i";
@@ -3230,6 +3389,9 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     out.extend(crate::network::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::software::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(OF_THEME_VIEW.iter().map(|(_, id)| *id));
+    // THE KIOSK'S VIEW AND ITS `,` GROUP, one table (`kiosk_view::ROOT`) and
+    // its two lists.
+    out.extend(crate::kiosk_view::reached());
     out
 }
 
@@ -3783,6 +3945,32 @@ mod tests {
         }
     }
 
+    /// FAILS IF: `LEADER d` stops being the development group with the
+    /// resizer at `d r`, or the glance leaves `g` — or the constant its
+    /// sentences teach it by stops being the key that runs it.
+    #[test]
+    fn the_dev_group_is_d_and_the_glance_is_g() {
+        let (tree, _) = default_of().unwrap();
+        let runs = |keys: &str| match tree.resolve(&parse_sequence(keys).unwrap()) {
+            ronoctua_keymap::Resolution::Command(id, None) => Some(id),
+            _ => None,
+        };
+        assert_eq!(runs("d r"), Some("dev-resizer"));
+        assert_eq!(runs("g"), Some("world-glance"));
+        assert_eq!(GLANCE_KEYS, "g");
+        assert_eq!(runs(GLANCE_KEYS), Some("world-glance"));
+        assert_eq!(runs("d"), None, "`d` runs something, so it is no group");
+        let ronoctua_keymap::Resolution::Prefix(root) = tree.resolve(&[]) else {
+            panic!("the root is not a list");
+        };
+        let d = root
+            .iter()
+            .find(|e| e.key == "d")
+            .expect("no `d` at the root");
+        assert_eq!(d.command, None, "`d` is a command and not a group");
+        assert_eq!(d.label, key::GROUP_DEV);
+    }
+
     /// FAILS IF: the root list draws the nine digits as nine rows again, or
     /// the condensed row's click stops opening the workspace group.
     #[test]
@@ -3977,6 +4165,7 @@ mod tests {
             "onscreen-keyboard",
             "gestures",
             "gestures-calibrate",
+            "dev-resizer",
             "camera-settings-open",
             "camera-settings-window",
             "camera-settings-up",
@@ -4266,6 +4455,40 @@ mod tests {
             "drawer-open",
             "trail-open",
             "selection-open",
+            // THE CHROME KIOSK — every one an arm of `run_with`, which hands
+            // it to `kiosk::Kiosks::command` or to the kiosk's view.
+            "kiosk-open",
+            "kiosk-back",
+            "kiosk-forward",
+            "kiosk-reload",
+            "kiosk-tab",
+            "kiosk-tab-next",
+            "kiosk-tab-previous",
+            "kiosk-tab-close",
+            "kiosk-tab-left",
+            "kiosk-tab-right",
+            "kiosk-tab-move",
+            "kiosk-new-tab",
+            "kiosk-address",
+            "kiosk-zoom",
+            "kiosk-zoom-in",
+            "kiosk-zoom-out",
+            "kiosk-zoom-reset",
+            "kiosk-chrome-ui",
+            "kiosk-address-line",
+            "kiosk-more",
+            "kiosk-tabs",
+            "kiosk-extensions",
+            "kiosk-extension",
+            "kiosk-extension-options",
+            "kiosk-extension-details",
+            "kiosk-release",
+            "modeline-adapt-kiosk",
+            "kiosk-list-down",
+            "kiosk-list-up",
+            "kiosk-list-enter",
+            "kiosk-tab-earlier",
+            "kiosk-tab-later",
         ];
         let (tree, registry) = default_of().unwrap();
         for id in super::reachable(&tree) {

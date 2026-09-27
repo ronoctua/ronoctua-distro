@@ -1,4 +1,4 @@
-# The places `LEADER d` glances at — the distro's defaults, in one file.
+# The places `LEADER g` glances at — the distro's defaults, in one file.
 #
 # ONE PLACE, the shape `assets/notifications.nix` and `assets/updates.nix`
 # already have: the data is declared here and everything else is generated from
@@ -10,7 +10,7 @@
 # A line above the modeline that says what time it is somewhere, and goes away
 # by itself. It is not a clock in the chrome: invariant 14 has no room for one,
 # and a clock that is always there is a clock nobody reads. This is a question
-# one asks — `LEADER d` — and gets answered.
+# one asks — `LEADER g` — and gets answered.
 #
 # THE FIELDS
 # ----------

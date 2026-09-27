@@ -27,6 +27,8 @@
   "chromium-browser" = "app-chrome";
   "google-chrome" = "app-chrome";
   "Chromium" = "app-chrome";
+  # The launcher's door to the Chrome kiosk (`br.ronoctua.kiosk.desktop`).
+  "br.ronoctua.kiosk" = "app-chrome";
 
   # --- communication -------------------------------------------------
   "org.telegram.desktop" = "app-telegram";

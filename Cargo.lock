@@ -2749,6 +2749,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-browser"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-xdg",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "ronoctua-cache-sweep"
 version = "0.1.0"
 dependencies = [
@@ -3156,6 +3169,7 @@ dependencies = [
  "ronoctua-audio",
  "ronoctua-bluetooth",
  "ronoctua-brain",
+ "ronoctua-browser",
  "ronoctua-camera",
  "ronoctua-clipboard",
  "ronoctua-clipcascade",
@@ -3308,6 +3322,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ronoctua-atlas-packs",
+ "ronoctua-browser",
  "ronoctua-files",
  "ronoctua-http",
  "ronoctua-software",

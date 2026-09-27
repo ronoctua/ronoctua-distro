@@ -93,9 +93,12 @@ mod tests {
 
     fn at(number: Option<u32>, focused: bool, occupied: bool) -> Workspace {
         Workspace {
+            name: number.map_or_else(|| "named".to_owned(), |n| n.to_string()),
             number,
             focused,
             occupied,
+            visible: focused,
+            output: Some("eDP-1".to_owned()),
         }
     }
 

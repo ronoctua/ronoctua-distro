@@ -3912,7 +3912,7 @@ cmd-geo-remove = Remover a região instalada sob o cursor
 group-geo = geografia
 
 # ---------------------------------------------------------------------------
-# LEADER d — the glance: what time it is somewhere, and the weather and money.
+# LEADER g — the glance: what time it is somewhere, and the weather and money.
 # ---------------------------------------------------------------------------
 world-place-europe-london = Londres
 world-place-america-sao-paulo = Brasília
@@ -4490,6 +4490,34 @@ pointers-speed-value = { $speed }
 pointers-is-first = o cursor em que os teclados estão
 
 # =====================================================================
+# LEADER d — development: tools for whoever builds this distro.
+# =====================================================================
+# The screen resizer (`LEADER d r`, `resizer.rs`): two curtains cut the
+# screen, and everything is laid out in the room they leave. Its line on the
+# bottom curtain says the room in pixels and in the grid, and each key's word
+# is short because the line is one line; `about-` is what the pointer reads.
+group-dev = desenvolvimento
+cmd-dev-resizer = Redimensionar a tela inteira
+hint-resizer = A tela está cortada em { $width } × { $height } px — { $columns } colunas por { $lines } linhas. Clique para tê-la inteira de novo.
+echo-resizer-on = A tela pode ser redimensionada: arraste a borda da direita, a de baixo ou o canto, ou clique numa cortina e use as teclas que a linha dela ensina.
+echo-resizer-off = A tela está inteira de novo.
+echo-resizer-failed = Não deu para redimensionar a tela: { $why }
+resizer-size = { $width } × { $height } px
+resizer-grid = { $columns } colunas × { $lines } linhas
+resizer-off = tela inteira
+about-resizer-off = Encerra o redimensionamento: as cortinas saem e a tela volta inteira.
+resizer-narrower = mais estreita
+about-resizer-narrower = Uma coluna a menos, ou várias com Shift pressionado.
+resizer-wider = mais larga
+about-resizer-wider = Uma coluna a mais, ou várias com Shift pressionado.
+resizer-shorter = mais baixa
+about-resizer-shorter = Uma linha a menos, ou várias com Shift pressionado.
+resizer-taller = mais alta
+about-resizer-taller = Uma linha a mais, ou várias com Shift pressionado.
+resizer-largest = a maior
+about-resizer-largest = Do maior tamanho que as cortinas deixam — tudo menos as duas faixas que elas guardam para serem pegas.
+
+# =====================================================================
 # THE CAMERA STUDIO — `LEADER m c` (the app) and `LEADER s c` (settings)
 # =====================================================================
 group-camera = câmera
@@ -4754,7 +4782,7 @@ player-title = Player
 
 cmd-player-open = O player, no rodapé
 cmd-player-window = O player, numa janela
-cmd-player-column = O player, na coluna à direita (ou fechá-la)
+cmd-player-column = A coluna do player, neste espaço de trabalho (ou fechá-la)
 cmd-player-play-file = Tocar um arquivo ou um endereço
 cmd-player-enqueue = Pôr um arquivo ou um endereço na fila
 cmd-player-follow = Tocar outro vídeo junto com este som
@@ -4781,6 +4809,22 @@ cmd-player-only = Só o que toca — o vídeo ou a capa — na região, na janel
 cmd-player-maximize = O que toca, na tela inteira — e de volta
 cmd-player-pip = O que toca, numa janela pequena no canto, por cima das outras — e de volta
 cmd-player-mute = Silenciar o player, ou devolver o som dele
+
+# ---------------------------------------------------------------------
+# THE RIGHT COLUMN'S OWN LINE (`crate::column`): its sizes, and the keys
+# that change them, after its tenant's own
+# ---------------------------------------------------------------------
+column-wider = mais larga
+column-narrower = mais estreita
+about-column-wider = Um tamanho mais larga; da barra, volta ao tamanho que tinha
+about-column-narrower = Um tamanho mais estreita, até a barra
+about-column-large = Grande: a mais larga que a coluna fica
+about-column-medium = Média: a largura de sempre
+about-column-small = Pequena: o mesmo conteúdo, mais estreito
+about-column-bar = Barra: uma faixa com poucos controles
+about-column-widen = Volta ao tamanho que tinha antes da barra
+column-bar-not-offered = Esta coluna ainda não tem nada feito para a barra
+column-no-room = Esta tela não tem espaço para uma coluna mais larga
 
 player-up = sobe
 player-down = desce
@@ -5603,3 +5647,126 @@ notif-action-transfers-panel = Abrir a fila
 notif-action-software-maintenance = Ver as atualizações
 notif-action-software-trials = Ver as experiências
 notif-action-software-android = Abrir o Android
+
+# =====================================================================
+# O CHROME QUIOSQUE — `LEADER m b`: o Chrome da própria pessoa sem as
+# barras dele, a modeline que se adapta a ele (`adapt.rs`, `kiosk.rs`), a
+# vista (`kiosk_view.rs`) e o grupo `,`. Tecla nunca é texto aqui.
+# =====================================================================
+cmd-kiosk-open = Abrir o seu Chrome como quiosque, sem as barras dele
+cmd-kiosk-back = Voltar, na aba do quiosque
+cmd-kiosk-forward = Avançar, na aba do quiosque
+cmd-kiosk-reload = Recarregar a aba do quiosque
+cmd-kiosk-tab = Trazer esta aba do quiosque para a frente
+cmd-kiosk-tab-next = Próxima aba do quiosque
+cmd-kiosk-tab-previous = Aba anterior do quiosque
+cmd-kiosk-tab-close = Fechar a aba do quiosque
+cmd-kiosk-tab-left = Mover a aba do quiosque uma casa para a esquerda
+cmd-kiosk-tab-right = Mover a aba do quiosque uma casa para a direita
+cmd-kiosk-tab-move = Pôr uma aba do quiosque em outro lugar
+cmd-kiosk-new-tab = Abrir um endereço numa aba nova do quiosque
+cmd-kiosk-address = Editar o endereço da aba do quiosque
+cmd-kiosk-zoom = O zoom do quiosque, em passos
+cmd-kiosk-zoom-in = Aumentar o zoom da página do quiosque
+cmd-kiosk-zoom-out = Diminuir o zoom da página do quiosque
+cmd-kiosk-zoom-reset = Voltar o zoom do quiosque para 100%
+cmd-kiosk-chrome-ui = Mostrar ou esconder as barras do próprio Chrome no quiosque
+cmd-kiosk-address-line = Mostrar ou esconder a linha de endereço acima da modeline
+cmd-kiosk-more = Tudo o que o quiosque faz
+cmd-kiosk-tabs = Todas as abas do quiosque
+cmd-kiosk-extensions = As extensões do quiosque
+cmd-kiosk-extension = Abrir a página de uma extensão numa aba nova
+cmd-kiosk-extension-options = Abrir as opções de uma extensão
+cmd-kiosk-extension-details = Os detalhes de uma extensão no Chrome
+cmd-kiosk-release = Fazer do quiosque uma janela comum do Chrome de novo
+cmd-modeline-adapt-kiosk = Adaptar a modeline ao quiosque, ou não
+cmd-kiosk-list-down = Próxima linha da lista do quiosque
+cmd-kiosk-list-up = Linha anterior da lista do quiosque
+cmd-kiosk-list-enter = A linha da lista do quiosque: a aba para a frente, ou a página da extensão
+cmd-kiosk-tab-earlier = Mover a aba sob o cursor uma casa para trás
+cmd-kiosk-tab-later = Mover a aba sob o cursor uma casa para a frente
+cmd-wm-full-application-on = Dizer à janela que ela está em tela cheia, no próprio lugar
+cmd-wm-full-application-off = Dizer à janela que ela não está mais em tela cheia
+kiosk-list-down = baixo
+kiosk-list-up = cima
+kiosk-list-enter = abrir
+kiosk-tab-earlier = para trás
+kiosk-tab-later = para a frente
+kiosk-tab-close = fechar
+kiosk-new-tab = aba nova
+kiosk-extension-options = opções
+kiosk-extension-details = detalhes
+ask-kiosk-address = O endereço, ou palavras para buscar
+ask-kiosk-new-tab = Endereço ou palavras para a aba nova (vazio abre uma em branco)
+kiosk-tabs-more = +{ $count }
+kiosk-zoom-percent = { $percent }%
+kiosk-tab-front = { $host }, na frente
+kiosk-menu-back = Voltar
+kiosk-menu-forward = Avançar
+kiosk-menu-reload = Recarregar
+kiosk-menu-new-tab = Aba nova
+kiosk-menu-address = Editar o endereço
+kiosk-menu-tabs = Abas
+kiosk-menu-tab-previous = Aba anterior
+kiosk-menu-tab-next = Próxima aba
+kiosk-menu-tab-left = Aba para a esquerda
+kiosk-menu-tab-right = Aba para a direita
+kiosk-menu-tab-close = Fechar a aba
+kiosk-menu-extensions = Extensões
+kiosk-menu-zoom = Zoom
+kiosk-menu-zoom-in = Maior
+kiosk-menu-zoom-out = Menor
+kiosk-menu-zoom-reset = Tamanho real
+kiosk-menu-show-chrome = Mostrar as barras do Chrome
+kiosk-menu-hide-chrome = Esconder as barras do Chrome
+kiosk-menu-address-show = Mostrar a linha de endereço
+kiosk-menu-address-hide = Esconder a linha de endereço
+kiosk-menu-adapt = Adaptar a modeline
+kiosk-menu-plain = Modeline comum
+kiosk-menu-release = Janela comum
+kiosk-heading-pinned = Fixadas
+kiosk-heading-others = As outras
+kiosk-heading-disabled = Desligadas
+kiosk-no-extensions = Este Chrome não tem nenhuma extensão além da nossa.
+window-menu-kiosk = Quiosque
+hint-kiosk-back = Uma página para trás nesta aba
+hint-kiosk-forward = Uma página para a frente nesta aba
+hint-kiosk-reload = Carregar esta página de novo
+hint-kiosk-tabs-before = { $count ->
+        [one] Mais uma aba à esquerda
+       *[other] Mais { $count } abas à esquerda
+    } — o clique lista todas
+hint-kiosk-tabs-after = { $count ->
+        [one] Mais uma aba à direita
+       *[other] Mais { $count } abas à direita
+    } — o clique lista todas
+hint-kiosk-tab = { $title } — o clique traz para a frente, arrastar muda de lugar, o botão do meio fecha, o direito lista todas as abas
+hint-kiosk-tab-current = { $title } — a aba da frente; o clique lista todas as abas, o botão do meio fecha
+hint-kiosk-new-tab = Uma aba nova, num endereço ou numa busca
+hint-kiosk-ext = { $name } — o clique abre a página dela numa aba nova, o botão direito as opções
+hint-kiosk-extensions = { $names } — o clique lista todas as extensões
+hint-kiosk-extensions-none = Nenhuma extensão além da nossa — o clique lista
+hint-kiosk-zoom = A página a { $percent }% — a roda muda, o clique abre os passos, o botão direito volta a 100%
+hint-kiosk-address-line-on = A linha de endereço está à mostra — o clique esconde
+hint-kiosk-address-line-off = A linha de endereço está escondida — o clique mostra acima da modeline
+hint-kiosk-chrome-hidden = As barras do Chrome estão escondidas — o clique mostra (modo normal)
+hint-kiosk-chrome-shown = As barras do Chrome estão à mostra — o clique esconde de novo
+hint-kiosk-more = Tudo o que o quiosque faz
+hint-kiosk-offline-bridge = A ponte com o navegador não está instalada nesta máquina: o quiosque só mostra e esconde as barras do Chrome
+hint-kiosk-offline-chrome = O Chrome não se conectou — a extensão ronoctua pode estar desligada
+hint-kiosk-offline-version = A extensão é de outra versão que o rodapé: reinicie o Chrome
+hint-kiosk-address = { $url } — o clique edita o endereço
+echo-kiosk-offline = O Chrome não está conectado, então o quiosque ainda não faz isso.
+echo-kiosk-unmatched = A janela do quiosque não respondeu; ela abriu como uma janela comum do Chrome.
+echo-kiosk-no-history = Nada para trás nesta aba.
+echo-kiosk-no-future = Nada para a frente nesta aba.
+echo-kiosk-not-a-kiosk = A janela em foco não é um quiosque.
+echo-kiosk-address-refused = Esse endereço não abre aqui: só http e https.
+echo-kiosk-refused = O Chrome recusou: { $why }
+echo-kiosk-no-chrome = O Chrome está desligado neste sistema.
+echo-kiosk-no-bridge = A ponte com o navegador não está instalada, então um quiosque não pode ser pareado.
+echo-kiosk-no-page = Essa extensão não tem página própria; os detalhes dela abriram no lugar.
+echo-kiosk-no-extension = Nenhuma extensão com esse id está neste Chrome.
+echo-kiosk-no-nonce = Não foi possível ler um número aleatório para parear um quiosque.
+echo-kiosk-no-tab = O quiosque não tem essa aba.
+echo-modeline-will-not-parse = O modeline.json não é lido, e gravar substituiria o que há nele.

@@ -44,6 +44,9 @@ use ronoctua_render::layout::{Segment, Shrink, Side};
 use ronoctua_tokens as tokens;
 
 mod actions;
+// THE MODELINE THAT ADAPTS TO A PROGRAM — one adapter per program, the
+// Chrome kiosk's the first.
+mod adapt;
 mod apps;
 mod audio;
 mod audio_window;
@@ -62,6 +65,7 @@ mod carry;
 mod chrome;
 mod clipboard;
 mod clipboard_view;
+mod column;
 mod daemon;
 mod disks;
 mod display;
@@ -84,6 +88,10 @@ mod history;
 mod history_window;
 mod keyboard;
 mod keys_link;
+// THE CHROME KIOSK (`LEADER m b`): the pairs and the modeline's adapter, and
+// the view its `…`, `LEADER w B` and the `,` group open.
+mod kiosk;
+mod kiosk_view;
 mod language;
 mod leader;
 mod line;
@@ -123,6 +131,7 @@ mod pointers_window;
 mod power;
 mod power_window;
 mod power_words;
+mod resizer;
 mod right_column;
 mod seats;
 // A NAME TOO LONG FOR ITS COLUMN, walking sideways a cell at a time.
@@ -351,6 +360,28 @@ fn main() -> Result<()> {
         Some("capture") => {
             return capture::host_it().context("the screen capture");
         }
+        // THE SCREEN RESIZER'S KEEPER (`LEADER d r`): it measures the screen
+        // with the focus, raises the two curtains and ends both when either
+        // ends — see `resizer`. The footer starts it and reads how it ended.
+        Some("resizer") => {
+            return resizer::keep_it().context("the screen resizer");
+        }
+        // ONE CURTAIN OF THE RESIZER, `right` or `bottom` — raised by the
+        // keeper and by nothing else: it reads its parent's command line.
+        Some("resizer-curtain") => {
+            let edge = std::env::args()
+                .nth(2)
+                .as_deref()
+                .and_then(resizer::Edge::of_word)
+                .with_context(|| {
+                    format!(
+                        "usage: ronoctua-shell {} {}",
+                        resizer::CURTAIN_WORD,
+                        resizer::Edge::ALL.map(resizer::Edge::word).join("|")
+                    )
+                })?;
+            return resizer::curtain_it(edge).context("a curtain of the screen resizer");
+        }
         Some("notifications") => {
             return notifications_window::host_it().context("host the manager");
         }
@@ -447,8 +478,7 @@ fn main() -> Result<()> {
                 Some("pip") => player_window::Stage::Small,
                 _ => player_window::Stage::Off,
             };
-            return player_window::host_it(player_window::Door::Window, stage)
-                .context("the player's window");
+            return player_window::host_window(stage).context("the player's window");
         }
         // WHAT THE `.desktop` ENTRY RUNS: play these, and show the column —
         // a file opened from anywhere is a file somebody wants to see play.
@@ -475,7 +505,8 @@ fn main() -> Result<()> {
                 ),
                 replace: true,
             })?;
-            if !player_window::column_is_up() {
+            // A COLUMN ALREADY UP, on any workspace, is left where it is.
+            if right_column::holder(right_column::Tenant::Player).is_none() {
                 let me = std::env::current_exe().context("where this program is")?;
                 std::process::Command::new(me)
                     .arg("column")
@@ -485,9 +516,25 @@ fn main() -> Result<()> {
             }
             return Ok(());
         }
+        // `ronoctua-shell column [<tenant>] [--on <workspace>] [--size <size>]`
+        // — a right column (`crate::column`), on the workspace named or the
+        // one in front, at the size named or its tenant's own.
         Some("column") => {
-            return player_window::host_it(player_window::Door::Column, player_window::Stage::Off)
-                .context("the player's column");
+            let said: Vec<String> = std::env::args().skip(2).collect();
+            let opening = column::Opening::parse(&said[..]).with_context(|| {
+                format!(
+                    "usage: ronoctua-shell column [{}] [--on <workspace>] [--size {}]",
+                    right_column::Tenant::ALL
+                        .map(right_column::Tenant::name)
+                        .join(" | "),
+                    column::Size::ALL.map(column::Size::name).join(" | ")
+                )
+            })?;
+            return match opening.tenant {
+                right_column::Tenant::Player => {
+                    player_window::host_column(&opening).context("the player's column")
+                }
+            };
         }
         Some("pointers") => {
             return pointers_window::host_it().context("host the pointers view");
@@ -815,6 +862,9 @@ pub struct Marks<'a> {
     pub recording: bool,
     /// Hand gestures are on: the camera reads hands (`LEADER m g`).
     pub gestures: bool,
+    /// The screen is cut by the resizer (`LEADER d r`): what everything is
+    /// laid out in is not the whole monitor.
+    pub resizer: bool,
     /// The player has something loaded: its glyph says playing or paused
     /// (`player::mark`). Absent with nothing loaded — a modeline at rest says
     /// nothing.
@@ -1226,6 +1276,22 @@ pub fn segments(
             removable: true,
         });
     }
+    // THE RESIZER, at the top rung and beside the gestures, whose colour it
+    // wears: the screen is not what it looks like, and the lines the tool
+    // itself makes narrow are where that has to stay said. FIRST of its rung,
+    // because a line drops the LAST mark of a rung first: at twenty columns
+    // the key mode's long name goes and this glyph stays.
+    if marks.resizer {
+        out.push(Segment {
+            id: "resizer",
+            text: tokens::icon::RESIZER.to_string(),
+            priority: 1,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
     // A KEY MODE, at the top rung: while it is on every key means something
     // else, and a person who does not know that is a person whose keys have
     // stopped working.
@@ -1530,6 +1596,8 @@ mod tests {
                         camera: true,
                         recording: true,
                         gestures: true,
+                        // AND THE SCREEN CUT, which is when lines get narrow.
+                        resizer: true,
                         // AND A KEY MODE, the longest of their names: the
                         // fullest line has to survive it beside the rest.
                         compositor_mode: Some("alternar largura"),
@@ -1576,6 +1644,58 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// FAILS IF: the resizer's mark leaves the line the resizer itself made
+    /// narrow — twenty columns, every mark on, and the screen is still said
+    /// to be cut.
+    #[test]
+    fn the_resizer_mark_survives_the_narrowest_line() {
+        let devices: Vec<crate::bluetooth::Shown> = crate::bluetooth::POOL
+            .iter()
+            .map(|at| crate::bluetooth::Shown {
+                at: (*at).to_owned(),
+                text: crate::bluetooth::glyph(ronoctua_bluetooth::Kind::Headphones).to_string(),
+                alarmed: false,
+            })
+            .collect();
+        let placed = layout::resolve(
+            20,
+            &segments(
+                "main.rs",
+                "ghostty",
+                "search",
+                9,
+                &Marks {
+                    transfer: Some(&format!("{} 62%", tokens::icon::TRANSFER)),
+                    battery: Some(&format!("{} 12%", tokens::icon::BATTERY_DANGER)),
+                    profile: Some(&tokens::icon::PROFILE_POWER_SAVER.to_string()),
+                    devices: &devices,
+                    silent: true,
+                    listening: true,
+                    camera: true,
+                    recording: true,
+                    gestures: true,
+                    resizer: true,
+                    compositor_mode: Some("alternar largura"),
+                    player: Some(tokens::icon::PLAYER),
+                    syncthing: Some(false),
+                    clip: Some(false),
+                    history: Some(false),
+                    adrift: true,
+                    tunnel: true,
+                    tailscale: true,
+                    tor: true,
+                    drawer: 3,
+                    selection: Some(Some(2)),
+                    ..Marks::default()
+                },
+            ),
+        );
+        let ids: Vec<&str> = placed.iter().map(|c| c.id).collect();
+        assert!(ids.contains(&"resizer"), "the cut went unsaid: {ids:?}");
+        let mark = placed.iter().find(|c| c.id == "resizer").unwrap();
+        assert!(mark.text.starts_with(tokens::icon::RESIZER));
     }
 
     #[test]

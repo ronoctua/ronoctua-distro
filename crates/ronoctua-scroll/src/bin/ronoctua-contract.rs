@@ -82,6 +82,19 @@ fn main() -> Result<()> {
         .focused_output()
         .context("asking which output has focus")?;
 
+    // THE WORKSPACES, which a column is bound to BY NAME and shown where
+    // they are: every one named, and every one a screen shows says which.
+    let workspaces = wm.workspaces().context("listing the workspaces")?;
+    println!("workspaces: {}", workspaces.len());
+    for w in &workspaces {
+        if w.name.is_empty() {
+            bail!("a workspace came back with no name");
+        }
+        if w.visible && w.output.is_none() {
+            bail!("the workspace {} is shown and names no output", w.name);
+        }
+    }
+
     // ---- 2. every deed, by name --------------------------------------
     // A criterion that matches nothing: the handler is resolved BEFORE the
     // criteria are tested, so an unknown verb fails differently from a verb

@@ -221,12 +221,17 @@
             pkgs.bibata-cursors.src
             segmentModel
             handModels.task
+            # CHROME'S .deb, which Google's pool serves only while the release
+            # is current: `kiosk-vm` (in `.#most`) and the `full` profile's
+            # browser build from it, and no cache has an unfree source.
+            unfreePkgs.google-chrome.src
           ];
         }
       }/bin/ronoctua-keep-sources";
 
-      # The glance's places (`LEADER d`). One declaration, and the build
-      # refuses a zone `zone1970.tab` does not know — see nix/world.nix.
+      # The glance's places (`LEADER g`, `leader::GLANCE_KEYS`). One declaration,
+      # and the build refuses a zone `zone1970.tab` does not know — see
+      # nix/world.nix.
       worldRs = pkgs.callPackage ./nix/world.nix {
         worldFile = ./assets/world.nix;
       };
@@ -988,6 +993,10 @@
               # And the one that empties the trash, extracted for the same
               # reason and one sharper: what it deletes is the only copy.
               emptyTrash = rust.emptyTrash;
+              # The kiosk's native-messaging host, EXTRACTED for the queue's
+              # reason: Chrome starts it beside the person's browser, and its
+              # closure is a JSON relay, never the desktop.
+              browser = rust.browser;
               # The browser extension, already generated: `nix/modules/browser-extension.nix`
               # packs and signs it on the machine, because the id comes from a
               # key that may not live in this repository.

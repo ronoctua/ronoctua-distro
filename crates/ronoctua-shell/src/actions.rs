@@ -482,7 +482,11 @@ fn scroll_chords() -> Vec<Chord> {
         d("<back>", "button8", "wm-overview"),
         // --- full screen and floating ---
         d("C-f", "Ctrl+f", "wm-full-layout"),
-        d("M-f", "Alt+f", "wm-full-application").nested("C-S-f", "Ctrl+Shift+f"),
+        // THE KIOSK'S BARS THROUGH US, for `S-TAB`'s reason: whether a
+        // window's bars are hidden is said by no reply and no event, so the
+        // footer keeps the copy (`kiosk::Kiosks::deed_ran`), and a key that
+        // went straight to the compositor would flip them behind it.
+        through_shell("M-f", "Alt+f", "wm-full-application").nested("C-S-f", "Ctrl+Shift+f"),
         d("C-M-f", "Ctrl+Alt+f", "wm-full-global").nested("C-S-g", "Ctrl+Shift+g"),
         d("y", "y", "wm-focus-either"),
         d("S-y", "Shift+y", "wm-transpose"),
@@ -1478,6 +1482,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// FAILS IF: a chord whose deed moves a copy the footer keeps — the
+    /// kiosk's bars, the selection, every workspace at once — is bound
+    /// straight to the compositor, which says none of them back: the copy
+    /// would fall behind the screen.
+    #[test]
+    fn a_chord_that_moves_a_kept_copy_goes_through_us() {
+        // A KIOSK THE FOOTER KEEPS, on window 7: what `deed_ran` answers for
+        // is exactly what moves its copy of the bars.
+        let kiosks = crate::kiosk::Kiosks::fresh(
+            br#"[{"nonce":"n","compositor":7,"chrome":1,"ui":"hidden"}]"#,
+            None,
+        );
+        let mut asked = 0;
+        for a in super::chords() {
+            let kept = kiosks.clone().deed_ran(a.command, 7).is_some()
+                || crate::selection::Selection::follows(a.command)
+                || a.command == "workspace-all";
+            if !kept {
+                continue;
+            }
+            asked += 1;
+            // BOTH LOOPS: the nested key of a chord is the same command.
+            for (key, said) in a.binds.iter().chain(a.nested.iter().flatten()) {
+                assert!(
+                    said.starts_with("exec ") && said.ends_with(&format!("command {}", a.command)),
+                    "`{key}` runs `{}` straight on the compositor: `{said}`",
+                    a.command
+                );
+            }
+        }
+        assert!(asked >= 8, "only {asked} chords move a kept copy");
     }
 
     #[test]

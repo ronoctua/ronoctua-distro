@@ -26,11 +26,14 @@
   # compiles in. The popup used to choose between exactly two.
   languages,
   source,
-  # The native-messaging host's name. ONE PLACE: the manifest of the host, the
-  # extension's `nativeMessaging` call and the Nix module that writes the host's
-  # own manifest all have to agree, and three literals is three chances not to.
-  hostName ? "br.ronoctua.transfers",
-  version ? "1.0.0",
+  # The native-messaging hosts' names. ONE PLACE (`nix/browser-hosts.nix`):
+  # the manifest of each host, the extension's `nativeMessaging` calls and the
+  # Nix module that writes the hosts' own manifests all have to agree, and a
+  # literal in each is a chance not to.
+  hosts ? import ./browser-hosts.nix,
+  # The version the manifest is built with. The packing unit adds the fourth
+  # number that makes every new build a HIGHER one — see the file.
+  version ? (import ./extension-version.nix).base,
 }:
 
 let
@@ -54,7 +57,8 @@ stdenvNoCC.mkDerivation {
       --space ${spaceJson} \
       --i18n ${i18nDir} \
       --languages ${lib.escapeShellArgs languages} \
-      --host '${hostName}' \
+      --host '${hosts.transfers}' \
+      --browser-host '${hosts.browser}' \
       --version '${version}' \
       --out .
     runHook postBuild
@@ -63,13 +67,16 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
     mkdir -p $out/share/ronoctua-extension
+    # THE LIST IS WRITTEN OUT, not globbed: a file dropped into `extension/`
+    # by accident would otherwise ship, signed, to every browser.
     cp manifest.json generated.js worker.js popup.html popup.css popup.js find-media.js \
+      bridge.js address.js kiosk.html kiosk.js \
       $out/share/ronoctua-extension/
     runHook postInstall
   '';
 
   meta = {
-    description = "The browser extension: sends a download to the queue, and does not enlarge the fingerprint";
+    description = "The browser extension: sends a download to the queue, bridges the kiosk windows, and does not enlarge the fingerprint";
     platforms = lib.platforms.all;
   };
 }

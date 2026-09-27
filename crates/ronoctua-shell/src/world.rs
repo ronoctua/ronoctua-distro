@@ -1,4 +1,4 @@
-//! The glance — `LEADER d`, one line above the modeline that goes away.
+//! The glance — `LEADER g`, one line above the modeline that goes away.
 //!
 //! # Why it is a line and not a clock in the chrome
 //!

@@ -706,6 +706,9 @@
   # are noise at one cell, nor `md-gesture_tap`, the notification's "has
   # actions".
   gestures = "md-hand_back_right";
+  # THE SCREEN IS CUT by the resizer (`LEADER d r`): the corner grip, which is
+  # what gets dragged.
+  resizer = "md-resize_bottom_right";
   # THE DRAWER HOLDS SOMETHING: windows put away (the compositor's
   # scratchpad), which no workspace shows and no focus reaches — this mark is
   # where the pointer finds them. Present or absent, like every mark here.
@@ -754,6 +757,17 @@
   player-column = "md-dock_right";
   player-window = "md-dock_window";
 
+  # THE COLUMN'S SIZES (`crate::column`), on its control line: four boxes
+  # from the widest to the narrowest, the way the edge moves. Material draws
+  # them as one family of lettered tags (`size_xl`, `m`, `s`, `xs`); there is
+  # no `size_l` in Nerd Fonts 3.4.0, so the widest is `xl`. In the bar only
+  # one fits: a double chevron pointing where the column grows back.
+  column-large = "md-size_xl";
+  column-medium = "md-size_m";
+  column-small = "md-size_s";
+  column-bar = "md-size_xs";
+  column-widen = "md-chevron_double_left";
+
   # THE PERSON'S OWN PROGRAMS (`LEADER i`, `crate::software`).
   #
   # The view's own mark, and the two modeline marks it may raise: a trial
@@ -787,4 +801,25 @@
   software-badge-anti-features = "md-eye_off";
   software-badge-library = "md-bookshelf";
   software-badge-installed = "md-check_circle_outline";
+
+  # THE CHROME KIOSK'S MODELINE (`crate::kiosk`): a browser's own controls,
+  # drawn as the codicons a browser's toolbar is known by — one family, so
+  # back, forward and reload are one drawing in three directions. The bars
+  # toggle names what the click WILL do (show Chrome's bars / hide them), and
+  # the address line is a link, crossed out while it is hidden. A pinned tab
+  # reuses `pinned`.
+  kiosk-back = "cod-arrow_left";
+  kiosk-forward = "cod-arrow_right";
+  kiosk-reload = "cod-refresh";
+  kiosk-new-tab = "cod-add";
+  kiosk-more = "cod-ellipsis";
+  kiosk-extensions = "cod-extensions";
+  kiosk-zoom-in = "cod-zoom_in";
+  kiosk-zoom-out = "cod-zoom_out";
+  kiosk-show-chrome = "cod-screen_normal";
+  kiosk-hide-chrome = "cod-screen_full";
+  kiosk-address = "md-link_variant";
+  kiosk-address-off = "md-link_variant_off";
+  kiosk-audible = "md-volume_high";
+  kiosk-offline = "cod-debug_disconnect";
 }

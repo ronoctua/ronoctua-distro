@@ -1012,6 +1012,101 @@ reflowa quando o foco troca de tela**.
 **Consequência a respeitar:** o estado do minibuffer vive **no daemon, não na superfície**. Se o
 output em foco desaparecer no meio de um prompt, o estado migra sem perder o que foi digitado.
 
+### O redimensionador de tela — `LEADER d r`, e por que são cortinas
+
+É uma ferramenta de desenvolvimento, e o grupo `LEADER d` existe para ela: ver o sistema inteiro
+numa tela menor, mudando a largura e a altura com o ponteiro ou com as teclas, com rodapé, coluna
+e janelas se rearranjando ao vivo. Ligado, ele põe uma marca na modeline (a cor é a da marca dos
+gestos, `MODELINE_WATCHING`), e um clique nela o desliga.
+
+**Cortinas, e não modo de vídeo.** O que se testa é o shell numa tela menor, e trocar o modo testa
+o monitor: ele apaga por um instante, só oferece os tamanhos do EDID e mexe nas outras saídas. Uma
+cortina é uma superfície layer-shell com zona exclusiva, e o compositor já dispõe rodapé, coluna e
+janelas no que as zonas deixam. O que sobra, a sala, fica ancorado no canto de cima à esquerda, e
+cada porta faz a mesma conta que faria numa tela daquele tamanho. Quem posiciona continua sendo o
+compositor (inv. 4).
+
+**A layer `overlay`.** O Scroll pinado aplica as zonas camada por camada: overlay, depois top,
+bottom e background (`arrange_layers`, em `sway/desktop/layer_shell.c`). Rodapé e coluna vivem em
+`top`, então uma zona em `overlay` estreita os dois; em `top`, o resultado dependeria de qual
+superfície nasceu primeiro. As cortinas são a terceira exceção do inv. 14, aprovada pelo dono: só
+existem enquanto o redimensionador está ligado e só cobrem o que ele cortou.
+
+**Duas superfícies.** Uma layer tem uma borda exclusiva só, e o corte tem duas. A cortina da
+direita é ancorada em cima, à direita e embaixo, e a zona é a largura dela; a de baixo, à esquerda,
+à direita e embaixo, e a zona é a altura dela. A de baixo tem pelo menos uma linha de texto, e é
+nela que a sala se diz (`W × H px · C colunas × L linhas`) e as teclas se ensinam, clicáveis, sobre
+`surface.header`; o resto das duas é `surface.base`, sem texto. A borda de cada uma é
+`rule.strong`, e `capture.guide` quando está acesa ou sendo arrastada. Nenhum papel novo. Sob o
+ponteiro, a frase de uma tecla vem logo depois dela, no lugar do que a seguia (`line_of`): no fim da
+linha inteira ela era a parte cortada numa sala estreita, e nada até a tecla acesa se move. E a
+linha para onde a sala para (`line_width`): quando a cortina de baixo cobre o canto, o quadrado do
+canto é a alça dos dois eixos, e uma tecla desenhada ali tomava o clique — medido na VM, um clique
+dois pixels dentro do canto estreitava a sala uma coluna em vez de pegá-la.
+
+**O dono do canto.** A cortina que o compositor arranja primeiro cobre o quadrado do canto, e
+ninguém decide qual é: cada uma lê isso do próprio configure (a da direita com a altura toda, ou a
+de baixo com a largura toda). O desenho não depende da resposta. O quadrado do canto é a alça dos
+dois eixos e desenha os dois lados internos, então as duas bordas atravessam a tela nas duas
+ordens. Cada alça é pega no retângulo cujos lados ela desenha (`resizer::grips` e
+`resizer::edges`).
+
+**O arrasto é medido no quadro da pegada, sem origem.** Enquanto um botão está preso numa layer, o
+Scroll pinado informa o ponteiro como o ponto local do press mais o quanto o cursor andou na tela
+(`handle_pointer_motion` do `seatop_down`, e o toque faz a mesma conta), e não refaz essa base
+quando a superfície se move. Por isso o arrasto é só a posição informada menos a posição do press
+(`Drag::delta`). A primeira versão somava a origem nova da cortina, tirada de cada configure, e
+contava de novo cada passo já dado: com a mão parada, a sala corria até o piso.
+
+**O settle.** O commit que mapeia a cortina não leva estado de layer, e o compositor não manda o
+arranjo às janelas nele (o mesmo defeito da coluna do player). O primeiro quadro pede o callback, e
+o `frame_done` chama `Compositor::settle`. Depois disso, mudar tamanho e zona manda o arranjo
+sozinho, e destruir as cortinas devolve a tela sozinho.
+
+**Três processos.** Todos são `ronoctua-shell`:
+
+- `resizer` é o guardião e não tem superfície. Mede a tela em foco pelo IPC, escreve o estado, sobe
+  as duas cortinas e espera. Quando uma sai, ele encerra a outra e apaga os arquivos: as duas
+  cortinas, ou nenhuma. Sobrevive ao hot reload do `.#dev` e morre com o cgroup do rodapé em
+  produção; o rodapé que sobe varre o que um guardião morto por sinal deixou (`sweep_stale`).
+- `resizer-curtain right` e `resizer-curtain bottom` são uma porta cada. Rodam com `pdeathsig TERM`
+  e conferem o pai pelo `/proc/<ppid>/cmdline`.
+
+Uma porta por processo, porque `theme::reload()` e `toolkits::reload()` guardam o "mudou?" do
+processo: a segunda porta do mesmo processo nunca repintaria com tema ou tamanho de texto novo.
+
+**O arquivo é o broadcast.** `runtime_file("resizer.json")`, por instância, em px lógicos, escrito
+por `write_atomically`, existe exatamente enquanto o redimensionador está ligado; o guardião fica em
+`resizer.pid`, conferido pela linha de comando e nunca pelo nome. Quem escreve mescla por campo e
+nunca escreve sobre um arquivo que não conseguiu ler (ausente quer dizer desligado). A cortina que
+arrasta ignora o próprio eixo ao ler, e é assim que ela reconhece a própria escrita. Ela escreve
+ANTES do commit, então o configure que a outra recebe já está no arquivo; só um eixo longo que nem
+o arquivo explica é uma tela que mudou, e só esse caso custa uma pergunta ao compositor.
+
+**As teclas andam na grade.** As setas levam ao menor tamanho que contém uma coluna ou uma linha a
+mais ou a menos (`stepped`), então cada tecla muda o layout do rodapé em exatamente uma unidade.
+`Shift` anda `space.resizer.bigStep`; `f` volta ao maior tamanho, que é a tela menos as duas
+faixas finas que as cortinas guardam para continuarem pegáveis. O piso é `minColumns` ×
+`minLines`, e numa tela menor que o piso as cortinas ganham (`fitted`): mais finas que isso, elas
+não poderiam ser pegas de volta.
+
+**Rodapé e coluna medem a sala, não o monitor.** `expansion_ceiling` media o monitor, e uma lista
+longa passava do topo de uma tela cortada. Agora ele mede a sala mais baixa entre as telas
+(`resizer::smallest_room`, sobre `room_height`). A coluna tinha o mesmo defeito na largura: as
+cortinas não mudam saída nenhuma, então nenhum `ScreensChanged` chega, e o teto de `maxPct` saía do
+monitor. Uma coluna média ocupava 77% de uma sala de 700 px e, abaixo de uns 540 px, saía pela borda
+esquerda da sala. Agora o teto sai da sala (`column::room_of`, sobre `resizer::room_width`), e a
+coluna vigia o `resizer.json` como o rodapé e diz a largura de novo quando a sala muda.
+
+**`d` era o relance, que foi para `g`.** O dono deu o `LEADER d` ao grupo de desenvolvimento. O
+relance (`world-glance`) é `g`, ligado pela constante `GLANCE_KEYS`, que é a mesma que as frases
+ensinam.
+
+**O que ele não simula.** Tela cheia ignora a área útil (`sway/tree/arrange.c`), e as cortinas
+cobrem as bordas dela. Janelas flutuantes, popups de apps, a captura, a visão geral e o ponteiro
+dos gestos usam a saída inteira. Só a tela em foco é cortada. Ligar com o rodapé no `overlay` (uma
+janela em tela cheia o cobrindo) arranja estranho até a tela cheia acabar.
+
 ---
 
 ### GPU nos testes
@@ -1448,7 +1543,8 @@ a única coisa que ainda as distingue, e ela basta (invariante 15).
 **A expansão para de crescer.** O teto sai de dois tokens (`space.expansion`): um absoluto em linhas
 e um percentual da tela, valendo o menor. Nenhum dos dois serve sozinho — doze linhas são um terço
 de um monitor de 1080 px e mais da metade de um de 600, e um percentual sem teto daria trinta e três
-linhas numa tela 4K. O que passa do teto vira **página**.
+linhas numa tela 4K. O que passa do teto vira **página**. O percentual é da altura que o rodapé
+tem: a do monitor, ou a que o redimensionador de tela deixa (`resizer::room_height`).
 
 **A página vira com o `CtrlRight`.** Ele é a tecla que **não se soma à leader**: com ele segurado, a
 tecla vai para a navegação da região em vez de entrar na sequência. Sem uma tecla assim, paginar
@@ -2013,6 +2109,59 @@ caminho para a mesma porta, e nunca uma porta própria** — e há check dos doi
 O que ele usa para saber onde está é o que o ÚLTIMO QUADRO desenhou, guardado como `(id, coluna,
 largura)`. Não é economia: um `Motion` chega por pixel de movimento, e um segundo cálculo do layout
 poderia discordar do que está na tela.
+
+---
+
+### A modeline que se adapta — um adaptador por programa
+
+Alguns programas têm uma barra de ferramentas inteira que este sistema esconde: o Chrome quiosque
+esconde as abas e a barra do Chrome. Para esses, a modeline vira a barra escondida. Um adaptador
+(`adapt::ModelineAdapter`) reivindica a janela em foco (`claims`), desenha segmentos sobre ela e
+responde ao ponteiro neles. Hoje há um, o do quiosque (`kiosk::Adapter`), e a forma foi escolhida
+para aguentar outros.
+
+**O título sai, e o programa vem primeiro.** Quando um adaptador toma a janela, o `buffer` (o
+título) sai, porque a aba da frente diz melhor o que ele dizia, e `adapt::graft` põe o `mode` (o
+nome do programa) como primeiro item: prioridade 4, a do título, não removível, com piso de quatro
+células (`goo…` ainda distingue o Chrome). Os segmentos do adaptador entram logo depois dele. Sem o
+título, o acento que ia para ele quando o rodapé toma o teclado vai para o `mode`
+(`adapt::mode_colour`).
+
+**Um enum fechado, e não um objeto de trait.** O despacho é o `enum Adapted`. O rodapé pergunta ao
+adaptador enquanto também se altera, e um `&dyn` emprestado do rodapé brigaria com cada um desses
+empréstimos. Um adaptador novo é uma variante e um braço em cada método.
+
+**O que foi desenhado responde ao ponteiro.** É a regra do resto da modeline: ao lado de
+`modeline_placed`, o rodapé guarda `adapter_drawn`, o alvo de cada segmento desenhado, e clique,
+botão do meio, roda e arrasto leem essa tabela, nunca um segundo layout. O arrasto arma no press e
+age no release: soltar no mesmo segmento é clique, soltar em outro é mover. A modeline ganhou roda
+(`wheel_lines`) sobre os segmentos adaptados.
+
+**O adaptador não roda nada.** Toda resposta dele é um comando do registro (`adapt::Act`), e a vista
+do adaptador e o grupo `,` alcançam os mesmos comandos, porque os três saem de uma tabela só
+(`kiosk_view::ROOT`): a grade da vista gera o `,`, como o menu da janela gera `LEADER w`. O
+`footer-mouse-reaches-nothing-new` exige que todo comando que um segmento roda esteja no registro e
+tenha tecla. O `,` de um quiosque roda no rodapé (`local_runs_here`): o Chrome não publica keymap, e
+a sequência vai por `run_with`.
+
+**A faixa contada, em duas passadas.** As abas são uma faixa (`adapt::Strip`) com um contador `+N`
+de cada lado para o que não coube. O contador diz quantas NÃO foram desenhadas, e quais foram é o
+layout que decide: a conta não existe antes do layout, e a largura dela entra nele. `adapt::resolve`
+faz duas passadas. A primeira reserva os contadores na largura máxima (a faixa inteira contada); a
+segunda mantém só o que sobreviveu, escreve o número de verdade (ou tira o contador que dá zero) e
+dispõe de novo. Todo sobrevivente fica no máximo tão largo quanto era, então nada que sobreviveu
+some e nada que saiu volta: a mesma entrada dá o mesmo quadro. O número de prioridade de uma aba
+vizinha cresce com a distância da aba da frente, então as mais distantes saem primeiro, os
+sobreviventes são contíguos e os contadores contam o que ficou fora deles.
+
+**Pools, como os números dos espaços.** O id de um segmento é `&'static str`, então os membros são
+nomeados pelo lugar (`kiosk-tab-1` a `kiosk-tab-16`, `kiosk-ext-1` a `kiosk-ext-8`), e o adaptador
+diz a que cada lugar se refere. O `footer-mouse-reaches-nothing-new` nomeia os dois pools.
+
+**Liga e desliga por programa.** `modeline.json`, escrito pelo `ronoctua-store`, guarda uma chave
+por adaptador (ausente é ligado) e se a linha de endereço do quiosque está de pé (ausente é
+desligada). O arquivo é o broadcast: o rodapé o vigia e reconhece a própria escrita. O comando é
+`modeline-adapt-kiosk`, que a vista, o `,` e o `LEADER :` alcançam.
 
 ---
 
@@ -4784,10 +4933,217 @@ exige que cada coisa que a extensão oferece tenha tecla, duas vezes: a anônima
 a identificada. Uma entrada nova no popup sem a tecla correspondente derruba o
 build.
 
-**O que não é afirmado aqui** é que uma build específica do Chrome honra um `update_url` `file://`.
-O `tests/extension-vm.nix` confere o que é conferível — a chave existe, o `.crx` está assinado, o id
-da política é o id do `.crx`, e a lista do host nomeia exatamente ele — e o `docs/PENDING.md` registra
-que o último passo é do dono, num navegador de verdade.
+**Onde cada parte é provada.** O `tests/extension-vm.nix` confere o que não precisa de navegador:
+a chave existe, o `.crx` está assinado, o id da política é o id do `.crx`, a lista dos dois hosts
+nomeia exatamente ele, e a versão sobe quando a build muda. O `tests/kiosk-vm.nix` roda o Chrome
+de verdade, offline, e prova o resto: que ele instala a extensão pelo `update_url` `file://` e sobe
+os dois hosts (veja "O Chrome quiosque").
+
+### O Chrome quiosque — `LEADER m b`: o seu Chrome, sem as barras dele
+
+O dono pediu o Chrome dele sem a interface do Chrome, e uma modeline que faz o que a barra fazia:
+as abas ao vivo (trocar e reordenar), as extensões fixadas e o acesso às outras, o zoom, uma linha
+de endereço, voltar ao Chrome comum, editar o endereço, abrir aba nova, voltar, avançar e
+recarregar.
+
+**Uma janela comum do Chrome da pessoa.** O quiosque abre no perfil que o Chrome usou por último
+(lido do `Local State` pelo `ronoctua-software`; `Default` quando não há), com os logins dela. O
+compositor faz `fullscreen enable application` na janela: diz a ela que está em tela cheia
+enquanto o tile mantém o tamanho, e o Chrome esconde abas e barra. A janela fica no lugar dela, e
+o rodapé fica embaixo. Nunca se passa `--kiosk`, `--start-fullscreen`, `--user-data-dir` nem
+`--enable-features`: os dois primeiros trancam o navegador inteiro, o terceiro perde os logins, o
+quarto substitui o do embrulho. O `web-apps-are-never-kiosk` varre também o `ronoctua-browser` e
+exige que o `launch::argv` tenha só as palavras do quiosque.
+
+**Os feitos são ON e OFF, nunca o alternar.** `full-application-on` e `full-application-off`
+(`fullscreen enable|disable application`, em `assets/compositor-deeds.nix`). Nenhuma resposta e
+nenhum evento do compositor dizem esse estado, então o rodapé guarda uma cópia por par (`kiosk::Ui`)
+e diz qual quer, pelo raciocínio do `overview-all-on/off`. O único lugar que diz ON ou OFF é
+`Footer::kiosk_bars`. Duas coisas mexem na cópia além dos comandos do rodapé: uma tela cheia de
+verdade (vídeo HTML5) que acaba leva o estado junto, e o rodapé o põe de volta; e o F11 dentro do
+Chrome, que o rodapé SEGUE em vez de brigar com a pessoa. A guarda: depois de pedir as barras
+escondidas, um relato `normal` que chega antes de o Chrome dizer `fullscreen` é a foto velha, e não
+um F11. Pelo mesmo motivo, o acorde `M-f` (`wm-full-application`) passa pelo nosso binário, como a
+seleção e o `S-TAB`: ligado direto no compositor, ele viraria as barras pelas costas da cópia.
+
+**Um caminho só, com o Chrome aberto ou fechado.** `kiosk-open [endereço ou palavras]` roda
+
+```
+chrome --profile-directory=<p> --new-window chrome-extension://<id>/kiosk.html#n=<nonce>&p=<p>&u=<endereço>
+```
+
+(`ronoctua_browser::launch::argv`). Com o Chrome aberto, o processo dele entrega a linha ao
+navegador que já roda; fechado, a mesma linha o sobe. O id da extensão nasce na máquina, então o
+rodapé o lê do manifesto do host (`RONOCTUA_BROWSER_MANIFEST`, no ambiente da unidade do rodapé). A
+outra porta é `br.ronoctua.kiosk.desktop`, sem `MimeType`: abre um endereço quando pedem, e nunca
+toma os links do navegador padrão.
+
+**O par nasce de duas metades, nunca de tempo.** A página `kiosk.html` põe o nonce no título, que o
+compositor relata (só de janela `google-chrome`), e diz `kiosk-born` à extensão, cujo estado chega
+ao rodapé pela ponte. As duas chegam em qualquer ordem. Com as duas, o rodapé esconde as barras,
+manda `Go`, e a página faz `location.replace` para o endereço. O par fica em `kiosk.json`, no
+diretório de runtime, para um rodapé que reinicia continuar sabendo, e o arquivo é conferido contra
+cada lista inteira de janelas (pelo id, ou reapontado pelo nonce num título). Um lançamento sem as
+duas metades em 20 s (`kiosk::PATIENCE`) vira janela comum, e a linha diz por quê; um lançamento que
+falhou antes de haver Chrome só diz a falha dele, porque nenhuma janela abriu. Uma página que o
+rodapé não vai parear (esse prazo, ou um rodapé que reiniciou no meio do lançamento) recebe `Go` e
+`Release`: sem o `Release`, a extensão continuaria contando a janela como quiosque, com a porta, o
+host e o worker vivos por ela. Sem rodapé (o host diz `footer up:false`, ou a porta falha), a página
+vai ao endereço na hora; um temporizador de 30 s, armado só enquanto uma página espera, cobre a
+página que ninguém lançou. Uma página recarregada ou restaurada também vai direto.
+
+**Palavras esperam a aba em que o quiosque cai.** `kiosk-open duas palavras` sem quiosque aberto
+lança sem endereço, e o `Go` sem endereço fecha a página de nascimento no lugar da página de aba
+nova do Chrome. A busca não vai para a aba que está indo embora: as palavras ficam no par, e o
+próximo estado que mostra uma aba que não é a de nascimento as recebe (`kiosk::born_on`).
+
+**A ponte são três saltos com um vocabulário só** (`ronoctua_browser::wire`). A extensão fala com o
+`ronoctua-browser` pelo enquadramento do Chrome (4 bytes de tamanho e o JSON); o host fala com o
+rodapé uma linha JSON por mensagem, e o rodapé é o servidor (`ronoctua[-dev]-browser.sock`). Ele
+liga o socket depois de tomar o display (`leader::listen`, onde um rodapé anterior é convidado a
+sair), e um servidor que sai só apaga o arquivo se ainda for o dele (pelo inode): ligado antes, o
+socket do rodapé antigo, vivo, recusava o novo, e o antigo levava o arquivo ao sair. O estado vai
+inteiro a cada mudança, com versão; as ordens levam `serial` e voltam como `done`, com o motivo
+quando falham. A extensão obedece uma ordem por vez, na ordem em que o rodapé mandou: lado a lado,
+cada uma terminava quando o Chrome respondia, e `[activate X, create]` deixava X na frente. Campo
+desconhecido é tolerado, e ordem desconhecida é recusada (`refused-order`). Endereço é só `http`,
+`https` ou a página de aba nova, conferido no rodapé, no host e na extensão. Os nomes dos dois hosts
+saem de uma tabela só (`nix/browser-hosts.nix`), que a extensão e os manifestos leem.
+
+**A porta nativa só existe enquanto há um quiosque.** Ela mantém o service worker vivo, e os
+ouvintes `tabs.*` e `windows.*` só são armados nessa hora: a navegação comum nunca acorda o worker.
+Os ids dos quiosques ficam em `storage.local` (o `storage.session` é apagado a cada atualização da
+extensão) e são limpos no `onStartup`. Uma janela que fechou enquanto não havia porta sai quando o
+próximo estado é montado, e a última leva a porta junto. Um host que acaba com quiosques abertos é
+subido de novo depois de uma pausa (1 s, dobrando até 16 s, que fica abaixo do meio minuto que um
+worker parado ganha); uma porta que viveu mais que isso zera a pausa. As permissões novas são duas,
+cada uma com o motivo no gerador: `management` (só `getAll`) e `search` (a linha de endereço busca
+no motor da pessoa). O manifesto continua sem nenhuma das cinco chaves que deixam uma página
+detectar a extensão: abrir `kiosk.html` pela linha de comando não precisa de
+`web_accessible_resources`.
+
+**O host acrescenta o que só um processo ao lado do perfil lê**: as extensões fixadas
+(`extensions.pinned_extensions`, no `Preferences` e depois no `Secure Preferences`) e o popup de
+cada uma, no manifesto dela (`ronoctua_browser::profile`). Quando o rodapé some, o host espera o
+socket reaparecer por inotify e reenvia o último estado inteiro. Como ele ACRESCENTA a cada estado,
+o teto de linha do rodapé é o dobro do quadro que o host aceita, e o host não manda uma linha que o
+rodapé recusaria: ela derrubaria a conexão, e a seguinte receberia a mesma linha. Uma conexão que
+acaba assim que é feita espera antes da próxima (100 ms, dobrando até 5 s). É um binário próprio,
+extraído em `rust.browser` como o da fila: o Chrome o sobe como a pessoa a cada quiosque, e o fecho
+dele é um leitor de JSON e um socket.
+
+**Sem conexão, o par continua de pé.** A modeline desenha o segmento `kiosk-offline` com o motivo: a
+ponte não está instalada, o Chrome não conectou, ou a versão é outra. Quiosque↔normal continua
+respondendo, porque só depende do compositor. Todo caminho que depende da extensão pergunta a mesma
+coisa que a marca (`Kiosks::live`): com a versão diferente, nenhum comando manda ordem, a vista diz
+que o Chrome não está conectado (inclusive nas extensões e no zoom, em vez de "nenhuma" e "100%"), e
+o `kiosk-open` diz isso em vez de lançar um segundo quiosque tão surdo quanto o primeiro.
+
+**A modeline do quiosque**, da esquerda para a direita: o `mode` (`google-chrome`); voltar,
+avançar e recarregar; `+N`; as abas vizinhas com o título curto (`space.kiosk.tabCells`) e a da
+frente (até `activeCells`, não removível, em `text.primary`; as outras em `text.secondary`, nunca no
+acento); `+N`; aba nova; as extensões fixadas uma a uma, pelo nome curto (`extensionCells`); a
+lista de extensões; o zoom (com a porcentagem quando não é 100%); a linha de endereço;
+quiosque↔normal (o glifo diz o que o clique fará); e o `…`, que abre a vista. Numa aba vizinha, o
+clique a traz para a frente; em qualquer aba, arrastar muda o lugar, o botão direito abre a lista
+nela, o do meio a fecha e a roda troca de aba. No zoom, a roda muda o zoom. O piso da linha é o
+`mode` mais a aba da frente elidida.
+
+**A linha de endereço é uma linha nossa**, acima da modeline: a terceira ocupante da linha do
+relance e do volume. Os dois que vêm e vão tomam a linha e a devolvem, com a mesma altura, então
+nada se move. Ela mostra o host inteiro e elide só o caminho, no meio, para um subdomínio enganoso
+não se esconder, e o clique edita o endereço no minibuffer. Quando nem o host cabe (tela estreita ou
+cortada), sai o COMEÇO dele: o fim é o domínio que diz de quem é a página, e nada passa da borda. Só
+aparece com as barras escondidas: no modo normal, a omnibox do Chrome está lá. Ela nasce e some com
+o foco, o estado do Chrome e as barras, e todo caminho que mexe nisso já mudou o estado quando o
+rodapé olha; por isso a altura é conferida contra a que foi APLICADA (`address_row_applied`), nunca
+contra uma leitura de "antes".
+
+**A vista existe só no rodapé** (`kiosk_view.rs`): uma janela tiraria o foco do quiosque que ela
+controla, e todo comando age na aba da frente. A grade tem a gramática do menu da janela, e a
+célula `B` do menu da janela de um quiosque a abre (`LEADER w B`); em `Footer::view()`, ela fica
+logo acima do menu da janela. As listas de abas e de extensões
+guardam o id do item, nunca a linha, porque o Chrome reordena por baixo do cursor.
+
+**`kiosk.rs` é puro.** Ele devolve `Errand`s, e o rodapé os executa (`Footer::kiosk_errands`).
+Isso o deixa testável sem Chrome e impede os métodos do rodapé de se perguntarem em anel
+(`the-footer-does-not-ask-itself`).
+
+**Decidido aqui, e pode mudar:** a adaptação da modeline nasce ligada e a linha de endereço
+desligada; o clique do meio fecha a aba; as abas vizinhas mostram o título curto.
+
+#### Medido com o Chrome de verdade
+
+O mecanismo foi medido antes de o rodapé ser escrito, numa VM com o Chrome 151 real
+(151.0.7922.71), o Scroll pinado e a extensão instalada pela política, offline, num tile de
+512×768:
+
+- **`fullscreen enable application` esconde abas e barra.** O `innerHeight` da página foi 768,
+  igual à janela, contra 681 sem ele: 87 px de barras. O `disable` devolve os 681, e o
+  `windows.get().state` passa de `fullscreen` a `normal` e volta. A alternativa desenhada para o
+  caso de falha (a extensão pedindo `windows.update({state:'fullscreen'})`) não foi preciso.
+- **O Chrome mostra o aviso "para sair da tela cheia, segure Esc"** por alguns segundos depois de
+  cada `enable`.
+- **O F11 é invisível ao IPC.** F11, ou segurar Esc, dentro do quiosque faz o próprio Chrome sair:
+  as barras voltam (681), o estado vira `normal` e a árvore do compositor não muda
+  (`fullscreen_mode` continua 0). É por isso que o rodapé segue o estado que a extensão relata. F11
+  numa janela comum pede tela cheia, e o compositor faz a de espaço de trabalho (`fullscreen_mode`
+  1, a saída inteira).
+- **Não é preciso inibidor de atalhos.** Um bind do compositor disparou com a janela comum, na tela
+  cheia de aplicativo e depois do F11: o Chrome não pede o inibidor, e nenhuma regra nova de janela
+  foi escrita.
+- **A instalação forçada leva uns 3 s, offline, por `file://`** (3,3 s, 2,7 s, 3,3 s e 2,7 s em
+  quatro partidas da VM).
+- **A página abre pela linha de comando** (E4): `--new-window chrome-extension://<id>/kiosk.html#…`
+  abre com o Chrome aberto (0,54 s até o título) e com ele fechado.
+- **O Chrome chama o host com a origem** (E5): `["…/bin/ronoctua-browser",
+  "chrome-extension://<id>/"]`, e o host da fila do mesmo jeito. O ambiente tem `XDG_RUNTIME_DIR` e
+  `WAYLAND_DISPLAY`, e não tem `RONOCTUA_INSTANCE`.
+- **O título chega antes da navegação** (E9): o IPC viu `<nonce> - Google Chrome` antes de a página
+  sair.
+- **O host não morre parado**: depois de 150 s sem nada, ele continua vivo e responde.
+- **Com o host de verdade e um rodapé de mentira**: o par nasceu; o estado chegou com o popup de uma
+  extensão; o host recusou `javascript:` (`refused-url`) sem repassar; um rodapé reiniciado foi
+  achado e recebeu o estado em 0,02 s; fechar o quiosque encerrou o host; sem rodapé, a página foi
+  ao endereço em 1,2 s.
+- **O zoom do Chrome é por site**: duas abas do mesmo host foram juntas para 110%.
+
+O `tests/kiosk-vm.nix` repete como asserção o que importa: a instalação pela política, um download
+chegando à fila, o par, as barras (pelo menos 60 px entre um estado e o outro), abas e zoom, o
+rodapé reiniciado e o host saindo com o quiosque. O Chrome entra nele pelo nome, o único não livre
+de um teste, pelo precedente do `uade`; ele fica no `most`. Lá a altura da página se compara com o
+CONTEÚDO da janela (`window_rect`), e não com o `rect`: na sessão de verdade o contêiner leva a
+borda de 2 px (`default_border pixel 2`), que o Chrome não preenche. Com as barras escondidas o
+`innerHeight` foi 695, igual ao conteúdo; com elas, 608 (os mesmos 87 px da medição).
+
+#### Os quatro defeitos que o quiosque expôs
+
+- **O host da fila morria no Chrome de verdade.** O Chrome passa a origem `chrome-extension://<id>/`
+  como primeiro argumento, e o manifesto não pode acrescentar uma palavra nossa; o
+  `ronoctua-transfers` só aceitava `browser`. O `extension-vm` escondia isso passando `browser` à
+  mão. Agora os dois hosts aceitam a origem (`ronoctua_browser::native::caller`), e o
+  `extension-vm` os chama como o Chrome chama.
+- **A extensão nunca atualizava.** A versão estava congelada em `1.0.0`, e o Chrome só troca uma
+  extensão forçada por uma versão MAIOR: o mesmo número com arquivos novos é ignorado, calado, para
+  sempre. Agora a versão é `<base>.<n>`. O `base` fica em `nix/extension-version.nix`; o `n` é um
+  contador da máquina, guardado ao lado da chave (o caminho no store empacotado por último e o
+  contador), que sobe cada vez que a unidade empacota outra build. Toda mudança em `extension/`, nos
+  textos ou nas cores dela chega como versão maior, sem passo humano. Um hash das fontes não tem
+  ordem, e a hora do commit anda com commits que nem tocaram a extensão.
+- **A instalação forçada nunca podia ter funcionado.** `/var/lib/ronoctua-browser` era `0700 root`,
+  e o Chrome roda como a pessoa: ele não entrava no diretório do `update.xml` e do `.crx`, e
+  esperava para sempre sem log (na primeira partida da VM de medição, nada foi instalado em 120 s).
+  Agora o diretório é `0755`, e a chave se protege pelo próprio modo (`0600`).
+- **O Chrome que o rodapé abria procurava um X.** O `--ozone-platform-hint=auto` escolhe o Wayland
+  pelo `XDG_SESSION_TYPE`, e não pelo `WAYLAND_DISPLAY`. O gerenciador de usuário recebe o
+  `XDG_CURRENT_DESKTOP` do `sessionVariables`, mas não o `XDG_SESSION_TYPE` ao lado dele, e o
+  compositor não o define; a linha `import-environment` do config dizia "Environment variable
+  $XDG_SESSION_TYPE not set, ignoring" e não importava nada. Todo programa aberto pelo rodapé (o
+  quiosque, os web apps, o Chrome do lançador) herdava a sessão sem tipo: o Chrome escolhia o X11,
+  não achava `DISPLAY` (que ninguém importa) e saía (`Missing X server or $DISPLAY`). A VM de
+  medição passava o tipo à mão e não viu. Agora a unidade do compositor tem
+  `XDG_SESSION_TYPE=wayland` no ambiente, e a linha do config o leva ao gerenciador; o
+  `kiosk-vm` confere que ele chega ao gerenciador e ao rodapé.
 
 
 ### A barra lateral — de onde se parte, e o que ela custou descobrir
@@ -8978,9 +9334,9 @@ da própria largura: as janelas encolhem, nada é coberto. A zona de uma superf�
 que as superfícies criadas ANTES dela deixaram — é assim que o compositor arranja a camada —, então
 a coluna termina onde a área do rodapé começa e nunca estreita a modeline, o minibuffer nem a faixa.
 A ordem é a armadilha: um rodapé que sobe DEPOIS da coluna seria arranjado depois dela e
-estreitado; por isso ele, na partida, derruba e levanta de novo uma coluna que já esteja de pé. Uma
-só por vez (`column.pid`): abrir outra fecha a atual, que é como um segundo inquilino vai tomar a
-borda quando existir.
+estreitado; por isso ele, na partida, derruba e levanta de novo uma coluna que já esteja de pé,
+no espaço e no tamanho que ela tinha. Uma por espaço de trabalho, e a base é de todas (veja "As
+colunas").
 
 **Remoto: por que a tailnet e por que um código.** A tailnet já é cifrada e já autentica máquina a
 máquina; o daemon escuta só nos endereços dela e recusa conexão fora das faixas dela mesmo assim.
@@ -9041,10 +9397,12 @@ que é o que sai. `Playlists` é para quem guarda listas SALVAS, e este player t
 pede a unidade ao systemd quando ninguém responde e o daemon não mora ao lado do shell.
 
 **A marca da modeline e a tecla alternam a coluna, e "está de pé?" é uma pergunta sobre a COLUNA,
-não sobre um número.** O `column.pid` sobrevive a uma coluna morta sem `Drop` (morta a sinal, ou
-levada com a sessão), e o número dele volta a outro processo; perguntar só "o PID vive?" fazia o
-interruptor mandar `TERM` a quem o herdou, responder "fechei" e não abrir nada. Por isso a linha de
-comando é lida: este programa, com a palavra `column`.
+não sobre um número.** O `column-player.pid` sobrevive a uma coluna morta sem `Drop` (morta a
+sinal, ou levada com a sessão), e o número dele volta a outro processo; perguntar só "o PID vive?"
+fazia o interruptor mandar `TERM` a quem o herdou, responder "fechei" e não abrir nada. Por isso a
+linha de comando é lida: este programa, aberto como a coluna do player (`column`, `column player`,
+com o que mais a abertura disser). A marca fecha a coluna quando ela está NESTE espaço, e a traz
+para cá quando está em outro.
 
 **A coluna pede ao compositor que avise as janelas, porque o commit que a mapeia não avisa.** A
 zona exclusiva só conta com a superfície mapeada, e o commit do primeiro quadro re-arranja as janelas
@@ -9078,7 +9436,7 @@ que uma porta tinha e a outra não foi fechado nos dois sentidos:
   onde foi desenhada.
 - **Parar é uma tecla da vista** (`s`), a mesma do botão da janela.
 - **O rodapé mostra a imagem.** A região é larga e baixa, então a imagem vai à direita das linhas,
-  na largura da coluna (`space.column.width`), com a última célula para a barra da região
+  na largura da coluna média (`space.column.medium`), com a última célula para a barra da região
   (`player::footer_panel`, função só da largura: as linhas são dispostas no que sobra, e perguntar a
   altura da região de volta seria o rodapé perguntando a si mesmo). A thread de quadros é a mesma da
   janela (`player_picture`), e só existe enquanto a vista mostra uma imagem. `o` é o palco do
@@ -9099,15 +9457,96 @@ fecho de 1 487 MiB e os decodificadores mais 670 — 1 682 MiB juntos, quase tud
 player segue a mídia na tabela do perfil, e uma linha o liga. Sem ele, as teclas dizem que ele não
 está instalado — "não responde, sobe sozinho" seria uma frase falsa ali.
 
-**A coluna da direita é um slot, e o inquilino é uma variante.** O invariante 14 fala da BORDA, não
-do player: no máximo uma coluna, uma de cada vez. Escrita como o arquivo do player, a regra valeria
-só para ele, e a próxima coisa que quisesse a borda traria um segundo arquivo — duas colunas lado a
-lado. O slot é declarado uma vez: quem o toma encerra quem o tinha.
+**As colunas são um slot por espaço de trabalho, e o inquilino é uma variante**
+(`right_column::Tenant`): quem toma um espaço encerra quem estava nele. O invariante 14 fala da
+BORDA, não do player; escrita como o arquivo do player, a regra valeria só para ele, e a próxima
+coisa que quisesse a borda traria um segundo arquivo — duas colunas lado a lado.
+
+**Na barra, o player é um controle remoto:** anterior, tocar/pausar e próximo, um por linha, uma
+linha de ar e o mudo. Cada um é pego na linha inteira e acende sob o ponteiro, a roda é o volume, e
+nenhuma frase os explica (decisão do dono). O resto da vista — linhas, mensagem, palco — fica
+guardado e volta quando a coluna alarga. Nos outros três tamanhos o player adapta: o transporte
+desenha os botões que cabem inteiros, e a imagem toma a fatia do tamanho (`Size::picture_lines`).
 
 **O que o libgme lê precisa do demuxer nomeado.** O ffmpeg reconhece VGM, NSF, SPC e os irmãos com
 uma nota de sondagem de 25, e o libmpv exige 26; sem nome, todos terminavam em "formato não
 reconhecido". Baixar o limiar para todo arquivo deixaria um palpite fraco ganhar noutro lugar, então
 o nome vai só para essas extensões, nas opções do `loadfile`.
+
+### As colunas — quatro tamanhos, uma linha de controle e um espaço de trabalho cada
+
+**Por que uma base.** Uma coluna é mais que uma janela ancorada à direita: tem tamanho, uma linha
+que o muda, uma linha que diz que ela tem o teclado, o espaço de trabalho a que pertence, o slot e
+a zona que as janelas precisam ouvir. Escrito por inquilino, o próximo esqueceria um desses. Por
+isso `column::Column<T>` é o `door::Content` de toda coluna, como a `Door` é de toda janela, e o
+inquilino (`column::Tenant`) só desenha na `Area` que recebe. Ele tem os mesmos ganchos da porta,
+cada um com padrão, mais `parked`/`shown` (parar e retomar o trabalho pesado) e
+`acts_without_rows`. O cabeçalho dele desce para a linha 1 (`Content::header_line`,
+`chrome::Hinted::at`).
+
+**Quatro tamanhos, em células.** Em `space.column`, contadas no conteúdo, mais a margem de cada
+lado:
+
+| tamanho | células | por quê |
+|---|---|---|
+| grande | 72 | meia média a mais: a lista de arquivos do player abre uma segunda coluna, e uma imagem 16:9 chega a ~17 linhas |
+| média | 48 | a de sempre; o player abre nela |
+| pequena | 32 | a mais estreita em que o transporte de nove botões cabe inteiro |
+| barra | 3 | 5 com as margens: ímpar, para um glifo ficar no meio, e perto do dobro da espessura da modeline |
+
+Nenhum passa de `maxPct` (45%) da largura lógica da tela (da sala, enquanto o redimensionador corta
+aquela tela: `column::room_of`), e nenhum fica abaixo da barra (`column::width_px`). Um tamanho que
+o teto deixa igual ao de baixo é desenhado inerte e diz `column-no-room`, e `C-<left>`/`C-<right>`
+passam por cima dele. O tamanho não é preferência: toda coluna abre no padrão do inquilino.
+`--size` existe para o rodapé levantar de novo uma coluna como ela estava
+(`right_column::raise_again`).
+
+**Adaptar, ou conteúdo próprio.** `Tenant::shape(size)` diz como o inquilino preenche um tamanho.
+Grande, média e pequena adaptam por padrão (`Shape::Adapted`: as linhas refluem); a barra só existe
+para quem tem conteúdo feito para ela (`Shape::Own`). Sem isso, o glifo da barra é inerte e diz
+`column-bar-not-offered`.
+
+**A linha de controle.** A linha 0 é da coluna em todo tamanho: os quatro glifos contados da borda
+direita (`chrome::from_the_edge`, e o ponteiro os pega por `chrome::at_the_edge`), do mais largo ao
+mais estreito, o atual em `text.primary` — nunca no acento, que na coluna é da linha de foco. Sob o
+ponteiro, a frase do glifo ocupa o espaço à esquerda dele; em repouso a linha é muda. Na barra há um
+glifo só, que volta ao tamanho de antes, em vez de girar pelos quatro, e ele não se explica: a barra
+é um controle remoto de glifos conhecidos (decisão do dono). As teclas são lidas ANTES do
+inquilino, porque o player lê tecla nomeada sem modificador e tomaria `C-<left>` pelo `<left>`
+dele. O desenho é uma função pura (`decoration`), e o ponteiro lê o que ela colocou (`glyph_at`).
+
+**A linha de foco.** Enquanto algum teclado está na coluna, uma linha de 2 px
+(`space.column.focusLine`, o peso da borda de foco do compositor) no acento, de borda a borda, sobre
+tudo (`chrome::focus_line`). Ela fica na entrelinha acima da linha 0, que nada tinge, então não move
+span nem marca — o teste compara os dois quadros. Antes, nada ficava azul quando a coluna tinha o
+teclado.
+
+**Um espaço de trabalho por coluna.** A coluna pertence ao espaço em que foi aberta, pelo NOME (um
+espaço vazio some, e `TAB 3` o recria com o mesmo nome), e aparece na tela que mostra esse espaço:
+cada tela mostra a coluna do seu. O contrato ganhou `Workspace { name, visible, output }` e
+`Compositor::workspaces()`. A decisão é de duas funções puras, `wanted` (que tela o espaço quer) e
+`step` (ficar, mostrar, mudar de tela ou estacionar), e um lugar só muda a superfície,
+`Column::place`. Estacionar destrói o papel da superfície e põe no lugar uma superfície sem papel
+(`Shell::Parked`): o processo, a fila e o estado ficam. Mostrar pede a tela pelo nome
+(`Door::output_named`), e uma tela ainda não descrita espera o `outputs_changed`. Uma tela que some
+fecha a superfície: a coluna estaciona (`Content::layer_closed` devolve `Closed::Park`), e a
+próxima lista de espaços diz onde ela volta. A coluna não segue mais o foco de tela em tela (o
+`follow_the_focus` do player saiu): quem decide a tela é o espaço.
+
+**O custo, dito.** Trocar entre um espaço com coluna e outro sem re-arranja as janelas por um
+quadro: a zona sai e volta com a superfície. E um espaço que só tem a coluna estacionada some dos
+números da modeline; o player continua alcançável pela marca `player`.
+
+**O slot.** Um arquivo por inquilino, `column-<inquilino>.pid`, com `<pid> <tamanho> <espaço…>` —
+o espaço por último, para um nome com espaços sobreviver —, escrito por rascunho e `rename`, cada
+processo só o seu. `take` encerra o mesmo inquilino onde ele estiver e quem ocupa o espaço de
+chegada (a decisão pura é `to_end`); `toggle` fecha a coluna se ela está AQUI e, se está em outro
+lugar, a traz. A guarda contra pid reciclado lê a linha de comando pelo mesmo `Opening::parse` que
+abre a coluna. O `column.pid` antigo ainda é lido como o do player.
+
+**Uma pergunta na barra alarga a coluna.** Pergunta é digitada onde é desenhada, e a barra não
+desenha cabeçalho: um `Ui::ask` com a coluna na barra a devolve ao tamanho de antes. O mesmo vale
+para uma tecla que age sobre uma linha que ninguém vê (`Tenant::acts_without_rows`).
 
 ### Programas — `LEADER i`, os programas da PESSOA, e por que não há daemon novo
 
@@ -9239,6 +9678,10 @@ Scroll pede decoração de servidor e sai sem omnibox, abas, barra de título ne
 conteúdo e a borda de 2 px do compositor, que o dono decidiu manter (é o sinal de foco). O
 `--enable-features=WaylandWindowDecorations` saiu do `browser.nix`: ele só existe no Electron, e o
 último `--enable-features` da linha vence os outros.
+
+O quiosque do `LEADER m b` não contradiz isto: ele não passa `--kiosk` nem nenhuma das outras três
+bandeiras recusadas. É uma janela comum do Chrome, cujas barras o compositor esconde por um feito
+(veja "O Chrome quiosque").
 
 O `.desktop` (`~/.local/share/applications/ronoctua-web-<slug>.desktop`) é a ÚNICA fonte da
 verdade — URL, perfil e origem do ícone em `X-Ronoctua-Web-*` —, e o `Exec` é
@@ -9406,6 +9849,11 @@ Duas adições ao grafo original, cada uma por um problema real:
   (lê, busca, detalha), a fila (roda a CLI como filho; depende da biblioteca sem features) e a
   atualização (roda a CLI de uma unidade). As features `net` (TLS pelo `ronoctua-http`) e `draw`
   (`image` com ICO e `resvg`) nascem desligadas; o binário exige as duas.
+- **`ronoctua-browser`.** O Chrome em execução, pequeno de propósito: um leitor de JSON e um socket
+  (`serde`, `rustix`, `ronoctua-xdg`), sem renderizador e sem TLS. Tem dois chamadores: o rodapé
+  (o servidor do socket, a linha de comando do quiosque, as regras de endereço e o vocabulário da
+  ponte) e a fila (o enquadramento do native messaging, que antes era uma cópia dela). O binário
+  `ronoctua-browser` é o host que o Chrome sobe, extraído em `rust.browser`.
 
 ---
 

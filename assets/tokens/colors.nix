@@ -1004,7 +1004,7 @@
   # floating toast (forbidden) and the modeline itself (which would push the
   # buffer's name off the one line that says where you are).
   # -------------------------------------------------------------------
-  # THE GLANCE — `LEADER d`, one line above the modeline
+  # THE GLANCE — `LEADER g`, one line above the modeline
   # -------------------------------------------------------------------
   #
   # It draws several PLACES side by side on one line, and where one ends and

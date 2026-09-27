@@ -144,6 +144,17 @@
   full-application = {
     text = "fullscreen application";
   };
+  # THE SAME, said as ON and OFF, for the Chrome kiosk: the compositor tells
+  # the window it is fullscreen (Chrome hides its tab strip and toolbar) while
+  # its tile keeps its size. No reply and no event carries this state, so the
+  # footer keeps its own copy and says which one it wants — never the toggle
+  # (the `overview-all-on/off` reasoning).
+  full-application-on = {
+    text = "fullscreen enable application";
+  };
+  full-application-off = {
+    text = "fullscreen disable application";
+  };
   full-global = {
     text = "fullscreen global";
   };

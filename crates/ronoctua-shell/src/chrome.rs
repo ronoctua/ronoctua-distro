@@ -315,6 +315,37 @@ pub fn divider_lit(x_px: f32, from_px: f32, bottom_px: f32) -> ronoctua_render::
     }
 }
 
+/// THE COLUMN HAS THE KEYBOARD: a line in the accent across its top, edge to
+/// edge (`crate::column`).
+///
+/// # Why a line, and why there
+///
+/// Because nothing else on the screen says it. The modeline takes the accent
+/// only while the FOOTER holds the keyboard, and a column is not the footer:
+/// a click in it gave it the keys and nothing turned blue anywhere, which is
+/// the one hole in "exactly one thing is in the accent". The compositor's own
+/// focus border is two pixels (`default_border pixel 2`), so this is two too
+/// (`space.column.focusLine`), and a column that has the keys reads the way a
+/// window that has them does.
+///
+/// # Why it moves nothing
+///
+/// It lies in the LEADING above line 0, which nothing in a column inks: a line
+/// is 1.45 em (26.1 px at 18 px) and the font's box 1.25 em, so the box starts
+/// ~1.8 px under the top and the ink of a glyph lower still. So it is drawn OVER
+/// everything — a stage picture included — without taking a pixel of room from
+/// anything, and turning it on or off changes no span and no mark.
+#[must_use]
+pub fn focus_line(width_px: f32) -> ronoctua_render::quad::Quad {
+    ronoctua_render::quad::Quad {
+        x: 0.0,
+        y: 0.0,
+        width: width_px,
+        height: f32::from(tokens::space::COLUMN_FOCUSLINE),
+        color: tokens::color::STATE_ACCENT,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // THE HINT LINE — one sentence, two registers, one decision
 // ---------------------------------------------------------------------------
@@ -1552,6 +1583,16 @@ pub struct Hinted {
     /// view sees it — and this line belongs to every view, which is why its
     /// keys live on it. See `Hinted::took_a_key`.
     right_ctrl: bool,
+    /// WHICH LINE the header is on — `0` in every window, and `1` in a
+    /// column, whose line 0 is the column's own control line
+    /// (`crate::column`).
+    ///
+    /// Inside the header and not an offset the column adds around it:
+    /// the door asks `light_at`, `press_under` and `drawer_track` in the
+    /// surface's own coordinates, so a wrapper translating them would have
+    /// to be every one of those calls, and the one forgotten would take a
+    /// click a line away from where the header was drawn.
+    top: u16,
 }
 
 impl Default for Hinted {
@@ -1573,11 +1614,42 @@ impl Default for Hinted {
             lit: None,
             chevron_lit: false,
             right_ctrl: false,
+            top: 0,
         }
     }
 }
 
 impl Hinted {
+    /// A header drawn on line `top` — see [`Hinted::top`].
+    #[must_use]
+    pub fn at(top: u16) -> Self {
+        Self {
+            top,
+            ..Self::default()
+        }
+    }
+
+    /// The line the header is on.
+    #[must_use]
+    pub const fn top(&self) -> u16 {
+        self.top
+    }
+
+    /// Takes the header OFF the surface: no shortcut, no chevron and no
+    /// sentence is left where the pointer could find it, and the drawer
+    /// shuts. For a door that stops drawing a header — the column in its bar
+    /// — whose last frame's marks would otherwise still answer a click on
+    /// what is no longer there.
+    pub fn withdraw(&mut self) {
+        self.placed.clear();
+        self.control = None;
+        self.said = None;
+        self.lit = None;
+        self.chevron_lit = false;
+        self.dragging = false;
+        let _ = self.fold.close();
+    }
+
     /// Swaps in the per-pointer half of this header: whether a pointer is
     /// dragging the drawer's bar.
     ///
@@ -1644,11 +1716,13 @@ impl Hinted {
         // in, and the air beside it (`on_the_control`'s own rule).
         let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
         let cell_px = f64::from(cell_width());
+        // ON THE HEADER'S OWN LINE, which is not line 0 in a column.
+        let row = line_height * f64::from(self.top);
         let chevron = at.is_some_and(|(x, y)| {
             line_height > 0.0
                 && cell_px > 0.0
-                && y >= 0.0
-                && y < line_height
+                && y >= row
+                && y < row + line_height
                 && self.control.is_some_and(|c| {
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let cell = (x / cell_px) as u16;
@@ -1771,7 +1845,7 @@ impl Hinted {
             // it.
             let (showing, scroll) = crate::fold::opened(&line, room, self.fold);
             for (n, row) in showing.into_iter().enumerate() {
-                let at = u16::try_from(n).unwrap_or(0);
+                let at = self.top + u16::try_from(n).unwrap_or(0);
                 spans.extend(hint_spans(
                     &row,
                     ronoctua_render::Size::Px(size),
@@ -1792,11 +1866,11 @@ impl Hinted {
                 &line,
                 ronoctua_render::Size::Px(size),
                 margin,
-                0,
+                self.top,
                 room,
             ));
             if hinting {
-                marks.extend(hint_marks(&line, margin, 0, room));
+                marks.extend(hint_marks(&line, margin, self.top, room));
             }
         }
         self.placed = marks;
@@ -1814,7 +1888,7 @@ impl Hinted {
                 size: ronoctua_render::Size::OnTheCell(crate::surface::chrome_size_of(chevron)),
                 text: chevron.to_string(),
                 column: at,
-                line: 0,
+                line: self.top,
                 // AND UNDER THE POINTER, LIT — the same small step.
                 color: if self.chevron_lit {
                     tokens::color::TEXT_SUBTLE_LIT_KEY
@@ -1838,7 +1912,7 @@ impl Hinted {
                 size: ronoctua_render::Size::Px(size),
                 text: ronoctua_render::layout::elide_end(said, columns),
                 column: margin,
-                line: 1 + self.folded_rows(),
+                line: self.top + 1 + self.folded_rows(),
                 color: Register::Explain.color(),
                 edge: false,
                 foot: false,
@@ -1856,7 +1930,7 @@ impl Hinted {
         if !self.fold.open || !self.scroll.cut() {
             return None;
         }
-        let top = f.y_of(0);
+        let top = f.y_of(self.top);
         let bottom =
             top + f.line() * f32::from(u16::try_from(self.scroll.lines).unwrap_or(u16::MAX));
         let (x, y, width, height) = self.scroll.bar(f.width, top, bottom, f.cell(), f.line())?;
@@ -1900,7 +1974,7 @@ impl Hinted {
             return false;
         };
         #[allow(clippy::cast_possible_truncation)]
-        if f.line_at(y as f32) != Some(0) {
+        if f.line_at(y as f32) != Some(self.top) {
             return false;
         }
         #[allow(clippy::cast_possible_truncation)]
@@ -1917,7 +1991,7 @@ impl Hinted {
         let Some(line) = f.line_at(y as f32) else {
             return false;
         };
-        self.fold.open && line <= self.folded_rows()
+        self.fold.open && line >= self.top && line <= self.top + self.folded_rows()
     }
 
     /// The drawer's bar as a rectangle to PRESS.
@@ -1929,7 +2003,7 @@ impl Hinted {
         if !self.fold.open || !self.scroll.cut() {
             return None;
         }
-        Some((f.y_of(0), f.line() * f32::from(self.folded_rows())))
+        Some((f.y_of(self.top), f.line() * f32::from(self.folded_rows())))
     }
 
     /// A press on the line's own controls: the chevron, or its bar.
@@ -2028,6 +2102,12 @@ impl Hinted {
             }
             _ => false,
         }
+    }
+
+    /// The right `Ctrl` went down or up while the header did not have its
+    /// keys — followed all the same, and taken by nobody (`Ui::header_took`).
+    pub const fn right_ctrl_is(&mut self, down: bool) {
+        self.right_ctrl = down;
     }
 
     /// The pointer left, or the keyboard did: nothing is held any more.
@@ -4166,5 +4246,88 @@ mod tests {
         let again = with_the_way_back(led.clone(), &t);
         assert_eq!(again, led, "Esc was taught twice");
         assert_eq!(with_the_way_back(Vec::new(), &t).len(), 2);
+    }
+
+    /// FAILS IF: a header told to sit on line 1 — a column's, under the
+    /// column's own control line — is drawn there and still answers on line
+    /// 0: its shortcuts, its chevron and its sentence all have to be taken
+    /// where they were drawn.
+    #[test]
+    fn a_header_on_line_one_is_drawn_and_taken_on_line_one() {
+        use super::{Act, Hinted, OF_THE_WAY_BACK};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let esc = ronoctua_keymap::Key::parse("ESC").expect("parses");
+        let line = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let cell = f64::from(cell_width());
+        let columns = 40;
+        let mut h = Hinted::at(1);
+        let spans = h.head(&hint_of(OF_THE_WAY_BACK, &t), true, 1, columns, &t);
+        assert!(!spans.is_empty());
+        assert!(
+            spans.iter().all(|s| s.line == 1),
+            "a run of the header left line 1: {:?}",
+            spans.iter().map(|s| s.line).collect::<Vec<_>>()
+        );
+        // THE SHORTCUT, on line 1 and not on line 0.
+        let x = cell * 1.5;
+        assert_eq!(h.press_under(x, line * 1.5), Some(Act::Key(esc)));
+        assert_eq!(h.press_under(x, line * 0.5), None);
+        // THE CHEVRON, drawn on the last content cell of line 1.
+        let f = Frame::of((cell * f64::from(columns + 2)) as f32, 600.0, 0);
+        let chevron = cell * f64::from(columns) + cell / 2.0;
+        assert!(h.on_the_control(f, chevron, line * 1.5));
+        assert!(!h.on_the_control(f, chevron, line * 0.5));
+        assert!(
+            h.light_at(Some((chevron, line * 1.5))),
+            "the chevron did not light"
+        );
+        assert!(
+            h.light_at(Some((chevron, line * 0.5))),
+            "it stayed lit off its line"
+        );
+        // AND THE LIST STARTS UNDER IT: the header is still one line.
+        assert_eq!(h.top(), 1);
+        assert_eq!(Hinted::default().top(), 0, "every window moved");
+    }
+
+    /// FAILS IF: a withdrawn header — the column in its bar, where no header
+    /// is drawn — still answers a click on the marks of its last frame.
+    #[test]
+    fn a_withdrawn_header_answers_nothing() {
+        use super::{Hinted, OF_THE_WAY_BACK};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let line = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let cell = f64::from(cell_width());
+        let mut h = Hinted::at(1);
+        let _ = h.head(&hint_of(OF_THE_WAY_BACK, &t), true, 1, 40, &t);
+        assert!(h.press_under(cell * 1.5, line * 1.5).is_some());
+        h.withdraw();
+        assert_eq!(h.press_under(cell * 1.5, line * 1.5), None);
+        let f = Frame::of((cell * 42.0) as f32, 600.0, 0);
+        assert!(
+            !h.on_the_control(f, cell * 40.5, line * 1.5),
+            "the chevron is still there"
+        );
+        assert_eq!(h.rows(), 0);
+    }
+
+    /// FAILS IF: the focus line stops being the accent, stops running edge
+    /// to edge, or grows past the leading above line 0 — where it would
+    /// cover the ink of the line under it.
+    #[test]
+    fn the_focus_line_is_the_accent_across_the_top() {
+        let q = super::focus_line(333.0);
+        assert_eq!(q.color, tokens::color::STATE_ACCENT);
+        assert_eq!((q.x, q.y, q.width), (0.0, 0.0, 333.0));
+        assert_eq!(q.height, f32::from(tokens::space::COLUMN_FOCUSLINE));
+        // THE INK OF LINE 0 starts under the font's box, which starts half
+        // the difference between the line and the box under the top.
+        let size = tokens::text::size();
+        let leading = (tokens::metrics::line_height(size) - size * 1.25) / 2.0;
+        assert!(
+            q.height < leading * 2.0,
+            "{} over a leading of {leading}",
+            q.height
+        );
     }
 }

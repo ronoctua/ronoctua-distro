@@ -167,8 +167,18 @@ impl<C: Content> WindowHandler for Door<C> {
 }
 
 impl<C: Content> LayerShellHandler for Door<C> {
-    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
-        self.ui.quit = true;
+    /// A screen went away with the surface on it. The door closes with it —
+    /// or, a column, stays off the screen until its workspace is shown again
+    /// (`Content::layer_closed`). Only about the surface the door is ON: one
+    /// it has already moved away from says nothing about this one.
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        if layer.wl_surface() != self.shell.wl_surface() {
+            return;
+        }
+        match self.content.layer_closed(&mut self.ui) {
+            super::Closed::Quit => self.ui.quit = true,
+            super::Closed::Park => self.park(),
+        }
     }
 
     fn configure(

@@ -569,7 +569,7 @@ pub struct Panel {
 /// The window has a band above its rows for the picture; the footer's region
 /// is the other shape — the whole screen across, a few lines down — so the
 /// picture goes at the right end of it, beside the rows, as wide as the
-/// column the player sits in (`space.column.width`), and the region's own bar
+/// column the player sits in (`space.column.medium`), and the region's own bar
 /// keeps its last cell. Only the picture (`o`) takes the whole region, the
 /// window's `Only` in this door. A region too narrow to spare the column —
 /// the rows would keep less than half — shows the rows whole and no picture.
@@ -587,7 +587,7 @@ pub fn footer_panel(columns: u16, only: bool) -> Option<Panel> {
             cells: usable,
         });
     }
-    let cells = tokens::space::COLUMN_WIDTH;
+    let cells = tokens::space::COLUMN_MEDIUM;
     (usable >= cells.saturating_mul(2)).then_some(Panel {
         from: usable - cells,
         cells,
@@ -3213,14 +3213,14 @@ mod tests {
     fn the_footers_picture_is_beside_the_rows_or_the_whole_region() {
         let wide = 200;
         let beside = footer_panel(wide, false).expect("room for the picture");
-        assert_eq!(beside.cells, tokens::space::COLUMN_WIDTH);
+        assert_eq!(beside.cells, tokens::space::COLUMN_MEDIUM);
         assert_eq!(
             beside.from + beside.cells,
             wide - tokens::space::FILES_EDGERIGHT,
             "the bar's cell is taken"
         );
         assert!(beside.from >= beside.cells, "the rows keep less than half");
-        let narrow = tokens::space::COLUMN_WIDTH * 2 - 1;
+        let narrow = tokens::space::COLUMN_MEDIUM * 2 - 1;
         assert_eq!(footer_panel(narrow, false), None);
         let only = footer_panel(wide, true).expect("the whole region");
         assert_eq!(

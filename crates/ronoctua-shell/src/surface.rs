@@ -425,6 +425,10 @@ struct Footer {
     /// The sequences are two or three keys deep, so what would be a tree is a
     /// filter over a list.
     buffer_pending: Vec<String>,
+    /// The kiosk the `,` group was built for, when it is a kiosk's: then the
+    /// group is THIS footer's (`kiosk_view::local_bindings`) and a sequence
+    /// runs here, by `run_with`, instead of in a buffer's process.
+    local_runs_here: Option<u64>,
 
     // --- notifications (section 4.2) ---
     /// One at a time, the rest waiting. It lives in the daemon, like the
@@ -762,6 +766,15 @@ struct Footer {
     capture_sender: Option<calloop::channel::Sender<Result<std::path::PathBuf, String>>>,
     /// Is the capture overlay up?
     capturing: bool,
+    /// THE SCREEN RESIZER (`LEADER d r`), while it is on: the cut its file
+    /// says — the room everything is laid out in (`crate::resizer`).
+    resizer: Option<crate::resizer::State>,
+    /// The watch on the resizer's file, which is the broadcast: it is how a
+    /// curtain's `Esc`, a drag and a footer started again all hear the cut.
+    _resizer_watch: Option<ronoctua_files::notice::Notice>,
+    /// Where the thread that waits for the resizer's keeper says how it
+    /// ended. `None` outside the event loop (tests).
+    resizer_sender: Option<calloop::channel::Sender<crate::resizer::Heard>>,
 
     /// Says "the radio has finished a scan" — see [`Self::watch_scans`].
     ///
@@ -884,7 +897,7 @@ struct Footer {
     locale_asking: Option<crate::locale::Asking>,
     /// The regions' view, when it is open. `LEADER s g g`.
     geo: Option<crate::geo::View>,
-    /// The glance, and when it goes away. `LEADER d`.
+    /// The glance, and when it goes away. `LEADER g`.
     ///
     /// An `Instant` and MONOTONIC, which is the rule this project has paid
     /// for: the display view's countdown once froze at fifteen seconds for
@@ -932,6 +945,36 @@ struct Footer {
     /// The window menu, when open — the modeline's app name, clicked, or
     /// `LEADER w o`.
     window_menu: Option<crate::window_menu::View>,
+    /// THE CHROME KIOSKS (`crate::kiosk`): the pairs, the launches under way
+    /// and what each Chrome said last. Kept whatever is on screen: the
+    /// modeline draws from it.
+    kiosk: crate::kiosk::Kiosks,
+    /// The bridge's socket, whose SERVER this footer is — `None` when it
+    /// could not be bound, and then every kiosk draws itself offline.
+    kiosk_server: Option<ronoctua_browser::serve::Server>,
+    /// The kiosk's view (`crate::kiosk_view`), when open.
+    kiosk_view: Option<crate::kiosk_view::View>,
+    /// Whether the clock that lets go of an unanswered launch is up — one at
+    /// a time, and only while a launch is waiting.
+    kiosk_timer: bool,
+    /// Where a kiosk's launch hands back its verdict, with its nonce: a
+    /// launch that failed is one nothing will answer (`crate::kiosk`).
+    /// `None` outside the event loop.
+    kiosk_launch_sender: Option<calloop::channel::Sender<(String, crate::foreign::Launch)>>,
+    /// Whether the kiosk's address line was up when the height was last
+    /// applied — what `kiosk_errands` compares with, because every caller
+    /// has already changed the state by the time it runs.
+    address_row_applied: bool,
+    /// The modeline's switches (`modeline.json`, `crate::adapt`).
+    modeline: crate::adapt::Prefs,
+    /// The watch on `modeline.json`: the file is the broadcast.
+    _modeline_watch: Option<ronoctua_files::notice::Notice>,
+    /// What each of an adapter's segments was about, as the LAST FRAME drew
+    /// them — beside `modeline_placed`, and for the same reason: a click, a
+    /// wheel, a drag and a hover answer what was DRAWN.
+    adapter_drawn: Vec<(&'static str, crate::adapt::Target)>,
+    /// What the address line says while the pointer rests on it.
+    address_hint: Option<String>,
     /// The screen a fullscreen window covers, while one does — see [`Edge`].
     edge: Option<Edge>,
     /// What is selected, as far as this footer knows — see `crate::selection`.
@@ -1348,6 +1391,9 @@ struct PerSeat {
     row_under_pointer: Option<usize>,
     /// Which segment the pointer is over.
     segment_under_pointer: Option<&'static str>,
+    /// A segment that can be carried (a kiosk's tab), pressed and not yet
+    /// let go: the release decides whether it was a click or a drop.
+    segment_held: Option<&'static str>,
     /// Where the pointer was when it last moved a shape.
     ///
     /// A gesture of the door's own and NOT a fourth `Axis`: `drag_to` inverts
@@ -1469,6 +1515,9 @@ enum ViewState {
     /// three panes and a sheet, and a cursor nobody can move is a view only the
     /// mouse reaches.
     Notifications,
+    /// Everything the Chrome kiosk can do — its modeline's `…`, `LEADER w
+    /// B`. Just above the window menu, which is one of its doors.
+    Kiosk,
     /// What can be done to the focused window — the modeline's app name,
     /// clicked. A grid of cells, the leader's, with submenus.
     WindowMenu,
@@ -1794,6 +1843,9 @@ enum Click {
     /// A cell of the window menu: it runs, or opens its submenu — the leader's
     /// grammar, where a cell is a key and a click is that key.
     WindowMenu(usize),
+    /// A cell of the kiosk's grid — it runs — or a row of one of its lists —
+    /// the first click selects, the second acts.
+    Kiosk(usize),
     /// A row of the sound view: the cursor goes there, `RET` acts.
     Audio(usize),
     /// A row of the pointers view: the cursor goes there, `RET` acts.
@@ -2360,6 +2412,9 @@ const RIGHT_BUTTON: u32 = 0x111;
 /// `BTN_SIDE`, the mouse's Back button. Over the footer with a view open it
 /// is `Esc`: the pointer's way back, beside the `ESC` the hint line teaches.
 const BACK_BUTTON: u32 = 0x113;
+/// `BTN_MIDDLE`, the wheel pressed. On a kiosk's tab it closes the tab, as
+/// it does in every browser; nowhere else does it do anything.
+const MIDDLE_BUTTON: u32 = 0x112;
 
 /// How many lines a wheel detent steps where there is scrolling.
 ///
@@ -2619,6 +2674,24 @@ fn watch_the_file(
     .ok()
 }
 
+/// The file the kiosks' pairs are kept in, under the runtime directory and
+/// per instance (`ronoctua_xdg::runtime_file`): a footer that restarts keeps
+/// its kiosks, and a session that ends forgets them with the windows.
+const KIOSK_FILE: &str = "kiosk.json";
+
+/// Our extension's id, from the bridge's host manifest the system wrote
+/// (`launch::MANIFEST_ENV`), or `None` when the bridge is not installed on
+/// this machine — and then a kiosk is refused with a sentence.
+fn kiosk_bridge() -> Option<String> {
+    let manifest = std::env::var_os(ronoctua_browser::launch::MANIFEST_ENV)?;
+    ronoctua_browser::launch::extension_id(std::path::Path::new(&manifest))
+        .map_err(|e| {
+            let m = format!("{e:#}");
+            tracing::warn!(error = %m, "the browser bridge's manifest could not be read");
+        })
+        .ok()
+}
+
 pub fn run() -> Result<()> {
     let conn = Connection::connect_to_env()
         .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
@@ -2679,6 +2752,7 @@ pub fn run() -> Result<()> {
         buffer_bindings: Vec::new(),
         buffer_pid: None,
         buffer_pending: Vec::new(),
+        local_runs_here: None,
         notifications: ronoctua_notify::Queue::with_history(notes.history()),
         book: {
             // THE DISTRO'S, PLUS THE PERSON'S. A broken preferences file leaves
@@ -2766,6 +2840,9 @@ pub fn run() -> Result<()> {
         pair_sender: None,
         capture_sender: None,
         capturing: false,
+        resizer: None,
+        _resizer_watch: None,
+        resizer_sender: None,
         apps: None,
         network: None,
         network_wire: None,
@@ -2852,6 +2929,23 @@ pub fn run() -> Result<()> {
         power_orders: None,
         power: None,
         window_menu: None,
+        // THE KIOSKS A FOOTER THAT RESTARTED ALREADY HAD, from the runtime
+        // file — measured against the compositor's first list of windows.
+        kiosk: crate::kiosk::Kiosks::fresh(
+            &ronoctua_xdg::runtime_file(KIOSK_FILE)
+                .and_then(|path| std::fs::read(path).ok())
+                .unwrap_or_default(),
+            kiosk_bridge(),
+        ),
+        kiosk_server: None,
+        kiosk_view: None,
+        kiosk_timer: false,
+        kiosk_launch_sender: None,
+        address_row_applied: false,
+        modeline: crate::adapt::store().read(),
+        _modeline_watch: None,
+        adapter_drawn: Vec::new(),
+        address_hint: None,
         edge: None,
         selection: crate::selection::Selection::default(),
         view_before: ViewState::NoneOf,
@@ -2995,6 +3089,39 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the capture channel: {e}"))?;
+
+    // THE SCREEN RESIZER: how its keeper ended, and its file. The keeper is
+    // another process (`resizer`) and outlives a footer started again, so
+    // what this footer knows of it comes from the FILE — read now, after
+    // sweeping what a keeper killed by a signal left behind, and watched.
+    let (resizer_sender, resizer_heard) = channel::channel::<crate::resizer::Heard>();
+    state.resizer_sender = Some(resizer_sender);
+    handle
+        .insert_source(resizer_heard, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(heard) = event {
+                state.resizer_heard(heard);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the resizer channel: {e}"))?;
+    crate::resizer::sweep_stale();
+    state.resizer = crate::resizer::is_on();
+    let (resizer_changed, resizer_file) = channel::channel::<()>();
+    state._resizer_watch = crate::resizer::watch_target().and_then(|(dir, name)| {
+        ronoctua_files::notice::Notice::on_file(
+            &dir,
+            &name,
+            ronoctua_files::notice::Pace::Coalesced,
+            move || resizer_changed.send(()).is_ok(),
+        )
+        .ok()
+    });
+    handle
+        .insert_source(resizer_file, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.resizer_file_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the resizer watch: {e}"))?;
 
     // WHAT THE FILE MANAGER'S THREADS COME BACK WITH.
     //
@@ -3315,6 +3442,9 @@ pub fn run() -> Result<()> {
                     state.software_window_closed();
                 }
                 state.windows.apply_to(&e);
+                // THE KIOSKS: a launch's title half, a video's fullscreen
+                // ending over one, a kiosk's window closing.
+                state.kiosk_follows(&e);
                 state.fullscreen_follows();
                 state.untrail_the_drawer();
                 state.states_arrived();
@@ -3325,10 +3455,67 @@ pub fn run() -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the compositor's channel: {e}"))?;
 
+    // THE KIOSKS' BRIDGE. The footer is the SERVER of the socket every
+    // Chrome's host connects to (`ronoctua_browser::serve`): its threads read
+    // the hosts, and what they hear comes through here, onto the loop. The
+    // socket itself is bound further down, once this footer has the display.
+    let (browser_sender, browser_heard) = channel::channel::<ronoctua_browser::serve::Heard>();
+    handle
+        .insert_source(browser_heard, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(h) = event {
+                state.kiosk_heard(h);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the browser channel: {e}"))?;
+    // A KIOSK'S LAUNCH VERDICT, with its nonce: the generic launch channel
+    // says a failure to the person, and this one also tells the kiosks that
+    // nothing will answer it.
+    let (kiosk_launch_sender, kiosk_launches) =
+        channel::channel::<(String, crate::foreign::Launch)>();
+    state.kiosk_launch_sender = Some(kiosk_launch_sender);
+    handle
+        .insert_source(kiosk_launches, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg((nonce, verdict)) = event {
+                state.kiosk_launched(&nonce, verdict);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the kiosk's launch channel: {e}"))?;
+
+    // AND `modeline.json`, watched the way `syncthing.json` is: the switches
+    // are flipped here, and a hand editing the file reaches the modeline too.
+    let (modeline_sender, modeline_changed) = channel::channel::<()>();
+    state._modeline_watch = ronoctua_store::config_dir().and_then(|dir| {
+        watch_the_file(&dir, crate::adapt::FILE, move || {
+            modeline_sender.send(()).is_ok()
+        })
+    });
+    handle
+        .insert_source(modeline_changed, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.modeline_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the modeline.json watch: {e}"))?;
+
     // Third event source: the control socket, where the leader arrives. See
     // `leader.rs` for why the leader comes from OUTSIDE.
     let (order_sender, orders) = channel::channel::<Order>();
     crate::leader::listen(order_sender);
+    // THE BRIDGE'S SOCKET, AFTER THE DISPLAY IS OURS. `leader::listen` is
+    // where a footer still running on this display is asked to leave, and
+    // waited for: bound before it, the socket was the old footer's — alive,
+    // so the bind failed — and the old one then took the file with it as it
+    // left, and every Chrome's host waited for a socket nobody would make.
+    state.kiosk_server = ronoctua_browser::serve::socket_path().and_then(|path| {
+        let sender = std::sync::Mutex::new(browser_sender);
+        ronoctua_browser::serve::Server::listen(path, move |h| {
+            if let Ok(s) = sender.lock() {
+                let _ = s.send(h);
+            }
+        })
+        .map_err(|e| tracing::warn!(error = %e, "the browser bridge's socket could not be bound"))
+        .ok()
+    });
     handle
         .insert_source(orders, |event, (), state: &mut Footer| {
             if let channel::Event::Msg(o) = event {
@@ -4318,7 +4505,7 @@ impl Footer {
     /// It rebuilds every frame instead of storing. It is cheap — five short
     /// `String`s — and it avoids the class of bug where the modeline shows the
     /// previous buffer because someone forgot to invalidate a cache.
-    fn segments_now(&self) -> Vec<ronoctua_render::layout::Segment> {
+    fn segments_now(&self) -> crate::adapt::Line {
         // THE PENDING SEQUENCE DOES NOT COME IN HERE.
         //
         // It showed up in the mode indicator AND in the minibuffer's line — the
@@ -4388,6 +4575,7 @@ impl Footer {
                 camera: self.camera_in_use(),
                 recording: self.studio_rolling(),
                 gestures: self.gestures.is_some(),
+                resizer: self.resizer.is_some(),
                 player: self.player.as_ref().and_then(crate::player::mark),
                 workspaces: &workspaces,
                 drawer: self.in_the_drawer().len(),
@@ -4412,7 +4600,13 @@ impl Footer {
         // THE SOFTWARE CENTRE'S TWO, with nothing to say at rest: a trial
         // running, and Android's session up — it costs memory.
         out.extend(crate::software::segments(&self.software_running));
-        out
+        // AND THE PROGRAM'S OWN MODELINE, when an adapter claims the focused
+        // window (`crate::adapt`): the title goes, the program's name leads,
+        // and the adapter's segments follow it.
+        match (self.adapted(), self.windows.focused()) {
+            (Some(a), Some(w)) => a.line(out, w, &self.texts),
+            _ => crate::adapt::Line::plain(out),
+        }
     }
 
     /// The battery's segment text, when there is one to draw.
@@ -4750,6 +4944,17 @@ impl Footer {
     /// That is the rule invariant 14 turns into for a pointer: the mouse is a
     /// second way to the same door, and never a door of its own.
     fn segment_clicked(&mut self, id: &str, forward: bool) {
+        // AN ADAPTER'S SEGMENT answers through its adapter, by what was DRAWN
+        // there (`adapter_drawn`) — and what it runs is a command its view and
+        // its `,` group reach too (`crate::adapt`).
+        let button = if forward {
+            crate::adapt::Button::Left
+        } else {
+            crate::adapt::Button::Right
+        };
+        if self.adapter_clicked(id, button) {
+            return;
+        }
         // THE BELL TOGGLES THE MANAGER.
         //
         // It is the one thing on that line the eye goes to when it wants to
@@ -4836,6 +5041,12 @@ impl Footer {
         // GESTURES: the mark is the switch that turns them off.
         if id == "gestures" {
             self.run_command("gestures");
+            return;
+        }
+        // THE RESIZER'S, likewise: the screen whole again, by the command
+        // `LEADER d r` runs.
+        if id == "resizer" {
+            self.run_command("dev-resizer");
             return;
         }
         // AND THE CAMERA'S TWO, to the camera's settings.
@@ -4979,6 +5190,14 @@ impl Footer {
     /// the buffer's name is the buffer's name — and a sentence explaining each
     /// of them would be a tooltip in everything but the surface it is drawn on.
     fn segment_hint(&self) -> Option<String> {
+        // AN ADAPTER'S SEGMENT says what its adapter says about it.
+        if let Some(t) = self
+            .here
+            .segment_under_pointer
+            .and_then(|id| self.adapter_target(id))
+        {
+            return self.adapted().and_then(|a| a.hint(&t, &self.texts));
+        }
         // A WORKSPACE NUMBER says what each button does with it.
         if let Some(n) = self
             .here
@@ -5159,6 +5378,24 @@ impl Footer {
             )),
             "recording" => Some(self.texts.t(ronoctua_i18n::key::HINT_RECORDING)),
             "gestures" => Some(self.texts.t(ronoctua_i18n::key::HINT_GESTURES)),
+            // THE CUT, in pixels and in the grid — what the curtains' own
+            // line says, for a person looking at the modeline.
+            "resizer" => {
+                let cut = self.resizer.as_ref()?;
+                let (columns, lines) = crate::resizer::grid_of(cut, crate::resizer::Units::now());
+                Some(self.texts.t_args(
+                    ronoctua_i18n::key::HINT_RESIZER,
+                    &[
+                        ("width", ronoctua_i18n::Arg::Number(i64::from(cut.width_px))),
+                        (
+                            "height",
+                            ronoctua_i18n::Arg::Number(i64::from(cut.height_px)),
+                        ),
+                        ("columns", ronoctua_i18n::Arg::Number(columns)),
+                        ("lines", ronoctua_i18n::Arg::Number(lines)),
+                    ],
+                ))
+            }
             // THE PLAYER SAYS WHAT IS PLAYING — the one thing its glyph
             // cannot.
             "player" => {
@@ -5390,7 +5627,9 @@ impl Footer {
         };
         let (width, height) = (t.width, t.height);
         let columns = tokens::metrics::columns(width as f32, tokens::text::size());
-        let placed = layout::resolve(columns, &self.segments_now());
+        let line = self.segments_now();
+        let adapted = self.adapted();
+        let (placed, _) = crate::adapt::resolve(columns, &line, adapted.as_ref(), &self.texts);
 
         tracing::info!(
             width,
@@ -6464,6 +6703,14 @@ impl Footer {
         let mut wheel_at: Option<f64> = None;
         let mut dragging_fold = false;
         let mut fold_hit = false;
+        // AN ADAPTER'S SEGMENTS: the middle button, the carried segment's
+        // release, the wheel, and the kiosk's address line — each decided by
+        // the `y` like the modeline's own clicks.
+        let mut segment_middle = None;
+        let mut segment_dropped: Option<(&'static str, Option<&'static str>)> = None;
+        let mut wheel_point: Option<(f64, f64)> = None;
+        let mut address_click = false;
+        let address_before = self.address_hint.clone();
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
@@ -6505,6 +6752,8 @@ impl Footer {
                     self.band_hint = self
                         .band_at(e.position.0, e.position.1)
                         .and_then(|p| p.explain.clone());
+                    // AND THE KIOSK'S ADDRESS LINE, one row down, the same way.
+                    self.address_hint = self.address_hint_at(e.position.1);
                     // AND WHICH SHORTCUT OF THE HINT LINE IT IS ON, which is
                     // the same question one line down: the hint is the
                     // minibuffer's line, and what a person points at there is
@@ -6673,6 +6922,8 @@ impl Footer {
                     self.here.row_under_pointer = None;
                     self.here.cell_under_pointer = None;
                     self.here.segment_under_pointer = None;
+                    self.here.segment_held = None;
+                    self.address_hint = None;
                     self.band_hint = None;
                     self.brain_hint = None;
                     // THE LINE GOES WITH THE POINTER, which is the whole of
@@ -6717,6 +6968,10 @@ impl Footer {
                     if button == BACK_BUTTON && self.view() != ViewState::NoneOf =>
                 {
                     back = true;
+                }
+                // THE MIDDLE BUTTON, on an adapter's segment and nowhere else.
+                PointerEventKind::Press { button, .. } if button == MIDDLE_BUTTON => {
+                    segment_middle = self.segment_at(e.position.0, e.position.1);
                 }
                 PointerEventKind::Press { button, .. } if button == RIGHT_BUTTON => {
                     self.here.row_under_pointer = self.row_at(e.position.0, e.position.1);
@@ -6834,8 +7089,21 @@ impl Footer {
                         self.fold_drag_to(e.position.1);
                         continue;
                     }
+                    // THE KIOSK'S ADDRESS LINE, above the modeline: a click
+                    // edits the address, which is what the line is for.
+                    if self.address_line_at(e.position.1) {
+                        address_click = true;
+                        continue;
+                    }
                     if let Some(id) = self.segment_at(e.position.0, e.position.1) {
-                        segment_next = Some(id);
+                        // A SEGMENT THAT CAN BE CARRIED (a kiosk's tab) waits
+                        // for the RELEASE: over the same segment it was a
+                        // click, over another it is a drop.
+                        if self.adapter_draggable(id) {
+                            self.here.segment_held = Some(id);
+                        } else {
+                            segment_next = Some(id);
+                        }
                         continue;
                     }
                     // AND AN EMPTY MINIBUFFER IS THE LEADER, which is the
@@ -6955,6 +7223,9 @@ impl Footer {
                     }
                 }
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
+                    if let Some(from) = self.here.segment_held.take() {
+                        segment_dropped = Some((from, self.segment_at(e.position.0, e.position.1)));
+                    }
                     self.here.dragging = false;
                     self.here.dragging_section = None;
                     self.here.dragging_globe = None;
@@ -6994,6 +7265,7 @@ impl Footer {
                     // above the region and `row_under_pointer` answers `None`
                     // up there — see `pointer_on_fold`.
                     wheel_at = Some(e.position.1);
+                    wheel_point = Some(e.position);
                 }
                 _ => {}
             }
@@ -7092,6 +7364,19 @@ impl Footer {
         // THE MODELINE'S CLICKS, before the region's: they are decided by the
         // `y`, so the two can never both be true for one press — and putting
         // them first keeps that obvious rather than incidental.
+        if address_click {
+            self.run_command("kiosk-address");
+            self.draw_and_paint();
+            return;
+        }
+        if let Some((from, onto)) = segment_dropped {
+            self.segment_released(from, onto);
+            return;
+        }
+        if let Some(id) = segment_middle {
+            self.adapter_clicked(id, crate::adapt::Button::Middle);
+            return;
+        }
         if let Some(id) = segment_prev {
             self.segment_clicked(id, false);
             return;
@@ -7123,6 +7408,20 @@ impl Footer {
         }
         if let Some(i) = clicked {
             self.click_at(i);
+            return;
+        }
+
+        // THE WHEEL ON AN ADAPTER'S SEGMENT — a kiosk's tabs, its zoom — is
+        // the segment's, and the adapter says what it walks. In LINES, the
+        // accumulator's unit (`wheel_lines`), so a detent is one step.
+        if let Some((x, y)) = wheel_point
+            && let Some(id) = self.segment_at(x, y)
+            && self.adapter_target(id).is_some()
+        {
+            let lines = wheel_lines(&mut self.here.lines_owed);
+            if lines != 0 {
+                self.adapter_wheeled(id, lines);
+            }
             return;
         }
 
@@ -7241,6 +7540,7 @@ impl Footer {
         // of movement, and painting a frame per pixel would spend the GPU drawing
         // exactly the same thing.
         if segment_before != self.here.segment_under_pointer
+            || address_before != self.address_hint
             || before
                 != (
                     self.here.under_pointer,
@@ -7434,6 +7734,16 @@ impl Footer {
             .and_then(|w| w.number)
     }
 
+    /// The NAME of the workspace in front — what a right column belongs to
+    /// (`crate::column`); a workspace named with words has no number.
+    fn current_workspace_name(&self) -> Option<String> {
+        self.windows
+            .workspaces()
+            .iter()
+            .find(|w| w.focused)
+            .map(|w| w.name.clone())
+    }
+
     /// Shows every workspace at once, or one again — said as `enable` or
     /// `disable`, never as the toggle, so a repeated order cannot invert
     /// what the footer believes.
@@ -7590,6 +7900,16 @@ impl Footer {
         if let Some(on) = wanted {
             self.show_every_workspace(on);
             return;
+        }
+        // A FULLSCREEN DEED BY NAME ON A KIOSK moves the footer's copy of its
+        // bars (`kiosk::Kiosks::deed_ran`); the deed itself goes out below.
+        if let Some(errand) = self
+            .windows
+            .focused()
+            .map(|w| w.id)
+            .and_then(|w| self.kiosk.deed_ran(id, w))
+        {
+            self.kiosk_errands(vec![errand]);
         }
         // EVERY DEED OF THE COMPOSITOR, on one path.
         //
@@ -7756,6 +8076,19 @@ impl Footer {
             "drawer-open" => self.open_drawer(),
             "trail-open" => self.open_window_menu_at(crate::window_menu::Level::Trail),
             "selection-open" => self.open_window_menu_at(crate::window_menu::Level::Selection),
+            // THE CHROME KIOSK (`LEADER m b`): the door, the view's list keys
+            // by name, and every other kiosk command through `kiosk_run` —
+            // the one door the view, the modeline and the `,` group share.
+            "kiosk-open" => self.kiosk_open(argument),
+            "kiosk-list-down" | "kiosk-list-up" | "kiosk-list-enter" | "kiosk-tab-earlier"
+            | "kiosk-tab-later" => {
+                if let Some(p) = crate::kiosk_view::press_of(id) {
+                    self.kiosk_view_press(p);
+                }
+            }
+            kiosk if kiosk.starts_with("kiosk-") || kiosk == "modeline-adapt-kiosk" => {
+                self.kiosk_run(kiosk, argument);
+            }
             // SYNCTHING. The view has two doors and the page has one key;
             // the four commands that were here before opened a browser and
             // echoed one line, which was the whole of it.
@@ -7945,6 +8278,7 @@ impl Footer {
             "onscreen-keyboard" => self.toggle_the_keyboard(),
             "gestures" => self.toggle_gestures(),
             "gestures-calibrate" => self.calibrate_gestures(),
+            "dev-resizer" => self.toggle_resizer(),
             "player-column" => self.player_door(id),
             "player-up" | "player-down" | "player-less" | "player-more" | "player-enter"
             | "player-remove" | "player-add" | "player-parent" | "player-only"
@@ -8745,7 +9079,7 @@ impl Footer {
             // SYNCTHING'S ONE-LINE ECHO. The view says all of this and more,
             // and the echo stays because a line that appears and goes is
             // cheaper than a view when the question is only "is it fine?" —
-            // the same argument `LEADER d` makes for the glance.
+            // the same argument `LEADER g` makes for the glance.
             // ---------------------------------------------------------
             "syncthing-state" => {
                 let m = match self.syncthing_snapshot.as_ref() {
@@ -9062,7 +9396,7 @@ impl Footer {
                 if let Err(key) = crate::locale::glance_change(&change) {
                     self.echo_message(self.texts.t(key));
                 }
-                // ADOPTED HERE, so the next `LEADER d` draws what was just
+                // ADOPTED HERE, so the next `LEADER g` draws what was just
                 // chosen — through the same door the watch uses. The watch
                 // will ring too; doing it here as well is what keeps the frame
                 // that follows this keystroke from drawing the old places.
@@ -10449,6 +10783,24 @@ impl Footer {
         self.buffer_pid = None;
         self.state_pending = false;
         self.state_menu.clear();
+        self.local_runs_here = None;
+
+        // A KIOSK'S `,` GROUP IS THIS FOOTER'S OWN: Chrome publishes no
+        // keymap, and what the group runs is the kiosk's commands, generated
+        // from its view's grid (`kiosk_view::local_bindings`). Whatever the
+        // modeline's switch says — `, M` is how it is turned back on.
+        if let Some(w) = self.windows.focused().map(|w| w.id)
+            && self.kiosk.pair_of(w).is_some()
+        {
+            self.buffer_bindings =
+                crate::adapt::Adapted::Kiosk(self.kiosk.adapter(self.modeline.address_line))
+                    .local_bindings()
+                    .iter()
+                    .map(|(sequence, id, _)| (sequence.clone(), (*id).to_owned()))
+                    .collect();
+            self.local_runs_here = Some(w);
+            return;
+        }
 
         let Some(pid) = self.windows.focused().and_then(|w| w.pid) else {
             return;
@@ -10603,6 +10955,12 @@ impl Footer {
             let pid = self.buffer_pid;
             self.buffer_pending.clear();
             self.close_leader();
+            // A KIOSK'S GROUP RUNS HERE, by the registry's door.
+            if self.local_runs_here.is_some() {
+                tracing::info!(command = %id, "a command of the kiosk's `,` group");
+                self.run_with(&id, None);
+                return true;
+            }
             match pid.map(|p| crate::leader::buffer_command(p, &id)) {
                 Some(Ok(())) => tracing::info!(command = %id, "command of the focused buffer"),
                 Some(Err(e)) => tracing::warn!(error = %e, command = %id, "the buffer refused"),
@@ -11424,6 +11782,14 @@ impl Footer {
             return;
         }
 
+        // THE KIOSK'S VIEW: its grids are the window menu's grammar — every
+        // cell a key, `Esc` up a level — and its lists read their keys out of
+        // `kiosk_view::OF_THE_TABS` and `OF_THE_EXTENSIONS` by notation.
+        if self.view() == ViewState::Kiosk {
+            self.kiosk_view_key(key);
+            return;
+        }
+
         // THE WINDOW MENU: every cell is a key, as in the leader, and `Esc`
         // goes up one level. The key is read as its NOTATION with shift left
         // in the letter (`K` is its own cell) and `Ctrl` kept (`C-h` nudges),
@@ -11707,6 +12073,7 @@ impl Footer {
     /// for it, and a password typed for a login goes with it.
     fn questions_let_go(&mut self) {
         self.locale_asking = None;
+        self.kiosk.let_go();
         self.player_pairing.let_go();
         if let Some(v) = self.history.as_mut() {
             v.let_go();
@@ -12610,6 +12977,10 @@ impl Footer {
             // which permission draws in the manager's own region and answers
             // there. Two pickers would be two behaviours for one gesture.
             ViewState::Files
+        } else if self.kiosk_view.is_some() {
+            // THE KIOSK'S VIEW, just above the window menu: its `B` cell is
+            // one of this view's doors, and takes the region from it.
+            ViewState::Kiosk
         } else if self.window_menu.is_some() {
             // ABOVE THE FINDER AND THE LEADER, which it can only be opened
             // from: the region is free when it opens (`region_is_free`), so
@@ -12670,16 +13041,21 @@ impl Footer {
     /// How many lines the row above the modeline claims: one when somebody is
     /// on it, none when nobody is.
     ///
-    /// TWO TENANTS AND ONE ARITHMETIC. The glance (`LEADER d`) and the volume
+    /// TWO TENANTS AND ONE ARITHMETIC. The glance (`LEADER g`) and the volume
     /// flash share this row, and the last thing asked for holds it — a second
     /// row of the same kind would be a second term in six functions of this
     /// file, a second thing outside the expansion's budget, and a second
     /// countdown for a person to tell apart.
+    ///
+    /// AND A THIRD, which stays: the Chrome kiosk's address line, while it is
+    /// asked for. The two that come and go take the row from it and give it
+    /// back; the height is the same either way, so nothing moves.
     fn above_rows(&self) -> u16 {
         crate::world::rows(above_row_taken(
             self.glance.is_some(),
             self.sound.is_some(),
             self.sound_on_minibuffer,
+            self.address_line_shown(),
         ))
     }
 
@@ -13258,6 +13634,89 @@ impl Footer {
             self.echo_message(m);
         }
         self.draw_and_paint();
+    }
+
+    /// Turns the screen resizer on, or off — `LEADER d r`, and a click on its
+    /// mark.
+    ///
+    /// ON is a process of its own (`resizer`, the keeper), waited for on a
+    /// thread: it lives as long as the cut does, and the loop that draws
+    /// cannot wait that long. What it prints when it ends is how it ended.
+    fn toggle_resizer(&mut self) {
+        if self.resizer.is_some() || crate::resizer::keeper().is_some() {
+            crate::resizer::stop();
+            self.resizer = None;
+            let m = self.texts.t(ronoctua_i18n::key::ECHO_RESIZER_OFF);
+            self.echo_message(m);
+            self.region_resized();
+            self.draw_and_paint();
+            return;
+        }
+        let Some(sender) = self.resizer_sender.clone() else {
+            return;
+        };
+        let mut child = match crate::resizer::start() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "the resizer could not be started");
+                let m = self.texts.t_with(
+                    ronoctua_i18n::key::ECHO_RESIZER_FAILED,
+                    &[("why", &e.to_string())],
+                );
+                self.echo_message(m);
+                self.draw_and_paint();
+                return;
+            }
+        };
+        std::thread::spawn(move || {
+            use std::io::Read as _;
+            let mut said = String::new();
+            if let Some(mut out) = child.stdout.take() {
+                let _ = out.read_to_string(&mut said);
+            }
+            let _ = child.wait();
+            let _ = sender.send(crate::resizer::last_word(&said));
+        });
+        let m = self.texts.t(ronoctua_i18n::key::ECHO_RESIZER_ON);
+        self.echo_message(m);
+        self.draw_and_paint();
+    }
+
+    /// The resizer's file changed — the cut moved, or it began or ended. A
+    /// file with no keeper behind it is a leftover, and goes.
+    ///
+    /// Only what the FOOTER is laid out by asks for a new layout: whether it
+    /// is on, the room's height (the expansion's ceiling) and which screen.
+    /// The width reaches the footer from the compositor, as a configure.
+    fn resizer_file_changed(&mut self) {
+        let now = crate::resizer::is_on();
+        if now.is_none() && crate::resizer::read().is_some() {
+            crate::resizer::sweep_stale();
+        }
+        let laid_out = match (&self.resizer, &now) {
+            (None, None) => false,
+            (Some(was), Some(is)) => was.height_px != is.height_px || was.output != is.output,
+            _ => true,
+        };
+        self.resizer = now;
+        if laid_out {
+            self.region_resized();
+            self.draw_and_paint();
+        }
+    }
+
+    /// How the resizer's keeper ended: a failure is said, and either way the
+    /// file says what is left.
+    fn resizer_heard(&mut self, heard: crate::resizer::Heard) {
+        if let crate::resizer::Heard::Failed(why) = heard {
+            tracing::warn!(why = %why, "the resizer failed");
+            let m = self
+                .texts
+                .t_with(ronoctua_i18n::key::ECHO_RESIZER_FAILED, &[("why", &why)]);
+            self.echo_message(m);
+            self.draw_and_paint();
+        }
+        self.resizer_file_changed();
     }
 
     /// One thing the studio said about the hands.
@@ -13846,12 +14305,23 @@ impl Footer {
         // The SMALLEST screen is in charge: the footer's height is the same on
         // all of them (see `apply_geometry`), so a ceiling that only fitted
         // on the big monitor would leak on the small one.
-        let smaller = self
-            .screens
-            .iter()
-            .map(|t| t.output_height)
-            .filter(|h| *h > 0)
-            .min();
+        //
+        // AND THE HEIGHT IS THE ROOM THE FOOTER HAS: under the resizer, the
+        // part of the screen its curtains leave (`resizer::room_height`) — a
+        // percentage of the monitor let a long list grow past the top of a
+        // screen cut short. The fold is `resizer::smallest_room`, pure, so
+        // it is tested where it is written; what stays here is only which
+        // height and which connector each screen has.
+        let smaller = crate::resizer::smallest_room(
+            self.screens.iter().map(|t| {
+                let name = self
+                    .resizer
+                    .as_ref()
+                    .and_then(|_| self.outputs.info(&t.output)?.name);
+                (t.output_height, name)
+            }),
+            self.resizer.as_ref(),
+        );
         // WHAT IS ACTUALLY FIXED, and it used to be a literal `2`.
         //
         // The percentage belongs to the WHOLE footer, so whatever is not the
@@ -13891,6 +14361,12 @@ impl Footer {
         match self.view() {
             // THE WINDOW MENU IS THE LEADER'S GRID, and pages like it.
             ViewState::Leader | ViewState::WindowMenu => Navigation::Page,
+            // THE KIOSK'S GRIDS PAGE like the window menu's; its two lists
+            // scroll, like every list.
+            ViewState::Kiosk => match &self.kiosk_view {
+                Some(v) if v.is_a_grid() => Navigation::Page,
+                _ => Navigation::Scroll,
+            },
             _ => Navigation::Scroll,
         }
     }
@@ -14976,6 +15452,49 @@ impl Footer {
                     } else {
                         tokens::color::TEXT_SECONDARY
                     },
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+        if self.view() == ViewState::Kiosk
+            && let Some(v) = self.kiosk_view.as_ref()
+        {
+            // A GRID IS THE WINDOW MENU'S CELLS — the key, the short label, the
+            // registry's sentence for the pointer, and the `,` sequence that
+            // does the same outside the view — and a list is rows of fields.
+            if v.is_a_grid() {
+                return v
+                    .entries(self.kiosk_facts(v.window), &self.texts)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(n, e)| ExpansionRow {
+                        key: e.key.to_owned(),
+                        text: e.label,
+                        teaches: Some(format!(
+                            "{} {} {}",
+                            crate::leader(),
+                            ronoctua_protocol::LOCAL_PREFIX,
+                            e.key
+                        )),
+                        description: Some(e.about),
+                        click: Some(Click::Kiosk(n)),
+                        text_color: tokens::color::TEXT_SECONDARY,
+                        ..ExpansionRow::empty_one()
+                    })
+                    .collect();
+            }
+            return v
+                .rows(
+                    self.kiosk.reading(v.window),
+                    self.screen_columns(),
+                    &self.texts,
+                )
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::Kiosk(n)),
+                    fields: r.fields,
+                    foot: false,
                     ..ExpansionRow::empty_one()
                 })
                 .collect();
@@ -17098,6 +17617,7 @@ impl Footer {
                     self.draw_and_paint();
                 }
             }
+            Some(Click::Kiosk(n)) => self.kiosk_view_clicked(n),
             Some(Click::WindowMenu(n)) => {
                 // ONE CLICK RUNS IT, as a cell of the leader does: the grid has
                 // no cursor to select with, and what a cell does is written on
@@ -17416,6 +17936,12 @@ impl Footer {
             ViewState::Geo => self.geo.as_ref().map(crate::geo::View::cursor),
             ViewState::Display => self.display.as_ref().map(crate::display::View::cursor),
             ViewState::Bluetooth => self.bluetooth.as_ref().map(crate::bluetooth::View::cursor),
+            // THE KIOSK'S LISTS, by the row the tab or the extension is drawn
+            // on — the cursor keeps its id, not its row. A grid has none.
+            ViewState::Kiosk => self.kiosk_view.as_ref().and_then(|v| {
+                let r = self.kiosk.reading(v.window);
+                v.drawn_cursor(r, &v.rows(r, self.screen_columns(), &self.texts))
+            }),
             // The manager's cursor, so the region scrolls with it — the same
             // `scrolloff` the locator uses. A listing that does not follow its
             // own cursor is a listing where holding `j` walks off the bottom.
@@ -17570,6 +18096,9 @@ impl Footer {
         // different between monitors and the buffers on one of them would reflow
         // when screen focus changed — with nothing having changed in them (section 9.2).
         let height = self.wanted_height();
+        // THE KIOSK'S ADDRESS ROW this height counted — what a later change
+        // of it is measured against (`kiosk_errands`).
+        self.address_row_applied = self.address_line_shown();
         self.keyboard_hold
             .asked_for(matches!(keyboard, KeyboardInteractivity::Exclusive));
         // THE ZONE FOLLOWS THE HEIGHT. See the top of the module: the expansion
@@ -18081,7 +18610,20 @@ impl Footer {
             })
             .unwrap_or_default();
 
-        let segments = self.segments_now();
+        let line = self.segments_now();
+        // WHETHER AN ADAPTER HOLDS THE LINE, asked once: the program's name
+        // then takes the accent the title wore.
+        let adapting = self.adapted().is_some();
+        // AND THE KIOSK'S ADDRESS, when its line is up.
+        let address_shown: Option<String> = self
+            .address_line_shown()
+            .then(|| {
+                self.windows
+                    .focused()
+                    .and_then(|w| self.kiosk.address_of(w.id))
+                    .map(ToOwned::to_owned)
+            })
+            .flatten();
         let mini_at_rest = crate::minibuffer_at_rest();
         // THE PROMPT OF THE MINIBUFFER'S LINE, from either of the two
         // finders.
@@ -18169,6 +18711,7 @@ impl Footer {
         let (records, book) = (self.notifications.history(), &self.book);
         let power = &self.power;
         let window_menu = &self.window_menu;
+        let (kiosk_view, kiosks) = (&self.kiosk_view, &self.kiosk);
         let audio = &self.audio;
         let pointer_view = &self.pointer_view;
         let pointer_snapshot = self.pointer_snapshot.as_ref();
@@ -18254,6 +18797,11 @@ impl Footer {
                 // THE WINDOW MENU names the window it is about: its cells are
                 // their own keys, so the line has nothing else to teach, and
                 // the way back goes in front of the name.
+                // THE KIOSK'S VIEW: the grid names the tab it acts on, the
+                // zoom says where it is, and a list teaches its keys.
+                ViewState::Kiosk => kiosk_view
+                    .as_ref()
+                    .map(|v| v.hint(kiosks.reading(v.window), texts)),
                 ViewState::WindowMenu => window_menu.as_ref().map(|v| {
                     v.window
                         .as_ref()
@@ -18425,6 +18973,12 @@ impl Footer {
             .band_hint
             .clone()
             .map(|t| vec![crate::chrome::Piece::said(t)])
+            // THE KIOSK'S ADDRESS LINE, between the band and the modeline.
+            .or_else(|| {
+                self.address_hint
+                    .clone()
+                    .map(|t| vec![crate::chrome::Piece::said(t)])
+            })
             .or_else(|| {
                 self.segment_hint()
                     .map(|t| vec![crate::chrome::Piece::said(t)])
@@ -18738,7 +19292,22 @@ impl Footer {
             let bottom = (self.screens[index].height as f32 - self.keyboard_px()).max(0.0);
             // PER SCREEN: a narrow monitor elides what the wide one shows.
             let columns = tokens::metrics::columns(width as f32, tokens::text::size());
-            let placed = layout::resolve(columns, &segments);
+            // THE MODELINE, in two passes when an adapter counts a strip —
+            // see `adapt::resolve` — with what each of its segments is about
+            // and the colour its adapter gives it, taken while the adapter is
+            // borrowed.
+            let (placed, drawn, adapter_colours) = {
+                let adapted = self.adapted();
+                let (placed, drawn) =
+                    crate::adapt::resolve(columns, &line, adapted.as_ref(), &self.texts);
+                let colours: Vec<(&'static str, tokens::Color)> = drawn
+                    .iter()
+                    .filter_map(|(id, t)| {
+                        adapted.as_ref().and_then(|a| a.colour(t)).map(|c| (*id, c))
+                    })
+                    .collect();
+                (placed, drawn, colours)
+            };
 
             // THE ORDER OF THE FOUR REGIONS, from top to bottom:
             //
@@ -18787,6 +19356,7 @@ impl Footer {
                 .into_iter()
                 .find(|w| w.current)
                 .and_then(|w| crate::workspaces::id_of(w.number));
+            self.adapter_drawn = drawn;
             self.modeline_placed = placed
                 .iter()
                 .map(|c| {
@@ -18805,14 +19375,24 @@ impl Footer {
                         &c.text,
                         c.column,
                         modeline_line,
-                        segment_color(
-                            c.id,
-                            with_keyboard,
-                            state_is_base,
-                            battery_danger,
-                            &alarmed,
-                            current_workspace,
-                        ),
+                        adapter_colours
+                            .iter()
+                            .find(|(id, _)| *id == c.id)
+                            .map(|(_, colour)| *colour)
+                            .or_else(|| {
+                                (adapting && c.id == "mode")
+                                    .then(|| crate::adapt::mode_colour(with_keyboard))
+                            })
+                            .unwrap_or_else(|| {
+                                segment_color(
+                                    c.id,
+                                    with_keyboard,
+                                    state_is_base,
+                                    battery_danger,
+                                    &alarmed,
+                                    current_workspace,
+                                )
+                            }),
                         c.edge,
                     )
                 })
@@ -18895,6 +19475,31 @@ impl Footer {
                 }
             } else {
                 self.glance_stripes.clear();
+                // THE THIRD TENANT OF THE ROW, while the other two leave it
+                // free: the kiosk's address — the host whole, the rest elided
+                // in the middle (`kiosk::address_text`).
+                if let Some(address) = address_shown.as_deref() {
+                    let at = tokens::space::MODELINE_EDGELEFT;
+                    let room = columns.saturating_sub(at + tokens::space::MODELINE_EDGERIGHT);
+                    let (lead, rest) = crate::kiosk::address_text(address, room);
+                    let row = self.above_line_at();
+                    spans.extend(glyph_and_text(
+                        &lead,
+                        at,
+                        row,
+                        tokens::color::TEXT_PRIMARY,
+                        false,
+                    ));
+                    if !rest.is_empty() {
+                        spans.extend(glyph_and_text(
+                            &rest,
+                            at + layout::width(&lead),
+                            row,
+                            tokens::color::TEXT_SECONDARY,
+                            false,
+                        ));
+                    }
+                }
             }
 
             // THE BRAIN'S LINE, under the minibuffer.
@@ -20809,9 +21414,15 @@ const fn minibuffer_free(view: ViewState, echo: bool, drawer_open: bool) -> bool
 }
 
 /// Does the row above the modeline hold anything? The glance does; the flash
-/// does only when it was NOT put on the minibuffer's line.
-const fn above_row_taken(glance: bool, sound: bool, sound_on_minibuffer: bool) -> bool {
-    glance && !(sound && sound_on_minibuffer)
+/// does only when it was NOT put on the minibuffer's line; and the kiosk's
+/// address line does while it is up.
+const fn above_row_taken(
+    glance: bool,
+    sound: bool,
+    sound_on_minibuffer: bool,
+    address: bool,
+) -> bool {
+    (glance && !(sound && sound_on_minibuffer)) || address
 }
 
 fn expansion_ceiling(screen_height: Option<u32>, fixed: usize) -> usize {
@@ -22004,8 +22615,12 @@ impl Footer {
             return;
         }
         let screens = self.screens.iter().filter(|t| t.configured).count();
+        // A KIOSK'S MENU HAS ITS VIEW ON `B` — the pointer's way to the
+        // kiosk's toolbar when the modeline is not adapted to it.
+        let kiosk = self.kiosk.pair_of(window.id).is_some();
         self.window_menu = Some(
             crate::window_menu::View::fresh(window, self.windows.workspaces().to_vec(), screens)
+                .with_kiosk(kiosk)
                 .with_drawer(drawer)
                 .with_trails(self.windows.trails())
                 .with_selection(self.selection.clone()),
@@ -22034,6 +22649,10 @@ impl Footer {
                 tracing::info!(deed = id, window, arg, "a deed on the menu's window");
                 if crate::selection::Selection::follows(spoken.deed.id) {
                     self.selection.deed(spoken.deed.id, Some(window));
+                }
+                // AND A KIOSK'S BARS, when the deed was one of the three.
+                if let Some(errand) = self.kiosk.deed_ran(id, window) {
+                    self.kiosk_errands(vec![errand]);
                 }
             }
             Err(e) => {
@@ -22159,6 +22778,598 @@ impl Footer {
             self.apply_geometry(self.interactivity());
         }
         self.draw_and_paint();
+    }
+
+    // -----------------------------------------------------------------
+    // THE CHROME KIOSK (`crate::kiosk`) and the modeline that adapts to it
+    // (`crate::adapt`). `kiosk.rs` decides and answers with errands; what
+    // follows carries them out, and is the only half that touches the
+    // compositor, the bridge's socket, a file or a thread.
+    // -----------------------------------------------------------------
+
+    /// The adapter that holds the modeline now: the focused window's, when
+    /// one claims it and its switch in `modeline.json` is on.
+    fn adapted(&self) -> Option<crate::adapt::Adapted<'_>> {
+        let w = self.windows.focused()?;
+        let kiosk = crate::adapt::Adapted::Kiosk(self.kiosk.adapter(self.modeline.address_line));
+        (self.modeline.adapts(kiosk.id()) && kiosk.claims(w)).then_some(kiosk)
+    }
+
+    /// The kiosk a command acts on: the one the open view is about, else the
+    /// focused window when it is one, else the one the `,` group was built
+    /// for.
+    fn kiosk_target(&self) -> Option<u64> {
+        self.kiosk_view
+            .as_ref()
+            .map(|v| v.window)
+            .or_else(|| {
+                self.windows
+                    .focused()
+                    .map(|w| w.id)
+                    .filter(|w| self.kiosk.pair_of(*w).is_some())
+            })
+            .or(self.local_runs_here)
+    }
+
+    /// What the kiosk's grid switches are switched to.
+    fn kiosk_facts(&self, window: u64) -> crate::kiosk_view::Facts {
+        crate::kiosk_view::Facts {
+            bars_shown: self.kiosk.pair_of(window).is_some() && !self.kiosk.hidden(window),
+            address_line: self.modeline.address_line,
+            adapted: self.modeline.adapts(crate::kiosk::ADAPTER),
+        }
+    }
+
+    /// A kiosk command — the one door the registry, the view, the modeline
+    /// and the `,` group share. It never runs a command back through
+    /// `run_with`: what it cannot do itself, `kiosk::Kiosks::command` answers.
+    fn kiosk_run(&mut self, id: &str, argument: Option<&str>) {
+        use crate::kiosk_view::Level;
+        // THE ROW UNDER A LIST'S CURSOR is the argument a list's command takes
+        // by name — `LEADER :` and the `,` group act on what the list shows.
+        let from_the_view = argument.is_none().then(|| {
+            self.kiosk_view
+                .as_ref()
+                .and_then(|v| v.argument_for(id, self.kiosk.reading(v.window)))
+        });
+        let arg: Option<String> = argument.map(ToOwned::to_owned).or(from_the_view.flatten());
+        match id {
+            "kiosk-more" => self.open_kiosk_view(Level::Root, None, true),
+            "kiosk-tabs" => {
+                let tab = arg.as_deref().and_then(|a| a.trim().parse().ok());
+                self.open_kiosk_view(Level::Tabs, tab, false);
+            }
+            "kiosk-extensions" => self.open_kiosk_view(Level::Extensions, None, false),
+            "kiosk-zoom" if arg.is_none() => self.open_kiosk_view(Level::Zoom, None, false),
+            "kiosk-address-line" => self.flip_the_address_line(),
+            "modeline-adapt-kiosk" => self.flip_the_adaptation(),
+            _ => {
+                let on = self.kiosk_target();
+                let errands = self.kiosk.command(id, arg.as_deref(), on);
+                self.kiosk_errands(errands);
+                self.draw_and_paint();
+            }
+        }
+    }
+
+    /// Opens the kiosk's view at `level` — the tabs' cursor on `tab` — or,
+    /// when `toggles` and it is open, closes it: the `…` is a switch, as the
+    /// bell is. Already open, it goes to the level asked for.
+    fn open_kiosk_view(
+        &mut self,
+        level: crate::kiosk_view::Level,
+        tab: Option<i64>,
+        toggles: bool,
+    ) {
+        if let Some(v) = self.kiosk_view.as_mut() {
+            if toggles {
+                self.kiosk_view = None;
+            } else {
+                v.go(level, tab);
+            }
+            self.first_page();
+            self.apply_geometry(self.interactivity());
+            self.draw_and_paint();
+            return;
+        }
+        let Some(window) = self.kiosk_target() else {
+            let m = self.texts.t(ronoctua_i18n::key::ECHO_KIOSK_NOT_A_KIOSK);
+            self.echo_message(m);
+            self.draw_and_paint();
+            return;
+        };
+        // FROM THE WINDOW MENU'S `B`: this view is one of that menu's doors,
+        // and takes the region from it rather than being refused by it.
+        self.window_menu = None;
+        if !self.region_is_free("kiosk-more") {
+            return;
+        }
+        let mut v = crate::kiosk_view::View::fresh(window, level);
+        v.go(level, tab);
+        self.kiosk_view = Some(v);
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// `kiosk-address-line`: the kiosk's address line, up or down.
+    fn flip_the_address_line(&mut self) {
+        let wanted = !self.modeline.address_line;
+        self.write_the_modeline(|p| p.address_line = wanted);
+    }
+
+    /// `modeline-adapt-kiosk`: the modeline adapted to the kiosk, or not.
+    fn flip_the_adaptation(&mut self) {
+        let wanted = !self.modeline.adapts(crate::kiosk::ADAPTER);
+        self.write_the_modeline(|p| {
+            p.adapt.insert(crate::kiosk::ADAPTER.to_owned(), wanted);
+        });
+    }
+
+    /// One switch of `modeline.json` changed and written — MERGED into what
+    /// the file says now (`Store::parsed`), so a hand's edit is not lost; and
+    /// refused, with a sentence, when the file will not parse: writing would
+    /// replace what is in it.
+    fn write_the_modeline(&mut self, change: impl FnOnce(&mut crate::adapt::Prefs)) {
+        let store = crate::adapt::store();
+        let Some(mut now) = store.parsed() else {
+            let m = self
+                .texts
+                .t(ronoctua_i18n::key::ECHO_MODELINE_WILL_NOT_PARSE);
+            self.echo_message(m);
+            self.draw_and_paint();
+            return;
+        };
+        change(&mut now);
+        let was = self.above_rows();
+        // THE COPY FIRST, so the file's own notice — inotify sees our write
+        // like anybody's — finds nothing new.
+        self.modeline = now.clone();
+        if let Err(e) = store.write(&now) {
+            tracing::warn!(error = %e, "could not write modeline.json");
+        }
+        if self.above_rows() != was {
+            self.apply_geometry(self.interactivity());
+        }
+        self.draw_and_paint();
+    }
+
+    /// `modeline.json` changed on disk: taken, unless it is what this footer
+    /// wrote.
+    fn modeline_changed(&mut self) {
+        let fresh = crate::adapt::store().read();
+        if fresh == self.modeline {
+            return;
+        }
+        let was = self.above_rows();
+        self.modeline = fresh;
+        if self.above_rows() != was {
+            self.apply_geometry(self.interactivity());
+        }
+        self.draw_and_paint();
+    }
+
+    /// The compositor said something the kiosks care about.
+    fn kiosk_follows(&mut self, e: &ronoctua_compositor::Event) {
+        let errands = self.kiosk.compositor(e, self.windows.all_windows());
+        self.kiosk_errands(errands);
+    }
+
+    /// The bridge heard something.
+    fn kiosk_heard(&mut self, heard: ronoctua_browser::serve::Heard) {
+        let errands = self.kiosk.heard(heard);
+        self.kiosk_errands(errands);
+        self.draw_and_paint();
+    }
+
+    /// Carries out what the kiosks asked for.
+    ///
+    /// AND SETTLES THE HEIGHT against what was APPLIED, never against a
+    /// reading taken here: every caller has already moved the state — the
+    /// bridge's state taken in, the focus moved onto or off a kiosk, the bars
+    /// flipped — so "before" read here is already "after", and the address
+    /// row would come and go inside a surface of the old height (the trap
+    /// `display_file_changed` records).
+    fn kiosk_errands(&mut self, errands: Vec<crate::kiosk::Errand>) {
+        use crate::kiosk::Errand;
+        for errand in errands {
+            match errand {
+                Errand::Send(conn, envelope) => match self.kiosk_server.as_ref() {
+                    Some(server) => {
+                        if let Err(e) = server.send(conn, &envelope) {
+                            tracing::warn!(conn, error = %e, "an order the bridge could not carry");
+                        }
+                    }
+                    None => tracing::warn!("no bridge socket to send an order on"),
+                },
+                Errand::Bars { window, shown } => self.kiosk_bars(window, shown),
+                Errand::Focus(window) => self.compositor_action(|wm| wm.focus_window(window)),
+                // THE QUESTION IS ASKED ON THE MINIBUFFER'S LINE, starting
+                // from what it is now — the address — and comes back as the
+                // same command's argument.
+                Errand::Ask { id, initial } => {
+                    self.mx.request_with(id, false, initial.as_deref());
+                    self.apply_geometry(KeyboardInteractivity::Exclusive);
+                }
+                Errand::Echo(said) => {
+                    let m = self.texts.t(said);
+                    self.echo_message(m);
+                }
+                Errand::Refused(why) => {
+                    let m = self
+                        .texts
+                        .t_with(ronoctua_i18n::key::ECHO_KIOSK_REFUSED, &[("why", &why)]);
+                    self.echo_message(m);
+                }
+                Errand::Launch(launching) => self.kiosk_launch(launching),
+                Errand::Persist => self.kiosk_persist(),
+                Errand::ArmTimer(after) => self.kiosk_arm_timer(after),
+            }
+        }
+        // A VIEW ABOUT A KIOSK THAT IS NOT ONE ANY MORE — released, its window
+        // closed — goes with it.
+        if self
+            .kiosk_view
+            .as_ref()
+            .is_some_and(|v| self.kiosk.pair_of(v.window).is_none())
+        {
+            self.kiosk_view = None;
+            self.first_page();
+            self.apply_geometry(self.interactivity());
+        } else if self.address_line_shown() != self.address_row_applied {
+            self.apply_geometry(self.interactivity());
+        }
+    }
+
+    /// Chrome's bars on a kiosk, shown or hidden — THE ONE PLACE the
+    /// mechanism is named: the compositor's `fullscreen application` on that
+    /// window, said ON or OFF and never the toggle, because the footer keeps
+    /// the only copy of which it is.
+    fn kiosk_bars(&mut self, window: u64, shown: bool) {
+        let id = if shown {
+            "wm-full-application-off"
+        } else {
+            "wm-full-application-on"
+        };
+        let Some(spoken) = ronoctua_scroll::deeds::spoken_of(id) else {
+            tracing::warn!(deed = id, "a deed the generated table does not have");
+            return;
+        };
+        match open_the_compositor().and_then(|mut wm| wm.deed_on(window, &spoken.deed, None)) {
+            Ok(()) => tracing::info!(window, shown, "the kiosk's bars"),
+            Err(e) => {
+                let m = format!("{e:#}");
+                tracing::warn!(deed = id, window, error = %m, "the compositor refused");
+                self.echo_message(m);
+            }
+        }
+    }
+
+    /// `kiosk.json` written again — the pairs a footer that restarts keeps.
+    fn kiosk_persist(&self) {
+        let Some(path) = ronoctua_xdg::runtime_file(KIOSK_FILE) else {
+            return;
+        };
+        let (Some(dir), Some(file)) = (path.parent(), path.file_name().and_then(|f| f.to_str()))
+        else {
+            return;
+        };
+        if let Err(e) = ronoctua_xdg::write_atomically(dir, file, &self.kiosk.kept()) {
+            tracing::warn!(error = %e, "could not write kiosk.json");
+        }
+    }
+
+    /// The clock that lets go of an unanswered launch — one at a time, and
+    /// only while a launch waits: an event arms it, it never ticks at rest.
+    fn kiosk_arm_timer(&mut self, after: std::time::Duration) {
+        if self.kiosk_timer {
+            return;
+        }
+        let Some(handle) = self.repeat.clone() else {
+            return;
+        };
+        let armed = handle.insert_source(
+            calloop::timer::Timer::from_duration(after),
+            |_, (), state: &mut Self| {
+                state.kiosk_expired();
+                calloop::timer::TimeoutAction::Drop
+            },
+        );
+        match armed {
+            Ok(_) => self.kiosk_timer = true,
+            Err(e) => tracing::warn!(error = %e, "the kiosk's clock could not be armed"),
+        }
+    }
+
+    /// The clock rang.
+    fn kiosk_expired(&mut self) {
+        self.kiosk_timer = false;
+        let errands = self.kiosk.expired(std::time::Instant::now());
+        self.kiosk_errands(errands);
+        self.draw_and_paint();
+    }
+
+    /// Starts a kiosk window, on a thread of its own: the profile is read
+    /// from Chrome's `Local State` — a file, and Chrome's — and the launch
+    /// holds its thread for as long as a Chrome it started runs. The verdict
+    /// comes back with the nonce (`kiosk_launched`).
+    fn kiosk_launch(&mut self, launching: crate::kiosk::Launching) {
+        let Some(sender) = self.kiosk_launch_sender.clone() else {
+            tracing::error!("no launch channel; the kiosk was not opened");
+            return;
+        };
+        let roots = self.software_context.as_ref().map(|c| c.roots.clone());
+        let spawned = std::thread::Builder::new()
+            .name("kiosk-launch".into())
+            .spawn(move || {
+                // THE PROFILE CHROME USED LAST, and `Default` when that is
+                // not a profile directory this system opens a kiosk in.
+                let profile = roots
+                    .as_ref()
+                    .and_then(|r| {
+                        ronoctua_software::web::chrome_profiles(r)
+                            .into_iter()
+                            .next()
+                    })
+                    .map(|p| p.directory)
+                    .filter(|d| ronoctua_browser::launch::is_profile_dir(d))
+                    .unwrap_or_else(|| ronoctua_software::web::DEFAULT_PROFILE.to_owned());
+                let argv = ronoctua_browser::launch::argv(&ronoctua_browser::launch::Launch {
+                    chrome: &launching.chrome,
+                    profile: &profile,
+                    extension_id: &launching.extension,
+                    nonce: &launching.nonce,
+                    url: launching.url.as_deref(),
+                });
+                let mut words = argv.iter().map(|a| a.to_string_lossy().into_owned());
+                let program = words.next().unwrap_or_default();
+                let args: Vec<String> = words.collect();
+                tracing::info!(profile, "a kiosk window is asked of Chrome");
+                let verdict = crate::foreign::launch_now(&program, &args, None);
+                let _ = sender.send((launching.nonce, verdict));
+            });
+        if let Err(e) = spawned {
+            tracing::error!(error = %e, "the kiosk's launching thread could not start");
+        }
+    }
+
+    /// A kiosk's launch verdict. A failure is said the way every launch's is
+    /// (`launched`), and the kiosks stop waiting for it: nothing will answer,
+    /// and "it opened as an ordinary window" twenty seconds later would be
+    /// false.
+    fn kiosk_launched(&mut self, nonce: &str, verdict: crate::foreign::Launch) {
+        if matches!(verdict, crate::foreign::Launch::Failed { .. }) {
+            self.kiosk.launch_failed(nonce);
+        }
+        self.launched(verdict);
+    }
+
+    /// `kiosk-open [address or words]` — `LEADER m b`, and the launcher's
+    /// `br.ronoctua.kiosk` entry with the address it was handed.
+    fn kiosk_open(&mut self, argument: Option<&str>) {
+        // THE BRIDGE IS LOOKED FOR AGAIN: a rebuild may have installed it
+        // since the footer started.
+        let ours = kiosk_bridge();
+        self.kiosk.bridge_found(ours.clone());
+        let chrome = self
+            .software_context
+            .as_ref()
+            .and_then(|c| c.tools.chrome.clone());
+        let nonce = ronoctua_browser::launch::nonce()
+            .map_err(|e| tracing::warn!(error = %e, "no nonce for a kiosk"))
+            .ok();
+        let errands = self.kiosk.open(
+            argument,
+            crate::kiosk::Opening {
+                chrome: chrome.as_deref(),
+                extension: ours.as_deref(),
+                nonce: nonce.as_deref(),
+            },
+            std::time::Instant::now(),
+        );
+        self.kiosk_errands(errands);
+        self.draw_and_paint();
+    }
+
+    /// A key, with the kiosk's view open.
+    fn kiosk_view_key(&mut self, key: ronoctua_keymap::Key) {
+        use ronoctua_keymap::Sym;
+        let Some(mut v) = self.kiosk_view.clone() else {
+            return;
+        };
+        let before = v.level;
+        // THE NOTATION WITH SHIFT LEFT IN THE LETTER (`M`, `R`, `K` are cells
+        // of their own) and `Ctrl` kept — how the cells spell it.
+        let plain = ronoctua_keymap::Key {
+            mods: ronoctua_keymap::Mods {
+                ctrl: key.mods.ctrl,
+                ..ronoctua_keymap::Mods::default()
+            },
+            sym: key.sym,
+        };
+        let errand = if v.is_a_grid() {
+            match key.sym {
+                Sym::Esc | Sym::Backspace => v.back(),
+                _ => v.pressed(&plain.notation()),
+            }
+        } else {
+            let Some(press) = crate::kiosk_view::press_of_key(v.level, plain) else {
+                return;
+            };
+            let r = self.kiosk.reading(v.window);
+            let rows = v.rows(r, self.screen_columns(), &self.texts);
+            v.press(press, r, &rows)
+        };
+        self.kiosk_view = Some(v);
+        self.kiosk_view_errand(errand, before);
+    }
+
+    /// A list's key, by its command's name — `LEADER :`.
+    fn kiosk_view_press(&mut self, press: crate::kiosk_view::Press) {
+        let Some(mut v) = self.kiosk_view.clone().filter(|v| !v.is_a_grid()) else {
+            return;
+        };
+        let before = v.level;
+        let r = self.kiosk.reading(v.window);
+        let rows = v.rows(r, self.screen_columns(), &self.texts);
+        let errand = v.press(press, r, &rows);
+        self.kiosk_view = Some(v);
+        self.kiosk_view_errand(errand, before);
+    }
+
+    /// A click on the view: a grid's cell runs, as a cell of the leader does;
+    /// a list's row is selected, and the second click is its `RET`
+    /// (invariant 19).
+    fn kiosk_view_clicked(&mut self, n: usize) {
+        let Some(mut v) = self.kiosk_view.clone() else {
+            return;
+        };
+        let before = v.level;
+        let errand = if v.is_a_grid() {
+            v.choose(n)
+        } else {
+            let r = self.kiosk.reading(v.window);
+            let rows = v.rows(r, self.screen_columns(), &self.texts);
+            if v.clicked(r, n, &rows) {
+                v.press(crate::kiosk_view::Press::Enter, r, &rows)
+            } else {
+                crate::kiosk_view::Errand::Redraw
+            }
+        };
+        self.kiosk_view = Some(v);
+        self.kiosk_view_errand(errand, before);
+    }
+
+    /// What the kiosk's view asked for. The command runs FIRST and the view
+    /// closes after it, the window menu's order.
+    fn kiosk_view_errand(
+        &mut self,
+        errand: crate::kiosk_view::Errand,
+        before: crate::kiosk_view::Level,
+    ) {
+        use crate::kiosk_view::Errand;
+        match errand {
+            Errand::Redraw => {}
+            Errand::Close => self.kiosk_view = None,
+            Errand::Run { id, arg, stays } => {
+                self.kiosk_run(id, arg.as_deref());
+                if !stays {
+                    self.kiosk_view = None;
+                }
+            }
+        }
+        // A NEW LEVEL, OR NO VIEW, starts on its first page.
+        if self.kiosk_view.as_ref().is_none_or(|v| v.level != before) {
+            self.first_page();
+        }
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// What the segment `id` of an adapter was about, as it was DRAWN.
+    fn adapter_target(&self, id: &str) -> Option<crate::adapt::Target> {
+        self.adapter_drawn
+            .iter()
+            .find(|(drawn, _)| *drawn == id)
+            .map(|(_, t)| t.clone())
+    }
+
+    /// Whether a drawn segment can be carried.
+    fn adapter_draggable(&self, id: &str) -> bool {
+        self.adapter_target(id)
+            .is_some_and(|t| self.adapted().is_some_and(|a| a.draggable(&t)))
+    }
+
+    /// A press on an adapter's segment — `false` when `id` is not one.
+    fn adapter_clicked(&mut self, id: &str, button: crate::adapt::Button) -> bool {
+        let Some(t) = self.adapter_target(id) else {
+            return false;
+        };
+        let act = self.adapted().and_then(|a| a.clicked(&t, button));
+        if let Some(act) = act {
+            self.adapter_act(act);
+        }
+        true
+    }
+
+    /// The wheel on an adapter's segment.
+    fn adapter_wheeled(&mut self, id: &str, lines: i64) {
+        let act = self
+            .adapter_target(id)
+            .and_then(|t| self.adapted().and_then(|a| a.wheeled(&t, lines)));
+        if let Some(act) = act {
+            self.adapter_act(act);
+        }
+    }
+
+    /// A carried segment let go: over itself it was a click, over another of
+    /// the adapter's a drop, anywhere else nothing.
+    fn segment_released(&mut self, from: &'static str, onto: Option<&'static str>) {
+        let Some(onto) = onto else {
+            return;
+        };
+        if onto == from {
+            self.adapter_clicked(from, crate::adapt::Button::Left);
+            return;
+        }
+        let act = match (self.adapter_target(from), self.adapter_target(onto)) {
+            (Some(a), Some(b)) => self.adapted().and_then(|ad| ad.dropped(&a, &b)),
+            _ => None,
+        };
+        if let Some(act) = act {
+            self.adapter_act(act);
+        }
+    }
+
+    /// What an adapter's segment does — a command of the registry.
+    fn adapter_act(&mut self, act: crate::adapt::Act) {
+        match act {
+            crate::adapt::Act::Run(id) => self.run_with(id, None),
+            crate::adapt::Act::RunWith(id, arg) => self.run_with(id, Some(&arg)),
+        }
+        self.draw_and_paint();
+    }
+
+    /// Whether the kiosk's address line is up: asked for (`modeline.json`),
+    /// on a kiosk the modeline is adapted to, with its bars hidden — in
+    /// normal mode Chrome's own omnibox is there — and with an address.
+    ///
+    /// FIELDS ONLY: `above_rows` asks this, and `Footer::metric` is built on
+    /// it (`the-footer-does-not-ask-itself`).
+    fn address_line_shown(&self) -> bool {
+        self.modeline.address_line
+            && self.modeline.adapts(crate::kiosk::ADAPTER)
+            && self
+                .windows
+                .focused()
+                .is_some_and(|w| self.kiosk.hidden(w.id) && self.kiosk.address_of(w.id).is_some())
+    }
+
+    /// Whether `y` is on the address line, while it is the row's tenant.
+    fn address_line_at(&self, y: f64) -> bool {
+        if !self.address_line_shown()
+            || (self.glance.is_some() && !self.flashing_on_the_minibuffer())
+        {
+            return false;
+        }
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let top = f64::from(self.above_line_at()) * line_height;
+        line_height > 0.0 && y >= top && y < top + line_height
+    }
+
+    /// What the message line says with the pointer on the address line.
+    fn address_hint_at(&self, y: f64) -> Option<String> {
+        if !self.address_line_at(y) {
+            return None;
+        }
+        let url = self
+            .windows
+            .focused()
+            .and_then(|w| self.kiosk.address_of(w.id))?;
+        Some(
+            self.texts
+                .t_with(ronoctua_i18n::key::HINT_KIOSK_ADDRESS, &[("url", url)]),
+        )
     }
 
     fn open_power(
@@ -22460,15 +23671,22 @@ impl Footer {
         self.draw_and_paint();
     }
 
-    /// The player's column, started — the one already up ends as this one
-    /// starts (`player_window`), so it is also how a hidden one is shown.
-    /// Said in the log, with the reason when it fails: a click that raised
-    /// nothing left no trace the first time.
-    fn raise_the_column(&mut self) {
+    /// The player's column, started on workspace `on` — the one already up,
+    /// wherever it is, ends as this one starts (`right_column::take`), so it
+    /// is also how the column is brought from another workspace. Said in the
+    /// log, with the reason when it fails: a click that raised nothing left
+    /// no trace the first time.
+    fn raise_the_column(&mut self, on: Option<&str>) {
         let _ = ronoctua_player::client::ensure();
+        let words = crate::column::Opening {
+            tenant: crate::right_column::Tenant::Player,
+            on: on.map(ToOwned::to_owned),
+            size: None,
+        }
+        .args();
         let started = std::env::current_exe().and_then(|me| {
             std::process::Command::new(me)
-                .arg("column")
+                .args(words)
                 .stdin(std::process::Stdio::null())
                 .spawn()
         });
@@ -22593,9 +23811,14 @@ impl Footer {
                     self.open_foreign(&me.to_string_lossy(), &["player".to_owned()], None);
                 }
             }
+            // THE COLUMN OF THIS WORKSPACE: closed when it is here, and
+            // brought here from wherever it is otherwise.
             "player-column" => {
-                if !crate::player_window::end_the_column() {
-                    self.raise_the_column();
+                let here = self.current_workspace_name();
+                if crate::right_column::toggle(crate::right_column::Tenant::Player, here.as_deref())
+                    == crate::right_column::Asked::Raise
+                {
+                    self.raise_the_column(here.as_deref());
                 }
             }
             other => tracing::warn!(id = other, "the player's view named no door of its own"),
@@ -25877,7 +27100,9 @@ fn segment_color(
         // THE CAMERA IS LOOKING — some program has one open, or the gestures
         // read the hands: a faded pink of its own, at the device's rung and
         // beside it. Not the recording red: looking is not yet keeping.
-        "camera" | "gestures" => tokens::color::MODELINE_WATCHING,
+        // AND THE RESIZER, in the gestures' colour: the owner's choice, for a
+        // mark that says the screen is not what it looks like.
+        "camera" | "gestures" | "resizer" => tokens::color::MODELINE_WATCHING,
         // A KEY MODE IS ON: every key means something else until it ends.
         "compositor-mode" => tokens::color::STATE_ACCENT,
         // THE KIND OF BUFFER. It used to carry the accent, from when it was the
@@ -26005,14 +27230,18 @@ mod tests {
             "the drawer is open"
         );
         // ON THE MINIBUFFER, the row above the modeline stays shut — no height.
-        assert!(!above_row_taken(true, true, true));
+        assert!(!above_row_taken(true, true, true, false));
         // OFF IT, the flash takes the row, as the glance does.
-        assert!(above_row_taken(true, true, false));
+        assert!(above_row_taken(true, true, false, false));
         assert!(
-            above_row_taken(true, false, true),
+            above_row_taken(true, false, true, false),
             "the glance keeps its row"
         );
-        assert!(!above_row_taken(false, false, false));
+        assert!(!above_row_taken(false, false, false, false));
+        // AND THE KIOSK'S ADDRESS LINE holds it on its own, and keeps it — at
+        // the same height — while a flash on the minibuffer comes and goes.
+        assert!(above_row_taken(false, false, false, true));
+        assert!(above_row_taken(true, true, true, true));
     }
 
     #[test]
@@ -26026,6 +27255,7 @@ mod tests {
         assert_eq!(paint("drawer", &[], None), color::MODELINE_DRAWER);
         assert_eq!(paint("selection", &[], None), color::MODELINE_SELECTION);
         assert_eq!(paint("gestures", &[], None), color::MODELINE_WATCHING);
+        assert_eq!(paint("resizer", &[], None), color::MODELINE_WATCHING);
         assert_eq!(paint("bt-2", &["bt-2"], None), color::STATE_ERROR);
         assert_eq!(paint("vpn", &[], None), color::TEXT_SECONDARY);
         assert_eq!(paint("ws-3", &[], Some("ws-3")), color::TEXT_PRIMARY);
@@ -26795,6 +28025,42 @@ mod tests {
             );
             assert!(lines >= 1, "an expansion of zero lines at {height} px");
         }
+    }
+
+    /// FAILS IF: the expansion's ceiling is measured on the monitor while the
+    /// resizer cuts it — a long list grew past the top of a screen cut short.
+    #[test]
+    fn the_ceiling_follows_the_room_the_resizer_leaves() {
+        let fixed = usize::from(FOOTER_LINES);
+        let cut = crate::resizer::State {
+            output: "DP-1".to_owned(),
+            screen_width_px: 3840,
+            screen_height_px: 2160,
+            width_px: 1000,
+            height_px: 600,
+        };
+        // THE FOLD `Footer::expansion_ceiling` runs: every screen's height
+        // and connector, and the cut.
+        let room = |screens: &[(u32, &str)]| {
+            crate::resizer::smallest_room(
+                screens.iter().map(|(h, n)| (*h, Some((*n).to_owned()))),
+                Some(&cut),
+            )
+        };
+        assert_eq!(
+            expansion_ceiling(room(&[(2160, "DP-1"), (2160, "HDMI-1")]), fixed),
+            expansion_ceiling(Some(600), fixed)
+        );
+        assert!(
+            expansion_ceiling(room(&[(2160, "DP-1")]), fixed)
+                < expansion_ceiling(Some(2160), fixed),
+            "the cut screen kept the monitor's ceiling"
+        );
+        assert_eq!(
+            expansion_ceiling(room(&[(2160, "HDMI-1")]), fixed),
+            expansion_ceiling(Some(2160), fixed),
+            "the cut of one screen reached another"
+        );
     }
 
     #[test]

@@ -237,6 +237,92 @@ avaliação; estas coisas não:
   ela não ensaia — um laço aninhado abre a câmera e escreve em `Videos`. Acaba com a decisão do dono
   sobre isso. Minúsculo.
 
+### 0.0000036. O Chrome quiosque — o que só o Chrome de verdade, numa máquina, prova · pequeno cada
+
+O quiosque (`LEADER m b`, `docs/ARCHITECTURE.md`, "O Chrome quiosque") foi medido numa VM com o
+Chrome 151 real, offline, e o `kiosk-vm` repete o que importa. Isto a VM não mostra:
+
+- **Vídeo HTML5 em tela cheia dentro de um quiosque** (E2): a tela cheia de verdade acabando tem de
+  devolver as barras escondidas, e a guarda "aguardando fullscreen" (`kiosk.rs`) não pode tomar o
+  relato do vídeo por um F11.
+- **O popup de outra extensão aberto numa aba** (E7), que é o que `RET` faz na lista de extensões:
+  falta ver quais popups funcionam fora da bolha.
+- **Onde o Chrome 151 guarda `extensions.pinned_extensions`** (E8). Na VM o `Preferences` ainda não
+  existia quando o host leu; o host lê o `Preferences` e depois o `Secure Preferences`, e falta ver
+  em qual deles uma fixação de verdade cai.
+- **`search.query` numa janela em tela cheia** (E10): a busca da linha de endereço abrindo na aba
+  certa.
+- **Sessão restaurada com um quiosque aberto** (E11): o Chrome reabre a janela sem o rodapé ter
+  pedido, e falta ver o que ela vira.
+- **`--new-window` com "continuar de onde parou"** ligado no perfil (E12).
+- **O tempo da primeira instalação forçada num perfil com uso** (E14). Na VM, com perfil novo,
+  foram uns 3 s.
+- **Os 8 px a mais de `innerWidth`** na tela cheia de aplicativo (520 num tile de 512): se é a
+  borda do compositor contada pelo Chrome, e se corta alguma coisa da página.
+- **O quiosque como PRIMEIRA partida do Chrome num perfil novo**: a extensão ainda não foi
+  instalada quando a linha de comando chega, e a página `kiosk.html` falha.
+
+- acabou quando: cada item foi visto no hardware do dono e virou frase no `ARCHITECTURE.md`, ou
+  conserto
+
+### 0.0000037. `/var/lib/ronoctua-browser` não sobrevive à impermanência · pequeno
+
+`nix/modules/persist.nix` não guarda o diretório. Com impermanência, a chave e o contador da versão
+renascem a cada boot, e a extensão ganha outro id a cada boot: é outra extensão para o Chrome (o
+comentário da chave em `nix/modules/browser-extension.nix` diz o que se perde com isso). O defeito é
+anterior ao quiosque.
+
+- acabou quando: `/var/lib/ronoctua-browser` está em `persist.nix`, e dois boots da `.#vm` dão o
+  mesmo id
+
+### 0.0000038. O redimensionador de tela: o que ficou de fora · pequeno cada
+
+- **O cursor de redimensionar sobre as bordas.** `cursor_shape.rs` pede a seta a cada `enter`, e a
+  porta precisa de um gancho para pedir outra forma sobre uma alça.
+- **Tamanhos prontos**, além das setas e do arrasto.
+- **A captura limitada à sala.** Hoje ela usa a saída inteira, cortinas inclusive.
+- **Lembrar o último tamanho.** Ligar de novo começa do maior.
+
+- acabou quando: cada um existe, ou está escrito no `ARCHITECTURE.md` por que não
+
+### 0.0000039. As colunas: o que ficou para depois · pequeno cada
+
+- **O shim do `column.pid` antigo** (`right_column::LEGACY`): sai quando nenhuma coluna aberta
+  por um binário anterior ao slot por espaço puder estar de pé.
+- **Duas telas de verdade**: que cada uma mostra a coluna do seu espaço, e que uma tela que some
+  estaciona a coluna. O `player-vm` tem uma saída só.
+- **`about-column-widen` existe e ninguém a lê**: a barra não tem frase (decisão do dono). Decidir
+  se a chave fica para um manual ou sai dos dois `.ftl`.
+
+- acabou quando: o shim saiu, o teste de duas telas existe, e a chave tem destino
+
+### 0.00000395. Os checks oferecidos do redimensionador, das colunas e do quiosque · pequeno cada
+
+Foram oferecidos com a entrega e não foram escritos. O que cada um pega:
+
+- `layer-surfaces-are-the-ones-we-know` — censo de `create_layer_surface`: uma superfície
+  layer-shell fora das conhecidas (rodapé, linha de vida, coluna, captura, cortinas) derruba o
+  build. É o inv. 14 conferido por máquina.
+- `a-column-is-a-column` — só `column.rs` cria superfície no namespace `ronoctua-column`: uma coluna
+  que não passa pela base perde tamanho, linha de foco e espaço de trabalho.
+- `focus_line` único em `separators-come-from-chrome` — a linha de foco só sai de
+  `chrome::focus_line`.
+- `one-browser-boundary` — só o `ronoctua-browser` fala o enquadramento do native messaging, lê o
+  `Preferences` de um perfil e monta a linha de comando do quiosque.
+- `native-hosts-take-chromes-origin` — comportamental e sem VM: cada host de native messaging,
+  chamado com `chrome-extension://<id>/` como primeiro argumento, responde ao enquadramento.
+- `extension-version-moves` — sem VM: duas builds diferentes da extensão saem com versões
+  crescentes, e a mesma build mantém o número. Hoje só o `extension-vm` confere.
+- `browser-socket-is-private` — o socket da ponte nasce no diretório de runtime da pessoa, nunca num
+  diretório compartilhado.
+- `extension-reads-extensions-only` — a permissão `management` só lê a lista (`getAll`): nenhuma
+  chamada liga, desliga ou remove extensão.
+- `resizer-vm`, no `slow` — liga o redimensionador, arrasta, confere a sala pelo retângulo que o
+  compositor dá ao espaço, e desliga.
+
+- acabou quando: cada um existe, foi quebrado de propósito, a mensagem exata foi vista e o arquivo
+  restaurado
+
 ### 0.000004. O que falta de `LEADER s l`, e o relance que não existe · médio cada
 
 A vista de idioma e região existe nas duas portas (`s l l` e `s l w`), troca de idioma ao vivo nas
@@ -776,22 +862,6 @@ zero enquanto ninguém pedir, e é por isso que fica para quando a API existir.
 
 - acabou quando: `notify-send --hint=string:glyph:md-bell` desenha o sino, e não desenha nada quando
   o nome não existe
-
-### 0. A extensão instalada fora da Web Store não foi provada num Chrome de verdade · médio
-
-Tudo o que é conferível já é conferido, e por check: a chave nasce na máquina, o `.crx` é assinado
-(a assinatura foi verificada com `openssl` contra a chave pública, do jeito que o Chrome verifica),
-o id da política é o id do `.crx`, e o `allowed_origins` do host de native messaging nomeia
-exatamente ele. O que **não** foi provado é o último passo: que uma build específica do Chrome
-honre `ExtensionSettings` com `installation_mode: force_installed` e um `update_url` `file://`.
-
-Não é código: é abrir o navegador depois de um rebuild e ver se a extensão está lá.
-
-- **se o Chrome recusar**, a saída honesta é carregar desempacotada uma vez pelo
-  `chrome://extensions` e escrever aqui que foi preciso. **Vigiar a pasta de downloads não conta**:
-  aquilo não pausa, não cancela e chama de transferência qualquer arquivo salvo.
-- acabou quando: um download começado no Chrome aparece em `t t` com pausa e cancelamento reais,
-  sem ninguém ter clicado em nada para instalar
 
 ### 0.1. O gerador de PO token roda sem o `canvas`, e isso pode parar de bastar · pequeno
 

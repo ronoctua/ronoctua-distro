@@ -955,6 +955,20 @@ rec {
     patchelf --shrink-rpath $out/bin/ronoctua-transfers
   '';
 
+  # THE KIOSK'S BRIDGE, extracted for the queue's reason and one of its own:
+  # Chrome starts it for every kiosk, as the person, beside their browser — a
+  # process whose job is to relay JSON between a pipe and a socket must not
+  # carry the renderer, wgpu and the wasm runtime into that. Its `[[bin]]`
+  # links `serde`, `rustix` and `ronoctua-xdg`, nothing else. The native-
+  # messaging manifest (`nix/modules/browser-extension.nix`) names THIS path.
+  browser = pkgs.runCommand "ronoctua-browser" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-browser $out/bin/
+    chmod +w $out/bin/ronoctua-browser
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-browser
+  '';
+
   # THE SOFTWARE CLI, extracted for the queue's reason and a sharper one.
   #
   # It is what the queue runs for every install, update and removal, and what

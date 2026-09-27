@@ -1,4 +1,4 @@
-//! What `LEADER d` glances at: what time it is somewhere, and what the weather
+//! What `LEADER g` glances at: what time it is somewhere, and what the weather
 //! and the money are doing there.
 //!
 //! # Two halves, and only one of them needs the network

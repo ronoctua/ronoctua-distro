@@ -1,5 +1,6 @@
 # The player in a VM: every family of format, the pictures, two videos in
-# step, MPRIS, and the column that narrows the windows and not the footer.
+# step, MPRIS, and the column that narrows the windows and not the footer —
+# at each of its sizes, on the workspace it belongs to.
 #
 # WHAT ONLY THIS PROVES
 # ---------------------
@@ -28,6 +29,25 @@
 let
   xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
   tools = import ../nix/player-tools.nix { inherit pkgs; };
+
+  # THE COLUMN'S WIDTHS COME FROM THE TOKENS, as the build bakes them: a cell
+  # is `cellWidthEm` of the base size, a size is its cells and the margin on
+  # each side (`chrome::FIELDS_LEAD`), and none passes `maxPct` of the screen
+  # (`column::width_px`). Nailed-down pixels would measure a column that no
+  # longer exists the day a token moves.
+  space = import ../assets/tokens/space.nix;
+  typography = import ../assets/tokens/typography.nix;
+  columnTokens = {
+    inherit (space.column)
+      large
+      medium
+      small
+      bar
+      maxPct
+      ;
+    cell = typography.size.base * typography.cellWidthEm;
+    margin = space.content.inset - space.files.gutter;
+  };
   setenv = lib.concatStringsSep " " (lib.mapAttrsToList (n: v: "--setenv=${n}=${v}") tools);
 
   # THE ADPLUG SOURCE, for two tunes it carries as test data: an AdLib song
@@ -221,8 +241,18 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import json
+    import math
     import re
     ${xvfb.prelude}
+
+    COLUMN = json.loads('${builtins.toJSON columnTokens}')
+
+    def column_width(size, out_w):
+        """`column::width_px`: the size's cells and both margins, rounded up,
+        never past `maxPct` of the screen and never under the bar."""
+        natural = lambda cells: math.ceil(round(COLUMN["cell"] * (cells + 2 * COLUMN["margin"]), 4))
+        most = out_w * COLUMN["maxPct"] // 100
+        return max(min(natural(COLUMN[size]), most), natural(COLUMN["bar"]))
 
     def player(what):
         return json.loads(machine.succeed(
@@ -441,9 +471,9 @@ pkgs.testers.runNixOSTest {
             "systemd-run --unit=column ${xvfb.env} --setenv=WAYLAND_DISPLAY=wayland-1 "
             "--setenv=XDG_RUNTIME_DIR=/run/user/0 --setenv=HOME=/root "
             f"--setenv=SCROLLSOCK={sock} --setenv=SWAYSOCK={sock} "
-            "${ronoctua-shell}/bin/ronoctua-shell column"
+            "${ronoctua-shell}/bin/ronoctua-shell column player"
         )
-        machine.wait_until_succeeds("ls /run/user/0 | grep -q column.pid", timeout=30)
+        machine.wait_until_succeeds("ls /run/user/0 | grep -q column-player.pid", timeout=30)
         machine.sleep(3)
         after = window_box(sock, "br.ronoctua.player")
         print(f"output {out_w}, window before {before}, after {after}")
@@ -464,7 +494,148 @@ pkgs.testers.runNixOSTest {
         assert told_before and after and after[-1] < told_before[-1], (
             f"the window was never told its new width: {told_before} then {after}"
         )
-        machine.succeed("systemctl stop column window")
+
+    # THE ROOM WINDOWS HAVE on a workspace is what a column carves: the
+    # workspace's own rectangle, which the compositor computes from every
+    # exclusive zone on its output. A window's width is a SHARE of it in this
+    # compositor, so the room — and not a window — is what is compared with
+    # the column's width.
+    msg = f"SCROLLSOCK={sock} SWAYSOCK={sock} ${scroll}/bin/scrollmsg"
+
+    def room(name):
+        spaces = json.loads(machine.succeed(f"{msg} -t get_workspaces"))
+        return next(w["rect"] for w in spaces if w["name"] == name)
+
+    def record():
+        """The slot's record: `<pid> <size> <workspace>`."""
+        return machine.succeed("cat /run/user/0/ronoctua-column-player.pid").strip().split(" ", 2)
+
+    def configured_of(unit):
+        said = machine.succeed(
+            f"journalctl -u {unit} --no-pager -o cat | grep 'configured' || true"
+        )
+        said = re.sub(r"\x1b\[[0-9;]*m", "", said)
+        return [int(w) for w in re.findall(r"width=(\d+) height=\d+ door=Window", said)]
+
+    def room_is(name, width, why):
+        try:
+            machine.wait_until_succeeds(
+                f"{msg} -t get_workspaces | python3 -c "
+                f"'import json,sys; w=[w for w in json.load(sys.stdin) if w[\"name\"]==\"{name}\"][0]; "
+                f"sys.exit(0 if w[\"rect\"][\"width\"]=={width} else 1)'",
+                timeout=30,
+            )
+        except Exception:
+            raise AssertionError(f"{why}: workspace {name} has {room(name)}, not {width} wide")
+
+    with subtest("the column stays on its workspace"):
+        # ON WORKSPACE 1, medium: the room is the screen less the column.
+        pid, size, where = record()
+        assert (size, where) == ("medium", "1"), record()
+        medium = column_width("medium", out_w)
+        room_is("1", out_w - medium, "the column's zone")
+        narrow = configured_of("window")[-1]
+        # WORKSPACE 2 is shown, and no screen shows 1: the column is parked,
+        # and a window opened there has the whole screen — and is TOLD so.
+        machine.succeed(f"{msg} workspace 2")
+        machine.wait_until_succeeds(
+            "journalctl -u column -o cat | grep -q 'the column is parked'", timeout=30
+        )
+        room_is("2", out_w, "a parked column still carves its zone")
+        machine.succeed(
+            "systemd-run --unit=window2 ${xvfb.env} --setenv=WAYLAND_DISPLAY=wayland-1 "
+            "--setenv=XDG_RUNTIME_DIR=/run/user/0 --setenv=HOME=/root "
+            "${ronoctua-shell}/bin/ronoctua-shell player"
+        )
+        machine.wait_until_succeeds("journalctl -u window2 -o cat | grep -q configured", timeout=60)
+        machine.sleep(2)
+        wide = configured_of("window2")
+        print(f"on workspace 2 the window was configured at {wide}, the one on 1 at {narrow}")
+        assert wide and wide[-1] > narrow, (
+            f"the window on workspace 2 was not given the column's room: {wide} vs {narrow}"
+        )
+        # BACK ON WORKSPACE 1: the SAME column is shown again, and the window
+        # there is told the room it has.
+        machine.succeed(f"{msg} workspace 1")
+        # SHOWN AGAIN, said by the column — the room alone could be the one
+        # workspace 1 kept from before, if nothing arranged it while hidden.
+        machine.wait_until_succeeds(
+            "journalctl -u column -o cat | grep -q 'the column is shown'", timeout=30
+        )
+        room_is("1", out_w - medium, "the column did not come back")
+        machine.sleep(2)
+        again = configured_of("window")
+        print(f"back on workspace 1 the window was configured at {again}")
+        assert again[-1] == narrow, f"the window was not told the column came back: {again}"
+        assert record()[0] == pid, f"the column is another process: {pid} -> {record()}"
+        machine.succeed(f"kill -0 {pid}")
+
+    with subtest("a size is a width"):
+        # EACH SIZE, from the command line (`--size`): the one before it
+        # ends as the new one takes the workspace.
+        for size in ["bar", "small", "large", "medium"]:
+            machine.succeed(
+                f"systemd-run --unit=column-{size} ${xvfb.env} --setenv=WAYLAND_DISPLAY=wayland-1 "
+                "--setenv=XDG_RUNTIME_DIR=/run/user/0 --setenv=HOME=/root "
+                f"--setenv=SCROLLSOCK={sock} --setenv=SWAYSOCK={sock} "
+                f"${ronoctua-shell}/bin/ronoctua-shell column player --size {size}"
+            )
+            want = column_width(size, out_w)
+            print(f"{size}: {want} px on a screen {out_w} wide")
+            room_is("1", out_w - want, f"the {size} column")
+            assert record()[1] == size, record()
+        # THE CLAMP IS SAID IN THE TOKENS, and the VM's screen is where it
+        # bites: on a screen this narrow even medium reaches the cap, so large
+        # may be no wider than medium — never wider than the cap, never
+        # narrower than medium.
+        medium, large = column_width("medium", out_w), column_width("large", out_w)
+        cap = out_w * COLUMN["maxPct"] // 100
+        assert medium <= large <= cap, (medium, large, cap)
+
+    with subtest("opening the player elsewhere moves it"):
+        old = record()[0]
+        machine.succeed(f"{msg} workspace 2")
+        machine.succeed(
+            "systemd-run --unit=column-moved ${xvfb.env} --setenv=WAYLAND_DISPLAY=wayland-1 "
+            "--setenv=XDG_RUNTIME_DIR=/run/user/0 --setenv=HOME=/root "
+            f"--setenv=SCROLLSOCK={sock} --setenv=SWAYSOCK={sock} "
+            "${ronoctua-shell}/bin/ronoctua-shell column player --on 2"
+        )
+        machine.wait_until_succeeds(
+            "test \"$(cut -d' ' -f3- /run/user/0/ronoctua-column-player.pid)\" = 2", timeout=30
+        )
+        # ONE PLAYER'S COLUMN: the one on workspace 1 is gone, not copied.
+        machine.wait_until_fails(f"kill -0 {old}", timeout=30)
+        room_is("2", out_w - column_width("medium", out_w), "the moved column")
+        # FROM HERE ON, what the window on workspace 1 is told: the configures
+        # before the switch belong to the sizes above.
+        told = len(configured_of("window"))
+        machine.succeed(f"{msg} workspace 1")
+        room_is("1", out_w, "workspace 1 kept the column that moved")
+        # AND THE WINDOW ALREADY OPEN THERE IS TOLD, once the column that took
+        # its room parks. The room above is what the compositor COMPUTED; the
+        # switch lays workspace 1 out while the column on 2 still carves its
+        # zone, and only the park — a layer surface whose role is destroyed —
+        # gives the width back. A window never told stays at `narrow` until
+        # the next click anywhere, the defect `settle_the_windows` exists for.
+        machine.wait_until_succeeds(
+            "journalctl -u column-moved -o cat | grep -q 'the column is parked'", timeout=30
+        )
+        widened = []
+        for _ in range(30):
+            widened = configured_of("window")[told:]
+            if widened and widened[-1] > narrow:
+                break
+            machine.sleep(1)
+        print(f"after the park the window on workspace 1 was configured at {widened}, not {narrow}")
+        assert widened and widened[-1] > narrow, (
+            f"the window on workspace 1 was not told the room the parked column gave back: "
+            f"{widened} after {narrow}"
+        )
+        machine.succeed(
+            "systemctl stop column-moved window window2; "
+            "systemctl stop column column-bar column-small column-large column-medium || true"
+        )
 
     with subtest("the small window floats in the bottom-right corner of the room, over the rest"):
         sock = socket_of("compositor")

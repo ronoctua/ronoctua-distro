@@ -54,6 +54,10 @@ ronoctua-xdg = { path = "../ronoctua-xdg" }
 # stay in the child's closure — `default-features = false` is the whole point
 # (`transfers-unit-is-narrow`).
 ronoctua-software = { path = "../ronoctua-software", default-features = false }
+# CHROME'S NATIVE-MESSAGING FRAMING and the caller's origin, from the crate
+# that owns the running Chrome: one reader of that framing for both hosts. Its
+# library is a JSON parser and a socket, nothing more.
+ronoctua-browser = { path = "../ronoctua-browser" }
 
 [[bin]]
 name = "ronoctua-transfers"

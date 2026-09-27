@@ -5,8 +5,10 @@
 //! - no argument: **the unit**. It listens on the socket and owns the ledger.
 //! - `open <address>`: what `xdg-open` runs when a **magnet** is clicked, or a
 //!   `.torrent` opened. It adds and leaves; it does not wait for the download.
-//! - `browser`: the **native-messaging host** Chrome starts. It translates
-//!   Chrome's length-prefixed framing into the queue's own asks.
+//! - `chrome-extension://<id>/`: the **native-messaging host**, as Chrome
+//!   starts it — the caller's origin is the first argument, because the
+//!   manifest's `path` carries none. It translates Chrome's length-prefixed
+//!   framing into the queue's own asks. `browser` is the same door by hand.
 //!
 //! One binary because all three need the same model, the same socket and the
 //! same resolver for "which engine takes this" — and three binaries would be
@@ -28,15 +30,49 @@ fn main() -> Result<()> {
         )
         .init();
 
-    match std::env::args().nth(1).as_deref() {
-        None => serve::listen_on(&wire::socket_path()?, &Arc::new(Shared::fresh_one())),
-        Some("open") => open(),
-        Some("browser") => ronoctua_transfers::browser::serve_stdio(),
-        Some(other) => {
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    match mode_of(&args) {
+        Mode::Unit => serve::listen_on(&wire::socket_path()?, &Arc::new(Shared::fresh_one())),
+        Mode::Open => open(),
+        Mode::Browser => ronoctua_transfers::browser::serve_stdio(),
+        Mode::Unknown(other) => {
             anyhow::bail!(
                 "I do not know how to do `{other}`; use `open <address>`, `browser`, or nothing"
             )
         }
+    }
+}
+
+/// Which of the three shapes this process is.
+#[derive(Debug, PartialEq, Eq)]
+enum Mode {
+    /// No argument: the unit.
+    Unit,
+    /// `open <address>`.
+    Open,
+    /// The browser's door: Chrome's origin as the first argument (what a real
+    /// browser passes), or `browser` by hand.
+    Browser,
+    /// Anything else, as it was given.
+    Unknown(String),
+}
+
+/// The shape, from the WHOLE argument vector (program first).
+///
+/// THE ORIGIN IS THE BROWSER'S ARGUMENT. Chrome starts a host with the
+/// caller's origin as argv[1] and the manifest cannot add a word of ours, so
+/// accepting only `browser` meant the host died on every message from a real
+/// browser — hidden by a test that passed `browser` by hand.
+fn mode_of(args: &[std::ffi::OsString]) -> Mode {
+    use ronoctua_browser::native::{Caller, caller};
+    match caller(args) {
+        Caller::Chrome { .. } | Caller::Hand => return Mode::Browser,
+        Caller::Unknown => {}
+    }
+    match args.get(1) {
+        None => Mode::Unit,
+        Some(a) if a == "open" => Mode::Open,
+        Some(other) => Mode::Unknown(other.to_string_lossy().into_owned()),
     }
 }
 
@@ -61,4 +97,37 @@ fn open() -> Result<()> {
     );
     ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work })
         .context("the transfer queue did not take the request")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(args: &[&str]) -> Vec<std::ffi::OsString> {
+        std::iter::once("ronoctua-transfers")
+            .chain(args.iter().copied())
+            .map(std::ffi::OsString::from)
+            .collect()
+    }
+
+    #[test]
+    fn chromes_origin_opens_the_browsers_door() {
+        let origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
+        assert_eq!(mode_of(&argv(&[origin])), Mode::Browser);
+        assert_eq!(
+            mode_of(&argv(&[origin, "--parent-window=0"])),
+            Mode::Browser
+        );
+        assert_eq!(mode_of(&argv(&["browser"])), Mode::Browser);
+    }
+
+    #[test]
+    fn the_other_shapes_are_what_they_were() {
+        assert_eq!(mode_of(&argv(&[])), Mode::Unit);
+        assert_eq!(mode_of(&argv(&["open", "magnet:?xt=x"])), Mode::Open);
+        assert_eq!(
+            mode_of(&argv(&["chrome-extension://nope/"])),
+            Mode::Unknown("chrome-extension://nope/".into())
+        );
+    }
 }

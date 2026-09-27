@@ -3924,7 +3924,7 @@ cmd-geo-remove = Remove the installed region under the cursor
 group-geo = geography
 
 # ---------------------------------------------------------------------------
-# LEADER d — the glance: what time it is somewhere, and the weather and money.
+# LEADER g — the glance: what time it is somewhere, and the weather and money.
 # ---------------------------------------------------------------------------
 world-place-europe-london = London
 world-place-america-sao-paulo = Brasília
@@ -4502,6 +4502,34 @@ pointers-speed-value = { $speed }
 pointers-is-first = the cursor the keyboards are on
 
 # =====================================================================
+# LEADER d — development: tools for whoever builds this distro.
+# =====================================================================
+# The screen resizer (`LEADER d r`, `resizer.rs`): two curtains cut the
+# screen, and everything is laid out in the room they leave. Its line on the
+# bottom curtain says the room in pixels and in the grid, and each key's word
+# is short because the line is one line; `about-` is what the pointer reads.
+group-dev = development
+cmd-dev-resizer = Resize the whole screen
+hint-resizer = The screen is cut to { $width } × { $height } px — { $columns } columns by { $lines } lines. Click to have it whole again.
+echo-resizer-on = The screen can be resized: drag its right edge, its bottom edge or the corner, or click a curtain and use the keys its line teaches.
+echo-resizer-off = The screen is whole again.
+echo-resizer-failed = The screen could not be resized: { $why }
+resizer-size = { $width } × { $height } px
+resizer-grid = { $columns } columns × { $lines } lines
+resizer-off = whole screen
+about-resizer-off = Ends the resizing: the curtains go and the screen is whole again.
+resizer-narrower = narrower
+about-resizer-narrower = One column narrower, or a stride of them with Shift held.
+resizer-wider = wider
+about-resizer-wider = One column wider, or a stride of them with Shift held.
+resizer-shorter = shorter
+about-resizer-shorter = One line shorter, or a stride of them with Shift held.
+resizer-taller = taller
+about-resizer-taller = One line taller, or a stride of them with Shift held.
+resizer-largest = largest
+about-resizer-largest = As large as the curtains allow — everything but the two strips they keep to be grabbed.
+
+# =====================================================================
 # THE CAMERA STUDIO — `LEADER m c` (the app) and `LEADER s c` (settings)
 # =====================================================================
 group-camera = camera
@@ -4766,7 +4794,7 @@ player-title = Player
 
 cmd-player-open = The player, in the footer
 cmd-player-window = The player, in a window
-cmd-player-column = The player, in the column on the right (or close it)
+cmd-player-column = The player's column, on this workspace (or close it)
 cmd-player-play-file = Play a file or an address
 cmd-player-enqueue = Add a file or an address to the queue
 cmd-player-follow = Play another video in step with this sound
@@ -4793,6 +4821,22 @@ cmd-player-only = Only what plays — the video or the cover — in the region, 
 cmd-player-maximize = What plays, on the whole screen — and back
 cmd-player-pip = What plays, in a small window in the corner, over the others — and back
 cmd-player-mute = Mute the player, or give its sound back
+
+# ---------------------------------------------------------------------
+# THE RIGHT COLUMN'S OWN LINE (`crate::column`): its sizes, and the keys
+# that change them, after its tenant's own
+# ---------------------------------------------------------------------
+column-wider = wider
+column-narrower = narrower
+about-column-wider = One size wider; from the bar, back to the size it had
+about-column-narrower = One size narrower, down to the bar
+about-column-large = Large: the widest the column gets
+about-column-medium = Medium: the usual width
+about-column-small = Small: the same content, narrower
+about-column-bar = Bar: a strip with a few controls
+about-column-widen = Back to the size it had before the bar
+column-bar-not-offered = This column has nothing made for the bar yet
+column-no-room = This screen has no room for a wider column
 
 player-up = up
 player-down = down
@@ -5615,3 +5659,126 @@ notif-action-transfers-panel = Open the queue
 notif-action-software-maintenance = See the updates
 notif-action-software-trials = See the trials
 notif-action-software-android = Open Android
+
+# =====================================================================
+# THE CHROME KIOSK — `LEADER m b`: the person's own Chrome without its
+# bars, the modeline that adapts to it (`adapt.rs`, `kiosk.rs`), its view
+# (`kiosk_view.rs`) and the `,` group. A key is never text here.
+# =====================================================================
+cmd-kiosk-open = Open your Chrome as a kiosk, without its bars
+cmd-kiosk-back = Back, in the kiosk's tab
+cmd-kiosk-forward = Forward, in the kiosk's tab
+cmd-kiosk-reload = Reload the kiosk's tab
+cmd-kiosk-tab = Bring this tab of the kiosk to the front
+cmd-kiosk-tab-next = Next tab of the kiosk
+cmd-kiosk-tab-previous = Previous tab of the kiosk
+cmd-kiosk-tab-close = Close the kiosk's tab
+cmd-kiosk-tab-left = Move the kiosk's tab one place left
+cmd-kiosk-tab-right = Move the kiosk's tab one place right
+cmd-kiosk-tab-move = Put a kiosk tab in another place
+cmd-kiosk-new-tab = Open an address in a new tab of the kiosk
+cmd-kiosk-address = Edit the address of the kiosk's tab
+cmd-kiosk-zoom = The kiosk's zoom, in steps
+cmd-kiosk-zoom-in = Zoom the kiosk's page in
+cmd-kiosk-zoom-out = Zoom the kiosk's page out
+cmd-kiosk-zoom-reset = Put the kiosk's zoom back to 100%
+cmd-kiosk-chrome-ui = Show or hide Chrome's own bars on the kiosk
+cmd-kiosk-address-line = Show or hide the address line above the modeline
+cmd-kiosk-more = Everything the kiosk can do
+cmd-kiosk-tabs = Every tab of the kiosk
+cmd-kiosk-extensions = The kiosk's extensions
+cmd-kiosk-extension = Open an extension's page in a new tab
+cmd-kiosk-extension-options = Open an extension's options
+cmd-kiosk-extension-details = An extension's details in Chrome
+cmd-kiosk-release = Make the kiosk an ordinary Chrome window again
+cmd-modeline-adapt-kiosk = Adapt the modeline to the kiosk, or not
+cmd-kiosk-list-down = Next row of the kiosk's list
+cmd-kiosk-list-up = Previous row of the kiosk's list
+cmd-kiosk-list-enter = The row of the kiosk's list: the tab to the front, or the extension's page
+cmd-kiosk-tab-earlier = Move the tab under the cursor one place earlier
+cmd-kiosk-tab-later = Move the tab under the cursor one place later
+cmd-wm-full-application-on = Tell the window it is fullscreen, in its own tile
+cmd-wm-full-application-off = Tell the window it is no longer fullscreen
+kiosk-list-down = down
+kiosk-list-up = up
+kiosk-list-enter = open
+kiosk-tab-earlier = earlier
+kiosk-tab-later = later
+kiosk-tab-close = close
+kiosk-new-tab = new tab
+kiosk-extension-options = options
+kiosk-extension-details = details
+ask-kiosk-address = The address, or words to search
+ask-kiosk-new-tab = Address or words for the new tab (empty opens a blank one)
+kiosk-tabs-more = +{ $count }
+kiosk-zoom-percent = { $percent }%
+kiosk-tab-front = { $host }, in front
+kiosk-menu-back = Back
+kiosk-menu-forward = Forward
+kiosk-menu-reload = Reload
+kiosk-menu-new-tab = New tab
+kiosk-menu-address = Edit the address
+kiosk-menu-tabs = Tabs
+kiosk-menu-tab-previous = Previous tab
+kiosk-menu-tab-next = Next tab
+kiosk-menu-tab-left = Tab to the left
+kiosk-menu-tab-right = Tab to the right
+kiosk-menu-tab-close = Close the tab
+kiosk-menu-extensions = Extensions
+kiosk-menu-zoom = Zoom
+kiosk-menu-zoom-in = Bigger
+kiosk-menu-zoom-out = Smaller
+kiosk-menu-zoom-reset = Actual size
+kiosk-menu-show-chrome = Show Chrome's bars
+kiosk-menu-hide-chrome = Hide Chrome's bars
+kiosk-menu-address-show = Show the address line
+kiosk-menu-address-hide = Hide the address line
+kiosk-menu-adapt = Adapt the modeline
+kiosk-menu-plain = Plain modeline
+kiosk-menu-release = Ordinary window
+kiosk-heading-pinned = Pinned
+kiosk-heading-others = The others
+kiosk-heading-disabled = Turned off
+kiosk-no-extensions = This Chrome has no extension besides ours.
+window-menu-kiosk = Kiosk
+hint-kiosk-back = One page back in this tab
+hint-kiosk-forward = One page forward in this tab
+hint-kiosk-reload = Load this page again
+hint-kiosk-tabs-before = { $count ->
+        [one] One more tab to the left
+       *[other] { $count } more tabs to the left
+    } — click lists them all
+hint-kiosk-tabs-after = { $count ->
+        [one] One more tab to the right
+       *[other] { $count } more tabs to the right
+    } — click lists them all
+hint-kiosk-tab = { $title } — click brings it to the front, drag it to move it, the middle button closes it, the right button lists every tab
+hint-kiosk-tab-current = { $title } — the tab in front; click lists every tab, the middle button closes it
+hint-kiosk-new-tab = A new tab, at an address or a search
+hint-kiosk-ext = { $name } — click opens its page in a new tab, the right button its options
+hint-kiosk-extensions = { $names } — click lists every extension
+hint-kiosk-extensions-none = No extension besides ours — click lists them
+hint-kiosk-zoom = The page at { $percent }% — the wheel changes it, click opens the steps, the right button goes back to 100%
+hint-kiosk-address-line-on = The address line is up — click hides it
+hint-kiosk-address-line-off = The address line is hidden — click shows it above the modeline
+hint-kiosk-chrome-hidden = Chrome's bars are hidden — click shows them (normal mode)
+hint-kiosk-chrome-shown = Chrome's bars are showing — click hides them again
+hint-kiosk-more = Everything the kiosk can do
+hint-kiosk-offline-bridge = The browser bridge is not installed on this machine: the kiosk can only show and hide Chrome's bars
+hint-kiosk-offline-chrome = Chrome has not connected — the ronoctua extension may be off
+hint-kiosk-offline-version = The extension is another version than the footer: restart Chrome
+hint-kiosk-address = { $url } — click edits the address
+echo-kiosk-offline = Chrome is not connected, so the kiosk cannot do that yet.
+echo-kiosk-unmatched = The kiosk window did not answer; it opened as an ordinary Chrome window.
+echo-kiosk-no-history = Nothing behind in this tab.
+echo-kiosk-no-future = Nothing ahead in this tab.
+echo-kiosk-not-a-kiosk = The window in focus is not a kiosk.
+echo-kiosk-address-refused = That address cannot open here: only http and https.
+echo-kiosk-refused = Chrome refused: { $why }
+echo-kiosk-no-chrome = Chrome is off on this system.
+echo-kiosk-no-bridge = The browser bridge is not installed, so a kiosk cannot be paired.
+echo-kiosk-no-page = That extension has no page of its own; its details opened instead.
+echo-kiosk-no-extension = No extension by that id is in this Chrome.
+echo-kiosk-no-nonce = No random number could be read to pair a kiosk.
+echo-kiosk-no-tab = The kiosk has no such tab.
+echo-modeline-will-not-parse = modeline.json will not parse, and writing would replace what is in it.

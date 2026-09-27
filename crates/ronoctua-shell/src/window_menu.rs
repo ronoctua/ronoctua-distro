@@ -211,6 +211,10 @@ pub struct View {
     workspaces: Vec<Workspace>,
     /// How many screens there are: moving to another one needs another one.
     screens: usize,
+    /// Whether the window is a Chrome kiosk (`crate::kiosk`): its own view
+    /// is one cell away, which is what reaches it when the modeline is not
+    /// adapted to it.
+    kiosk: bool,
     /// Where the grid is.
     pub level: Level,
 }
@@ -230,6 +234,7 @@ impl View {
             selection: Selection::EMPTY,
             workspaces,
             screens,
+            kiosk: false,
             level: Level::Root,
         }
     }
@@ -256,6 +261,7 @@ impl View {
             selection: Selection::EMPTY,
             workspaces: Vec::new(),
             screens: 0,
+            kiosk: false,
             level,
         }
     }
@@ -278,6 +284,13 @@ impl View {
     #[must_use]
     pub fn with_drawer(mut self, drawer: Vec<Window>) -> Self {
         self.drawer = drawer;
+        self
+    }
+
+    /// The same menu, knowing whether its window is a Chrome kiosk.
+    #[must_use]
+    pub const fn with_kiosk(mut self, kiosk: bool) -> Self {
+        self.kiosk = kiosk;
         self
     }
 
@@ -421,6 +434,13 @@ impl View {
                 ]);
                 if w.floating {
                     out.push(run("R", key::WINDOW_MENU_FLOAT_KEYS, "wm-mode-floating"));
+                }
+                // A KIOSK'S OWN VIEW (`crate::kiosk_view`), on `B` for
+                // browser — `K` is the group's move up. It is how the pointer
+                // reaches the kiosk's toolbar when the modeline is not adapted
+                // to it, and the leader walks it into `LEADER w B`.
+                if self.kiosk {
+                    out.push(run("B", key::WINDOW_MENU_KIOSK, "kiosk-more"));
                 }
                 out.extend([
                     run("d", key::WINDOW_MENU_CLOSE, "buffer-close"),
@@ -1019,7 +1039,9 @@ pub fn leader_bindings() -> &'static Leader {
             w.sticky = false;
             let mut selection = Selection::default();
             selection.deed("wm-select", Some(1));
+            // AND AS A KIOSK, so its one cell has its sequence too.
             let mut v = View::fresh(w.clone(), Vec::new(), 2)
+                .with_kiosk(true)
                 .with_drawer(vec![w])
                 .with_trails(Trails {
                     count: 9,
@@ -1149,9 +1171,12 @@ mod tests {
     fn spaces(current: u32) -> Vec<Workspace> {
         (1..=3)
             .map(|n| Workspace {
+                name: n.to_string(),
                 number: Some(n),
                 focused: n == current,
                 occupied: n != 3,
+                visible: n == current,
+                output: Some("eDP-1".to_owned()),
             })
             .collect()
     }
@@ -1557,6 +1582,26 @@ mod tests {
             missing.is_empty(),
             "no leader sequence for:\n{}",
             missing.join("\n")
+        );
+    }
+
+    /// A kiosk's window offers its view on `B`, no other window does, and the
+    /// leader has the same cell as `LEADER w B`.
+    #[test]
+    fn a_kiosk_offers_its_view_on_b() {
+        let t = texts();
+        let plain = View::fresh(window(false, false, false), spaces(1), 1);
+        assert!(!ids(&plain).contains(&Does::Run("kiosk-more")));
+        let kiosk = View::fresh(window(false, false, false), spaces(1), 1).with_kiosk(true);
+        assert!(ids(&kiosk).contains(&Does::Run("kiosk-more")));
+        let keys: Vec<&str> = kiosk.entries(&t).iter().map(|e| e.key).collect();
+        assert_eq!(keys.iter().filter(|k| **k == "B").count(), 1);
+        let (binds, _) = leader_bindings();
+        assert!(
+            binds
+                .iter()
+                .any(|(s, id, arg)| s == "w B" && *id == "kiosk-more" && arg.is_none()),
+            "LEADER w B is not generated"
         );
     }
 

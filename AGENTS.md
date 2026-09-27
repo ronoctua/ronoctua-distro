@@ -66,13 +66,19 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
 12. **`ronoctua-design`, `ronoctua-protocol` e `ronoctua-syntax` compilam para `wasm32-wasip2`.**
 13. **Nenhum dado pessoal no repositório.** `host.nix`, `facter.json` e `~/.shellrc.local` nascem na
     máquina.
-14. **A chrome é o rodapé e, no máximo, uma coluna à direita por vez.** A coluna vai do topo até o
-    rodapé e não o estreita: modeline, minibuffer e faixa de notificação ficam com a largura toda.
-    Não existe barra de cima, relógio, taskbar, menu iniciar, dock, ícone de desktop nem popup
-    flutuante; tray, notificação e expansão são a mesma superfície crescendo. Duas exceções
+14. **A chrome é o rodapé e, no máximo, uma coluna à direita por espaço de trabalho.** Cada tela
+    mostra a coluna do espaço que está nela, e um inquilino existe uma vez só: abri-lo em outro
+    espaço o muda de lugar. A coluna vai do topo até o rodapé e não o estreita: modeline, minibuffer
+    e faixa de notificação ficam com a largura toda. Em qualquer tamanho, barra inclusive, ela é um
+    inquilino desenhado numa faixa, nunca dock nem taskbar: não lista nem lança programas. Não
+    existe barra de cima, relógio, taskbar, menu iniciar, dock, ícone de desktop nem popup
+    flutuante; tray, notificação e expansão são a mesma superfície crescendo. Três exceções
     aprovadas: a sobreposição da captura (layer `overlay` que só existe enquanto se escolhe o que
-    capturar e some antes de o arquivo ser escrito — `capture.rs`, 2026-09-26) e a linha de vida,
-    que ocupa o lugar do rodapé só enquanto ele está morto.
+    capturar e some antes de o arquivo ser escrito — `capture.rs`, 2026-09-26); as cortinas do
+    redimensionador de tela, ferramenta de desenvolvimento (`LEADER d r`): duas superfícies na
+    layer `overlay`, à direita e embaixo, que só existem enquanto ele está ligado e cobrem só o que
+    ele cortou (`resizer.rs`, 2026-09-27); e a linha de vida, que ocupa o lugar do rodapé só
+    enquanto ele está morto.
 15. **Sem sombra e sem elevação.** Card e linha separatória são permitidos, e também colunas lado a
     lado, cada uma com as próprias seleções — uma seleção não precisa ocupar a linha inteira
     (`selection` e `rule` levam `column` e `columns`; `0` = até a borda). Preferir um layout limpo é
@@ -130,6 +136,9 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
 - **`ronoctua-software`**: não é daemon. É a biblioteca e a CLI dos programas da pessoa
   (`LEADER i`); o rodapé a usa para ler e buscar, e toda ordem que muda algo é um
   `Work::Software` que a fila roda como filho, num escopo próprio da `app.slice`.
+- **`ronoctua-browser`**: o host de native messaging que o Chrome sobe enquanto existe uma janela
+  quiosque. Não é daemon nosso: vive e morre com a porta da extensão. Ele conecta no rodapé, que é
+  o servidor (`ronoctua[-dev]-browser.sock`), e manda o estado inteiro, um JSON por linha.
 - **Buffers**: componentes WASM hospedados pelo shell (veja abaixo).
 
 ### O rodapé
@@ -152,6 +161,12 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
   conteúdo vira recursão — a shell já morreu duas vezes assim, de stack overflow e sem diagnóstico.
   O que a região sabe de si é guardado onde foi medido (cobra `the-footer-does-not-ask-itself`, que
   também recusa ciclos novos entre métodos do `Footer`).
+- **A modeline se adapta a um programa** (`adapt.rs`; hoje só o Chrome quiosque, `kiosk.rs`): o
+  adaptador toma a janela em foco, tira o título, põe o nome do programa primeiro e os segmentos
+  dele logo depois. O que foi desenhado responde ao ponteiro (`adapter_drawn`, ao lado de
+  `modeline_placed`), e tudo o que um segmento roda é um comando do registro que a vista do
+  adaptador e o grupo `,` também alcançam: a grade da vista gera o `,` (cobra
+  `footer-mouse-reaches-nothing-new`). Liga e desliga em `modeline.json` (ausente é ligado).
 - Se o rodapé morre, o `OnFailure=` levanta a linha de vida (`ronoctua-shell lifeline <unidade>`).
   Os binds de emergência morrem com ele, porque escrevem no socket dele. `Ctrl+Alt+Del` é o resgate.
 
@@ -179,7 +194,14 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
   escala da tela em que está (`hidpi.rs`; cobra `every-window-knows-its-scale`) e repete teclas
   (`get_keyboard_with_repeat`; cobra `every-window-repeats` — o rodapé é a exceção, porque repetir
   a leader é erro).
-- A coluna à direita é um slot só (`right_column.rs`): quem toma a borda encerra quem estava nela.
+- As colunas à direita têm uma base só, `column::Column<T>` (`column.rs`), como toda janela tem a
+  `Door`: tamanho (grande, média, pequena e barra), linha de controle (a linha 0), linha de foco e
+  espaço de trabalho são dela, e o inquilino (`column::Tenant`) só desenha na `column::Area` que
+  recebe; o cabeçalho dele desce para a linha 1 (`Content::header_line`, `chrome::Hinted::at`). O
+  slot é um por espaço (`right_column.rs`, um `column-<inquilino>.pid` com `<pid> <tamanho>
+  <espaço>`): quem toma um espaço encerra quem estava nele, e um inquilino aberto em outro espaço
+  sai de onde estava. Fora da tela a coluna fica estacionada (`Shell::Parked`): o processo e o
+  estado ficam, a superfície não.
 
 ### A fronteira com o compositor
 
@@ -281,7 +303,8 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | zip | `ronoctua-zip` (cobra `one-zip-reader`) |
 | keyd | `ronoctua-keyboards` |
 | arquivos de preferência | `ronoctua-store`, sobre o `ronoctua-xdg` |
-| perfil Nix da pessoa, Flatpak, AppImage, Waydroid, web apps do Chrome | `ronoctua-software` (cobra `one-software-boundary`) |
+| perfil Nix da pessoa, Flatpak, AppImage, Waydroid, web apps do Chrome (o `Local State`) | `ronoctua-software` (cobra `one-software-boundary`) |
+| o Chrome em execução: a extensão, o native messaging, o `Preferences` de um perfil e as janelas quiosque | `ronoctua-browser` |
 
 ## Regras de interface
 
@@ -299,6 +322,10 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   `cmd-<id>` para comando do registro e `about-<id>` para tecla de vista (cobra
   `every-hint-key-explains-itself`). Essa linha sai da região, nunca da altura do rodapé: se o
   rodapé crescesse, sairia de baixo do ponteiro, o hover acabaria e a linha sumiria, em laço.
+- A coluna muda de tamanho com `C-<left>` e `C-<right>`, lidas antes do inquilino
+  (`column::OF_THE_COLUMN`). Na linha de controle, a frase do glifo sob o ponteiro vai na própria
+  linha; no tamanho barra, o glifo acende e não se explica: a barra é um controle remoto de glifos
+  conhecidos (decisão do dono, 2026-09-27).
 - Toda vista da região ensina `Esc` primeiro, e ele é clicável (`chrome::with_the_way_back`). O
   botão Voltar do mouse sobre o rodapé ou sobre uma janela é o mesmo `Esc`.
 - Tecla nunca é texto no `.ftl`: a sequência vem de uma constante ao lado do binding mais
@@ -374,8 +401,9 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   (`keymap-no-collision` derruba o build). `LEADER :` alcança qualquer comando pelo nome.
 - Grupos da leader: `s` é o sistema (`s q`, as saídas), `w` é janela e buffer (são a mesma coisa,
   inv. 4), `m` é miscelânea — o que não pertence a outro grupo, e é isso que deixa `c` ser o
-  clipboard sozinho — e `,` é o grupo do buffer em foco. Numa janela de buffer, a tecla local `, r`
-  é o acorde `C-r`; letra sozinha é texto.
+  clipboard sozinho —, `d` é desenvolvimento (ferramentas para quem constrói a distro; hoje só
+  `d r`, o redimensionador de tela) e `,` é o grupo do buffer em foco. O relance (`world-glance`) é
+  `g`. Numa janela de buffer, a tecla local `, r` é o acorde `C-r`; letra sozinha é texto.
 - Comando de uma vista usa `C-`, nunca `M-`: `M-` é a família dos acordes do compositor e não chega
   à janela.
 - O layout de teclado mora num lugar só (`nix/keyboard-xkb.nix`). O xkb não recusa layout que não
@@ -530,6 +558,9 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   não chega ao status de saída — leia a saída.
 - No Xvfb ninguém tem foco (`xdotool windowfocus`), e `xdotool key` solta a tecla; para segurar, use
   `keydown`.
+- Uma porta por processo. `theme::reload()` e `toolkits::reload()` respondem "mudou?" uma vez por
+  processo, então a segunda porta do mesmo processo nunca repinta com tema ou tamanho de texto
+  novo (é por isso que o redimensionador são três processos).
 
 ### Sistema
 
@@ -547,6 +578,9 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   herdam o `PATH` da sessão (cobra `session-units-inherit-the-session-path`).
 - Unidade com sandbox (a do Tor é um chroot) só enxerga o que foi montado nela, e só teste de VM vê
   isso — teste unitário nenhum.
+- O Chrome roda como a pessoa: o que a política dele aponta por `file://` (o `update.xml`, o `.crx`)
+  tem de estar num diretório que ela atravesse. Com `/var/lib/ronoctua-browser` em `0700`, a
+  instalação forçada esperava para sempre, sem log; a chave se protege pelo próprio modo (`0600`).
 - Configurar uma unidade pelo nome errado cria uma unidade fantasma que não configura nada (é
   `dbus-broker.service`, não `dbus`).
 - `grep -r` não segue symlink, e todo `/etc` do NixOS é symlink: use `-R`.

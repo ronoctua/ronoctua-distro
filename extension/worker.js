@@ -19,6 +19,10 @@
 // out loud rather than papered over.
 
 import { TEXT, HOST } from './generated.js';
+// THE KIOSK'S BRIDGE, in a module of its own: its port, its listeners and its
+// orders have nothing to do with the queue, and it opens nothing until a kiosk
+// page is born.
+import { kioskBorn } from './bridge.js';
 
 // Whether a download the browser starts is handed over. Kept in `storage.sync`
 // so it is one answer per person and not per machine.
@@ -150,12 +154,16 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-// What the popup asks for. The popup is part of the extension, so this is not
-// a door onto the outside: `externally_connectable` is absent, and no page can
-// reach it.
-chrome.runtime.onMessage.addListener((message, _sender, reply) => {
+// What the popup and the kiosk page ask for. Both are part of the extension,
+// so this is not a door onto the outside: `externally_connectable` is absent,
+// and no page can reach it.
+chrome.runtime.onMessage.addListener((message, sender, reply) => {
   (async () => {
     switch (message && message.kind) {
+      case 'kiosk-born':
+        // Answered when the page may leave — which is the footer's to say.
+        await kioskBorn(message, sender, reply);
+        return;
       case 'state':
         reply({
           up: await tell({ kind: 'ping' }),

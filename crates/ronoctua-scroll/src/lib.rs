@@ -35,7 +35,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, bail};
 use ronoctua_compositor::{
     Ask, Compositor, Corner, Deed, Device, Event, Events, FocusFollows, Output, Seat, SeatAsk,
-    Setting, Window,
+    Setting, Window, Workspace,
 };
 use serde_json::Value;
 
@@ -182,6 +182,12 @@ impl Compositor for Scroll {
             return Ok(None);
         };
         Ok(read::outputs_in(&said).remove(&at))
+    }
+
+    fn workspaces(&mut self) -> Result<Vec<Workspace>> {
+        Ok(read::workspaces_in(
+            &self.request(wire::Kind::Workspaces, "")?,
+        ))
     }
 
     fn ask(&mut self, at: &str, ask: Ask) -> Result<()> {

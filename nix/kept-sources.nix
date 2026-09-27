@@ -37,6 +37,12 @@
 # NOT the sources of `nix/prefetch.nix`: that list is the `full` profile's, and
 # holding it from here would make every `.#dev` download 1.37 GB of Android
 # Studio on a machine that never installs it.
+#
+# CHROME'S .deb IS HERE, although only the `full` profile installs Chrome:
+# `kiosk-vm` runs the real one and is in `.#most`, so every battery builds from
+# it — and its address is Google's pool, which drops a release once the next
+# one is out (a hash with an expiry date, the defect above). It costs a
+# machine that never ran a battery one download of 134 MiB.
 {
   lib,
   linkFarm,

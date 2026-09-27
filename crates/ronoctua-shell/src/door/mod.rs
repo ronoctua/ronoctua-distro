@@ -346,6 +346,28 @@ impl Ui {
         }
     }
 
+    /// A keysym, pressed (`down`) or let go, that belongs to the header when
+    /// the window lets the header have its keys now (`its`,
+    /// [`Content::header_keys`]).
+    ///
+    /// THE RIGHT `Ctrl` IS FOLLOWED EITHER WAY, and only taking a key is
+    /// gated. A window may give the header its keys back while that `Ctrl`
+    /// is down or up — the column coming back from its bar — and followed
+    /// only while the header had them, a right `Ctrl` let go in the bar was
+    /// still held after it: a plain `Down` walked the drawer instead of the
+    /// list, until that `Ctrl` went down and up again. While the header is
+    /// away the key is still not taken: the window reads it as it always
+    /// did.
+    fn header_took(&mut self, its: bool, sym: Keysym, down: bool) -> bool {
+        if its {
+            return self.hinted.took_a_key(sym, down);
+        }
+        if sym == Keysym::Control_R {
+            self.hinted.right_ctrl_is(down);
+        }
+        false
+    }
+
     /// A paste read off the loop, typed into the line when it was read FOR
     /// the line. `Some(false)` when it is the window's (`Content::pasted`);
     /// `Some(true)` when the line took it; `None` when it was for a question
@@ -465,10 +487,11 @@ impl Ui {
     }
 
     /// The first line of the list, pushed down by the header's drawer and the
-    /// sentence about the shortcut under the pointer.
+    /// sentence about the shortcut under the pointer — and by the line the
+    /// header is on, which is 1 in a column (`Content::header_line`).
     #[must_use]
     pub fn first_of_list(&self) -> u16 {
-        FIRST_OF_LIST + self.hinted.rows()
+        FIRST_OF_LIST + self.hinted.top() + self.hinted.rows()
     }
 
     /// How many rows of the list fit under the header.
@@ -660,6 +683,17 @@ pub enum Shell {
     /// global, SHARED so a column raised again on another screen is made by
     /// the same one (`Door::layer_shell`).
     Layer(LayerSurface, std::rc::Rc<LayerShell>),
+    /// NOTHING ON SCREEN: a surface with no role, and the layer shell to give
+    /// it one again — a column whose workspace no screen shows (`crate::column`).
+    ///
+    /// # Why a surface at all
+    ///
+    /// Because the door is built around one: the scale, the GPU and every
+    /// handler read `ui.surface`, and a door with an `Option` there would be
+    /// every door checking it. A surface with no role is never configured, so
+    /// nothing is drawn to it (`Ui::may_draw`), no pointer or key reaches it,
+    /// and the process and everything it keeps stay alive behind it.
+    Parked(wl_surface::WlSurface, std::rc::Rc<LayerShell>),
 }
 
 impl Shell {
@@ -669,8 +703,20 @@ impl Shell {
         match self {
             Self::Window { window, .. } => window.wl_surface(),
             Self::Layer(l, _) => l.wl_surface(),
+            Self::Parked(surface, _) => surface,
         }
     }
+}
+
+/// What a door does when the compositor closes its layer surface
+/// (`Content::layer_closed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Closed {
+    /// The door closes with it — every layer surface but a column.
+    Quit,
+    /// The door stays, off the screen (`Shell::Parked`): a screen that went
+    /// away took the surface, not what the door was showing.
+    Park,
 }
 
 /// What a door is handed while it is being built: the loop to hang its own
@@ -783,6 +829,23 @@ pub trait Content: Sized + 'static {
     /// The margin inside the window, in cells.
     fn margin(&self) -> u16 {
         crate::chrome::FIELDS_LEAD
+    }
+
+    /// The line the header is drawn on — `0`, in every window. A column
+    /// answers `1`: its line 0 is its own control line (`crate::column`), and
+    /// the header, the drawer and the list move down with it
+    /// (`chrome::Hinted::at`, `Ui::first_of_list`). Read once, when the door
+    /// is built.
+    fn header_line(&self) -> u16 {
+        0
+    }
+
+    /// The compositor closed the door's layer surface — a screen went away.
+    /// Every layer surface closes with it; a column answers
+    /// [`Closed::Park`] and stays, off the screen.
+    fn layer_closed(&mut self, ui: &mut Ui) -> Closed {
+        let _ = ui;
+        Closed::Quit
     }
 
     /// The keys the header teaches.
@@ -1001,6 +1064,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
     let content = make(&wiring)?;
     let surface = compositor.create_surface(&qh);
     let shell = content.open(&wiring, surface)?;
+    let header_line = content.header_line();
 
     let watches = hang_the_watches(&handle)?;
 
@@ -1031,7 +1095,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             quit: false,
             owed: false,
             offset: 0,
-            hinted: crate::chrome::Hinted::default(),
+            hinted: crate::chrome::Hinted::at(header_line),
             room: crate::chrome::Room::default(),
             conn: conn.clone(),
             surface: shell.wl_surface().clone(),
@@ -1170,9 +1234,39 @@ impl<C: Content> Door<C> {
     #[must_use]
     pub fn layer_shell(&self) -> Option<std::rc::Rc<LayerShell>> {
         match &self.shell {
-            Shell::Layer(_, shell) => Some(shell.clone()),
+            Shell::Layer(_, shell) | Shell::Parked(_, shell) => Some(shell.clone()),
             Shell::Window { .. } => None,
         }
+    }
+
+    /// The screen whose connector is `connector` (`eDP-1`), as this door's
+    /// connection knows it — `None` until the compositor has described it,
+    /// and then `Content::outputs_changed` is the moment to ask again.
+    #[must_use]
+    pub fn output_named(
+        &self,
+        connector: &str,
+    ) -> Option<wayland_client::protocol::wl_output::WlOutput> {
+        self.outputs.outputs().find(|o| {
+            self.outputs
+                .info(o)
+                .and_then(|i| i.name)
+                .is_some_and(|n| n == connector)
+        })
+    }
+
+    /// Takes the door OFF the screen and keeps it: the surface's role is
+    /// destroyed and a surface with none takes its place (`Shell::Parked`).
+    /// Only a layer surface parks — a window has nowhere to be put away.
+    pub fn park(&mut self) {
+        if matches!(self.shell, Shell::Parked(..)) {
+            return;
+        }
+        let Some(layer_shell) = self.layer_shell() else {
+            return;
+        };
+        let surface = self._compositor.create_surface(&self.qh);
+        self.reopen(Shell::Parked(surface, layer_shell));
     }
 
     /// The compositor state, for a window that makes a surface of its own.
@@ -1181,19 +1275,40 @@ impl<C: Content> Door<C> {
         &self._compositor
     }
 
-    /// Puts the door on ANOTHER surface — the player's column following the
-    /// screen with the focus.
+    /// Puts the door on ANOTHER surface — a column shown on the screen of its
+    /// workspace, moved to another, or parked (`crate::column`).
     ///
     /// A new surface is a new texture: the GPU, the text and the pictures are
     /// let go of and built again against it on the next frame, and the scale
     /// starts from one until the new screen says otherwise.
+    ///
+    /// The shell it replaces is dropped here, and its surface with it — a
+    /// layer surface destroys its own. A PARKED surface is a bare one, which
+    /// nothing else would ever destroy, unless it is the very surface the new
+    /// shell gives a role to.
+    ///
+    /// WHAT THE POINTER AND THE KEYBOARD HELD goes with the old surface: a
+    /// destroyed surface may never be told its pointer left, and a button, a
+    /// drag or a modifier held across it would still be held on the new one.
     pub fn reopen(&mut self, shell: Shell) {
+        self.here = Hand::default();
+        self.mods = Modifiers::default();
+        self.selection = None;
+        self.fingers.cancel();
+        self.ui.hinted.let_everything_go();
+        let _ = self.ui.hinted.light_at(None);
+        let _ = self.ui.hinted.say(None);
         self.images = None;
         self.quads = None;
         self.text = None;
         self.gpu = None;
         self.ui.surface = shell.wl_surface().clone();
-        self.shell = shell;
+        let old = std::mem::replace(&mut self.shell, shell);
+        if let Shell::Parked(bare, _) = old
+            && &bare != self.shell.wl_surface()
+        {
+            bare.destroy();
+        }
         self.ui.scale = 1;
         self.scale_told = 1;
         self.ui.width = 0;
@@ -1774,9 +1889,11 @@ impl<C: Content> Door<C> {
         }
     }
 
-    /// A keysym that belongs to the header, when the window lets it have them.
+    /// A keysym that belongs to the header, when the window lets it have them
+    /// — see [`Ui::header_took`].
     fn header_took(&mut self, sym: Keysym, down: bool) -> bool {
-        self.content.header_keys() && self.ui.hinted.took_a_key(sym, down)
+        let its = self.content.header_keys();
+        self.ui.header_took(its, sym, down)
     }
 }
 
@@ -1968,6 +2085,30 @@ mod tests {
         // THE CONFIGURE, acked by the toolkit before the door hears it.
         ui.configured = true;
         assert!(ui.may_draw());
+    }
+
+    /// FAILS IF: a right `Ctrl` let go while the header did not have its
+    /// keys — the column in its bar — is still held once the header has them
+    /// again, so a plain `Down` opens the drawer instead of reaching the
+    /// window; or one pressed there is not held when the header comes back.
+    #[test]
+    fn the_right_ctrl_is_followed_while_the_header_is_away() {
+        let mut ui = ui();
+        // HELD at a size with a header: the header's key.
+        assert!(ui.header_took(true, Keysym::Control_R, true));
+        // LET GO IN THE BAR, which has no header: nobody takes it.
+        assert!(!ui.header_took(false, Keysym::Control_R, false));
+        // BACK TO A SIZE WITH A HEADER: a plain `Down` is the window's.
+        assert!(
+            !ui.header_took(true, Keysym::Down, true),
+            "a plain Down walked the drawer"
+        );
+        assert!(!ui.hinted.is_open());
+        // PRESSED IN THE BAR, where the window still reads it, it is held
+        // once the header comes back.
+        assert!(!ui.header_took(false, Keysym::Control_R, true));
+        assert!(ui.header_took(true, Keysym::Down, true));
+        assert!(ui.hinted.is_open(), "the drawer did not open");
     }
 
     /// AN ORDER FOR THE FOOTER is the control socket's own line — the one

@@ -8,29 +8,25 @@
 //! view asks is typed on this door's own line, as the footer types it on its
 //! minibuffer (`player::Question`).
 //!
-//! # Two surfaces, one host
+//! # Two surfaces, one player
 //!
-//! The window is an `xdg_toplevel`; the column is a layer-shell surface
-//! anchored to the top, the right and the bottom, with an exclusive zone as
-//! wide as itself — the windows move over and nothing is covered. Everything
-//! else is the same, down to the last pixel: a column is a window the
-//! compositor places for us.
+//! The window is an `xdg_toplevel`, a `door::Content` of its own. The column
+//! is the player as the first TENANT of `crate::column`: the base keeps its
+//! size, its control line, its focus line, its workspace and its slot, and
+//! the player draws in the `column::Area` it is handed — the same painter as
+//! the window's, a line lower. Large, medium and small adapt: the rows
+//! reflow, the transport draws the buttons that fit and the picture takes the
+//! size's share (`Size::picture_lines`).
 //!
-//! # The column never narrows the footer
+//! # The bar is a remote control
 //!
-//! A layer surface's exclusive zone is carved out of what the surfaces laid
-//! out BEFORE it left, in the order they were created. The footer is created
-//! first, so the column ends where the footer's area begins — the modeline,
-//! the minibuffer and the notification band keep the whole width. A footer
-//! that starts again after the column would be laid out after it; that is why
-//! the footer, on its start, raises a column that is already up again
-//! (`Footer::column_again`).
-//!
-//! # Only one column
-//!
-//! Its pid is kept in the runtime directory (`column.pid`). A column that
-//! starts ends the one already there, which is how "another column" will take
-//! the right edge when there is more than one tenant.
+//! At the bar's width nothing of the view fits, so the player draws content
+//! of its own there (`Shape::Own`): previous, play or pause and next, one per
+//! line, a line of air and the mute — each taken across the whole line and
+//! lit under the pointer, and the wheel is the volume. No sentence explains
+//! them (the owner's decision): these are the glyphs every player has. A key
+//! that acts on a row nobody sees puts the column back to its size, and so
+//! does a question — both are the base's (`Tenant::acts_without_rows`).
 //!
 //! # The frames are the clock
 //!
@@ -38,7 +34,7 @@
 //! frame that arrives is what asks for the next paint — no timer.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     sync::{Arc, atomic::AtomicBool},
 };
 
@@ -46,7 +42,6 @@ use anyhow::{Context as _, Result};
 use ronoctua_player::wire::{Ask, Repeat, State};
 use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
-    compositor::FrameCallbackData,
     reexports::calloop::{self, channel},
     seat::{
         keyboard::{KeyEvent, Keysym, Modifiers},
@@ -54,15 +49,15 @@ use smithay_client_toolkit::{
     },
     shell::{
         WaylandSurface as _,
-        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface},
         xdg::{
             XdgShell,
             window::{Window, WindowDecorations},
         },
     },
 };
-use wayland_client::{QueueHandle, protocol::wl_surface};
+use wayland_client::protocol::wl_surface;
 
+use crate::column::{Area, Size};
 use crate::door::{self as base, Canvas, Content, Hand, LEFT_BUTTON, Shell, Ui, Wiring};
 
 /// The door this module is: the plumbing, and the player in it.
@@ -70,10 +65,6 @@ type Host = base::Door<Player>;
 
 /// The window's `app_id`.
 pub const APP_ID: &str = "br.ronoctua.player";
-
-/// The column's layer-shell namespace, so a compositor rule can tell it from
-/// the footer.
-pub const NAMESPACE: &str = "ronoctua-column";
 
 /// The margin inside the surface, in cells — see `chrome::FIELDS_LEAD`.
 const MARGIN: u16 = crate::chrome::FIELDS_LEAD;
@@ -100,6 +91,26 @@ const BUTTONS: [&str; 9] = [
     "player-pip",
     "player-maximize",
 ];
+
+/// The bar's buttons, one per line under the control line's air — previous,
+/// play or pause and next, a line of air, and the mute: the glyphs every
+/// player has, which is why the bar says nothing about them. The ids are the
+/// transport's own, so a click asks what the transport's click asks.
+const BAR_BUTTONS: [Option<&str>; 5] = [
+    Some("player-previous"),
+    Some("player-toggle"),
+    Some("player-next"),
+    None,
+    Some("player-mute"),
+];
+
+/// Where each of the bar's buttons goes, in a tenant area whose first line is
+/// `top`: the first a line under it, and one per line.
+fn bar_buttons(top: u16) -> impl Iterator<Item = (u16, &'static str)> {
+    (top + 1..)
+        .zip(BAR_BUTTONS)
+        .filter_map(|(line, id)| id.map(|id| (line, id)))
+}
 
 /// How quick a second click on the picture has to be to be a DOUBLE click,
 /// which puts it on the whole screen and back.
@@ -249,14 +260,15 @@ pub fn fitted(width: f32, height: f32, video: Option<(u32, u32)>) -> (f32, f32) 
     }
 }
 
-/// The door on stage: one picture over the whole surface, the transport and
-/// the time bar on its last two lines, and no list.
+/// The door on stage: one picture over the whole surface from line `top` —
+/// under a column's control line — the transport and the time bar on its
+/// last two lines, and no list.
 #[must_use]
-pub fn stage_layout(lines: u16) -> Layout {
+pub fn stage_layout(top: u16, lines: u16) -> Layout {
     Layout {
         pictures: vec![Place {
-            first: 0,
-            lines: lines.max(1),
+            first: top,
+            lines: lines.saturating_sub(top).max(1),
             share: 0,
             shares: 1,
         }],
@@ -269,13 +281,14 @@ pub fn stage_layout(lines: u16) -> Layout {
 /// The smallest a follower's strip gets, in lines.
 const FOLLOWER_FLOOR: u16 = 3;
 
-/// Lays the door out. `first` is the line under the header, `lines` how many
-/// the surface has, `columns` how wide it is in cells, `line_over_cell` the
-/// font's line height over its cell width, and `video` the main picture's
-/// size, when there is one.
+/// Lays the door out. `area` is what the door is handed (a window's whole
+/// surface, or a column's size), `first` the line under the header, `lines`
+/// how many the surface has, `columns` how wide it is in cells,
+/// `line_over_cell` the font's line height over its cell width, and `video`
+/// the main picture's size, when there is one.
 #[must_use]
 pub fn layout(
-    door: Door,
+    area: &Area,
     first: u16,
     lines: u16,
     columns: u16,
@@ -293,10 +306,9 @@ pub fn layout(
         let wanted = f32::from(columns) * (vh.max(1) as f32 / vw.max(1) as f32) / line_over_cell;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let wanted = wanted.ceil().max(1.0) as u16;
-        let ceiling = match door {
-            Door::Window => lines / 2,
-            Door::Column => tokens::space::COLUMN_PICTURES.min(lines / 2),
-        };
+        // A COLUMN'S PICTURE is its size's share of the width, and never
+        // past half the surface either (`Area::picture_ceiling`).
+        let ceiling = area.picture_ceiling(lines);
         // THE FOLLOWERS SHARE ONE STRIP under it, side by side, and the
         // strip comes out of the same ceiling: a video added in step never
         // pushes the rows off. A third of it, and never less than
@@ -337,187 +349,165 @@ pub fn layout(
     }
 }
 
-/// Opens the player in `door`.
+/// Opens the player in a window, on `stage`.
 ///
 /// # Errors
 ///
-/// No Wayland compositor, or none of the shell the door needs.
-pub fn host_it(door: Door, stage: Stage) -> Result<()> {
-    crate::door::run(|w: &Wiring<'_, Player>| {
-        // THE PLAYER'S STATE, on its own thread. A door that opens starts the
-        // daemon: the nested loop has no unit, and a door onto nothing is a
-        // door that says "not running" for ever.
-        let _ = ronoctua_player::client::ensure();
-        let (state_sender, states) = channel::channel::<Option<State>>();
-        let watch = ronoctua_player::client::watch(move |s| {
-            let _ = state_sender.send(s);
-        });
-        w.handle
-            .insert_source(states, |event, (), d: &mut Host| {
-                if let channel::Event::Msg(s) = event {
-                    d.content.state_arrived(&mut d.ui, s);
-                }
-            })
-            .map_err(|e| anyhow::anyhow!("could not hang the player channel: {e}"))?;
+/// No Wayland compositor, or no `xdg_shell`.
+pub fn host_window(stage: Stage) -> Result<()> {
+    crate::door::run(|w: &Wiring<'_, Player>| wired(w, Door::Window, stage))
+}
 
-        // THE COLUMN FOLLOWS THE FOCUSED SCREEN. It is born on it; when focus
-        // moves to a window on another screen, the column moves there too —
-        // it is the screen being worked on that the player sits beside. The
-        // events come through the compositor CONTRACT (`crate::daemon`), and
-        // the question "which screen?" is asked of it only when focus moved.
-        if door == Door::Column {
-            let (focus_sender, focus_events) = channel::channel::<ronoctua_compositor::Event>();
-            crate::daemon::listen_to_the_compositor(focus_sender);
-            w.handle
-                .insert_source(focus_events, |event, (), d: &mut Host| {
-                    if let channel::Event::Msg(ronoctua_compositor::Event::FocusChanged(_)) = event
-                    {
-                        follow_the_focus(d);
-                    }
-                })
-                .map_err(|e| anyhow::anyhow!("could not hang the compositor channel: {e}"))?;
-        }
+/// Opens the player in the column on the right, as `opening` says
+/// (`crate::column`).
+///
+/// # Errors
+///
+/// No Wayland compositor, or no layer shell.
+pub fn host_column(opening: &crate::column::Opening) -> Result<()> {
+    crate::column::run::<Player>(opening, |w| wired(w, Door::Column, Stage::Off))
+}
 
-        // HOW A PAIRING ENDED, from the thread that waited for the other
-        // machine (`player::pair_then`).
-        let (paired, pairings) = channel::channel::<crate::player::Paired>();
-        w.handle
-            .insert_source(pairings, |event, (), d: &mut Host| {
-                if let channel::Event::Msg(p) = event {
-                    d.ui.message = crate::player::paired_said(&p, &d.ui.texts);
-                    d.ui.ask_paint();
-                }
-            })
-            .map_err(|e| anyhow::anyhow!("could not hang the pairing channel: {e}"))?;
+/// A door the player is in — the window, or the column around it — and how
+/// to reach the player inside, so the channels and the timers hung on its
+/// loop are written once for both.
+trait PlayerHost: Content<Hand = PerPointer> {
+    /// The player, what every door keeps, and the pointer being handled.
+    fn player(d: &mut base::Door<Self>) -> (&mut Player, &mut Ui, &mut Hand<PerPointer>);
+}
 
-        // A PING PER FRAME, from whichever picture's thread has one.
-        let (frame_sender, frames) = channel::channel::<usize>();
-        w.handle
-            .insert_source(frames, |event, (), d: &mut Host| {
-                if let channel::Event::Msg(k) = event {
-                    d.content.frame_arrived(&mut d.ui, k);
-                }
-            })
-            .map_err(|e| anyhow::anyhow!("could not hang the preview channel: {e}"))?;
+impl PlayerHost for Player {
+    fn player(d: &mut Host) -> (&mut Player, &mut Ui, &mut Hand<PerPointer>) {
+        (&mut d.content, &mut d.ui, &mut d.here)
+    }
+}
 
-        // WHERE IT IS BORN, asked now: the column is made with no screen
-        // named, which is the focused one — and the first focus event may
-        // already be the move to another.
-        let (wm, on_screen) = if door == Door::Column {
-            let mut wm = crate::daemon::open_the_compositor().ok();
-            let on = wm
-                .as_mut()
-                .and_then(|c| c.focused_output().ok().flatten())
-                .map(|o| o.name);
-            (wm, on)
-        } else {
-            (None, None)
-        };
+impl PlayerHost for crate::column::Column<Player> {
+    fn player(d: &mut base::Door<Self>) -> (&mut Player, &mut Ui, &mut Hand<PerPointer>) {
+        (&mut d.content.tenant, &mut d.ui, &mut d.here)
+    }
+}
 
-        // THE STAGE IT WAS OPENED ON (`ronoctua-shell player
-        // only|maximized|pip`), and the slot that lets the door that asked
-        // close it again. The stage itself is set on the first turn, once the
-        // window exists to be made whole-screen or small.
-        let opened_for = (stage != Stage::Off).then_some(stage);
-        if opened_for.is_some() {
-            crate::player_stage::hold(match stage {
-                Stage::Only | Stage::Off => crate::player::Show::Only,
-                Stage::Maximized => crate::player::Show::Maximized,
-                Stage::Small => crate::player::Show::Small,
-            });
-        }
-
-        Ok(Player {
-            door,
-            handle: w.handle.clone(),
-            qh: w.qh.clone(),
-            surf: RefCell::new(None),
-            told_width: Cell::new(0),
-            on_screen,
-            wm,
-            view: crate::player::View::fresh(),
-            pairing: crate::player::Pairing::default(),
-            paired,
-            player: None,
-            pictures: Vec::new(),
-            frame_sender,
-            buttons: Vec::new(),
-            layout: Layout::default(),
-            stage: Stage::Off,
-            first_stage: opened_for,
-            opened_for,
-            controls_until: None,
-            controls_timer: None,
-            settle_owed: door == Door::Column,
-            settle_asked: false,
-            corner_owed: 0,
-            fullscreen: false,
-            corner_timer: false,
-            painted: false,
-            button_under: None,
-            pointer_at: None,
-            _watch: watch,
+/// The player, with its channels hung on the loop of the door `C` it is in.
+fn wired<C: PlayerHost>(w: &Wiring<'_, C>, door: Door, stage: Stage) -> Result<Player> {
+    // THE PLAYER'S STATE, on its own thread. A door that opens starts the
+    // daemon: the nested loop has no unit, and a door onto nothing is a door
+    // that says "not running" for ever.
+    let _ = ronoctua_player::client::ensure();
+    let (state_sender, states) = channel::channel::<Option<State>>();
+    let watch = ronoctua_player::client::watch(move |s| {
+        let _ = state_sender.send(s);
+    });
+    w.handle
+        .insert_source(states, |event, (), d: &mut base::Door<C>| {
+            if let channel::Event::Msg(s) = event {
+                let (p, ui, _) = C::player(d);
+                p.state_arrived(ui, s);
+            }
         })
+        .map_err(|e| anyhow::anyhow!("could not hang the player channel: {e}"))?;
+
+    // HOW A PAIRING ENDED, from the thread that waited for the other
+    // machine (`player::pair_then`).
+    let (paired, pairings) = channel::channel::<crate::player::Paired>();
+    w.handle
+        .insert_source(pairings, |event, (), d: &mut base::Door<C>| {
+            if let channel::Event::Msg(p) = event {
+                let (_, ui, _) = C::player(d);
+                ui.message = crate::player::paired_said(&p, &ui.texts);
+                ui.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the pairing channel: {e}"))?;
+
+    // A PING PER FRAME, from whichever picture's thread has one.
+    let (frame_sender, frames) = channel::channel::<usize>();
+    w.handle
+        .insert_source(frames, |event, (), d: &mut base::Door<C>| {
+            if let channel::Event::Msg(k) = event {
+                let (p, ui, _) = C::player(d);
+                p.frame_arrived(ui, k);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the preview channel: {e}"))?;
+
+    // THE TWO TIMERS, armed on this door's loop — built here, where the
+    // door's type is known, and kept as closures by a player that does not
+    // know which door it is in.
+    let handle = w.handle.clone();
+    let arm_controls: Arm<Option<calloop::RegistrationToken>> = Box::new(move || {
+        handle
+            .insert_source(
+                calloop::timer::Timer::from_duration(CONTROLS_LINGER),
+                |_, (), d: &mut base::Door<C>| {
+                    let (p, ui, here) = C::player(d);
+                    p.controls_tick(ui, here)
+                },
+            )
+            // NOT SILENT, and the controls STAY: a transport that does not go
+            // is a smaller failure than one that cannot be brought back.
+            .map_err(|e| tracing::warn!(error = %e, "no timer for the controls; they will stay"))
+            .ok()
+    });
+    let handle = w.handle.clone();
+    let arm_corner: Arm<bool> = Box::new(move || {
+        handle
+            .insert_source(
+                calloop::timer::Timer::from_duration(CORNER_WAIT),
+                |_, (), d: &mut base::Door<C>| {
+                    let (p, _, _) = C::player(d);
+                    p.corner_timer = false;
+                    p.float_in_the_corner();
+                    calloop::timer::TimeoutAction::Drop
+                },
+            )
+            .is_ok()
+    });
+
+    // THE STAGE IT WAS OPENED ON (`ronoctua-shell player
+    // only|maximized|pip`), and the slot that lets the door that asked
+    // close it again. The stage itself is set on the first turn, once the
+    // window exists to be made whole-screen or small.
+    let opened_for = (stage != Stage::Off).then_some(stage);
+    if opened_for.is_some() {
+        crate::player_stage::hold(match stage {
+            Stage::Only | Stage::Off => crate::player::Show::Only,
+            Stage::Maximized => crate::player::Show::Maximized,
+            Stage::Small => crate::player::Show::Small,
+        });
+    }
+
+    Ok(Player {
+        door,
+        arm_controls,
+        arm_corner,
+        window: RefCell::new(None),
+        wm: None,
+        view: crate::player::View::fresh(),
+        pairing: crate::player::Pairing::default(),
+        paired,
+        player: None,
+        pictures: Vec::new(),
+        frame_sender,
+        buttons: Vec::new(),
+        layout: Layout::default(),
+        stage: Stage::Off,
+        first_stage: opened_for,
+        opened_for,
+        controls_until: None,
+        controls_timer: None,
+        corner_owed: 0,
+        fullscreen: false,
+        corner_timer: false,
+        painted: false,
+        button_under: None,
+        pointer_at: None,
+        _watch: watch,
     })
 }
 
-/// The column's surface, on `output` — or, with none named, on the screen the
-/// compositor has focused, which is where a column raised from a key belongs.
-fn column_on(
-    layer_shell: &LayerShell,
-    surface: wl_surface::WlSurface,
-    qh: &QueueHandle<Host>,
-    output: Option<&wayland_client::protocol::wl_output::WlOutput>,
-) -> LayerSurface {
-    let layer = layer_shell.create_layer_surface(
-        qh,
-        surface,
-        // `Top`, the footer's layer: above the windows, below a lock.
-        Layer::Top,
-        Some(NAMESPACE),
-        output,
-    );
-    let width = column_width();
-    layer.set_anchor(Anchor::TOP | Anchor::RIGHT | Anchor::BOTTOM);
-    layer.set_size(width, 0);
-    layer.set_exclusive_zone(i32::try_from(width).unwrap_or(i32::MAX));
-    // ON DEMAND, the lifeline's reasoning: a click gives it the keys, and
-    // opening it takes them from nobody.
-    layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
-    layer.commit();
-    layer
-}
-
-/// The column's width in logical pixels: `space.column.width` cells and the
-/// margin on both sides.
-fn column_width() -> u32 {
-    let cell = tokens::metrics::cell_width(tokens::text::size());
-    let cells = tokens::space::COLUMN_WIDTH + 2 * MARGIN;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let px = (cell * f32::from(cells)).ceil() as u32;
-    px
-}
-
-/// Ends the column that is up, if one is — whoever holds the right column.
-pub fn end_the_column() -> bool {
-    crate::right_column::end()
-}
-
-/// Whether a column is up.
-#[must_use]
-pub fn column_is_up() -> bool {
-    crate::right_column::holder().is_some()
-}
-
-/// The role this door's surface has, kept to act on it: made whole-screen,
-/// small, or — the column — told its width again.
-///
-/// A CLONE of what the door holds (both are handles onto one object), taken
-/// when the surface is made and replaced when the column moves.
-enum Surf {
-    Window(Window),
-    Layer(LayerSurface),
-}
+/// A timer armed on the loop of the door the player is in — see [`wired`].
+type Arm<T> = Box<dyn Fn() -> T>;
 
 /// What this door keeps for ONE pointer, past what every door keeps (the
 /// list's bar, the wheel's leftover, the row under it) — see `crate::seats`.
@@ -540,15 +530,13 @@ struct PerPointer {
 /// The player, as this door shows it.
 struct Player {
     door: Door,
-    handle: calloop::LoopHandle<'static, Host>,
-    qh: QueueHandle<Host>,
-    /// The surface's role, to act on it — see [`Surf`].
-    surf: RefCell<Option<Surf>>,
-    /// The width the column last told the compositor, so a size of text that
-    /// moved tells it again and a configure does not.
-    told_width: Cell<u32>,
-    /// The screen the column is on, by its connector name, once known.
-    on_screen: Option<String>,
+    /// Arms the timer that takes the controls away — see [`wired`].
+    arm_controls: Arm<Option<calloop::RegistrationToken>>,
+    /// Arms the timer that asks for the corner again.
+    arm_corner: Arm<bool>,
+    /// The window, kept to act on it — made whole-screen or small. A CLONE of
+    /// what the door holds (both are handles onto one object).
+    window: RefCell<Option<Window>>,
     /// The compositor, through the contract — opened the first time it is
     /// needed.
     wm: Option<Box<dyn ronoctua_compositor::Compositor>>,
@@ -576,12 +564,6 @@ struct Player {
     controls_until: Option<std::time::Instant>,
     /// The timer that takes them away, armed only while they are shown.
     controls_timer: Option<calloop::RegistrationToken>,
-    /// The column's first frame is owed a frame callback, whose answer means
-    /// the commit that mapped it was shown — see
-    /// [`Player::settle_the_windows`].
-    settle_owed: bool,
-    /// That callback was asked, and not yet answered.
-    settle_asked: bool,
     /// The window was made small on stage and the compositor has not yet
     /// been told to float it in the corner — a window it has not mapped is
     /// not in its tree to be found.
@@ -607,90 +589,15 @@ struct Player {
 
 impl Drop for Player {
     fn drop(&mut self) {
-        // THE PICTURES' THREADS go with the pictures (`player_picture`).
-        if self.door == Door::Column {
-            crate::right_column::leave();
-        }
+        // THE PICTURES' THREADS go with the pictures (`player_picture`), and
+        // the column's slot with the column (`crate::column`).
         if self.opened_for.is_some() {
             crate::player_stage::leave();
         }
     }
 }
 
-/// Moves the column to the screen that has focus, if that is another one.
-///
-/// The new surface is made with NO screen named, which the compositor gives
-/// to the one it has focused — the same rule the column was born by, and the
-/// screen this was just told about.
-fn follow_the_focus(d: &mut Host) {
-    let p = &mut d.content;
-    if p.wm.is_none() {
-        p.wm = crate::daemon::open_the_compositor().ok();
-    }
-    let Some(name) =
-        p.wm.as_mut()
-            .and_then(|w| w.focused_output().ok().flatten())
-            .map(|o| o.name)
-    else {
-        return;
-    };
-    if p.on_screen.as_deref() == Some(name.as_str()) {
-        return;
-    }
-    // THE SAME GLOBAL the column was made by, shared (`Door::layer_shell`).
-    let Some(layer_shell) = d.layer_shell() else {
-        return;
-    };
-    let surface = d.compositor().create_surface(&d.qh);
-    let layer = column_on(&layer_shell, surface, &d.qh, None);
-    let p = &mut d.content;
-    p.surf.replace(Some(Surf::Layer(layer.clone())));
-    p.told_width.set(column_width());
-    p.settle_owed = true;
-    p.settle_asked = false;
-    // A NEW SURFACE IS A NEW GPU SURFACE: everything drawn on the old one is
-    // made again on the first configure of this one.
-    for pic in &mut p.pictures {
-        pic.uploaded = false;
-    }
-    p.on_screen = Some(name);
-    d.reopen(Shell::Layer(layer, layer_shell));
-}
-
 impl Player {
-    /// Tells the compositor to send the windows the layout it already
-    /// worked out — asked once the commit that MAPPED the column is known to
-    /// have been shown (the first frame's callback answers only then).
-    ///
-    /// # Why the windows were not told on their own
-    ///
-    /// Two lines of the pinned source. A layer's exclusive zone is counted
-    /// only once the surface is MAPPED (`wlr_scene_layer_surface_v1_get_box`,
-    /// `surface->mapped && exclusive_zone > 0`), so the windows are re-tiled
-    /// by the commit that carries the first frame. And a layer's commit sends
-    /// the new layout out (`transaction_commit_dirty`) only when it also
-    /// changed some layer state (`handle_surface_commit`), which a frame does
-    /// not. The column opened over the windows, and they moved at the next
-    /// click anywhere — the owner's screenshot, twice.
-    ///
-    /// The first attempt said the zone again in that commit, and did nothing:
-    /// wlroots IGNORES a value set to what it already is
-    /// (`layer_surface_handle_set_exclusive_zone`). This one asks over IPC,
-    /// where every command ends in `transaction_commit_dirty`
-    /// (`Compositor::settle`).
-    fn settle_the_windows(&mut self) {
-        if self.wm.is_none() {
-            self.wm = crate::daemon::open_the_compositor().ok();
-        }
-        match self.wm.as_mut().map(|w| w.settle()) {
-            Some(Ok(())) => tracing::info!("the windows were told the column's room"),
-            Some(Err(e)) => {
-                tracing::warn!(error = %e, "the windows were not told the column's room");
-            }
-            None => tracing::warn!("no compositor to tell the column's room to"),
-        }
-    }
-
     /// Whether the picture is shown alone.
     fn on_stage(&self) -> bool {
         self.stage != Stage::Off
@@ -714,7 +621,33 @@ impl Player {
             return false;
         }
         let l = line_at(y);
-        l <= ui.hinted.rows() || l >= self.layout.transport
+        l < ui.first_of_list() || l >= self.layout.transport
+    }
+
+    /// The controls' timer rang: again later while they are to stay — the
+    /// hand resting on them keeps them — and otherwise they go.
+    fn controls_tick(
+        &mut self,
+        ui: &mut Ui,
+        here: &mut Hand<PerPointer>,
+    ) -> calloop::timer::TimeoutAction {
+        let now = std::time::Instant::now();
+        if self.on_stage() && self.pointer_on_controls(ui) {
+            self.controls_until = Some(now + CONTROLS_LINGER);
+        }
+        match self.controls_until {
+            Some(until) if self.on_stage() && until > now => {
+                calloop::timer::TimeoutAction::ToDuration(until - now)
+            }
+            _ => {
+                self.controls_until = None;
+                self.controls_timer = None;
+                self.button_under = None;
+                here.extra.button_under = None;
+                ui.ask_paint();
+                calloop::timer::TimeoutAction::Drop
+            }
+        }
     }
 
     /// Activity: on stage, the controls come back over the picture and a
@@ -731,35 +664,7 @@ impl Player {
         if self.controls_timer.is_some() {
             return;
         }
-        let armed = self.handle.insert_source(
-            calloop::timer::Timer::from_duration(CONTROLS_LINGER),
-            |_, (), d: &mut Host| {
-                let now = std::time::Instant::now();
-                let p = &mut d.content;
-                if p.on_stage() && p.pointer_on_controls(&d.ui) {
-                    p.controls_until = Some(now + CONTROLS_LINGER);
-                }
-                match p.controls_until {
-                    Some(until) if p.on_stage() && until > now => {
-                        calloop::timer::TimeoutAction::ToDuration(until - now)
-                    }
-                    _ => {
-                        p.controls_until = None;
-                        p.controls_timer = None;
-                        p.button_under = None;
-                        d.here.extra.button_under = None;
-                        d.ui.ask_paint();
-                        calloop::timer::TimeoutAction::Drop
-                    }
-                }
-            },
-        );
-        match armed {
-            Ok(token) => self.controls_timer = Some(token),
-            // NOT SILENT, and the controls STAY: a transport that does not go
-            // is a smaller failure than one that cannot be brought back.
-            Err(e) => tracing::warn!(error = %e, "no timer for the controls; they will stay"),
-        }
+        self.controls_timer = (self.arm_controls)();
     }
 
     /// Shows the picture alone, on the whole screen, small in the corner, or
@@ -795,10 +700,7 @@ impl Player {
             }
             _ => to,
         };
-        let window = match &*self.surf.borrow() {
-            Some(Surf::Window(w)) => Some(w.clone()),
-            _ => None,
-        };
+        let window = self.window.borrow().clone();
         if let Some(w) = &window {
             if to == Stage::Maximized {
                 w.set_fullscreen(None);
@@ -874,15 +776,7 @@ impl Player {
         if self.corner_timer {
             return;
         }
-        let armed = self.handle.insert_source(
-            calloop::timer::Timer::from_duration(CORNER_WAIT),
-            |_, (), d: &mut Host| {
-                d.content.corner_timer = false;
-                d.content.float_in_the_corner();
-                calloop::timer::TimeoutAction::Drop
-            },
-        );
-        self.corner_timer = armed.is_ok();
+        self.corner_timer = (self.arm_corner)();
     }
 
     /// Runs `ask` on this window, found in the compositor's tree by this
@@ -926,18 +820,13 @@ impl Player {
         self.set_stage(ui, if self.stage == to { Stage::Off } else { to });
     }
 
-    /// Where a picture is on the surface: its band, or the whole surface on
-    /// stage.
-    fn picture_area(&self, ui: &Ui, place: Place) -> ronoctua_render::image::Area {
+    /// Where a picture is on the surface: its band, or on stage the whole
+    /// surface from `area`'s top — under a column's control line.
+    fn picture_area(&self, ui: &Ui, place: Place, area: &Area) -> ronoctua_render::image::Area {
         #[allow(clippy::cast_precision_loss)]
         let (w, h) = (ui.width as f32, ui.height as f32);
         if self.on_stage() {
-            return ronoctua_render::image::Area {
-                x: 0.0,
-                y: 0.0,
-                width: w,
-                height: h,
-            };
+            return stage_area(w, h, area);
         }
         place.area(w, line_px())
     }
@@ -971,15 +860,15 @@ impl Player {
         self.view.rows(self.player.as_ref(), ui.columns, &ui.texts)
     }
 
-    /// Lays the door out from the state and the size.
-    fn relayout(&mut self, ui: &Ui) {
+    /// Lays the door out from the state, the size and the area it is handed.
+    fn relayout(&mut self, ui: &Ui, area: &Area) {
         let video = self.player.as_ref().and_then(|s| s.video);
         let followers = self.player.as_ref().map_or(0, |s| s.participants.len());
         self.layout = if self.on_stage() {
-            stage_layout(ui.lines)
+            stage_layout(area.top, ui.lines)
         } else {
             layout(
-                self.door,
+                area,
                 ui.first_of_list(),
                 ui.lines,
                 ui.columns + 2 * MARGIN,
@@ -1014,10 +903,10 @@ impl Player {
         // player draws is the black a picture on its own is framed in.
         let video = self.player.as_ref().and_then(|s| s.video);
         for (p, place) in self.pictures.iter().zip(&self.layout.pictures) {
-            let area = self.picture_area(ui, *place);
+            let band = self.picture_area(ui, *place, area);
             let (fw, fh) = fitted(
-                area.width,
-                area.height,
+                band.width,
+                band.height,
                 if p.of.is_none() && !self.on_stage() {
                     video
                 } else {
@@ -1396,13 +1285,7 @@ impl Player {
                     // VOLUME — the gesture belongs to what is under the hand,
                     // and there is no list there to walk.
                     if line_at(e.position.1) < self.layout.list {
-                        let now = self.player.as_ref().map_or(100, |s| s.volume);
-                        let step = i64::from(crate::player::VOLUME_STEP);
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                        let percent = (i64::from(now) - by * step)
-                            .clamp(0, i64::from(crate::player::VOLUME_MOST))
-                            as u8;
-                        Self::tell(ui, &Ask::Volume { percent });
+                        self.turn_the_volume(ui, by);
                         continue;
                     }
                     let last = total.saturating_sub(self.room(ui));
@@ -1422,6 +1305,146 @@ impl Player {
         if before != (hand.row_under_pointer, hand.extra.button_under) {
             ui.ask_paint();
         }
+    }
+}
+
+impl Player {
+    /// The wheel over what is not a list: the volume, a step per line.
+    fn turn_the_volume(&self, ui: &mut Ui, by: i64) {
+        let now = self.player.as_ref().map_or(100, |s| s.volume);
+        let step = i64::from(crate::player::VOLUME_STEP);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let percent =
+            (i64::from(now) - by * step).clamp(0, i64::from(crate::player::VOLUME_MOST)) as u8;
+        Self::tell(ui, &Ask::Volume { percent });
+    }
+
+    /// THE BAR: the remote control's glyphs, one per line on the middle cell,
+    /// each taken across the whole line — see the module's header. No header,
+    /// no picture and no list: the rows, the message and the stage are kept,
+    /// and are there again when the column is widened.
+    fn paint_bar(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>, area: &Area) {
+        #[allow(clippy::cast_precision_loss)]
+        let (w, h) = (ui.width as f32, ui.height as f32);
+        canvas.under.push(ronoctua_render::quad::Quad {
+            x: 0.0,
+            y: 0.0,
+            width: w,
+            height: h,
+            color: tokens::color::SURFACE_CHROME,
+        });
+        // NO PICTURE, and no thread decoding one for nobody.
+        self.pictures.clear();
+        ui.room = crate::chrome::Room::default();
+        self.buttons.clear();
+        let s = self.player.as_ref();
+        let across = ui.columns + 2 * MARGIN;
+        for (line, id) in bar_buttons(area.top) {
+            // A COLUMN SHORTER THAN ITS BUTTONS draws the ones that fit.
+            if line >= ui.lines {
+                break;
+            }
+            self.buttons.push((line, 0, across, id));
+            let colour = if self.button_under == Some(id) || lit(id, s, self.stage) {
+                tokens::color::STATE_ACCENT
+            } else {
+                tokens::color::TEXT_PRIMARY
+            };
+            canvas.spans.push(ronoctua_render::Span {
+                size: ronoctua_render::Size::Px(tokens::text::size()),
+                text: glyph_of(id, s, self.stage).to_string(),
+                // THE MIDDLE CELL: the bar is five, the margins included.
+                column: MARGIN + 1,
+                line,
+                color: colour,
+                edge: false,
+                foot: false,
+            });
+        }
+        self.painted = true;
+    }
+
+    /// The pointer over the bar: the button under it lights, a press asks
+    /// what its transport button asks, and the wheel is the volume.
+    fn pointer_bar(&mut self, ui: &mut Ui, hand: &mut Hand<PerPointer>, events: &[PointerEvent]) {
+        let before = hand.extra.button_under;
+        for e in events {
+            match e.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    hand.extra.button_under = self.button_at(e.position.0, e.position.1);
+                }
+                PointerEventKind::Leave { .. } => hand.extra.button_under = None,
+                PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
+                    if let Some(ask) = self.button_at(e.position.0, e.position.1).and_then(ask_of) {
+                        Self::tell(ui, &ask);
+                    }
+                }
+                PointerEventKind::Axis {
+                    vertical,
+                    horizontal,
+                    ..
+                } => {
+                    crate::surface::wheel_arrived(&mut hand.lines_owed, &vertical, &horizontal);
+                    let by = crate::surface::wheel_lines(&mut hand.lines_owed);
+                    if by != 0 {
+                        self.turn_the_volume(ui, by);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if before != hand.extra.button_under {
+            ui.ask_paint();
+        }
+    }
+
+    /// A key, in either door.
+    fn typed_here(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+        self.wake_controls(ui);
+        // `Esc` ON STAGE brings the door back first — one level, as every
+        // view with levels has it — and only then reaches the view.
+        if event.keysym == Keysym::Escape && self.on_stage() {
+            self.set_stage(ui, Stage::Off);
+            return;
+        }
+        // THE FOOTER'S READER: the view answers which press a key is, with
+        // its modifiers (`player::press_of_key`), and `Esc` goes back one
+        // level and closes the door from the top.
+        if let Some(press) =
+            crate::door::keys::key_of(event, mods).and_then(crate::player::press_of_key)
+        {
+            self.pressed(ui, press);
+        }
+    }
+
+    /// Once per turn, in either door.
+    fn each_turn_here(&mut self, ui: &mut Ui) {
+        if let Some(stage) = self.first_stage.take() {
+            self.set_stage(ui, stage);
+        }
+        // AFTER A FRAME: the window is in the compositor's tree only once a
+        // buffer mapped it.
+        if std::mem::take(&mut self.painted) {
+            self.float_in_the_corner();
+        }
+    }
+
+    /// Every size is SAID, because a size the compositor computed and never
+    /// SENT is the defect the column's settle exists for, and only this line
+    /// tells the two apart: the compositor's own tree shows the new size
+    /// either way.
+    fn configured(&self, ui: &Ui) {
+        tracing::info!(width = ui.width, height = ui.height, door = ?self.door, "configured");
+    }
+}
+
+/// On stage, the picture's band: the whole surface from `area`'s top.
+fn stage_area(width: f32, height: f32, area: &Area) -> ronoctua_render::image::Area {
+    ronoctua_render::image::Area {
+        x: 0.0,
+        y: area.top_px,
+        width,
+        height: (height - area.top_px).max(0.0),
     }
 }
 
@@ -1495,34 +1518,20 @@ impl Content for Player {
         texts.t(ronoctua_i18n::key::PLAYER_TITLE)
     }
 
-    /// A window, or the column: an `xdg_toplevel`, or a layer surface
-    /// anchored to the top, the right and the bottom.
+    /// The window: an `xdg_toplevel`, kept to be made whole-screen or small.
+    /// (The column is `crate::column`'s, around the player.)
     fn open(&self, wiring: &Wiring<'_, Self>, surface: wl_surface::WlSurface) -> Result<Shell> {
-        match self.door {
-            Door::Window => {
-                let xdg = XdgShell::bind(wiring.globals, wiring.qh)
-                    .context("the compositor does not expose xdg_shell")?;
-                let window =
-                    xdg.create_window(surface, WindowDecorations::RequestServer, wiring.qh);
-                window.set_title(self.title(&wiring.texts));
-                window.set_app_id(APP_ID);
-                window.commit();
-                self.surf.replace(Some(Surf::Window(window.clone())));
-                Ok(Shell::Window {
-                    window,
-                    _global: xdg,
-                })
-            }
-            Door::Column => {
-                let layer_shell = base::layer_shell(wiring)?;
-                // ONE COLUMN: the one already there goes.
-                crate::right_column::take(crate::right_column::Tenant::Player);
-                let layer = column_on(&layer_shell, surface, wiring.qh, None);
-                self.told_width.set(column_width());
-                self.surf.replace(Some(Surf::Layer(layer.clone())));
-                Ok(Shell::Layer(layer, layer_shell))
-            }
-        }
+        let xdg = XdgShell::bind(wiring.globals, wiring.qh)
+            .context("the compositor does not expose xdg_shell")?;
+        let window = xdg.create_window(surface, WindowDecorations::RequestServer, wiring.qh);
+        window.set_title(Content::title(self, &wiring.texts));
+        window.set_app_id(APP_ID);
+        window.commit();
+        self.window.replace(Some(window.clone()));
+        Ok(Shell::Window {
+            window,
+            _global: xdg,
+        })
     }
 
     fn margin(&self) -> u16 {
@@ -1530,21 +1539,7 @@ impl Content for Player {
     }
 
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
-        self.wake_controls(ui);
-        // `Esc` ON STAGE brings the door back first — one level, as every
-        // view with levels has it — and only then reaches the view.
-        if event.keysym == Keysym::Escape && self.on_stage() {
-            self.set_stage(ui, Stage::Off);
-            return;
-        }
-        // THE FOOTER'S READER: the view answers which press a key is, with
-        // its modifiers (`player::press_of_key`), and `Esc` goes back one
-        // level and closes the door from the top.
-        if let Some(press) =
-            crate::door::keys::key_of(event, mods).and_then(crate::player::press_of_key)
-        {
-            self.pressed(ui, press);
-        }
+        self.typed_here(ui, event, mods);
     }
 
     /// What was typed on this door's line — the ONE function the footer's
@@ -1559,44 +1554,12 @@ impl Content for Player {
         self.pairing.let_go();
     }
 
-    /// The column tells the compositor its width again when the size of the
-    /// text moved it — and every size is SAID.
     fn resized(&mut self, ui: &mut Ui) {
-        // SAID, because a size the compositor computed and never SENT is the
-        // defect `settle_the_windows` exists for, and only this line tells
-        // the two apart: the compositor's own tree shows the new size either
-        // way.
-        tracing::info!(width = ui.width, height = ui.height, door = ?self.door, "configured");
-        if self.door != Door::Column {
-            return;
-        }
-        let w = column_width();
-        if w == self.told_width.get() {
-            return;
-        }
-        if let Some(Surf::Layer(l)) = &*self.surf.borrow() {
-            l.set_size(w, 0);
-            l.set_exclusive_zone(i32::try_from(w).unwrap_or(i32::MAX));
-            l.commit();
-        }
-        self.told_width.set(w);
+        self.configured(ui);
     }
 
     fn each_turn(&mut self, ui: &mut Ui) {
-        if let Some(stage) = self.first_stage.take() {
-            self.set_stage(ui, stage);
-        }
-        // AFTER A FRAME: the window is in the compositor's tree only once a
-        // buffer mapped it.
-        if std::mem::take(&mut self.painted) {
-            self.float_in_the_corner();
-        }
-    }
-
-    fn frame_done(&mut self, _: &mut Ui) {
-        if std::mem::take(&mut self.settle_asked) {
-            self.settle_the_windows();
-        }
+        self.each_turn_here(ui);
     }
 
     /// NO SWEEP OF TEXT HERE: a held button is this window's own gesture
@@ -1612,12 +1575,125 @@ impl Content for Player {
         self.button_under = hand.extra.button_under;
     }
 
-    #[allow(clippy::too_many_lines)]
     fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
+        self.paint_in(ui, canvas, &Area::whole());
+    }
+}
+
+impl crate::column::Tenant for Player {
+    type Hand = PerPointer;
+
+    const WHO: crate::right_column::Tenant = crate::right_column::Tenant::Player;
+
+    fn app_id(&self) -> &'static str {
+        APP_ID
+    }
+
+    fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
+        texts.t(ronoctua_i18n::key::PLAYER_TITLE)
+    }
+
+    /// Every size: the three widths adapt, and the bar is a remote control
+    /// of its own.
+    fn shape(&self, size: Size) -> Option<crate::column::Shape> {
+        Some(if size == Size::Bar {
+            crate::column::Shape::Own
+        } else {
+            crate::column::Shape::Adapted
+        })
+    }
+
+    fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>, area: &Area) {
+        if area.size == Size::Bar {
+            self.paint_bar(ui, canvas, area);
+        } else {
+            self.paint_in(ui, canvas, area);
+        }
+    }
+
+    fn pointer(
+        &mut self,
+        ui: &mut Ui,
+        hand: &mut Hand<PerPointer>,
+        events: &[PointerEvent],
+        area: &Area,
+    ) {
+        ui.hinted.swap_hand(&mut hand.hint_drag);
+        if area.size == Size::Bar {
+            self.pointer_bar(ui, hand, events);
+        } else {
+            self.pointer_here(ui, hand, events);
+        }
+        ui.hinted.swap_hand(&mut hand.hint_drag);
+        self.button_under = hand.extra.button_under;
+    }
+
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers, _: &Area) {
+        self.typed_here(ui, event, mods);
+    }
+
+    fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
+        Content::answered(self, ui, id, text);
+    }
+
+    fn unanswered(&mut self, ui: &mut Ui, id: &'static str) {
+        Content::unanswered(self, ui, id);
+    }
+
+    /// NO SWEEP OF TEXT, as in the window.
+    fn text_area(&self, _: &Ui, _: u16, _: u16, _: &Area) -> Option<crate::text_select::Area> {
+        None
+    }
+
+    fn each_turn(&mut self, ui: &mut Ui) {
+        self.each_turn_here(ui);
+    }
+
+    fn resized(&mut self, ui: &mut Ui, _: &Area) {
+        self.configured(ui);
+    }
+
+    /// OFF THE SCREEN NOTHING IS DECODED for it: a picture's thread ends
+    /// with the picture, and the next frame drawn starts them again.
+    fn parked(&mut self, _: &mut Ui) {
+        self.pictures.clear();
+    }
+
+    /// A NEW SURFACE IS A NEW GPU SURFACE: everything drawn on the old one is
+    /// made again on the first frame of this one.
+    fn shown(&mut self, _: &mut Ui) {
+        for pic in &mut self.pictures {
+            pic.uploaded = false;
+        }
+    }
+
+    /// IN THE BAR, a key acts when it is the view's everywhere
+    /// (`player::Where::Anywhere`) — play, the next, the volume, the mute,
+    /// the window's stages — and `Esc`. The cursor's keys walk rows the bar
+    /// does not draw, `o` shows a picture it has no room for, and the rest
+    /// act on a row; those put the column back instead.
+    fn acts_without_rows(&self, key: ronoctua_keymap::Key) -> bool {
+        use crate::player::{OF_THE_VIEW, Press, Where, press_of_key, pressed};
+        match press_of_key(key) {
+            None | Some(Press::Escape) => true,
+            Some(Press::Up | Press::Down | Press::Only) => false,
+            Some(press) => OF_THE_VIEW.iter().any(|(notation, _, at)| {
+                *at == Where::Anywhere && pressed(notation) == Some(press)
+            }),
+        }
+    }
+}
+
+impl Player {
+    /// One frame of the view — the window's whole surface, or a column's
+    /// area at its three widths: the header on `area.top`, the picture under
+    /// it, the transport, and the rows.
+    #[allow(clippy::too_many_lines)]
+    fn paint_in(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>, area: &Area) {
         if ui.message.is_some() {
             ui.hinted.say(None);
         }
-        self.relayout(ui);
+        self.relayout(ui, area);
         let size = tokens::text::size();
         let line = line_px();
         let rows = self.rows(ui);
@@ -1644,8 +1720,9 @@ impl Content for Player {
             color: tokens::color::SURFACE_CHROME,
         });
 
-        // LINE 0: the keys, what the last order said, or — with the pointer on
-        // a button — what that button does.
+        // THE HEADER'S LINE — 0 in the window, 1 in a column: the keys, what
+        // the last order said, or — with the pointer on a button — what that
+        // button does.
         let under_button = self.button_under;
         let question = crate::door::list::the_question(ui);
         let (pieces, hinting) = match (question, &ui.message, under_button) {
@@ -1658,10 +1735,16 @@ impl Content for Player {
                 )],
                 false,
             ),
-            (None, None, None) => (
-                self.view.hint(self.player.as_ref(), ui.columns, &ui.texts),
-                true,
-            ),
+            // AND IN A COLUMN, its own keys after the view's.
+            (None, None, None) => {
+                let mut hint = self.view.hint(self.player.as_ref(), ui.columns, &ui.texts);
+                let column = area.teach(&ui.texts);
+                if !hint.is_empty() && !column.is_empty() {
+                    hint.push(crate::chrome::Piece::separator());
+                }
+                hint.extend(column);
+                (hint, true)
+            }
         };
         // ON STAGE, what is drawn over the picture: the translucent band
         // under the header and the transport, and the time bar — after the
@@ -1682,7 +1765,7 @@ impl Content for Player {
         if stage && shown {
             let header = line * f32::from(1 + ui.hinted.rows());
             let foot = line * f32::from(self.layout.transport);
-            for (y, height) in [(0.0, header), (foot, h - foot)] {
+            for (y, height) in [(area.top_px, header), (foot, h - foot)] {
                 top.push(ronoctua_render::quad::Quad {
                     x: 0.0,
                     y,
@@ -1697,19 +1780,10 @@ impl Content for Player {
         // a surface of the theme in the door, and the content's ground on
         // stage, where a picture alone is framed in black.
         for (p, place) in self.pictures.iter_mut().zip(&self.layout.pictures) {
-            let band = {
-                #[allow(clippy::cast_precision_loss)]
-                let (w, h) = (ui.width as f32, ui.height as f32);
-                if stage {
-                    ronoctua_render::image::Area {
-                        x: 0.0,
-                        y: 0.0,
-                        width: w,
-                        height: h,
-                    }
-                } else {
-                    place.area(w, line)
-                }
+            let band = if stage {
+                stage_area(w, h, area)
+            } else {
+                place.area(w, line)
             };
             canvas.under.push(ronoctua_render::quad::Quad {
                 x: band.x,
@@ -1756,8 +1830,12 @@ impl Content for Player {
         let s = self.player.as_ref();
         // HIDDEN CONTROLS ARE NOT CONTROLS: nothing is laid out for the hand,
         // so a click on stage lands on the picture and not on a button nobody
-        // can see.
+        // can see. AND A BUTTON THAT DOES NOT FIT IS NOT DRAWN: a column
+        // clamped narrower than the transport keeps the ones that are whole.
         for id in BUTTONS.iter().copied().filter(|_| shown) {
+            if !fits(at, ui.columns) {
+                break;
+            }
             let colour = if under_button == Some(id) || lit(id, s, self.stage) {
                 tokens::color::STATE_ACCENT
             } else {
@@ -1916,21 +1994,14 @@ impl Content for Player {
             canvas.over.extend(ui.hinted.bar(ui.frame(0)));
         }
 
-        // THE FRAME THAT MAPS THE COLUMN asks to be told when it is SHOWN:
-        // the answer can only come after the compositor read that commit and
-        // counted the zone, and only then is there a layout to send. A `sync`
-        // after presenting was the second attempt, and it raced: the driver
-        // may commit the frame on a thread of its own, so the `sync` could
-        // arrive first — measured in the VM, the window told 512 again. The
-        // callback is asked here, before the commit that carries this frame.
-        if std::mem::take(&mut self.settle_owed) {
-            let _ = ui
-                .surface
-                .frame(&self.qh, FrameCallbackData(ui.surface.clone()));
-            self.settle_asked = true;
-        }
         self.painted = true;
     }
+}
+
+/// Whether a transport button drawn at cell `at` fits whole in a surface
+/// `columns` cells wide inside its margins.
+const fn fits(at: u16, columns: u16) -> bool {
+    at + 2 <= MARGIN + columns
 }
 
 #[cfg(test)]
@@ -1938,17 +2009,22 @@ mod tests {
 
     use super::*;
 
+    /// A column's area at `size`, the header on line 1 as the column puts it.
+    fn column(size: Size) -> Area {
+        Area::of_a_column(size, 1, line_px())
+    }
+
     #[test]
     fn with_no_video_the_transport_is_under_the_header() {
-        let l = layout(Door::Column, 1, 40, 50, 2.0, None, 0);
+        let l = layout(&column(Size::Medium), 2, 40, 50, 2.0, None, 0);
         assert!(l.pictures.is_empty());
-        assert_eq!((l.transport, l.bar, l.list), (1, 2, 3));
+        assert_eq!((l.transport, l.bar, l.list), (2, 3, 4));
     }
 
     #[test]
     fn a_wide_video_takes_the_height_its_shape_wants() {
         // 60 cells wide, a line twice a cell: 16:9 wants 60 × 9/16 / 2 ≈ 17.
-        let l = layout(Door::Window, 1, 60, 60, 2.0, Some((1920, 1080)), 0);
+        let l = layout(&Area::whole(), 1, 60, 60, 2.0, Some((1920, 1080)), 0);
         assert_eq!((l.pictures[0].first, l.pictures[0].lines), (1, 17));
         assert_eq!(l.transport, 18);
     }
@@ -1969,17 +2045,25 @@ mod tests {
         assert_eq!(super::fitted(400.0, 300.0, None), (400.0, 300.0));
     }
 
+    /// FAILS IF: a picture takes more than half the surface, or a column's
+    /// picture stops taking its SIZE's share — medium's lines at medium, more
+    /// at large, fewer at small.
     #[test]
     fn the_pictures_never_take_more_than_half() {
-        let l = layout(Door::Window, 1, 20, 200, 2.0, Some((1080, 1920)), 0);
+        let l = layout(&Area::whole(), 1, 20, 200, 2.0, Some((1080, 1920)), 0);
         assert_eq!(l.pictures[0].lines, 10);
-        let c = layout(Door::Column, 1, 80, 50, 2.0, Some((1080, 1920)), 0);
-        assert!(c.pictures[0].lines <= tokens::space::COLUMN_PICTURES);
+        for size in [Size::Large, Size::Medium, Size::Small] {
+            let c = layout(&column(size), 2, 80, 50, 2.0, Some((1080, 1920)), 0);
+            assert_eq!(c.pictures[0].lines, size.picture_lines(), "{size:?}");
+            let short = layout(&column(size), 2, 10, 50, 2.0, Some((1080, 1920)), 0);
+            assert_eq!(short.pictures[0].lines, 5, "{size:?} past half");
+        }
+        assert_eq!(Size::Medium.picture_lines(), tokens::space::COLUMN_PICTURES);
     }
 
     #[test]
     fn followers_share_a_strip_inside_the_same_ceiling() {
-        let l = layout(Door::Window, 1, 60, 60, 2.0, Some((1920, 1080)), 2);
+        let l = layout(&Area::whole(), 1, 60, 60, 2.0, Some((1920, 1080)), 2);
         assert_eq!(l.pictures.len(), 3);
         let (main, a, b) = (l.pictures[0], l.pictures[1], l.pictures[2]);
         assert_eq!(a.first, main.first + main.lines);
@@ -1987,7 +2071,7 @@ mod tests {
         assert_eq!((a.share, b.share, a.shares), (0, 1, 2));
         assert!(main.lines + a.lines <= 30, "never past half: {l:?}");
         // AND ON A SHORT SURFACE the strip is still there, at its floor.
-        let tight = layout(Door::Window, 1, 24, 60, 2.0, Some((1920, 1080)), 3);
+        let tight = layout(&Area::whole(), 1, 24, 60, 2.0, Some((1920, 1080)), 3);
         assert_eq!(tight.pictures.len(), 4);
         assert!(tight.pictures[1].lines >= FOLLOWER_FLOOR);
         assert!(tight.list <= 1 + 12 + 2, "{tight:?}");
@@ -2021,30 +2105,97 @@ mod tests {
         }
     }
 
-    /// A window onto a player that answered, with no daemon, no compositor
-    /// and no thread behind it — the loop and the queue it needs, kept alive
-    /// beside it.
-    fn a_window(
-        state: State,
-    ) -> (
-        Player,
-        Ui,
-        calloop::EventLoop<'static, Host>,
-        wayland_client::EventQueue<Host>,
-    ) {
+    /// FAILS IF: the bar's buttons stop being one per line from the line
+    /// under the control line's air, with air before the mute — or one of
+    /// them is not a transport button: a glyph, an ask and a command.
+    #[test]
+    fn the_bar_is_one_button_a_line() {
+        let lines: Vec<(u16, &str)> = bar_buttons(1).collect();
+        assert_eq!(
+            lines,
+            [
+                (2, "player-previous"),
+                (3, "player-toggle"),
+                (4, "player-next"),
+                (6, "player-mute"),
+            ]
+        );
+        for (_, id) in lines {
+            assert!(ask_of(id).is_some(), "{id} asks nothing");
+            assert_ne!(glyph_of(id, None, Stage::Off), ' ', "{id}");
+            assert!(
+                crate::leader::default_of().is_ok_and(|(_, r)| r.search(id).is_some()),
+                "{id} is not a command of the registry"
+            );
+        }
+    }
+
+    /// FAILS IF: a bar button stops being taken across the whole line —
+    /// the bar is five cells, and a target the size of the glyph is one to
+    /// aim at — or a line of air answers as a button.
+    #[test]
+    fn a_bar_button_is_taken_across_its_line() {
+        let (mut w, ui) = a_window(State::default());
+        w.buttons = bar_buttons(1)
+            .map(|(line, id)| (line, 0, ui.columns + 2 * MARGIN, id))
+            .collect();
+        let line = f64::from(line_px());
+        let cell = f64::from(cell_px());
+        for (l, id) in bar_buttons(1) {
+            let y = line * (f64::from(l) + 0.5);
+            assert_eq!(w.button_at(cell * 0.5, y), Some(id), "the first cell");
+            assert_eq!(w.button_at(cell * 4.5, y), Some(id), "the last cell");
+        }
+        assert_eq!(w.button_at(cell * 2.5, line * 5.5), None, "the air");
+        assert_eq!(w.button_at(cell * 2.5, line * 1.5), None, "the air on top");
+    }
+
+    /// FAILS IF: the transport stops fitting a column at its small size —
+    /// the size exists because the nine buttons still fit there — or a
+    /// button that does not fit a clamped column is drawn cut.
+    #[test]
+    fn the_transport_fits_the_small_column() {
+        let mut at = MARGIN;
+        for _ in BUTTONS {
+            assert!(fits(at, tokens::space::COLUMN_SMALL), "at {at}");
+            at += 3;
+        }
+        assert!(!fits(MARGIN + 3 * 9, 3 * 9), "a button past the edge");
+    }
+
+    /// FAILS IF: in the bar a key acts on a row nobody sees, or a key the
+    /// bar does show — play, next, the volume — stops acting there. The
+    /// rule is `Where::Anywhere`, less the cursor's keys and the picture.
+    #[test]
+    fn in_the_bar_only_the_keys_of_everywhere_act() {
+        use crate::column::Tenant as _;
+        use crate::player::{OF_THE_VIEW, Where};
+        let (w, _) = a_window(State::default());
+        for (notation, id, at) in OF_THE_VIEW {
+            let key = ronoctua_keymap::Key::parse(notation).expect(notation);
+            let everywhere = *at == Where::Anywhere
+                && !matches!(*id, "player-up" | "player-down" | "player-only");
+            assert_eq!(w.acts_without_rows(key), everywhere, "{notation} ({id})");
+        }
+        let esc = ronoctua_keymap::Key::parse("ESC").expect("parses");
+        assert!(
+            w.acts_without_rows(esc),
+            "Esc closes the column in every size"
+        );
+    }
+
+    /// A window onto a player that answered, with no daemon, no compositor,
+    /// no loop and no thread behind it — its timers arm nothing.
+    fn a_window(state: State) -> (Player, Ui) {
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
         let ui = Ui::for_tests(texts);
-        let event_loop = calloop::EventLoop::<'static, Host>::try_new().expect("a loop");
-        let queue = ui.conn.new_event_queue::<Host>();
         let (frame_sender, _) = channel::channel::<usize>();
         let (paired, _) = channel::channel::<crate::player::Paired>();
         let me = Player {
             door: Door::Window,
-            handle: event_loop.handle(),
-            qh: queue.handle(),
-            surf: RefCell::new(None),
-            told_width: Cell::new(0),
-            on_screen: None,
+            arm_controls: Box::new(|| None),
+            arm_corner: Box::new(|| false),
+            window: RefCell::new(None),
             wm: None,
             view: crate::player::View::fresh(),
             pairing: crate::player::Pairing::default(),
@@ -2059,8 +2210,6 @@ mod tests {
             opened_for: None,
             controls_until: None,
             controls_timer: None,
-            settle_owed: false,
-            settle_asked: false,
             corner_owed: 0,
             fullscreen: false,
             corner_timer: false,
@@ -2069,7 +2218,7 @@ mod tests {
             pointer_at: None,
             _watch: Arc::new(AtomicBool::new(false)),
         };
-        (me, ui, event_loop, queue)
+        (me, ui)
     }
 
     /// Puts the cursor on the row whose target is `target`, as a click does.
@@ -2092,7 +2241,7 @@ mod tests {
             tailnet: Some("here".into()),
             ..State::default()
         };
-        let (mut w, mut ui, _loop, _queue) = a_window(state);
+        let (mut w, mut ui) = a_window(state);
         stand_on(&mut w, &ui, &Target::Pair);
         w.pressed(&mut ui, Press::Enter);
         let line = ui.asking.as_ref().expect("the name is asked here");
@@ -2120,7 +2269,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("ronoctua-window-library-{}", std::process::id()));
         std::fs::create_dir_all(root.join("Album")).expect("a library");
-        let (mut w, mut ui, _loop, _queue) = a_window(State::default());
+        let (mut w, mut ui) = a_window(State::default());
         w.view.files_at(&root, Purpose::Queue);
         stand_on(&mut w, &ui, &Target::Typed);
         w.pressed(&mut ui, Press::Enter);
@@ -2139,7 +2288,7 @@ mod tests {
     #[test]
     fn opening_another_door_is_the_footers_order() {
         use crate::player::{Press, Target};
-        let (mut w, mut ui, _loop, _queue) = a_window(State::default());
+        let (mut w, mut ui) = a_window(State::default());
         stand_on(&mut w, &ui, &Target::Run("player-column"));
         w.pressed(&mut ui, Press::Enter);
         assert_eq!(ui.orders(), ["command player-column".to_owned()]);
@@ -2151,9 +2300,15 @@ mod tests {
     /// drawn over the picture, and where the pointer keeps them up.
     #[test]
     fn on_stage_the_picture_is_everything_and_the_transport_is_its_foot() {
-        let l = super::stage_layout(20);
+        let l = super::stage_layout(0, 20);
         assert_eq!(l.pictures.len(), 1);
         assert_eq!((l.pictures[0].first, l.pictures[0].lines), (0, 20));
         assert_eq!((l.transport, l.bar, l.list), (18, 19, 20));
+        // IN A COLUMN, under its control line — which stays the column's.
+        let c = super::stage_layout(1, 20);
+        assert_eq!((c.pictures[0].first, c.pictures[0].lines), (1, 19));
+        assert_eq!((c.transport, c.bar), (18, 19));
+        let band = stage_area(300.0, 400.0, &column(Size::Medium));
+        assert_eq!((band.y, band.height), (line_px(), 400.0 - line_px()));
     }
 }

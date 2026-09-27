@@ -248,6 +248,13 @@ pub fn workspaces_in(said: &Value) -> Vec<Workspace> {
     };
     all.iter()
         .map(|w| Workspace {
+            // THE NAME IS THE IDENTITY, and a workspace always has one: the
+            // number is only its reading as a number.
+            name: w
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
             // `-1` is how the compositor says the name is not a number.
             number: w
                 .get("num")
@@ -255,6 +262,14 @@ pub fn workspaces_in(said: &Value) -> Vec<Workspace> {
                 .and_then(|n| u32::try_from(n).ok()),
             focused: w.get("focused").and_then(Value::as_bool) == Some(true),
             occupied: non_empty(w, "focus") || non_empty(w, "floating_nodes"),
+            // WHETHER A SCREEN SHOWS IT, and which: one visible workspace per
+            // output, the focused one among them.
+            visible: w.get("visible").and_then(Value::as_bool) == Some(true),
+            output: w
+                .get("output")
+                .and_then(Value::as_str)
+                .filter(|o| !o.is_empty())
+                .map(ToOwned::to_owned),
         })
         .collect()
 }
@@ -816,6 +831,36 @@ mod tests {
             ]
         );
         assert!(workspaces_in(&json!({})).is_empty());
+    }
+
+    /// FAILS IF: the name, whether a screen shows it or which screen stops
+    /// being read — a column is bound to a workspace BY NAME and shown on
+    /// the output that shows it, and a named workspace has no number to
+    /// fall back on.
+    #[test]
+    fn a_workspace_says_its_name_and_where_it_is_shown() {
+        let said = json!([
+            {"num": 1, "name": "1", "focused": true, "visible": true,
+             "output": "eDP-1", "focus": [], "floating_nodes": []},
+            {"num": 2, "name": "2", "focused": false, "visible": false,
+             "output": "eDP-1", "focus": [5], "floating_nodes": []},
+            {"num": -1, "name": "mail box", "focused": false, "visible": true,
+             "output": "DP-2", "focus": [], "floating_nodes": []},
+            {"num": 4, "name": "4", "focused": false, "focus": [], "floating_nodes": []}
+        ]);
+        let seen: Vec<(String, bool, Option<String>)> = workspaces_in(&said)
+            .into_iter()
+            .map(|w| (w.name, w.visible, w.output))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("1".to_owned(), true, Some("eDP-1".to_owned())),
+                ("2".to_owned(), false, Some("eDP-1".to_owned())),
+                ("mail box".to_owned(), true, Some("DP-2".to_owned())),
+                ("4".to_owned(), false, None),
+            ]
+        );
     }
 
     /// FAILS IF: the title bar stops being counted — the tree keeps it in

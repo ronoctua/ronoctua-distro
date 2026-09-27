@@ -674,7 +674,7 @@
     pad = 1;
   };
 
-  # THE GLANCE'S LINE — `LEADER d`, one row above the modeline.
+  # THE GLANCE'S LINE — `LEADER g`, one row above the modeline.
   #
   # # The air inside a place's ground
   #
@@ -868,15 +868,68 @@
   };
 
   # THE COLUMN ON THE RIGHT — the one chrome besides the footer (invariant
-  # 14), from the top of the screen to where the footer's area begins.
+  # 14), from the top of the screen to where the footer's area begins; one per
+  # workspace (`crate::column`).
   #
-  # `width` is in CELLS, like everything drawn on the grid, so the column
-  # grows with the size of the text instead of squeezing it. `pictures` is how
-  # many LINES a video in it takes before the rows start; a second video
-  # playing in step (a follower) takes as many again.
+  # FOUR SIZES, in CONTENT cells (the column adds `FIELDS_LEAD` on each side),
+  # like everything drawn on the grid, so the column grows with the size of the
+  # text instead of squeezing it:
+  #
+  #   large   72  half a medium more: the file browser opens a second column
+  #               (72 - 3 >= 2 x `player.browseColumn`) and a 16:9 picture
+  #               reaches ~17 lines
+  #   medium  48  the width the player's column always had; tenants open here
+  #   small   32  the narrowest that still holds the player's whole transport
+  #               (nine buttons of three cells)
+  #   bar      3  five with the margins: ODD, so a one-cell glyph sits exactly
+  #               in the middle, and about twice the modeline's thickness, so it
+  #               reads as a strip and not a line
+  #
+  # `maxPct` is "nothing leaks off the screen": no size takes more than that
+  # share of the screen's logical width, and a size the clamp makes equal to
+  # the one below it is drawn inert (the windows always keep more than half —
+  # the precedent is `expansion.maxFooterPct`). `pictures` is how many LINES a
+  # video takes at MEDIUM before the rows start (the other sizes scale it); a
+  # second video playing in step (a follower) takes as many again.
+  # `focusLine` is in LOGICAL PIXELS, not cells: the line drawn across the top
+  # while the column has the keyboard, the weight of the compositor's focus
+  # border (`default_border pixel 2`).
   column = {
-    width = 48;
+    large = 72;
+    medium = 48;
+    small = 32;
+    bar = 3;
+    maxPct = 45;
     pictures = 12;
+    focusLine = 2;
+  };
+
+  # THE SCREEN RESIZER (`LEADER d r`, `crate::resizer`): two curtains that cut
+  # the screen from the right and from below, for testing how everything
+  # behaves on a smaller one.
+  #
+  # `minColumns` x `minLines` is the smallest screen it cuts to: 20 columns is
+  # the narrowest line the modeline's own test measures, and 8 lines hold the
+  # footer's two, a band of three, a region of one and two lines of window.
+  # `edgeCells` is the right curtain's thinnest (the bottom one is one text
+  # line, where the size is said), `bigStep` how many columns or lines a
+  # Shift-arrow moves. `edgePx` is in LOGICAL PIXELS: the drawn edge of a
+  # curtain, the handle a pointer takes — a drawing, not a rule.
+  resizer = {
+    minColumns = 20;
+    minLines = 8;
+    edgeCells = 2;
+    edgePx = 2;
+    bigStep = 10;
+  };
+
+  # THE CHROME KIOSK'S MODELINE (`crate::kiosk`), in cells: a tab beside the
+  # one in front shows this much of its title, the tab in front up to
+  # `activeCells`, and a pinned extension this much of its name.
+  kiosk = {
+    tabCells = 14;
+    activeCells = 32;
+    extensionCells = 8;
   };
 
   # THE SCREEN CAPTURE'S OVERLAY (`ronoctua-shell capture`), in LOGICAL

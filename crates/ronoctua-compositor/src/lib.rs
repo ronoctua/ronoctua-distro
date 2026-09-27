@@ -144,21 +144,35 @@ pub struct Trails {
     pub marked: u32,
 }
 
-/// A workspace, reduced to what the modeline draws of it.
+/// A workspace, reduced to what the modeline draws of it — and where it is on
+/// screen, which a column needs.
 ///
 /// It is the whole of what the numbers on the modeline need: which one it is,
 /// whether it is the one in front, and whether anything is open on it. Its
 /// windows are NOT listed — "is there anything" is one field of the
 /// compositor's reply, and "which" would be a walk of the whole tree on every
 /// window that opens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// A right column belongs to ONE workspace (`crate::column` in the shell),
+/// and is shown on whichever screen shows that workspace: so a workspace also
+/// says whether a screen shows it and which one.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
+    /// Its name — the IDENTITY: a number is `None` for a workspace named
+    /// with words, and a workspace that empties and goes comes back under
+    /// the same name.
+    pub name: String,
     /// Its number, or `None` when it has a name that is not one.
     pub number: Option<u32>,
     /// Whether it is the focused workspace. There is one per session.
     pub focused: bool,
     /// Whether anything is open on it, floating windows included.
     pub occupied: bool,
+    /// Whether a screen shows it now — one per screen, the focused one among
+    /// them.
+    pub visible: bool,
+    /// The connector of the screen it is on (`eDP-1`), when it says one.
+    pub output: Option<String>,
 }
 
 /// A small window kept in the bottom-right corner, over the others —
@@ -709,6 +723,11 @@ pub trait Compositor: Send {
     /// taking focus.
     fn focused_output(&mut self) -> Result<Option<Output>>;
 
+    /// Every workspace, in the compositor's order — the same list
+    /// [`Event::Workspaces`] carries, asked now: a column being born has to
+    /// know where it belongs before the first event arrives.
+    fn workspaces(&mut self) -> Result<Vec<Workspace>>;
+
     /// Change one thing about one monitor, right now and not for ever.
     ///
     /// It is TRANSIENT by contract: a re-read of the configuration drops it.
@@ -863,6 +882,12 @@ impl Compositor for Absent {
     fn focused_output(&mut self) -> Result<Option<Output>> {
         Ok(None)
     }
+    // A REFUSAL, and not an empty list: a column told "no workspace" would
+    // park for ever, where one told "no compositor" stays on the screen it
+    // was born on.
+    fn workspaces(&mut self) -> Result<Vec<Workspace>> {
+        Self::nothing_there()
+    }
     fn ask(&mut self, _at: &str, _ask: Ask) -> Result<()> {
         Self::nothing_there()
     }
@@ -939,6 +964,8 @@ pub struct Scripted {
     pub windows: Vec<Window>,
     /// The connector [`Compositor::focused_output`] will name.
     pub focused: Option<String>,
+    /// What [`Compositor::workspaces`] will answer.
+    pub workspaces: Vec<Workspace>,
     /// What [`Compositor::devices`] will answer.
     pub devices: Vec<Device>,
     /// What [`Compositor::seats`] will answer.
@@ -1025,6 +1052,10 @@ impl Compositor for Scripted {
             .as_ref()
             .and_then(|at| self.outputs.get(at))
             .cloned())
+    }
+    fn workspaces(&mut self) -> Result<Vec<Workspace>> {
+        self.allowed()?;
+        Ok(self.workspaces.clone())
     }
     fn ask(&mut self, at: &str, ask: Ask) -> Result<()> {
         self.allowed()?;
@@ -1479,6 +1510,28 @@ mod tests {
         assert!(none.reread().is_err());
         assert!(none.close_window().is_err());
         assert!(none.ask("eDP-1", Ask::On).is_err());
+        // AND NO WORKSPACES IS A REFUSAL, not an empty list: a column told
+        // "there are none" would put itself away for good.
+        assert!(none.workspaces().is_err());
+    }
+
+    /// FAILS IF: a scripted compositor stops answering the workspaces it was
+    /// given — the column's binding is driven from these.
+    #[test]
+    fn a_scripted_compositor_answers_its_workspaces() {
+        let two = Workspace {
+            name: "2".to_owned(),
+            number: Some(2),
+            focused: true,
+            occupied: false,
+            visible: true,
+            output: Some("eDP-1".to_owned()),
+        };
+        let mut c = Scripted {
+            workspaces: vec![two.clone()],
+            ..Scripted::default()
+        };
+        assert_eq!(c.workspaces().unwrap(), vec![two]);
     }
 
     #[test]

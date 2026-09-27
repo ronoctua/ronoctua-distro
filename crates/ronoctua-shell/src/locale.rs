@@ -847,7 +847,7 @@ impl View {
         b.note(key::LOCALE_MACHINE_DOES);
         self.machine_rows(&mut b, now, texts);
 
-        // 5. THE GLANCE'S PLACES — `LEADER d`, and what each of them shows.
+        // 5. THE GLANCE'S PLACES — `LEADER g`, and what each of them shows.
         b.heading(key::LOCALE_HEADING_GLANCE);
         b.note_with(
             key::LOCALE_GLANCE_DOES,

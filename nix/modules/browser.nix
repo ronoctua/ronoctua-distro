@@ -30,10 +30,13 @@
   pkgs,
   lib,
   config,
+  ronoctua,
   ...
 }:
 
 let
+  cfg = config.ronoctua.browser;
+
   chrome = pkgs.google-chrome.override {
     commandLineArgs = [
       # The whole point of this module.
@@ -51,19 +54,64 @@ let
       # never passes `--enable-features` at all.
     ];
   };
+
+  # THE KIOSK'S BRIDGE, as the footer finds it: the host manifest the
+  # extension-packing unit writes (`nix/modules/browser-extension.nix`), which
+  # carries our extension's id in its allow-list — the id is born on the
+  # machine, so a path to the file is all the footer can be told.
+  bridgeManifest = "/etc/opt/chrome/native-messaging-hosts/${(import ../browser-hosts.nix).browser}.json";
+
+  # THE LAUNCHER'S DOOR TO THE KIOSK (`LEADER m b` is the other): the
+  # person's own Chrome, without its bars, the footer drawing its tabs. A
+  # `.desktop` has room for one language, and that is English (AGENTS.md,
+  # invariant 18). `Exec` is the store path, the rule for a program the
+  # system calls; `%u` hands an address over when one is opened with it.
+  # No `MimeType`: it opens an address when ASKED, and never takes links
+  # from the person's default browser. Its glyph comes from
+  # `assets/icons/tray-glyphs.nix`, by this id.
+  kioskEntry = pkgs.writeTextDir "share/applications/br.ronoctua.kiosk.desktop" ''
+    [Desktop Entry]
+    Type=Application
+    Name=Chrome kiosk
+    Comment=Your Chrome without its bars; the footer draws its tabs
+    Exec=${ronoctua.shell}/bin/ronoctua-shell command kiosk-open %u
+    Terminal=false
+    Categories=Network;WebBrowser;
+  '';
 in
 {
-  options.ronoctua.browser.enable = lib.mkEnableOption "Google Chrome (0.42 GiB)" // {
-    default = true;
+  options.ronoctua.browser = {
+    enable = lib.mkEnableOption "Google Chrome (0.42 GiB)" // {
+      default = true;
+    };
+    # THE CHROME THIS MACHINE RUNS. The wrapped one above; `tests/kiosk-vm.nix`
+    # hands in the real Chrome with its own test flags, because a test node's
+    # `pkgs` admits nothing unfree. Whatever is here is what
+    # `/run/current-system/sw/bin/google-chrome-stable` is.
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = chrome;
+      defaultText = lib.literalExpression "pkgs.google-chrome with --password-store=basic --ozone-platform-hint=auto";
+      description = "The Chrome installed, and the one the kiosk and the web apps open.";
+    };
   };
 
   config = {
-    environment.systemPackages = lib.mkIf config.ronoctua.browser.enable [ chrome ];
+    environment.systemPackages = lib.mkIf cfg.enable [
+      cfg.package
+      kioskEntry
+    ];
+
+    # WHERE THE FOOTER READS OUR EXTENSION'S ID: the unit's environment, and
+    # not the login shell's — a user unit inherits the manager's, which is
+    # the trap `RONOCTUA_GRIM` records in `nix/modules/scroll.nix`.
+    systemd.user.services.ronoctua-footer.environment.RONOCTUA_BROWSER_MANIFEST =
+      lib.mkIf cfg.enable bridgeManifest;
 
     # The portal is what a file dialog and a screen share go through on Wayland.
     # `xdg.portal` is already enabled by nix/modules/scroll.nix; this only adds the
     # GTK backend, which is the one Chrome talks to.
-    xdg.portal.extraPortals = lib.mkIf config.ronoctua.browser.enable [
+    xdg.portal.extraPortals = lib.mkIf cfg.enable [
       pkgs.xdg-desktop-portal-gtk
     ];
 

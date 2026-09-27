@@ -14,7 +14,14 @@
 //! Each message is a little-endian `u32` length followed by that many bytes of
 //! UTF-8 JSON, in both directions. It is not line-delimited like the queue's
 //! own socket — a length prefix is what Chrome speaks, and translating between
-//! the two is the whole job of this file.
+//! the two is the whole job of this file. The reader and the writer live in
+//! `ronoctua_browser::native`, beside the kiosk's host, which speaks the same.
+//!
+//! # Chrome says who is calling
+//!
+//! Its first argument is the extension's origin, `chrome-extension://<id>/`
+//! — the manifest's `path` takes none of its own. The daemon's `main` takes
+//! that for this door; the word `browser` stays, for use by hand.
 //!
 //! # What it may be asked for
 //!
@@ -25,13 +32,9 @@
 
 use crate::job::{Identity, Want, Work};
 use crate::wire::Ask;
-use anyhow::{Context as _, Result, bail};
+use anyhow::Result;
+use ronoctua_browser::native::{read_message, write_message};
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
-
-/// The biggest message Chrome will send. Anything larger is a bug or an
-/// attempt, and either way is refused before it is allocated.
-const CEILING: u32 = 1024 * 1024;
 
 /// What the extension may ask for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,42 +95,6 @@ impl Answer {
             why: Some(why.into()),
         }
     }
-}
-
-/// Reads one message, or `None` at the end of the stream.
-///
-/// # Errors
-///
-/// On a short read, a length past [`CEILING`], or JSON that does not parse.
-pub fn read_message<T: serde::de::DeserializeOwned>(from: &mut impl Read) -> Result<Option<T>> {
-    let mut header = [0_u8; 4];
-    match from.read_exact(&mut header) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(e) => return Err(e.into()),
-    }
-    let len = u32::from_le_bytes(header);
-    if len > CEILING {
-        bail!("a message of {len} bytes; the ceiling is {CEILING}");
-    }
-    let mut body = vec![0_u8; len as usize];
-    from.read_exact(&mut body)
-        .context("the message ended before the announced size")?;
-    Ok(Some(serde_json::from_slice(&body)?))
-}
-
-/// Writes one message with Chrome's framing.
-///
-/// # Errors
-///
-/// When the pipe is gone, or the value does not serialise.
-pub fn write_message<T: Serialize>(to: &mut impl Write, value: &T) -> Result<()> {
-    let body = serde_json::to_vec(value)?;
-    let len = u32::try_from(body.len()).context("a message too large for the framing")?;
-    to.write_all(&len.to_le_bytes())?;
-    to.write_all(&body)?;
-    to.flush()?;
-    Ok(())
 }
 
 /// What one request becomes, or nothing for a ping.

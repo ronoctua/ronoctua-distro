@@ -476,6 +476,19 @@ in
         pkgs.bash
         pkgs.swaybg
       ];
+      # THE SESSION TYPE, WHICH THE USER MANAGER DOES NOT CARRY. Measured: its
+      # environment has `XDG_CURRENT_DESKTOP` from `sessionVariables` and not
+      # the `XDG_SESSION_TYPE` beside it, and this compositor sets neither
+      # (only `WAYLAND_DISPLAY` and `DISPLAY`, `sway/server.c`). So the
+      # `import-environment` line of the
+      # config said "Environment variable $XDG_SESSION_TYPE not set,
+      # ignoring", and every program the footer opens inherited no session
+      # type. Chrome's `--ozone-platform-hint=auto` reads THAT variable, not
+      # `WAYLAND_DISPLAY`: it chose X11, found no `DISPLAY` (never imported)
+      # and exited — the kiosk, the web apps and Chrome from the launcher
+      # alike (`tests/kiosk-vm.nix`, which now asserts the manager has it).
+      # Given here, to the process whose import line exports it.
+      environment.XDG_SESSION_TYPE = "wayland";
       serviceConfig = {
         # `exec` AND NOT `notify`: this compositor has no `sd_notify` at
         # all, so `Type = "notify"` would sit for the full start timeout and
