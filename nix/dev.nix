@@ -181,8 +181,8 @@ let
     client.focused_inactive @BORDER_INACTIVE@ @BORDER_INACTIVE@ @BORDER_INACTIVE@ @BORDER_INACTIVE@ @BORDER_INACTIVE@
     client.unfocused @BORDER_INACTIVE@ @BORDER_INACTIVE@ @BORDER_INACTIVE@ @BORDER_INACTIVE@ @BORDER_INACTIVE@
 
-    # THE DESK. Same token as production,
-    # another compositor's spelling.
+    # THE DESK. Same token as production — the default answer's desk, the
+    # theme's own — in another compositor's spelling.
     output * bg @BACKGROUND@ solid_color
 
     # THE NESTED OUTPUT'S SIZE AND SCALE ARE APPENDED AT RUN TIME, because
@@ -510,7 +510,7 @@ let
       # `output * bg` is not drawn by the compositor: it spawns a helper, BY
       # NAME. Measured here, from its own log — `failed to execute 'swaybg'
       # (background configuration probably not applied)` — and the reason it
-      # took a log to find is that the default theme's desk is black and an
+      # took a log to find is that the desk was black by default then, and an
       # unpainted desk is black too.
       swaybg
       # `cargo` for hot reload. It comes from the SAME toolchain `nix/rust.nix`
@@ -625,7 +625,8 @@ let
 
       # THE CONFIG ARRIVES READY AND VALIDATED — see this file's `let`.
       cfg=${nestedConfig}
-      # THE PERSON'S THEME AND DESK, included as production includes them.
+      # THE PERSON'S THEME, DESK AND BORDERS (`scroll-<desk>-<borders>.conf`,
+      # copied by the footer), included as production includes them.
       # Appended to a COPY at run time, because only here is the home known;
       # the store file stays shared. A `mktemp` file like the log, and it
       # stays with it.

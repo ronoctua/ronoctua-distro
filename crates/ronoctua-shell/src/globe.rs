@@ -256,11 +256,22 @@ pub const fn ink_color(ink: Ink) -> tokens::Color {
 /// path up by `from` keeps the scale and takes the top off. It is the crop this
 /// renderer has nowhere else — nothing downstream clips, which is why an image
 /// drawn half outside its panel is drawn over the listing rather than cut.
+///
+/// # In the palette the sight names
+///
+/// `palette` is [`Sight::theme`], and every ink is resolved IN it
+/// (`Color::to_rgba8_in`), never in the palette the process wears at the
+/// moment this runs: this runs on the worker's thread while the footer
+/// paints its screens, each wearing its own page, and an ink read from the
+/// process would be whichever page the loop had just put on — a texture
+/// keyed for one palette carrying another's colours, and never drawn again,
+/// since the sight did not change.
 pub fn paint(
     drawing: &ronoctua_atlas::Drawing,
     width: u32,
     height: u32,
     from: u32,
+    palette: usize,
 ) -> Option<Rgba> {
     use resvg::tiny_skia;
     let mut pixmap = tiny_skia::Pixmap::new(width.max(1), height.max(1))?;
@@ -282,7 +293,7 @@ pub fn paint(
             b.close();
         }
         let Some(path) = b.finish() else { continue };
-        let rgba = ink_color(shape.ink).to_rgba8();
+        let rgba = ink_color(shape.ink).to_rgba8_in(palette);
         let mut paint = tiny_skia::Paint {
             anti_alias: true,
             ..tiny_skia::Paint::default()
@@ -329,7 +340,9 @@ pub struct Sight {
     /// The drawing is always projected at `size.1 + from` and then cut, so the
     /// map keeps its size as its rows leave. See [`paint`].
     pub from: u32,
-    /// Which theme it is painted in — part of the texture's identity.
+    /// Which PALETTE it is painted in — the theme and the page, as
+    /// `ronoctua_tokens::theme::palette` numbers them: part of the texture's
+    /// identity, and what [`paint`] resolves every ink in.
     pub theme: usize,
     /// Which language the address is wanted in.
     pub portuguese: bool,
@@ -545,7 +558,13 @@ pub fn stage(out: calloop::channel::Sender<Beat>) -> Option<Stage> {
                 if mine[slot].load(std::sync::atomic::Ordering::SeqCst) != now {
                     continue;
                 }
-                let Some(rgba) = paint(&drawing, sight.size.0, sight.size.1, sight.from) else {
+                let Some(rgba) = paint(
+                    &drawing,
+                    sight.size.0,
+                    sight.size.1,
+                    sight.from,
+                    sight.theme,
+                ) else {
                     continue;
                 };
                 if out
@@ -844,7 +863,8 @@ mod tests {
         };
         // HOW MUCH OF THE BOX THE BAND COVERS, as a fraction of its pixels.
         let covered = |height: u32, from: u32| {
-            let rgba = super::paint(&band, 20, height, from).expect("a pixmap");
+            let rgba = super::paint(&band, 20, height, from, ronoctua_tokens::theme::palette())
+                .expect("a pixmap");
             let lit = rgba.pixels.chunks_exact(4).filter(|p| p[3] > 128).count();
             lit as f32 / (20.0 * height as f32)
         };

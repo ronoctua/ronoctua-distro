@@ -131,14 +131,17 @@ in
       # --- the palette, solved by the theme generator (nix/themes.nix) -------
       # Sixteen ANSI colours, background, foreground, cursor and selection,
       # mapped from the same families the footer draws with: the machine's
-      # default theme first, and after it — because in Ghostty the later file
-      # wins — the theme the person chose with `LEADER s t`, which the footer
-      # copies to this path and which may not exist (`?`). A Ghostty PROCESS
+      # default theme first, on the theme's own ground, and after it — because
+      # in Ghostty the later file wins — the theme the person chose with
+      # `LEADER s t`, on the ground they chose for the windows (the generator
+      # writes `ghostty-<ground>.conf` per theme, `theme::fragments` picks
+      # one), which the footer copies to this path and which may not exist
+      # (`?`). A Ghostty PROCESS
       # started after a change wears it; a running one keeps what it had —
       # and every window is a process: `gtk-single-instance = false` below,
       # which the desktop entry installed by this module no longer overrides
       # (`ghosttyPerWindow`, at the top).
-      config-file = ${ronoctua.themed}/${cfg.theme}/ghostty.conf
+      config-file = ${ronoctua.themed}/${cfg.theme}/ghostty-theme.conf
       config-file = ?/home/${cfg.user}/.config/ronoctua/ghostty-theme.conf
 
       # --- and the size of the text, which is the person's too ----------

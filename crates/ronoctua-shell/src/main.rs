@@ -71,6 +71,7 @@ mod disks;
 mod display;
 mod display_window;
 mod display_words;
+mod events;
 // EVERY WINDOW'S PLUMBING, ONCE: the seats, the scale, the GPU, the watches,
 // the header, the list, the pointer and the finger. A window is what it
 // draws and what its keys do; the rest is here, and a window that wants it
@@ -83,6 +84,7 @@ mod foreign;
 mod geo;
 mod geo_window;
 mod globe;
+mod hidden;
 mod hidpi;
 mod history;
 mod history_window;
@@ -691,10 +693,15 @@ fn main() -> Result<()> {
         // It checks the keymap without bringing anything up. It exists so whoever edits their own
         // keymap gets the same verdict `nix flake check` gives.
         Some("check-keymap") => {
-            let (tree, registry) = leader::default_of().context("keymap")?;
+            // THE THREE SETS, each built through `Tree::build_it`: a collision
+            // in any of them — the folded ones included — fails here, named
+            // with the set it is in (`leader::Trees::build`).
+            let (trees, registry) = leader::default_of().context("keymap")?;
             // REACHABILITY, and not only collisions. A command with no key at all does not
-            // collide with anything — and that is how it goes unnoticed.
-            let reachable = leader::reachable(&tree);
+            // collide with anything — and that is how it goes unnoticed. It is
+            // asked of the FULL tree, which holds every sequence the other two
+            // fold away.
+            let reachable = leader::reachable(&trees.full);
             // The compositor's 141 MIRRORED actions are reachable by NAME
             // and by name only — giving them keys would spend the whole keymap on
             // what is almost never used. It is recognisable by its prefix.
@@ -717,8 +724,11 @@ fn main() -> Result<()> {
                 orphans.join(", ")
             );
             println!(
-                "keymap OK: {} bindings, {} chords, {} commands, all reachable",
-                tree.amount(),
+                "keymap OK: {} bindings ({} in the footer's set, {} in the window's), \
+                 {} chords, {} commands, all reachable",
+                trees.full.amount(),
+                trees.footer.amount(),
+                trees.window.amount(),
                 actions::chords().len(),
                 registry.amount()
             );

@@ -226,6 +226,26 @@ pub fn is_a_cursor_hover(c: Color) -> bool {
     CURSOR_HOVERS.contains(&c)
 }
 
+/// One per KEY, the first to claim it, in the order they came: the bands the
+/// pointers light, when two pointers may stand on one thing — a place two
+/// cursors share takes the first one's colour, so the picture is the same on
+/// every frame.
+///
+/// THE KEY IS WHAT ONE BAND COVERS, and that is the caller's to say: a row,
+/// or — where a row holds lists side by side, each with its own hover (the
+/// theme chooser) — a row and a column. Keyed by the row alone, the second
+/// pointer on another list of that row lit nothing.
+#[must_use]
+pub fn first_of_each<K: PartialEq, T>(items: impl IntoIterator<Item = (K, T)>) -> Vec<(K, T)> {
+    let mut kept: Vec<(K, T)> = Vec::new();
+    for (key, item) in items {
+        if !kept.iter().any(|(k, _)| *k == key) {
+            kept.push((key, item));
+        }
+    }
+    kept
+}
+
 /// The eight cursors' hover colours, in the order of the cursor colours.
 const CURSOR_HOVERS: [Color; 8] = [
     ronoctua_tokens::color::CURSOR_HOVER_ONE,

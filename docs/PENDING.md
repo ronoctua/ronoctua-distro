@@ -198,6 +198,24 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
+### 0.0000029. O rodapé transparente — o que só a GPU do dono prova · minúsculo
+
+Nos modos ocultos (`LEADER LEADER`, `LEADER Alt LEADER`; `docs/ARCHITECTURE.md`, "Os modos
+ocultos"), o que empurra as janelas fica sobre a cor da mesa, opaca, e não depende de nada. O que
+depende de a superfície do rodapé aceitar o modo `PreMultiplied`
+(`ronoctua_render::gpu::alpha_mode_for`) é o que fica POR CIMA das janelas: o véu (o minibuffer
+sozinho e a lista da leader nos dois modos, e tudo no `Cover`) e o pixel transparente da borda em
+repouso. Os testes provam a escolha do modo e a limpeza multiplicada; se o driver da máquina do dono
+oferece o modo, só ela responde. Sem ele o rodapé fica opaco, registra
+`the surface cannot be see-through here` e diz `echo-footer-opaque` uma vez: as barras somem e fica
+uma faixa de chrome.
+
+- **como saber que acabou**: na máquina do dono, com `LEADER LEADER` o minibuffer sozinho (um eco)
+  e com `LEADER Alt LEADER` uma vista aberta mostram a janela através do véu, a linha de baixo da
+  tela em repouso mostra a janela e não uma faixa de chrome, e nem a frase nem o aviso no journal
+  aparecem. Se o driver recusar, a decisão do dono sobre isso fica escrita no `ARCHITECTURE.md` e o
+  item sai.
+
 ### 0.000003. Os programas da pessoa — o que só uma máquina de verdade prova · pequeno cada
 
 A central (`LEADER i`, `docs/ARCHITECTURE.md`, "Programas") foi provada por teste, por palco e por
@@ -461,7 +479,7 @@ multiplicar o lado pela escala e desenhar na caixa lógica. **O ícone custa uma
 localizador é indexado pelo nome nu do `Icon=` (`surface.rs`, `im.missing(key)`), e
 `request_visible_icons` filtra o que já está em `self.icons` — então uma vez decodificado a 18 px ele
 nunca é pedido de novo, nem numa troca de escala nem numa troca de tamanho do texto. É a mesma classe
-que o AGENTS.md já registra para o tema ("leva o tema na CHAVE do cache"), com `scale` e `size`
+que o AGENTS.md já registra para a paleta ("leva a paleta na chave do cache"), com `scale` e `size`
 faltando; o `files::Stamp::key()` já carrega o passo de decodificação e está certo por isso.
 
 **E as MINIATURAS saíram desta lista**, que é o que este item queria de cada textura: o alvo delas é

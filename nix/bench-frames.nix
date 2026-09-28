@@ -153,6 +153,13 @@ writeShellApplication {
       sleep 0.5
       env WAYLAND_DISPLAY="$display" ${ronoctua-shell}/bin/ronoctua-shell command notif-dismiss \
         >/dev/null 2>&1 || true
+      # THE NEXT LEADER MUST OPEN, NOT TOGGLE. The leader pressed again at the
+      # root of the default set hides the bars (`crate::hidden`), and nothing
+      # here closes the one just opened — so the loop moves it to the whole
+      # tree (`LEADER CTRL`), where the leader again starts over, as every
+      # opening measured here used to.
+      env WAYLAND_DISPLAY="$display" ${ronoctua-shell}/bin/ronoctua-shell command leader-set-full \
+        >/dev/null 2>&1 || true
       sleep 0.4
     done
     sleep 1

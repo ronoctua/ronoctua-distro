@@ -1007,7 +1007,8 @@ está em foco ali; o minibuffer é por tela e é onde se digita. Dois minibuffer
 pergunta "qual deles tem o prompt?", que não tem resposta boa.
 
 Todo output mantém exatamente duas linhas, então o exclusive zone fica uniforme e **o conteúdo não
-reflowa quando o foco troca de tela**.
+reflowa quando o foco troca de tela**. A exceção são as barras ocultas: a borda de baixo as revela só
+na tela em que o ponteiro está, e as outras ficam num pixel (ver "Os modos ocultos").
 
 **Consequência a respeitar:** o estado do minibuffer vive **no daemon, não na superfície**. Se o
 output em foco desaparecer no meio de um prompt, o estado migra sem perder o que foi digitado.
@@ -1521,8 +1522,12 @@ teclado.
 ### O rodapé: onde cada linha fica, e o que aparece nelas
 
 **Modeline e minibuffer ficam coladas; a expansão cresce abaixo e a notificação acima.** De cima
-para baixo: a faixa de notificação (0 a 3 linhas), o nome do buffer, a linha do que se digita, e
-então a lista — which-key, candidatos do localizador, gerenciador, manual.
+para baixo: a faixa de notificação (0 a 3 linhas), a linha do relance ou do endereço do quiosque,
+a modeline, o minibuffer (com a gaveta dele quando aberta, e a linha que explica a dica sob o
+ponteiro), a linha do cérebro, e então a lista — which-key, candidatos do localizador,
+gerenciador, manual —, com o teclado na tela embaixo de tudo. Com as barras ocultas, a modeline e o
+minibuffer podem faltar, um ou os dois, e o minibuffer sozinho sobe para a linha da modeline: quantas
+linhas as barras ocupam é o `hidden::Shape` que diz, nunca uma constante (ver "Os modos ocultos").
 
 A superfície é ancorada **embaixo**, e é isso que torna as duas direções livres: crescer para cima
 não move a modeline na tela, come conteúdo. O primeiro da expansão deixou de ser constante por causa
@@ -1841,6 +1846,10 @@ então abrir a lista redimensiona o que está atrás. Cobrir o conteúdo esconde
 se estava lendo — e num sistema sem popup (invariante 14), a superfície do rodapé é a única coisa
 capaz de cobrir algo. O custo é o reflow: os buffers recebem `configure` a cada expansão.
 
+Com as barras ocultas isso deixa de valer, por pedido do dono: com `LEADER Alt LEADER` tudo cobre, e
+com `LEADER LEADER` cobrem o minibuffer e a lista da leader enquanto nada empurra (ver "Os modos
+ocultos"). O argumento acima continua verdadeiro lá, e é o preço aceito.
+
 **O teclado sai na hora, num commit só dele; a altura espera o quadro** (`commit_now` e
 `configure_repeats_itself`, em `surface.rs`). A altura nova vai junto com o quadro desenhado nela,
 para o compositor nunca mostrar o quadro velho na caixa nova — o salto. O teclado não tem imagem a
@@ -1858,7 +1867,8 @@ não há contador de notificações, e o sino só existe com não lida (o dono p
 abre, o nome do buffer aparece. Um rótulo de ausência inventado ocuparia coluna afirmando algo falso,
 e quem o lê procura um buffer que não existe.
 
-A sequência pendente aparece como `LEADER g-`. O `-` no fim custa duas colunas a menos que ` …`
+A sequência pendente aparece como `LEADER g-` — e `LEADER ALT g-` ou `LEADER CTRL s n-` fora do
+conjunto padrão (ver "Três conjuntos da leader"). O `-` no fim custa duas colunas a menos que ` …`
 dizendo a mesma coisa, e num rodapé onde tudo elide, espaço é o recurso.
 
 **O rótulo da leader vem do ambiente**, posto por quem define o bind, e são **dois**:
@@ -1870,11 +1880,210 @@ acorde. Deduzir um do outro seria a tela ensinando o gesto errado.
 
 ---
 
+### Os modos ocultos — `LEADER LEADER` empurra, `LEADER Alt LEADER` cobre
+
+O dono pediu um rodapé que some: modeline e minibuffer fora da tela em repouso, de volta quando se
+pede. São dois modos, e o que os separa é o que o rodapé faz com as janelas enquanto mostra alguma
+coisa. A tabela é dele, e `hidden::Shape::of` a responde inteira (o teste percorre todas as
+combinações):
+
+| | `LEADER LEADER` — empurra | `LEADER Alt LEADER` — cobre |
+|---|---|---|
+| o minibuffer sozinho (eco, pergunta, a sequência) e a lista da leader | por cima, com véu | por cima, com véu |
+| uma vista-app do rodapé aberta | empurra, sobre a mesa | por cima, com véu |
+| a faixa de notificação, a linha do cérebro | empurram, com o fundo delas | por cima, com o fundo delas |
+| o teclado na tela | empurra, com o fundo dele | empurra SOZINHO (só as linhas dele), com o fundo dele |
+| o ponteiro na borda de baixo | as barras empurram, sobre a mesa | as barras por cima, com véu |
+| um quiosque em foco | as barras empurram, sobre a mesa | nada: só a borda revela |
+
+"Sobre a mesa" era "sem fundo" — a limpeza de alfa 0, com a mesa aparecendo por trás — até o dono
+pedir (2026-09-28) a cor da mesa, opaca: o mesmo aspecto, sem a franja branca que o texto desenhado
+sobre nada ganha (ver "Transparente só onde a superfície deixa", abaixo). As linhas que empurram
+VESTEM a página da mesa (`hidden::Shape::page`; ver "As faixas seguem o fundo", em "Cores"), então o
+fundo delas é simplesmente o `surface.chrome` dessa página, que É a mesa, e texto, hover e seleção
+sobre ele foram medidos ali.
+
+**O gesto é a leader de novo, na raiz.** Com a leader aberta e nada digitado — nem tecla da árvore,
+nem o `,` do buffer, nem o `w s` —, a leader chegando outra vez esconde as barras no conjunto padrão
+(empurrar) e no das janelas (cobrir), e as devolve quando o modo já é aquele; de um modo para o outro,
+vai ao pedido (`hidden::leader_again`, `hidden::toggled`). Só com a leader À VISTA: ativa sob uma
+vista-app ou o localizador de comandos, ela não está na tela — a vista continua com a região e as
+teclas —, e a leader de novo ali recomeça, em vez de esconder as barras a partir de uma lista que a
+pessoa não vê. No conjunto completo, ou com algo digitado, ela recomeça a sequência como sempre fez: a árvore inteira é onde se vai para digitar, e
+uma sequência recomeçada por engano custa menos que barras escondidas por engano. Os dois gestos são
+também comandos (`footer-hide-push`, `footer-hide-cover`, pelo nome no `LEADER :`), e a raiz da lista
+ganha uma linha cuja tecla é o rótulo da própria leader (`hidden::bars_row`): a tecla do gesto não
+cabe em árvore nenhuma, e sem a linha o ponteiro não a alcançaria (invariante 19). Clicar nela é a
+leader chegando (`Click::Leader`), e não uma tecla.
+
+**O modo é preferência, em `modeline.json`** (`adapt::Prefs::hidden`, `"push"` ou `"cover"`).
+Ausente é visível. Uma palavra que não é nenhuma das duas recusa o arquivo com a frase que toda
+chave dele já diz, em vez de voltar calada ao visível — no gesto, na vigia do arquivo
+(`adapt::reread`, que lê com `parsed` e mantém a cópia que o rodapé tem) e na partida, onde não há
+cópia: o rodapé sobe com o padrão e diz a frase uma vez. O gesto lê o arquivo, mescla e grava, então o
+modo sobrevive ao reinício, e outra mão que o mude — outro rodapé, o arquivo editado — move este
+também.
+
+**Por que tudo empurra quando qualquer coisa empurra.** O layer-shell reserva a zona contada da
+borda ANCORADA — a de baixo — e a faixa cresce no TOPO da superfície. Uma zona que cobrisse a faixa
+e não as linhas abaixo dela não se pede. Então, empurrando, a superfície inteira é a zona, e nada
+nela leva véu: com a faixa ou o cérebro no ar, o minibuffer que estava por cima passa a empurrar
+junto e perde o véu. É a geometria do protocolo, escrita e não contornada. Cobrindo, nada reserva.
+
+**O teclado na tela empurra em todos os modos** (`hidden::Inputs::keyboard_out`, decisão do dono
+de 2026-09-28). Ele digita na janela em foco, e por cima dela cobriria justamente a linha em que se
+digita — o prompt de um terminal. No `Push` ele empurra junto com o resto; no `Cover` empurra
+SOZINHO: é a linha de baixo da superfície, e a zona conta da borda de baixo, então ela reserva só a
+altura dele (`hidden::geometry`, `keyboard_lines`) e o que está acima continua por cima das janelas,
+com o véu. Cobra `the_keyboard_pushes_in_every_mode`.
+
+**Por cima, a largura toda: a camada `overlay` e a zona `-1`** (`hidden::geometry`, decisão do dono
+de 2026-09-28). Uma superfície de zona 0 é posta dentro do espaço que as EXCLUSIVAS deixam, e a
+coluna da direita é uma (`top`, ancorada em cima, à direita e embaixo, reservando a largura dela): o
+rodapé oculto que não reservava nada saía estreitado pela coluna — modeline, minibuffer, faixa e
+lista sem a largura dela, as marcas contadas da borda direita deslocadas, e o pixel da borda parando
+antes do canto. É o invariante 14. A zona `-1` é o "ignore as outras zonas" do protocolo, e a camada
+`overlay` põe o rodapé ACIMA da coluna, que está em `top` — na mesma camada, a coluna criada depois
+dele o cobriria.
+
+**Oculto, uma camada só.** Empurrando, o rodapé oculto CONTINUA na `overlay` e só a zona muda (a
+altura dele no lugar de `-1`). Ele voltava para `top` para empurrar, e isso era um laço: uma
+superfície que muda de camada sob o ponteiro recebe um `leave` do compositor, o `leave` esconde o
+que a borda revelou, o ponteiro está na borda de novo, e o rodapé virava a cada ~15 ms — 1044 voltas
+em três segundos, medido no palco, com as janelas pulando a altura do rodapé a cada volta (o dono viu
+o conteúdo "duplicado" e não conseguiu fotografar). Na `overlay` ele também é reservado PRIMEIRO (é
+a primeira camada arranjada), então a coluna em `top` continua parando acima dele. Com as barras
+visíveis ele fica em `top` com a zona do tamanho dele, como sempre; a camada só muda quando um modo
+é trocado, por tecla. Uma camada que muda é mandada na hora, num commit sem quadro (o comentário do
+`apply_geometry`). Cobra `the_edge_never_moves_a_hidden_footer_to_another_layer`.
+
+O preço, escrito: oculto, o rodapé ignora as cortinas do redimensionador de tela (`LEADER d r`,
+ferramenta de desenvolvimento) — por cima, a zona `-1` ignora toda outra zona; empurrando, ele é
+reservado antes das cortinas, criadas depois na mesma camada. Nos dois casos ele não senta na tela
+menor que elas fazem: fica na borda de baixo de verdade, e a cortina de baixo é desenhada por cima
+dele.
+
+**Quem empurra é uma vista-APP** (`ViewState::is_an_app`). A lista da leader, o localizador de
+comandos e o menu da janela ficam de fora: são o teclado passando a caminho de outra coisa, e ficam
+por cima como o minibuffer de onde pendem.
+
+**Isto é a exceção a "a expansão empurra os buffers".** O argumento de lá — cobrir esconde a linha
+que se estava lendo — continua verdadeiro, e é o preço que o dono aceitou: sob o véu, texto sobre
+uma janela movimentada pode ficar difícil de ler.
+
+**Em repouso, um pixel transparente, sem zona própria** (`hidden::geometry`, `pixels_of`), por
+cima, com a largura toda. É a borda que o
+ponteiro acha. Só a última linha de pixels revela (`hidden::at_the_edge`, contra a altura que o
+compositor CONFIGUROU, `Screen::asked`: a que um quadro desenhado adiante já mudou não é a da
+superfície a que as coordenadas do ponteiro pertencem, e o ponteiro voltando por cima do rodapé que
+acabara de encolher estava "na borda" em qualquer `y`); reveladas, as barras
+ficam enquanto o ponteiro estiver em qualquer ponto do rodapé, e sair dele as esconde. A superfície
+inteira não serve de gatilho por causa da faixa: com ela no ar, o ponteiro atravessando-a para
+apertar um botão traria as barras para baixo dela, e a superfície, ancorada embaixo, cresce para cima
+— o botão fugiria da mão. O preço é o do `Edge` da tela cheia, que mantém a precedência: aquele pixel
+rouba o clique da última linha de pixels das janelas.
+
+**A borda é de uma tela — enquanto nada mais está no rodapé.** As linhas são contadas uma vez para
+todas as telas, como sempre, e o `Shape` é um só. Com nada mais à mostra, só a tela em que o ponteiro
+está cresce: a outra fica no pixel (o `revealed_on` guarda o conector da tela em que ele está) e não
+desenha nele nada das linhas que a primeira mostra. Com outra coisa no rodapé — um eco, uma vista, a
+faixa —, que aparece em todas as telas, como as duas linhas sempre apareceram, uma borda revelada
+põe as barras em TODAS: em `Push`, a zona delas também, e as janelas da outra tela sobem enquanto o
+ponteiro fica na borda; cobrindo, a outra tela desenha a modeline por cima. É o preço de as linhas
+serem uma aritmética só para todas as telas (a decisão do dono foi mantê-lo); separar exigiria um
+`Shape` por tela, na geometria e na pintura. Uma tela que chega com as barras ocultas nasce na
+geometria que as outras têm (`create_screen`), e não nas duas linhas: nada que um monitor plugado muda
+pede geometria, e ela ficava com uma faixa sob o véu reservando duas linhas. Uma tela que sai leva a borda junto: nenhum `leave` virá de uma superfície que não existe
+mais. Clicar no minibuffer revelado e vazio abre a leader com a lista na hora, e é por aí que o
+ponteiro chega aos dois gestos.
+
+**Nos dois modos**, o minibuffer aparece quando tem o que dizer: uma vista com o teclado, um eco (o
+de um evento inclusive), uma pergunta, o volume ou o brilho, a gaveta aberta
+(`Footer::minibuffer_busy`). A modeline nunca vem sem o minibuffer embaixo; sozinho, ele sobe para a
+linha dela. As marcas da modeline somem com ela. Num quiosque em foco, empurrando, as barras ficam
+enquanto o foco for dele: o quiosque não tem barra própria, e a modeline é onde estão os controles
+dele. Cobrindo, só a borda.
+
+**Linha que não é desenhada não é acertada.** `modeline_placed`, `adapter_drawn`, as marcas da linha,
+o chevron da gaveta e o contador de páginas são escritos na pintura, e a pintura de uma linha oculta
+os escreve vazios; `segment_at`, `hint_under`, `pointer_on_fold` e `on_the_empty_minibuffer`
+perguntam o `shape` antes de tudo.
+
+**As linhas das barras deixaram de ser constante.** `FOOTER_LINES` era a soma, e agora ela é
+`shape.lines()`, de zero a dois. O `apply_geometry` guarda o `Shape` num campo, e toda soma de linhas
+lê o campo: essas somas estão sob o `metric`, e um `Shape` calculado dentro delas seria o rodapé
+perguntando a si mesmo o que contém (`the-footer-does-not-ask-itself`). **A guarda é uma só**: o
+`draw_and_paint` compara o `Shape` de agora com o do campo e pede geometria quando diferem. Um eco, o
+foco indo para um quiosque, o volume, a faixa, a lista parando de esperar — nenhum deles pedia
+geometria, porque com as barras visíveis as linhas que eles tocam sempre estavam lá; ocultas, cada um
+tira ou põe uma linha, e perguntar no quadro é perguntar uma vez por todos. O teto da expansão
+continua contando as duas barras: um teto que as seguisse encolheria uma vista aberta cada vez que a
+mão tocasse a borda.
+
+**Transparente só onde a superfície deixa.** O rodapé pede ao `Gpu` uma superfície que o compositor
+componha com o alfa dela, e recebe o modo `PreMultiplied` quando a superfície o oferece
+(`gpu::alpha_mode_for`); toda outra porta continua com o primeiro modo oferecido, opaco na prática,
+como antes. O quadro limpa com a cor que quem chama passa (`Gpu::frame`), multiplicada pelo próprio
+alfa numa superfície pré-multiplicada (`gpu::clear_of`): escrita como está, uma cor de limpeza com
+alfa zero seria SOMADA à janela de trás — um brilho onde se queria um buraco. Oculto, o rodapé limpa
+com `surface.clear`, não pinta o fundo da modeline e pinta, antes de tudo, o fundo das linhas da
+modeline até o chão da região (`hidden::Shape::grounds`): `surface.veil` enquanto elas ficam por
+cima das janelas, e o `surface.chrome` da página da mesa, OPACO, enquanto empurram — para que
+cérebro, teclado, seleção e hover pintem os próprios fundos sobre ele. O teclado na tela ganha um
+fundo próprio (o `surface.chrome` da página que a tela veste), porque o ar entre as teclas era a cor
+de limpeza. Quads, imagens e o texto do glyphon misturam com `ALPHA_BLENDING`, que sobre um destino
+pré-multiplicado é o `over` pré-multiplicado nos valores LINEARES. O alvo é sRGB, então o que se
+grava é `encode(c × α)`, e um compositor que mistura valores codificados (o GLES2 e o pixman do
+wlroots) espera `encode(c) × α`. Sobre o véu, a diferença é o véu um pouco mais claro que o número
+dele, afinado a olho. Sobre NADA (alfa 0) o texto não sai pré-multiplicado válido: na borda de um
+glifo o rgb passa do alfa, e sobre qualquer coisa que não seja preto sai uma franja branca em volta
+da letra. Por isso nenhuma letra fica sobre nada: as linhas que empurram eram desenhadas assim, com
+a mesa aparecendo por trás, e pagavam a franja até o dono pedir a cor da mesa pintada (2026-09-28) —
+o mesmo aspecto, opaco. Alfa 0 sobra só onde não há letra: o pixel da borda em repouso e a limpeza
+sob o véu. Posto por cima de uma janela em tela cheia pela borda, o rodapé é pintado como o visível
+(`hidden::Shape::painted`), em qualquer modo: linhas no véu ficariam sobre o filme ou o slide,
+ilegíveis, e linhas na mesa seriam uma faixa de mesa recortada numa janela que nunca saiu dali.
+
+**Os dois tokens são o chrome com alfa**: `surface.clear` a zero, `surface.veil` a quatro quintos —
+o chrome DA PÁGINA que a tela veste, então sobre um rodapé posto na mesa o véu é a mesa a quatro
+quintos. O matiz do chrome, e não uma cor própria, porque a superfície que não consegue ser
+transparente limpa com o chrome que sempre teve, e não com preto. O texto sobre eles fica com os
+tons que o `Pen` escolhe para `surface.chrome`, e o `every-ground-is-measured` os dispensa por
+escrito, numa lista própria (decisão do dono): o que está embaixo do véu é uma janela, e nenhum
+portão sabe qual. A linha que empurra não está nessa lista: ela é a mesa, e as mesas são medidas.
+
+**Sem o modo, o rodapé diz.** A superfície fica no primeiro modo oferecido, o journal registra
+`the surface cannot be see-through here`, e o rodapé põe `echo-footer-opaque` no minibuffer uma vez,
+na primeira vez que um modo precisa dele. Sem a frase, a pessoa veria as barras sumirem e uma faixa
+de chrome ficar, e nada dizendo por quê.
+
+**A lista espera a mão parar** (`leader::Patience`; `LIST_PATIENCE`, 2 s, ao lado de
+`ECHO_SECONDS`). Só com as barras ocultas, e só quando uma TECLA abriu a leader: quem sabe a
+sequência a digita de um fôlego, e uma lista abrindo por cima das janelas a cada leader passaria
+piscando a caminho do comando. A sequência pendente aparece na hora; a lista, quando a mão para,
+contando da ÚLTIMA tecla — quem lê o primeiro nível e depois digita é exatamente quem não deve
+esperar de novo. Mostrada uma vez, fica mostrada até a sequência acabar: os níveis seguintes e a
+troca de conjunto aparecem na hora. Aberta pelo ponteiro (o minibuffer vazio, a linha enxertada, um
+`leader-set-*` pelo nome), ela aparece na hora: a mão no mouse não digita rápido, e dois segundos de
+nada seriam um clique que errou — e isso vale também para um conjunto escolhido pelo ponteiro ou
+pelo nome numa leader que uma tecla abriu e cuja lista ainda espera (`leader_set_by_name`); o toque
+de `Alt` ou `Ctrl` continua esperando. O relógio é numerado como o do `wait_for_the_keyboard`: cada tecla
+arma um novo, e o antigo que dispara acha o número velho e não faz nada. Enquanto espera, a região
+não toma altura, e com ela saem a linha que explica a dica e o contador de páginas.
+
+**O vidro fosco ficou de fora, por decisão do dono**: o compositor pinado não desfoca o que está
+atrás de uma superfície de camada, e o véu é translúcido, não fosco.
+
+---
+
 ### Preto puro, e o foco visível
 
-O fundo do sistema é **`#000000`**. Numa tela OLED o preto é pixel desligado: contraste máximo e
-menos bateria, que é o que importa num laptop. Superfícies — rodapé e buffers — são cinza escuro, e a separação entre conteúdo e chrome
-passa a ser a diferença entre preto e cinza, sem régua nem caixa.
+O fundo do sistema era **`#000000`**. Numa tela OLED o preto é pixel desligado: contraste máximo e
+menos bateria, que é o que importa num laptop. Superfícies — rodapé e buffers — são cinza escuro, e
+a separação entre conteúdo e chrome passa a ser a diferença entre preto e cinza, sem régua nem
+caixa. Hoje a mesa é uma resposta da pessoa (`LEADER s t`; ver "A mesa, o rodapé, as janelas e as
+bordas", em "Cores"): o preto continua sendo a mesa absoluta de todo tema escuro
+(`surface.absolute`), e o padrão é a cor do tema.
 
 **A borda de foco de 2 px é do compositor, não nossa.** Com `border` e `focus-ring` desligados, duas
 janelas abertas eram indistinguíveis: nada na tela dizia qual recebia tecla. Uma linha não é card,
@@ -2298,6 +2507,14 @@ linha — a da captura inclusive, agora que ela é nossa: havia um check lendo a
 programa para que o par (app, resumo) não se mexesse em silêncio, e ele morreu junto com a
 dependência que o justificava.
 
+**Algumas das nossas deixaram de chegar à faixa.** Um aparelho Bluetooth conectando ou saindo e um
+programa instalado ou web app criado viraram EVENTOS, ditos no minibuffer, junto com os que já
+nasceram assim: câmera, microfone, a gravação e a transmissão do estúdio, rede, modo avião, VPN,
+tailnet, Tor e carregador (ver "Eventos no minibuffer"). A entrada de cada um continua no catálogo,
+porque é ela que decide a notificação de quando a linha estava ocupada; as dos aparelhos guardam as
+tags, e com elas os filtros que as escondem. O que pode querer resposta continua notificação: os
+alarmes de bateria, o arquivo que a câmera gravou, os outros fins da central de programas.
+
 **O sino abre o gerenciador, e só existe com algo não lido.** Era um sino com um número, em toda
 tela, para sempre — um `0` respondendo a uma pergunta que ninguém fez —, e o dono pediu o contrário:
 nada em repouso, e o sino pontilhado sozinho quando há algo a ler. O NÚMERO foi junto: quantas é a
@@ -2325,7 +2542,8 @@ uma regra da distro sobre nível baixo rodava depois e a devolvia ao discreto.
 contador que não dá para zerar. Mas ela é REGISTRADA, e a coluna da direita do gerenciador é onde
 ela aparece — um filtro que ninguém consegue auditar é um filtro em que ninguém confia.
 
-**Duas portas, uma `notifications::View`.** `n n` abre no rodapé, `n w` numa janela; duas colunas
+**Duas portas, uma `notifications::View`.** `LEADER n` abre no rodapé, `LEADER Alt n` numa janela
+(`n n` e `n w` na árvore completa); duas colunas
 quando cabe, uma quando não. O corte sai de um token, e vale para as duas portas — que é o que faz
 "uma implementação, duas portas" ser verdade também do layout.
 
@@ -2503,19 +2721,130 @@ era esperar ela envelhecer. É o registro da própria pessoa.
 se instala mais um aplicativo, e ninguém ligaria os pontos. O único furo é o estado de atenção,
 porque a alternativa — um app pedindo atenção que ninguém vê — é pior.
 
+### Eventos no minibuffer — o que a máquina fez, numa linha
+
+O dono escolheu o que é EVENTO: um fato sobre a máquina que vale uma linha e nada mais.
+
+| Grupo | Eventos | De onde vem a leitura |
+|---|---|---|
+| Privacidade | uma câmera aberta (dizendo por quais programas) e livre; um microfone escutando e livre; o estúdio começando e parando de gravar e de transmitir | a varredura do `/proc` de quem segura a câmera; o PipeWire; o estado do estúdio |
+| Bluetooth e redes | um aparelho conectado e desconectado; uma rede conectada e caída; modo avião; VPN; tailnet; Tor | o BlueZ; o NetworkManager; o `ronoctua-tunnel` |
+| Energia | carregador conectado e removido | o UPower |
+| Programa instalado | um programa instalado e um web app criado, com a ação de abri-lo | o fim do trabalho na fila |
+
+**No minibuffer, e não na faixa.** A faixa é para o que chega e pode querer resposta; um fato que
+passa é o que a linha do minibuffer já faz com as respostas do próprio shell (o eco). Então o evento
+é dito ali, no resumo da entrada dele no catálogo (`notif-<tag>-summary`), pelo tempo de um eco. E é
+dito com a modeline à mostra ou não: com as barras ocultas, um evento é o que traz o minibuffer à
+tela por um instante, sob o véu (ver "Os modos ocultos").
+
+**A primeira leitura é só referência** (`events::Edge`). Toda fonte é comparada com a leitura
+anterior, e a primeira não tem anterior: o rodapé subindo com um fone conectado não é o fone
+conectando. Sem isso, cada partida do rodapé dizia "conectado" uma vez por aparelho, que é o que o
+rádio fazia.
+
+**O que é nosso não é notícia.** O medidor da vista de som e a captura do estúdio abrem o microfone
+a pedido de alguém, e os dois se nomeiam `ronoctua-audio` no PipeWire (`pipewire::OWN_STREAM`); o
+evento pergunta `Snapshot::someone_else_listens`. Sem nome, os dois respondiam `pw-cat`, que é o que
+o `pw-cat` de qualquer outro programa também responde — separar os nossos era perder um estranho ou
+anunciar o medidor a cada movimento do cursor. A marca da modeline continua perguntando
+`is_listening`, porque um microfone que o medidor segura ESTÁ aberto. Pela mesma razão, o estúdio não
+conta como alguém abrindo a câmera (`events::OUR_CAMERA_HOLDERS`): a prévia foi pedida, e a gravação
+é um evento próprio. Quem segura o dispositivo nessa hora é o `ffmpeg` filho do estúdio
+(`ronoctua_camera::Capture`), com o mesmo nome do `ffmpeg` de qualquer um; então o que é nosso se
+decide pela LINHAGEM: o `ronoctua-memory`, única fronteira com o `/proc`, lê o pai de cada um no
+`stat` (`camera::Holder::parents`, até `LINEAGE` níveis), e é nosso quem é ou roda sob um processo da
+lista (`Holder::under`). A marca da modeline continua contando todos.
+
+**Uma leitura sem daemon não é leitura.** Um NetworkManager reiniciando não responde por um segundo,
+e isso não é toda rede caindo. O mesmo vale para o rádio (o `Manager::read` do BlueZ devolve a cena
+vazia em qualquer erro de D-Bus, e comparada ela era todo aparelho saindo e voltando) e para os
+túneis: a tailnet só conta quando o tailscaled respondeu, e o Tor quando o socket de controle
+respondeu ou quando o systemd diz que a unidade está parada ou não existe — socket calado com a
+unidade rodando não é leitura. A referência fica a da última resposta. O preço: um tailscaled que
+morre de vez não diz "fora da tailnet". O modo avião é dito uma vez, e não mais uma por rede que ele derrubou;
+mudar de rede é perder uma e achar a outra; um link que É a rede (o ponto de acesso) não é saída. Um
+carregador que aparece ou some — uma doca que o UPower só agora notou — não é tomada. E a câmera é
+lida pela varredura do `/proc` a cada 2 s, então o eco dela pode chegar até 2 s depois.
+
+**Ocupada, a linha passa o evento à faixa, na hora** (`events::route`). A linha é de alguém enquanto
+uma vista está aberta (a leader inclusive), uma pergunta está sendo digitada, a gaveta da linha está
+aberta, ou a tela está sob uma janela em tela cheia com o rodapé reduzido à borda. O evento que chega
+então não espera a linha: uma câmera que abriu enquanto alguém digitava no localizador é notícia
+agora, não daqui a dois minutos. Ele vai para a faixa pela porta de toda notificação
+(`Footer::arrived`), com a tag dele, e o corpo ABRE com a frase que diz por que está ali
+(`notif-minibuffer-was-busy`): o mesmo fato chega em dois lugares conforme o que a pessoa estava
+fazendo, e uma notificação que não dissesse isso seria lida como a linha tendo quebrado. Abre, e as
+entradas são `full`, porque a faixa desenha UMA linha de corpo, cortada no espaço: uma entrada
+`brief` nunca mostrava a frase, e depois do corpo do evento ela era a parte que o corte levava.
+
+**A fila** (`events::Line`). Eventos vêm em rajada — voltar da suspensão traz a rede, o túnel e o
+fone no mesmo segundo —, então a linha guarda os que esperam, em ordem, e mostra cada um pelo tempo
+de um eco. O eco de uma pessoa (o shell respondendo o que acabou de ser pedido) toma a linha na hora,
+e o evento interrompido volta para o INÍCIO da fila, para ser dito inteiro depois. Com
+`EVENT_ECHOES` (quatro) esperando, o seguinte vai para a faixa: uma fila sem fim é uma linha que diz,
+um minuto atrasada, o que já não é verdade. Pela mesma razão, **um evento que diz o contrário de um
+que está na linha ou na fila o substitui** (`events::contradicts`): câmera, microfone, gravação,
+transmissão, avião, carregador, tailnet e Tor pelo par; rede, VPN e aparelho Bluetooth pelo par e
+pelo mesmo nome. Na linha, ele entra no lugar com o tempo inteiro; na fila, no lugar do outro. E
+quando a linha passa a ser de alguém, o que ainda esperava vai para a faixa, na ordem em que seria
+dito; o que já estava NA linha foi dito e sai sem ir a lugar nenhum, a menos que tenha ficado menos
+de `READ_IN` (1 s) — antes disso ninguém o leu. Mandá-lo à faixa era o mesmo fato duas vezes, com a
+frase de que a linha estava ocupada, a cada leader apertada logo depois de um evento. Isso é perguntado uma vez por quadro, no
+topo do `draw_and_paint`, porque toda mudança do que segura a linha acaba num quadro, e uma lista dos
+jeitos de tomar a linha é a lista que esquece um. Com só a gaveta aberta, o evento que está na linha
+fica: a gaveta o está mostrando.
+
+**O ponteiro segura o evento, por um tempo.** Com a mão sobre a linha ele não sai, e fica mais um
+tempo de eco depois que ela sai: alcançar a ação leva mais que os três segundos que ele teria. Mas no
+máximo `HELD_AT_MOST` ecos (três) desde que subiu: a linha é a última da tela, onde um ponteiro
+costuma ficar PARADO, e com as barras ocultas ela é a borda que as revela — segurar sem fim deixava
+"uma câmera está aberta" na tela muito depois de ela fechar, com a fila parada atrás.
+
+**A gaveta fecha com a linha.** Aberta para ler um evento ou um eco inteiro, ela ficava aberta depois
+que ele saía — em repouso nada a fecha senão o chevron, e o rodapé em repouso não tem teclado para o
+`Esc` —, e uma gaveta aberta conta a linha como ocupada: todo evento seguinte ia para a faixa com a
+linha vazia. Quando a linha esvazia em repouso, a gaveta fecha e a geometria é pedida de novo
+(`close_the_drawer_of_an_empty_line`).
+
+**O Bluetooth guarda as tags de sempre** (`bluetooth-connected`, `bluetooth-disconnected`), e os dois
+filtros que calam um aparelho indo e vindo casam a TAG: calam também a notificação de quando a linha
+estava ocupada. As entradas novas do catálogo são `full` (a segunda linha da faixa é a do porquê) e
+`quick` — o passo do minibuffer — e nascem lidas, menos câmera e microfone abertos, que o sino deve
+guardar.
+
+**A ação vai no fim da linha, com a cara da ação da faixa.** Um evento cuja entrada oferece ações as
+desenha depois da frase (`chrome::Piece::action`, `chrome::said_with_actions`), no tom dos botões da
+faixa (`notification.acts`, e `notification.acts-lit` sob o ponteiro): o dono pediu que uma ação
+parecesse UMA coisa onde quer que esteja. Só entram as ações que são comando do registro
+(`events::actions_of`); um comando que o registro não conhece fica de fora, em vez de virar um botão
+que não faz nada. As ações ficam coladas no fim do espaço, e quem cede é a frase
+(`chrome::room_for_actions`): em repouso não há linha embaixo para dizer o que faz a ação sob o
+ponteiro, então a frase `cmd-<id>` dela toma o lugar das palavras (`chrome::explained_in_place`), e
+com as ações logo depois das palavras uma frase de outro tamanho as tiraria de baixo do ponteiro — o
+laço que o `Footer::explain_rows` descreve. O espaço é o da tela MAIS ESTREITA
+(`room_for_the_actions`): com o fim de cada tela, duas telas de larguras diferentes desenhavam a ação
+em células diferentes, e a tabela do ponteiro (`hint_placed`) é uma só. Clicar numa ação encerra o
+evento. Hoje só o programa instalado oferece uma (`software-launch-latest`), e o evento leva o id do
+`.desktop` daquele trabalho (`Event::opens`): o "Abrir" da linha abre o programa que ela nomeia
+(`events::launch_of`), e não o último que terminou — a fila e o ponteiro seguram uma instalação
+antiga na linha enquanto outras terminam. O botão da faixa, quando o evento cai nela, continua
+abrindo o último, como sempre abriu.
+
 ### Cores: o gerador e os temas — `LEADER s t`
 
 **Nenhuma cor é escrita à mão.** `assets/tokens/colors.nix` é uma tabela de RECEITAS — cada token
-nomeia um degrau de uma família (`text.primary = "neutral.text-strong"`, `surface.selection =
-"accent.element"`), e uma receita pode levar `alpha` (a faixa do transporte) ou escalar o croma do
-degrau (`surface.mesh`). Os valores saem de `nix/scripts/gen-theme.py`, que roda UMA vez em
-`nix/themes.nix` para todos os temas de `assets/themes/themes.nix` — uma LISTA, como a dos idiomas: o
-primeiro é o padrão, e nenhum outro sítio nomeia um tema. Um tema é um arquivo de SEMENTES
-(`assets/themes/<id>.nix`): a luminosidade do fundo e do rodapé, o matiz e o tinte dos cinzas, o
-matiz e o croma do texto, um multiplicador global, e por família um matiz, um croma relativo, um
-`shift` de contraste, uma `torsion` de matiz nos degraus de pintura e um `paint-chroma`. Nada de hex:
-o check `colours-are-computed` recusa um literal nas receitas e nas sementes, e recusa qualquer
-`import` da referência congelada fora de `nix/themes.nix`.
+nomeia um degrau de uma família (`text.primary = "neutral.text-strong"`,
+`surface.selection = "accent.element"`), e uma receita pode levar `alpha` (a faixa do transporte) ou
+escalar o croma do degrau (`surface.mesh`). Os valores saem de `nix/scripts/gen-theme.py`, que roda
+UMA vez em `nix/themes.nix` para todos os temas de `assets/themes/themes.nix` — uma LISTA, como a
+dos idiomas, com a ordem (`order`) e o padrão (`default`) em campos separados, e nenhum outro sítio
+nomeia um tema. Um tema é um arquivo de SEMENTES (`assets/themes/<id>.nix`): o modo (`dark` ou
+`light`), a luminosidade do fundo e do rodapé, o matiz e o tinte dos cinzas, a mesa (`backdrop`:
+matiz, croma e passo), o matiz e o croma do texto, um multiplicador global, e por família um matiz,
+um croma relativo, um `shift` de contraste, uma `torsion` de matiz nos degraus de pintura e um
+`paint-chroma`. Nada de hex: o check `colours-are-computed` recusa um literal nas receitas e nas
+sementes, e recusa qualquer `import` da referência congelada fora de `nix/themes.nix`.
 
 **A escada é a paleta do owl feita regra.** Cada família tem catorze degraus com NOME (nunca número:
 um identificador do WIT começa por letra): quatro de pintura que sobem do rodapé por separação de
@@ -2550,87 +2879,124 @@ para os três degraus). `report.md` de `nix build .#themes` traz cada margem; `t
 e `themes-negative` (uma semente com o acento a 165° TEM de falhar) são os checks.
 
 **Uma cor é um PAPEL, e o tema é do processo.** `ronoctua_tokens::Color` é um `u16` — o índice de um
-papel — e `to_rgba8()` lê `themes::TABLE[tema][papel]`, uma tabela gerada com TODOS os temas. Os 280
-sítios que nomeiam `color::TEXT_DIM` não mudaram: nomeiam o papel, e o papel resolve ao desenhar.
-Igualdade e hash são por papel (`lift_onto_a_band` pergunta "este campo é o dim?", e é isso que
-sempre quis perguntar). O tema é um `AtomicUsize` (`theme::set`), como o idioma é uma propriedade do
-processo: enfiar um valor por 280 assinaturas carregaria algo que só o desenho lê. Buffers wasip2 não
-souberam de nada — cruzam NOMES (inv. 11), e o host resolve; o enum do WIT cresceu para 147 nomes e
-recompilaram uma vez. `to_rgba8` deixou de ser `const`; os três `const fn colour()` das TUIs viraram
-`fn`. Cada processo escolhe no arranque (`theme::resolve_at_start`, em `main.rs`, antes de qualquer
-porta): `$XDG_CONFIG_HOME/ronoctua/theme.json` > `RONOCTUA_THEME` (a opção `ronoctua.theme`) > o
-primeiro. Fonte que nomeia tema inexistente ou não parseia cai para a seguinte e diz no log.
-`render-png --theme` é determinístico (o primeiro, nunca arquivo nem ambiente); o instalador e o
-resgate leem só o ambiente.
+papel — e `to_rgba8()` lê `themes::TABLE[tema][página][papel]`, uma tabela gerada com TODOS os
+temas, cada um nas suas quatro páginas (ver "As faixas seguem o fundo", abaixo). Os 280 sítios que
+nomeiam `color::TEXT_DIM` não mudaram: nomeiam o papel, e o papel resolve ao desenhar. Igualdade e
+hash são por papel (`lift_onto_a_band` pergunta "este campo é o dim?", e é isso que sempre quis
+perguntar). A paleta é um `AtomicUsize` (`tema × 4 + página`: `theme::set` muda o tema e guarda a
+página, `theme::set_ground` muda a página e guarda o tema, `theme::palette()` lê os dois numa
+palavra só, para um quadro nunca ler um tema de um lugar e uma página de outro), como o idioma é uma
+propriedade do processo: enfiar um valor por 280 assinaturas carregaria algo que só o desenho lê.
+Buffers wasip2 não souberam de nada — cruzam NOMES (inv. 11), e o host resolve; o enum do WIT
+cresceu para 147 nomes e recompilaram uma vez. `to_rgba8` deixou de ser `const`; os três
+`const fn colour()` das TUIs viraram `fn`. Cada processo escolhe no arranque
+(`theme::resolve_at_start`, em `main.rs`, antes de qualquer porta):
+`$XDG_CONFIG_HOME/ronoctua/theme.json` > `RONOCTUA_THEME` (a opção `ronoctua.theme`) > o padrão
+declarado. Fonte que nomeia tema inexistente ou não parseia cai para a seguinte e diz no log; as
+quatro respostas SOBRE o tema vêm só do arquivo. `render-png --theme` é determinístico (o primeiro,
+nunca arquivo nem ambiente); o instalador e o resgate leem só o ambiente.
 
 **O arquivo é o broadcast.** O socket de controle só entra no rodapé, e as portas — janela de
 arquivos, notificações, atualização, cada host de buffer — são processos. Então o rodapé não avisa
 ninguém: grava `theme.json` atomicamente (`ronoctua-xdg`, o quarto chamador que o comentário do
 brain pedia, e que agora serve os três anteriores) e toda porta segura um `Notice::on_file` sobre
 ele — o mesmo inotify do gerenciador, filtrado por UM nome, porque o `files-sidebar.json` mora ao
-lado. Ao tocar, `theme::reload()` e repintura. O que uma CRIANÇA pintou com um valor — a forma de
-onda do ffmpeg, o `currentColor` dos SVGs — se refaz porque o tema entrou na CHAVE da prévia e do
-SVG rasterizado: chave nova, cache do GPU sem ela, upload de novo; sem isso a tinta velha ficava
-na textura. Custo: o diretório `~/.config/ronoctua` passa a existir no primeiro arranque de qualquer
-porta (o inotify quer um diretório); e uma troca com um filme na prévia respawna o ffmpeg, com uma
-peça 3D relê o arquivo uma vez — chave nova é pedido novo, e o painel fica vazio até a resposta, como
-sempre ficou.
+lado. Ao tocar, `theme::reload()` — verdadeiro quando muda o tema OU qualquer resposta sobre ele,
+porque o fundo de uma porta pode ser a mesa — e repintura. O que uma CRIANÇA pintou com um valor — a
+forma de onda do ffmpeg, o `currentColor` dos SVGs, o globo, a arte do manual — se refaz porque a
+paleta (`theme::palette()`, tema e página) entrou na CHAVE da prévia e do SVG rasterizado: chave
+nova, cache do GPU sem ela, upload de novo; sem isso a tinta velha ficava na textura — e, com as
+páginas, uma figura pintada para o chrome apareceria sobre a mesa. Custo: o diretório
+`~/.config/ronoctua` passa a existir no primeiro arranque de qualquer porta (o inotify quer um
+diretório); e uma troca com um filme na prévia respawna o ffmpeg, com uma peça 3D relê o arquivo uma
+vez — chave nova é pedido novo, e o painel fica vazio até a resposta, como sempre ficou.
 
-**`LEADER s t` é a lista da rede com uma diferença: mover o cursor PRÉ-VISUALIZA.** O tema sob o
-cursor vira o do rodapé na hora — o rodapé é a amostra, porque amostra "na cor do tema dele" não
-existe: uma `Color` resolve pelo tema corrente e um valor preso a outro tema é justamente o que o
-crate recusa guardar. A prévia é só do rodapé; as outras portas seguem o ARQUIVO, que só `RET`
-(`theme-apply`) grava, senão toda janela piscaria pelos temas enquanto a pessoa olha. `Esc` volta ao
-gravado; um `theme.json` escrito por fora durante a prévia vence a prévia. Linhas: SÓ o id, na coluna
-da tecla (identificador, como a lista do `M-x` mostra ids de comando; o nome traduzido era uma segunda
-grafia da mesma coisa e saiu a pedido do dono), visto no gravado, foco no acento; sem faixa (é do
-gerenciador). Sem `theme-next`: o `check-keymap` recusa comando sem tecla.
+**`LEADER s t` é a lista da rede com uma diferença: mover um cursor PRÉ-VISUALIZA** (a região,
+`theme_chooser.rs`). A escolha sob os cursores vira a do processo na hora — o rodapé é a amostra,
+porque amostra "na cor do tema dele" não existe: uma `Color` resolve pela paleta corrente e um valor
+preso a outro tema é justamente o que o crate recusa guardar. **E a prévia grava o ARQUIVO**
+(`theme::show_everywhere`), com os dois fragmentos: o arquivo é o canal que toda outra porta já
+vigia, e uma prévia que ficava fora dele era a prévia de uma faixa da tela — o dono viu o minibuffer
+mudar e as janelas, a mesa e os terminais não. Um segundo canal foi recusado pelo motivo de sempre
+(uma segunda coisa a manter em passo, e toda leitora teria de aprender a precedência entre os dois).
+O preço, escrito: o arquivo que quer dizer "escolhido" é gravado enquanto ninguém escolheu, e um
+rodapé que morre no meio da prévia deixa a prévia gravada — uma preferência, reversível pelas mesmas
+teclas. `RET` (`theme-apply`) aplica as cinco respostas sob os cinco cursores. `Esc` devolve tudo ao
+que era quando o seletor abriu — ou APAGA arquivo e fragmentos, se não havia arquivo: máquina que
+nunca escolheu não ganha um por ter olhado a lista (`chosen_before`, perguntado uma vez, na
+abertura, porque depois da primeira prévia o arquivo sempre existe), e `sync_with_file` mantém "sem
+arquivo, sem fragmento" no arranque e quando o arquivo some. Um `theme.json` escrito por fora
+durante a prévia vence a prévia; a gravação da própria porta ela reconhece (`View::previewed`),
+senão a primeira seta movia o "gravado" e o `Esc` não tinha para onde voltar. Temas: SÓ o id
+(identificador, como a lista do `M-x` mostra ids de comando; o nome traduzido era uma segunda grafia
+da mesma coisa e saiu a pedido do dono). Sem `theme-next`: o `check-keymap` recusa comando sem
+tecla.
 
-**E uma segunda coluna, das escolhas SOBRE o tema** — hoje uma: o fundo que o compositor pinta onde não
-há janela, preto ou a cor do tema. A cor é `surface.backdrop`, o único degrau neutro ABAIXO do chrome
-(um passo de janela abaixo, espelhado: janela um passo acima, fundo um passo abaixo), no matiz e croma
-relativo que a semente `backdrop` nomeia — a única superfície FEITA para ler como a cor do tema, com
-gate de distância contra preto, chrome e janela (owl `#040C24`, forest `#031206`). Duas listas lado a
-lado na mesma região: `<left>`/`<right>` cruzam, `<up>`/`<down>` andam na que tem o foco, o cabeçalho
-da opção não recebe cursor, e a linha da direita fica na coluna do texto mesmo quando a da esquerda
-acabou (`ExpansionRow::aside`). A prévia do fundo não pode ser do rodapé, que nunca pinta o fundo: é
-do compositor — SÓ o fragmento dele é escrito ao mover o cursor (`theme::show_to_compositor`, com o tema
-sob o outro cursor; o do Ghostty não, senão um terminal aberto durante a prévia vestiria o que ninguém
-aplicou), e no `Esc` ele volta ao que o arquivo diz — ou SOME, se não há arquivo: máquina que nunca
-escolheu não tem fragmento, e `sync_with_file` mantém isso no arranque e quando o arquivo some.
-`RET` grava o PAR (`{ "theme", "backdrop" }`; arquivo sem o campo é preto, que é o que toda máquina
-tinha). Preto NÃO é token: é o nome da opção, e o fragmento o escreve como `#000000`.
+**Cinco colunas, cada uma uma lista isolada: Tema | Variações | Rodapé | Janelas | Bordas.** O tema
+e as quatro respostas SOBRE ele (ver "A mesa, o rodapé, as janelas e as bordas", abaixo), lado a
+lado, com uma régua entre duas (`chrome::divider`, com o ar da tabela do gerenciador: `files.gutter`
+antes do texto e `files.edgeRight` depois, para nenhum rótulo encostar na régua). O dono pediu cada
+coluna ISOLADA, e é o que cada uma tem: título próprio (que não recebe cursor), cursor próprio —
+guardado por coluna, então cruzar e voltar o acha onde estava — e HOVER próprio: a faixa do ponteiro
+cobre só as células da coluna sob ele, na linha em que ele está, de régua a régua
+(`Layout::band_px`), e nunca a linha inteira, que é o que ela fazia quando o seletor eram duas
+listas desenhadas como um par tecla/texto. `<left>`/`<right>` cruzam, `<up>`/`<down>` andam na
+coluna que tem o teclado, e cada passo pré-visualiza a escolha inteira. O clique acerta pela mesma
+`Layout::column_at` que a faixa usa: o primeiro escolhe na coluna sob o ponteiro, o segundo é o
+`RET` (inv. 19). O cursor é cor: acento na coluna com o teclado, `text.primary` no cursor das outras
+(o `RET` aplica as cinco, então as cinco têm de se ler), e a marca de visto fica na resposta que o
+arquivo diz. **A largura de cada coluna é a do rótulo mais largo na tradução mais longa**, com os
+rótulos da mesa nos DOIS modos: medida no idioma da tela, as réguas andariam ao trocar de idioma, e
+a coluna da mesa andaria quando a prévia cruza de um tema escuro para um claro ("Preto" e "Branco"
+não têm a mesma largura em todo idioma). Num rodapé estreito as mais largas cedem primeiro, até um
+piso, e o rótulo é elidido no fim (`Layout::of`).
 
-**Fora do shell, três consumidores seguem, e cada um até onde pode.** O compositor: a borda estática
-vem do tema padrão (substituída no build do config, sem IFD), e no FIM do config há `include
-"${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-theme.conf"` — o gerador escreve por tema DOIS
-fragmentos, um por fundo (`scroll-black.conf`, `scroll-backdrop.conf`), cada um com a borda em
-`client.focused` e companhia e o fundo num `output * bg`. **Aqui não há ordem a acertar**: ajuste de
+**A coluna da mesa segue o modo do tema sob o cursor.** Um tema escuro oferece Preto e Cor do tema;
+um claro, Branco, Quase branco e Cor do tema (`Backdrop::offered`, `Backdrop::text_key`). A mesa é
+guardada como RESPOSTA (`View::desk`) e não como número de linha — as listas têm tamanhos
+diferentes, e um número mudaria de sentido sob o cursor dos temas —, então um quase-branco escolhido
+num tema claro sobrevive ao cursor passar por um escuro (mostrado na linha da mesa absoluta, que é a
+que ele veste ali) e volta com o próximo claro.
+
+**Fora do shell, três consumidores seguem, e cada um até onde pode.** O compositor: a borda e a
+mesa estáticas vêm do tema padrão (substituídas no build do config, sem IFD) e são as da RESPOSTA
+padrão — a mesa `surface.backdrop` e as bordas `standard`, iguais às do `scroll-backdrop-standard.conf`
+(o `themes-have-fragments` cobra): numa máquina que nunca escolheu, o que a tela mostra e o que o
+rodapé acha que ela mostra são uma coisa só, e as linhas do `Push` oculto pousam na mesma cor. No FIM
+do config há
+`include "${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-theme.conf"` — o gerador escreve por
+tema SEIS fragmentos, um por par de respostas (`scroll-<mesa>-<bordas>.conf`: mesa `backdrop`,
+`near` ou `absolute`; bordas `standard` ou `discreet`), cada um com as bordas em `client.focused` e
+companhia e a mesa num `output * bg`. Os de `near` de um tema escuro existem e nunca são copiados:
+ali um "quase branco" é vestido como a mesa absoluta. **Aqui não há ordem a acertar**: ajuste de
 saída é MESCLADO (`*`, depois o conector, depois o identificador; campo a campo, o último vence), e
 `client.focused` simplesmente sobrescreve o valor anterior — então o fragmento ganha do que o config
-já diz, sem nó duplicado e sem precedência para lembrar. O `themes-have-fragments` valida cada um sob
-um config que JÁ pinta uma mesa, que é a forma dessa prova. O rodapé COPIA o do par escolhido ao
-gravar — copiar É escolher — **e então PEDE a releitura**, porque este compositor não vigia arquivo
-nenhum: escrever e parar aí deixaria a mesa na cor velha pelo resto da sessão. O `background-color` estático é o `surface.base` do tema
-padrão, o que vale antes de qualquer escolha. O Ghostty: `config-file` com a paleta gerada do tema
-padrão (ANSI 16, fundo, cursor, seleção — `terminal.*`, mapeados das famílias) e depois
-`config-file = ?~/.config/ronoctua/ghostty-theme.conf`, opcional, que o rodapé também copia; processo
-novo do Ghostty veste, processo aberto não — e toda janela É um processo, por qualquer porta: a
-config diz `gtk-single-instance = false`, mas a entrada `.desktop` do upstream passava
-`--gtk-single-instance=true` no `Exec` (flag vence arquivo) e oferecia ativação por D-Bus, que é
-de instância única por construção; o módulo instala a entrada reescrita sem os dois e sem o arquivo
-de serviço (`ghosttyPerWindow`, um `symlinkJoin`), e `ghostty-windows-are-processes` mede o instalado.
-Pelo lançador, uma janela aberta depois da troca entrava no processo antigo e não vestia nada.
-**E o Ghostty do nixpkgs 26.05 só lê
-`$XDG_CONFIG_HOME/ghostty/config`** — nunca `/etc/xdg` —, então o módulo do terminal passou a pôr o
-arquivo lá pelo home-manager, que já cuida dos dotfiles desse usuário: até isso, nenhuma linha dele
-chegava ao programa, decoração inclusive (a revisão mediu com `+show-config`, e o check
-`ghostty-config-includes-theme` agora pergunta ao binário a configuração EFETIVA). Os fragmentos têm UM renderizador (o gerador); o shell só copia, do
+já diz, sem nó duplicado e sem precedência para lembrar. O `themes-have-fragments` valida cada um
+sob um config que JÁ pinta uma mesa, que é a forma dessa prova. O rodapé COPIA o da escolha ao
+gravar (`theme::fragments`, pela mesa VESTIDA) — copiar É escolher — **e então PEDE a releitura**,
+porque este compositor não vigia arquivo nenhum: escrever e parar aí deixaria a mesa na cor velha
+pelo resto da sessão. O `background-color` estático é o `surface.base` do tema padrão, o que vale
+antes de qualquer escolha. O Ghostty: `config-file` com a paleta gerada do tema padrão (ANSI 16,
+fundo, cursor, seleção — `terminal.*`, mapeados das famílias) e depois
+`config-file = ?~/.config/ronoctua/ghostty-theme.conf`, opcional, que o rodapé também copia — de um
+dos QUATRO fragmentos do tema, um por página (`ghostty-<página>.conf`: `theme` com o fundo da janela
+do tema, `backdrop`, `near` e `absolute` com a mesa por fundo e a paleta daquela página), pela
+resposta `windows`; processo novo do Ghostty veste, processo aberto não — e toda janela É um
+processo, por qualquer porta: a config diz `gtk-single-instance = false`, mas a entrada `.desktop`
+do upstream passava `--gtk-single-instance=true` no `Exec` (flag vence arquivo) e oferecia ativação
+por D-Bus, que é de instância única por construção; o módulo instala a entrada reescrita sem os dois
+e sem o arquivo de serviço (`ghosttyPerWindow`, um `symlinkJoin`), e `ghostty-windows-are-processes`
+mede o instalado. Pelo lançador, uma janela aberta depois da troca entrava no processo antigo e não
+vestia nada. **E o Ghostty do nixpkgs 26.05 só lê `$XDG_CONFIG_HOME/ghostty/config`** — nunca
+`/etc/xdg` —, então o módulo do terminal passou a pôr o arquivo lá pelo home-manager, que já cuida
+dos dotfiles desse usuário: até isso, nenhuma linha dele chegava ao programa, decoração inclusive (a
+revisão mediu com `+show-config`, e o check `ghostty-config-includes-theme` agora pergunta ao
+binário a configuração EFETIVA). Os fragmentos têm UM renderizador (o gerador); o shell só copia, do
 `RONOCTUA_THEMES`, e os refaz ao arrancar e quando o arquivo muda por fora. GTK e Qt vestem o MODO
-(escuro), não a cor (`nix/modules/foreign.nix`); a extensão do navegador veste o tema padrão do build.
-O que NÃO segue ao vivo, e por quê: a extensão (não enxerga nossos arquivos) e terminais já abertos
-(cada janela é um processo que leu o config). O fundo do compositor SEGUE: o `layout` do fragmento é
-fundido no reload.
+(escuro ou claro, pelo fragmento `mode` do tema), não a cor (`nix/modules/foreign.nix`); a extensão
+do navegador veste o tema padrão do build. O que NÃO segue ao vivo, e por quê: a extensão (não
+enxerga nossos arquivos) e terminais já abertos (cada janela é um processo que leu o config). O
+fundo do compositor SEGUE: o `layout` do fragmento é fundido no reload.
 
 **O que está lá para contextos que ainda não existem.** Além dos 52 tokens de sempre, cada tema traz
 `context.<família>.{solid,hover,ground,border,on,text}` para as oito famílias do rodapé e
@@ -2639,6 +3005,149 @@ referência, sem o que o inv. 15 proíbe), `terminal.*`, `chart.one..eight` (mat
 iguais a partir do acento, luminosidade subindo com o índice — é o que sobrevive à dicromacia) e
 `level.zero..ten` (sequencial no matiz do acento, croma mudo nas pontas). Uma tela nova pede o papel
 que existe; a família que ela quiser criar é uma linha na semente e passa pelos mesmos gates.
+
+#### A mesa, o rodapé, as janelas e as bordas — as quatro respostas sobre o tema
+
+Pedidas pelo dono em 2026-09-28, e nenhuma é um tema: são escolhas SOBRE o tema, uma coluna cada no
+`LEADER s t`, gravadas ao lado dele: `theme.json` é `{ "theme", "backdrop", "footer", "windows",
+"borders" }`. Só `theme` é obrigatório; resposta ausente é o padrão (`Choice::with_theme`: a cor do
+tema, o tema, o tema, padrão). **Resposta desconhecida é RECUSADA e dita**, como um tema
+desconhecido sempre foi — no log e na linha do rodapé, onde o arquivo é lido (`theme::Complaint`,
+`echo-theme-refused`) —, e o campo fica no padrão: nunca vira um padrão calado, que é como "minha
+escolha voltou sozinha" acontece sem nada dizer por quê.
+
+- **A mesa** (`backdrop`), o que o compositor pinta onde não há janela. Três mesas por tema, cada
+  uma um token, e o seletor oferece duas num tema escuro e três num claro (`Backdrop::offered`):
+  - **`absolute`** (`surface.absolute`): o extremo de que o tema se afasta, sem croma — `#000000`
+    num tema escuro, `#FFFFFF` num claro. Era `black`, um literal do gerador com o nome da opção, e
+    o primeiro tema claro fez o nome mentir: o pixel desligado não é a ponta de uma escada que desce
+    do papel. Uma palavra para as duas polaridades, e o modo diz qual; o rótulo é Preto ou Branco
+    pelo modo do tema MOSTRADO (`Backdrop::text_key`). Um arquivo antigo que diz `"black"` lê-se
+    como `absolute`, e a gravação seguinte já diz `"absolute"`.
+  - **`theme`** (`surface.backdrop`): a cor do tema, o único degrau neutro com matiz próprio — a
+    semente `backdrop` diz matiz, croma e passo —, um passo abaixo do chrome nos dois modos (numa
+    tela, toda janela fica sobre algo mais escuro que ela). **É o padrão**, por decisão do dono:
+    todo tema a resolve e todo portão a separa da absoluta, então mostrá-la numa máquina nova não
+    custa nada, e o trabalho deixa de ser invisível por padrão.
+  - **`near`** (`surface.near`): o quase-branco de um tema claro, a meio caminho entre o chrome e o
+    papel (`NEAR_SHARE`), no matiz e no tinte dos fundos. Só um tema claro o oferece; `"near"` sob
+    um tema escuro é VESTIDO como a mesa absoluta (`Backdrop::worn_in`) e continua `"near"` no
+    arquivo, então voltar a um tema claro traz o quase-branco de volta. Pinta-se a mesa vestida
+    (`Choice::worn_backdrop`); guarda-se a resposta.
+- **O rodapé** (`footer`) **e as janelas** (`windows`): sobre o que ficam — `theme` (o chrome do
+  tema) ou `desk` (a mesa escolhida, para lerem como parte dela e não como uma faixa atravessada
+  nela). A do rodapé vale para modeline, minibuffer e região, em todo modo, e para a coluna da
+  direita; nunca para a faixa de notificação nem para a linha do cérebro. A das janelas vale para
+  toda porta aberta por `door::run`, os buffers que ela hospeda e o terminal.
+- **As bordas** (`borders`): `standard` ou `discreet` (ver "As bordas discretas", abaixo).
+
+As respostas são do PROCESSO como o tema é (`theme::wear`: um byte atômico ao lado do índice da
+paleta), pelo mesmo motivo — todo pintor pergunta na hora de desenhar —, e prévia e gravação chegam
+pelo mesmo caminho: o pintor não sabe distinguir uma da outra. O que ele pergunta é QUAL PÁGINA
+(`theme::footer_page`, `windows_page`, `desk_page`), e não qual cor.
+
+#### As faixas seguem o fundo — uma paleta por página
+
+A primeira resposta a "o rodapé e as janelas sobre a mesa" pôs os tons do chrome sobre a mesa e
+mediu todos lá também. Isso empurrou as mesas dos temas claros para uma cor: uma mesa cinza fica no
+meio das faixas do chrome, e uma faixa sobre ela não se distinguia dela (medido no papyrus: o hover
+a ΔE 0,004 da mesa, `text.primary` a Lc 74,9 contra o piso de 75). **O dono escolheu o outro
+caminho: as faixas seguem o fundo.** Cada tema é resolvido em QUATRO PÁGINAS — `chrome` (a base),
+`backdrop`, `near` e `absolute` (`PAGES`, `Theme.on_page`) —, e numa página de mesa a mesa toma o
+lugar do chrome e todo texto, faixa e régua é resolvido de novo a partir dela. Nenhum tom da base é
+desenhado sobre uma mesa; a mesa é medida como o `surface.chrome` da própria página.
+
+- **Um degrau de pintura é o mesmo passo de LUZ** que a base dá a partir do chrome, com o croma da
+  base. Não o mesmo ΔL: numa página preta os 0,018 da janela são o byte 0, e numa branca os 0,07 do
+  hover são um passo de luz menor que a partir de um cinza médio; a razão de luminância (com o
+  flare de 0,05 que a borda fraca também usa) é uma medida só nas duas pontas. E o croma absoluto,
+  não o relativo: a mesma fração do máximo é uma faixa mais pálida numa página branca — a seleção
+  chegou a 0,043 de uma régua na página branca do papyrus, contra o piso de 0,05.
+- **Um texto é resolvido por Lc a partir da página, e nunca mais fraco que a tinta da base** ali:
+  uma página com MAIS espaço que o chrome (o branco num tema claro, o preto num escuro) dá tintas
+  mais pálidas, e a faixa e o cérebro, que não seguem a página, ficariam com uma tinta mais fraca
+  que a medida — `text.primary` sobre a faixa, na página branca do papyrus, a 63,7 contra o piso de
+  65. Fica a que lê mais. Numa página mais escura que o chrome de um tema claro o teto da escada
+  desce até os dois degraus de cima continuarem dois (sem isso, eram o mesmo `#000000`).
+- **O que não muda em página nenhuma** (`IDENTICAL_ON_EVERY_PAGE`, copiado da base): a faixa de
+  notificação e a linha do cérebro (o dono: elas não mudam com essas opções), as duas listras do
+  relance, as bordas (são do compositor, e os fragmentos levam a base) e as três mesas (são o que as
+  páginas SÃO). E numa página de mesa `modeline.background` É a página: a modeline tem a cor da
+  mesa, sem faixa de chrome atravessada.
+- **Todo portão roda em toda página** — onze temas × quatro páginas, 44 paletas, `Fail 0` na linha 5
+  do `report.md`. O que roda só na base diz por quê: `BASE_ONLY_PAIRS` (o chrome contra o fundo, o
+  chrome e a janela contra as mesas, e o chrome contra a faixa da modeline — numa página de mesa o
+  "chrome" É a mesa, e esses pares a mediriam contra si mesma), os degraus que partem do fundo, as
+  mesas entre si (`NEAR_GATES`) e as bordas discretas (`DISCREET_DESKS`), esses dois porque só medem
+  tokens iguais em toda página. O terminal é medido contra o fundo que o fragmento de cada página
+  escreve (`TERMINAL_BACKGROUND`). O `every-ground-is-measured` dispensa as três mesas como papéis
+  sem texto, com esse motivo: o texto sobre uma mesa é o da página dela, medido lá como
+  `surface.chrome`.
+- **O que sai**: `<id>.json` (a base) e `<id>.<página>.json`; o `report.json` por página; e o
+  `gen-tokens.py` gera `themes::TABLE[tema][página][papel]`, `themes::PAGES`, `counts::PAGES` e o
+  modo de cada tema (`Theme::is_light`, `theme::is_light_at`).
+
+**Quem veste qual página.** Uma superfície sobre uma mesa não pinta outra cor: VESTE a página da
+mesa (`tokens::theme::set_ground`) e pinta exatamente como pintaria no chrome — nenhum pintor
+aprendeu o que é uma mesa. O rodapé veste, por tela, a resposta `footer` (`hidden::Shape::page`),
+menos enquanto as linhas do modo oculto `Push` empurram as janelas: aí ele veste a página da mesa de
+onde elas saíram. A coluna da direita veste a resposta `footer` (é vizinha do rodapé, chrome numa
+faixa — inv. 14 —, e não janela). Toda porta veste `Content::page()`, que por padrão é a resposta
+`windows`, perguntada a cada quadro e a cada troca do arquivo, e limpa com `surface.chrome`; os
+buffers que ela hospeda vestem junto (cruzam nomes, inv. 11: nada muda do lado WASM). O terminal
+recebe o `ghostty-<página>.conf` da resposta `windows`. A linha de vida não põe página: fica na
+base. Faixa, cérebro, relance e bordas nunca mudam. E todo cache de figura pintada com valor de
+token é chaveado por `theme::palette()`, tema e página numa palavra só.
+
+**As exceções dos temas claros, escritas nos portões** (decisão do dono, 2026-09-28). Entre duas
+mesas o piso é 0,10, o de "uma escolha que não faz nada". As três de um tema claro são FEITAS para
+ser três papéis próximos — branco, quase-branco e o do tema —, e o piso de 0,10 empurrava a do tema
+para uma cor (empurrou: um pêssego, depois um lilás). Então, num tema claro: a mesa do tema contra o
+branco ≥ 0,07 (`LIGHT_DISTANCE_FLOORS`), contra o quase-branco ≥ 0,05, e o quase-branco contra o
+branco ≥ 0,02, um JND (`NEAR_GATES`, que só rodam num tema claro: num escuro o quase-branco nunca é
+oferecido). Medido: a mesa do tema a 0,094 do branco no papyrus e no flashbang, e a 0,068 e 0,073 do
+quase-branco.
+
+**As sementes que se moveram para caber em quatro páginas.** A mesa do papyrus ficou dessaturada — o
+cinza quente da própria folha — e o flashbang foi refeito num prateado sóbrio — acento aço, estados
+e matizes de conteúdo com cerca de metade do croma —, os dois a pedido do dono. A linha do cérebro
+mudou de matiz em cinco temas (flashbang, frost, industrial, owl, papyrus): ela é igual em toda
+página, e em alguma delas a mesa ou a faixa de seleção chegava perto dela. A torção do acento do
+forest e do frost mudou para a seleção ficar a 0,05 de uma régua nas páginas mais escuras. Cada
+semente diz o número e o que o prende.
+
+#### As bordas discretas
+
+`borders` é `standard` — `border.active` na janela em foco e `border.inactive` nas outras, como
+sempre — ou `discreet`: a janela em foco num contorno quieto (`border.discreet`, o degrau do
+acento com menos da metade da cor) e toda outra num contorno EXTREMAMENTE fraco, e nunca
+transparente — o dono: a pessoa ainda precisa de uma referência para redimensionar com o mouse. O
+`focused_inactive` é das OUTRAS: neste compositor cada coluna é um contêiner, e a janela que cada
+coluna focou por último — quase toda janela da tela — veste essa classe; com a cor discreta nela,
+foco e fora de foco pareciam iguais (o dono viu, 2026-09-28). O marcado continua em
+`border.selected`: o que ele diz é "marcado", e a resposta não o cala. É uma cor, e não uma borda
+mais fina, porque o compositor pinado não varia a largura da borda pelo foco. E é opaca: borda com
+alfa seria elevação (inv. 15).
+
+**A borda fraca é uma por mesa** (`border.faint-<mesa>`), porque é medida contra a mesa em que fica:
+a mesa subida na escada da interface até a razão de luminância chegar a `FAINT_RATIO` (1,05) —
+`#090909` sobre o preto, `#F9F9F9` sobre o branco, mais ou menos o menor degrau que a paleta já pede
+ao olho (o chrome contra a janela é 1,035 no owl). Razão, e não ΔE, porque o ΔE_ok não tem trecho
+linear perto do preto: o primeiro byte acima do preto já está a 0,067, e um passo que o olho mal
+acha mede 0,14 ali e 0,018 perto do branco; a razão com flare é um número só nas duas pontas.
+Portões, por mesa e na base: a fraca contra a mesa com ΔE ≥ 0,012 (visível, medido nos bytes, então
+cair nos bytes da mesa é Fail) e razão ≤ 1,10 (fraca); e as três em ordem — a discreta pelo menos
+0,03 mais longe da mesa que a fraca, e a padrão pelo menos 0,03 mais longe que a discreta
+(`DISCREET_ORDER`).
+
+**A linha de foco da coluna segue a resposta** (`theme::focus_line`): o acento com as bordas padrão,
+`border.discreet` com as discretas — a coluna diz "em foco" do jeito que o contorno de uma janela
+diz. Ela é desenhada na página do rodapé, então `border.discreet` contra `surface.chrome` tem piso
+de 0,05 em toda página.
+
+Os fragmentos: `write_fragments` escreve `scroll-<mesa>-<bordas>.conf` (seis), com as cores de
+cada classe de cliente e o `output * bg` da mesa, e `ghostty-<página>.conf` (quatro);
+`theme::fragments` escolhe quais copiar a partir da escolha, pela mesa vestida.
 
 ---
 
@@ -2802,13 +3311,22 @@ ficava sem modeline, sem minibuffer e sem leader, e nenhum check acusava — nen
 sessão de verdade. Agora o rodapé é unidade de usuário do `graphical-session.target`, todo `spawn` do
 config carrega caminho do store, e o `keyboard-vm` afirma as duas coisas.
 
-**Segurar a leader é inerte.** O gatilho da sequência é `LEADER+Space`, um acorde como os outros —
-não a leader sozinha. Segurá-la não abre a lista e não tira o foco da janela, e há uma guarda no
-build que recusa um bind na leader sozinha: seria o único jeito de esse comportamento voltar.
+**Segurar a leader é inerte.** O que abre a sequência é um bind do compositor — o `F13` que o keyd
+emite no toque, o `Ctrl+Alt+Espaço` no aninhado —, nunca o modificador da leader sozinho. Segurá-lo
+não abre a lista e não tira o foco da janela, e há uma guarda no build que recusa um bind no
+modificador sozinho: seria o único jeito de esse comportamento voltar.
 
 `LEADER w h` é **sequência**: a leader é apertada e solta, o compositor avisa o daemon, e o rodapé
 passa a receber teclado. `LEADER+←` é **acorde**: a leader fica segurada, e o rodapé nunca vê essa
 tecla — quando ele ganha o teclado, o acorde já terminou. Quem resolve acorde é o compositor, sempre.
+
+**O que chega logo depois da leader ainda é da sequência, mesmo sem ser tecla da árvore.** Um toque
+de `Alt` ou de `Ctrl` — apertado e solto sozinho — troca o conjunto em que ela anda (ver "Três
+conjuntos da leader"), e a própria leader chegando de novo, com nada digitado, esconde ou devolve as
+barras no conjunto padrão e no das janelas (ver "Os modos ocultos"); com algo digitado, ou no
+conjunto completo, ela recomeça na raiz, como sempre fez. Nenhum dos dois é bind novo no compositor:
+o toque é lido pelo rodapé, que já tem o teclado, e a leader de novo é o mesmo `ronoctua-shell
+leader` chegando pelo socket.
 
 Isso poderia trazer de volta as duas tabelas. Não traz, porque **o bind do compositor é gerado**: a
 tabela de acordes vive em `actions.rs`, ao lado do que cada comando faz, e o `export-binds` emite as
@@ -2891,6 +3409,89 @@ como carregar um número: ela é um caminho até um id, não uma chamada com par
 compositor **para o build** até o que apareceu ser traduzido. É barulhento de propósito: a
 alternativa é o inglês do upstream aparecendo no meio de uma lista em português, que é o fallback
 silencioso com outra roupa.
+
+---
+
+### Três conjuntos da leader — o que vem logo depois dela
+
+O dono pediu que a tecla que abria o SUBMENU de um app abrisse o app: `LEADER s n` é a rede no
+rodapé, onde era `LEADER s n n`. Um toque de `Alt` logo depois da leader faz a mesma tecla abrir a
+JANELA do app, e um toque de `Ctrl` devolve a árvore de antes, com cada submenu como era. São três
+árvores (`leader::Set`: `Footer`, `Window`, `Full`), e toda sequência começa na primeira.
+
+**A dobra é LIDA da convenção das duas portas, e não listada** (`leader::folds`). Um grupo G dobra
+quando `G <última tecla de G>` e `G w` são comandos, e comandos diferentes: é a convenção que toda
+vista com rodapé e janela já seguia só nos nomes. No conjunto padrão G vira o comando do rodapé; no
+das janelas, o da janela; e tudo abaixo de G sai dos dois — o resto de um grupo dobrado (`s n a`, o
+modo avião) fica a um toque de `Ctrl`. Só a dobra mais de fora conta. Uma lista mantida à mão ao lado
+das tabelas seria mais uma coisa a esquecer no dia em que um app ganhasse janela; o
+`the_collapsed_groups_are_these` fixa o que a regra responde hoje, e um grupo novo que dobre é uma
+decisão tomada de propósito. Hoje são dezessete: `.`, `p`, `t`, `n`, `i`, `s h`, `s n`, `s s`, `s d`,
+`s a`, `s c`, `s i`, `s p`, `s b`, `s l`, `s g` e `s u` (cuja janela é a `update-watch`).
+
+**O `w` não dobra, e a regra diz por quê sem exceção**: a tecla dobrada dele É o `w` dele (`w w`), um
+binding e não duas portas. **E nada embaixo do `w` dobra.** Ali estão os níveis do menu da janela,
+gerados com as letras do menu, e neles `w` é só mais uma letra: `w v v` seleciona a janela e `w v w`
+o espaço inteiro, dois feitos de um nível que a regra, lida sozinha, tomava por rodapé e janela — o
+teste fixado pegou. Grupo com uma porta só (`RET`, `TAB`, `TAB m`, `s q`) ou com nenhuma (`m`,
+`m i`, `s`, `d`, `t i`) é igual nos três. E um grupo dobra nos dois conjuntos ou em nenhum: uma tecla
+que fosse comando num e lista no outro seria uma terceira regra que ninguém escreveu.
+
+**Três árvores, e não uma árvore com um interruptor dentro.** Cada uma passa pelo `Tree::build_it`
+(`leader::Trees::build`), então uma colisão que a dobra crie — um grupo dobrado caindo numa tecla que
+é prefixo de outra coisa — é erro de build no conjunto em que acontece, com o nome dele, como é na
+árvore completa. O `check-keymap` constrói as três; o `reachable` pergunta à completa, que tem toda
+sequência que as outras dobram. O `,` do buffer, a linha condensada `1…9` e a linha do gesto das
+barras entram na raiz de cada conjunto por uma função só (`Footer::leader_root`), e o `w s` é
+enxertado sob o `w`, que é grupo nos três.
+
+**Um toque, e não um acorde.** Segurar `Alt` com a letra é `M-s`, e `M-` é a família do compositor:
+não chega ao rodapé. E no aninhado o `Ctrl` e o `Alt` da própria leader estão segurados por
+construção quando a sequência começa, então um modificador segurado não pode querer dizer nada aqui.
+Um toque — apertado e solto sem nada no meio — é um gesto próprio (`leader::Tap`): uma soltura sem
+descida (a da leader do aninhado) não conta; uma tecla no meio, ou um segundo modificador, é acorde,
+e por isso o `Control_R` segurado com as setas continua paginando; `AltGr` não é `Alt`, porque é como
+metade do mundo digita as próprias letras. O toque é lido nos dois caminhos de tecla, o do assento e
+o dos teclados independentes (`typed` e `key_released`). O ponteiro agindo no meio — um botão, a
+roda, um dedo encostando — também é acorde (`Tap::pointer_acted`): sem isso, o `Ctrl` solto depois
+de um Ctrl-clique em `ALT janelas` trocava para a árvore inteira.
+
+**No teclado na tela, o toque também vale.** Lá um modificador tocado TRAVA, e a soltura dele só sai
+depois da próxima tecla — que a essa altura já fez acorde: a tecla sai como `M-s`, que nada liga. Então, com a
+leader na raiz, um `Alt` ou `Ctrl` travado sozinho, sem tecla digitada depois, é o toque
+(`osk::Board::spend_a_lone_tap`, `leader::set_of_osk_tap`): a trava é desfeita na hora, a soltura
+sai, e o conjunto troca ali mesmo. Fora da raiz da leader, a trava é o que sempre foi.
+
+**Só na raiz, e o último vence.** Um conjunto escolhido no meio de `s n` daria às teclas já digitadas
+um sentido com que elas não foram digitadas. Toda abertura volta ao padrão.
+
+**A leader de novo não recomeça mais em dois dos três.** Na raiz do padrão e do das janelas, ela
+esconde ou devolve as barras (ver "Os modos ocultos"). No completo, recomeça, como sempre: é onde se
+vai para digitar, e uma sequência recomeçada por engano custa menos que barras escondidas por engano.
+
+**A tela diz o conjunto.** A sequência pendente é `SUPER ALT-` ou `SUPER CTRL s n-`: o mesmo `s n`
+roda uma coisa diferente em cada conjunto, e a sequência na tela é o único lugar que diz qual árvore
+a próxima tecla anda. `ALT` e `CTRL` são constantes ao lado das tabelas (`WINDOW_SET_KEY`,
+`FULL_SET_KEY`), nunca texto num `.ftl`. Na raiz, a linha de dicas da leader ensina os outros
+conjuntos como cliques (`leader::set_hint`: `ALT janelas · CTRL tudo` no padrão, só o `CTRL` no das
+janelas), porque o ponteiro não toca modificador (invariante 19). O clique roda `leader-set-window`
+ou `leader-set-full`, comandos que existem para isso e para o `LEADER :`, e o ponteiro parado lê a
+frase `cmd-` deles. Pelo nome, uma leader fechada abre já no conjunto, e uma no meio de uma sequência
+recomeça na raiz dele. Trocar de conjunto, e abrir a leader, tiram o último eco da pessoa da linha
+(como toda tecla da sequência): o eco passa na frente da sequência e das dicas, e o eco de um `Esc`
+ou de uma tecla sem comando logo antes as escondia — e os cliques delas — pelos três segundos dele.
+
+**O que se ensina parte do conjunto padrão** (`leader::taught_keys`): a sequência do rodapé quando
+existe (`t`, a fila), senão a das janelas depois do `ALT` (`ALT .`, a janela do gerenciador), senão a
+da árvore completa depois do `CTRL` (`CTRL s b y`, responder um pareamento). Ensinada de outro jeito,
+a tecla faz outra coisa quando digitada onde toda sequência começa: `t t` no padrão é a fila e depois
+uma tecla que não leva a lugar nenhum. A vista de programas, o cartão de pareamento e as células do
+menu da janela leem dela; as constantes ao lado dos bindings (`TRANSFERS_KEYS`, `PAIRING_YES_KEYS`)
+continuam sendo da árvore completa, que é quem as lê.
+
+**As sequências citadas neste documento são as da árvore completa**, a que um toque de `Ctrl`
+alcança. No conjunto padrão, um grupo de duas portas é a própria tecla do grupo: `LEADER t t` é
+`LEADER t`, e `s n w` é `LEADER Alt s n`.
 
 ---
 
@@ -4202,10 +4803,13 @@ rodapé e `. w` é a janela.
 E isso obrigou uma coisa que vale escrever: **o `.` deixou de ser comando para poder ser prefixo**.
 O registro recusa as duas coisas na mesma sequência — um prefixo que também executa faz o primeiro
 toque rodar algo enquanto a pessoa ainda está digitando —, e é a mesma regra que fez `s b b`, `s n n`
-e `t t` dobrarem a letra. O preço é um toque a mais; o que ele compra é a segunda porta ter casa sem
-inventar um segundo grupo.
+e `t t` dobrarem a letra. A segunda porta ganhou casa sem inventar um segundo grupo, e o preço era um
+toque a mais — que deixou de ser pago: no conjunto padrão da leader o grupo de duas portas é a
+própria tecla, `LEADER .` abre o gerenciador no rodapé e `LEADER Alt .` a janela, e a árvore com
+`. .` e `. w` continua inteira a um toque de `Ctrl` (ver "Três conjuntos da leader"). A regra
+continua valendo nessa árvore, e é ela que dá à convenção os dois nomes que a dobra lê.
 
-O grupo tem DUAS teclas e nada mais: `f f` abre o gerenciador no rodapé e **`f w` o abre em janela**,
+O grupo tem DUAS teclas e nada mais: `. .` abre o gerenciador no rodapé e **`. w` o abre em janela**,
 `w` de *window* — a mesma letra que toda vista com segunda porta usa (`t w`, `n w`, `s n w`, `s p w`,
 `s b w`, `s u w`). O teto de doze linhas do rodapé está certo para um rodapé e não para o trabalho que
 se abre um gerenciador para fazer.
@@ -8641,10 +9245,13 @@ Ela é **colada embaixo do minibuffer**, e não a última linha da superfície. 
 que decide: uma linha verdadeiramente última moraria em `first_of_expansion() + expansion_rows()`, e
 teria de ser recalculada no pintor, no hit-test e no quadrilátero de fundo, para sempre — que é
 exatamente o defeito que o `first_of_expansion()` foi escrito para remover. Colada, ela custa **um
-termo** (`band_rows() + FOOTER_LINES + brain_line()`), e todo leitor rio abaixo acompanha de graça.
-Os outros dois motivos são que foi assim que se pediu, e que ela mantém o rodapé simétrico — faixa ·
-modeline · minibuffer · cérebro · expansão —, de modo que esta linha se mexe na tela exatamente
-quando a modeline se mexe.
+termo** na soma das linhas (`brain_line_at` é `modeline_line() + shape.lines() + fold_rows() +
+explain_rows()`), e todo leitor rio abaixo acompanha de graça. Os outros dois motivos são que foi
+assim que se pediu, e que ela mantém o rodapé simétrico — faixa · modeline · minibuffer · cérebro ·
+expansão —, de modo que esta linha se mexe na tela exatamente quando a modeline se mexe. Com as
+barras ocultas o `shape.lines()` pode ser zero: a linha do cérebro sobe para onde elas estariam, com
+o fundo dela, e no modo que empurra ela empurra as janelas enquanto está no ar (ver "Os modos
+ocultos").
 
 #### A contagem pega carona no relógio de um segundo que o rodapé já bate
 
@@ -9516,10 +10123,11 @@ inquilino, porque o player lê tecla nomeada sem modificador e tomaria `C-<left>
 dele. O desenho é uma função pura (`decoration`), e o ponteiro lê o que ela colocou (`glyph_at`).
 
 **A linha de foco.** Enquanto algum teclado está na coluna, uma linha de 2 px
-(`space.column.focusLine`, o peso da borda de foco do compositor) no acento, de borda a borda, sobre
-tudo (`chrome::focus_line`). Ela fica na entrelinha acima da linha 0, que nada tinge, então não move
-span nem marca — o teste compara os dois quadros. Antes, nada ficava azul quando a coluna tinha o
-teclado.
+(`space.column.focusLine`, o peso da borda de foco do compositor) de borda a borda, sobre tudo
+(`chrome::focus_line`), na cor do contorno em foco: o acento com as bordas padrão e
+`border.discreet` com as discretas (`theme::focus_line`; ver "As bordas discretas", em "Cores"). Ela
+fica na entrelinha acima da linha 0, que nada tinge, então não move span nem marca — o teste compara
+os dois quadros. Antes, nada ficava azul quando a coluna tinha o teclado.
 
 **Um espaço de trabalho por coluna.** A coluna pertence ao espaço em que foi aberta, pelo NOME (um
 espaço vazio some, e `TAB 3` o recria com o mesmo nome), e aparece na tela que mostra esse espaço:
@@ -9770,9 +10378,10 @@ pool próprio (`software_pictures.rs`) cuja chave leva o lado em pixels.
 - **Toda pergunta que não se desfaz abre no NÃO** (remover, apagar o Android, devolver as
   permissões, instalar um arquivo que catálogo nenhum conferiu), com o cursor nela.
 - **O fim de um trabalho da fila é o evento**: `transfers::ended` diz que um trabalho de programas
-  acabou; o rodapé relê o lançador, a vista, as marcas, e levanta uma das sete notificações
-  (instalado, falhou, removido, atualizado, experiência encerrada, Android pronto, web app criado).
-  Não há relógio.
+  acabou; o rodapé relê o lançador, a vista, as marcas, e diz como ele acabou. Instalado e web app
+  criado são ditos no minibuffer, com a ação de abrir o programa no fim da linha (ver "Eventos no
+  minibuffer"); os outros (falhou, removido, atualizado, experiência encerrada, Android pronto)
+  continuam notificação. Não há relógio.
 - **Duas marcas, mudas em repouso**: uma experiência rodando (frasco) e o Android ligado (ele custa
   memória, que é a razão de existir a marca). O clique abre o nível delas.
 - **O lançador acha o que não tem**: nada casando, a última linha é "procurar «x» para instalar";

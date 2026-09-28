@@ -113,7 +113,7 @@ nix run .#iso                imagem do instalador
 nix run .#install            instala no disco (sem --execute, só ensaia)
 nix run .#bench              falha se um quadro estourar o orçamento
 nix run .#diagnostics        só lê; rode quando "nenhum atalho funciona"
-nix build .#themes           gera os temas e o report.md (~2 s)
+nix build .#themes           gera os temas e o report.md (~20 s)
 nix fmt                      formata a árvore (Nix e Rust); nix fmt -- --check só confere
 ```
 
@@ -161,6 +161,18 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
   conteúdo vira recursão — a shell já morreu duas vezes assim, de stack overflow e sem diagnóstico.
   O que a região sabe de si é guardado onde foi medido (cobra `the-footer-does-not-ask-itself`, que
   também recusa ciclos novos entre métodos do `Footer`).
+- **Dois modos ocultos** (`hidden.rs`, gravados em `modeline.json`): `LEADER LEADER` esconde
+  modeline e minibuffer e faz o que abre empurrar as janelas; `LEADER Alt LEADER` põe tudo por
+  cima delas; o mesmo gesto as devolve. O que empurra veste a página da mesa e fica sobre a cor
+  dela, opaca (texto sobre alfa 0 sai com franja branca); o que sobrepõe leva o véu da página
+  (`surface.veil`); faixa, cérebro e teclado ficam com o deles. A última linha de pixels da tela
+  revela as barras, o minibuffer aparece sempre que tem o que dizer, e a lista da leader aberta por
+  tecla espera 2 s parada. As linhas saem de `hidden::Shape`, que o `apply_geometry` guarda num
+  campo e as somas sob o `metric` leem; o `draw_and_paint` pede geometria quando ele muda. Por cima
+  das janelas o rodapé vai à camada `overlay` com zona `-1` — a largura toda, acima da coluna (inv.
+  14) —, e empurrando continua na `overlay` com zona = altura (`hidden::geometry`): uma camada que
+  muda sob o ponteiro ganha um `leave`, e a borda virava um laço. O teclado na tela empurra em
+  todos os modos (no `Cover`, só as linhas dele).
 - **A modeline se adapta a um programa** (`adapt.rs`; hoje só o Chrome quiosque, `kiosk.rs`): o
   adaptador toma a janela em foco, tira o título, põe o nome do programa primeiro e os segmentos
   dele logo depois. O que foi desenhado responde ao ponteiro (`adapter_drawn`, ao lado de
@@ -179,8 +191,11 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
   pode sobrescrever (cobra `every-window-is-a-door`). O rodapé e a linha de vida são layer-shell com
   handlers próprios, montados com as mesmas peças.
 - Uma vista costuma ser **uma `View` com duas portas**: a região do rodapé e uma janela, que
-  desenham as mesmas linhas. Na leader, a sequência dobrada abre no rodapé e a terminada em `w`
-  abre na janela (`s n n` / `s n w`).
+  desenham as mesmas linhas. Na árvore da leader, a sequência dobrada abre no rodapé e a terminada
+  em `w` abre na janela (`s n n` / `s n w`), e o código lê essa convenção: o grupo que tem as duas
+  vira uma tecla só (`leader::folds`), que no conjunto padrão abre o rodapé (`LEADER s n`) e no
+  `LEADER Alt` a janela; o `LEADER Ctrl` é a árvore inteira. O `the_collapsed_groups_are_these`
+  fixa os grupos que dobram.
 - **As duas portas fazem as mesmas coisas** (regra do dono, 2026-09-27): tudo o que a janela
   suporta o rodapé suporta, e vice-versa — cada nível, cada tecla, colar, soltar arquivo e
   **digitar** (buscar, responder uma pergunta, senha, caminho, nome). Nenhuma porta manda a pessoa
@@ -238,8 +253,14 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
 - Tokens (`assets/tokens/*.nix`) e textos (`assets/i18n/*.ftl`) geram Rust: chave ou cor que não
   existe é erro de compilação. O layout é aritmética de inteiros em duas fases: a preferência, e
   depois "nada vaza da tela".
-- `Color` é um papel (`u16`), resolvido em `themes::TABLE[tema][papel]` na hora de desenhar; `==`
-  compara papéis.
+- `Color` é um papel (`u16`), resolvido em `themes::TABLE[tema][página][papel]` na hora de
+  desenhar; `==` compara papéis.
+- **As faixas seguem o fundo.** Todo tema é resolvido em quatro páginas — o chrome e as mesas
+  `backdrop`, `near` e `absolute` —, com texto, faixas e réguas medidos a partir de cada uma. Quem
+  fica sobre uma mesa VESTE a página dela (`theme::set_ground`) e pinta como no chrome; nunca ponha
+  um tom da página do chrome sobre uma mesa. Rodapé e coluna vestem a resposta `footer` do
+  `theme.json`; portas, buffers e terminal, a `windows`. Faixa, cérebro, relance, bordas e mesas
+  são iguais em toda página.
 - Nenhuma cor é escrita à mão. `assets/tokens/colors.nix` é receita
   (`text.primary = "neutral.text-strong"`), e os valores saem de `nix/scripts/gen-theme.py` a partir
   das sementes `assets/themes/<id>.nix` (matiz, croma relativo, shift, torção, `mode`). Toda relação
@@ -247,9 +268,9 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
   `owl.reference.nix`. `order` e `default` são campos separados em `themes.nix`: o primeiro da lista
   não é o padrão.
 - Para afinar uma cor, mexa na semente e rode `nix build .#themes --no-link --print-out-paths`
-  direto do shell (2 s; dentro do `nix develop` são 41 s). No `report.md` impresso, a linha 5 traz
-  o placar dos portões (`Fail 0`). Mexer no gerador reconstrói o workspace: afine antes de compilar
-  Rust.
+  direto do shell (~20 s, quatro páginas por tema; dentro do `nix develop` demora mais). No
+  `report.md` impresso, a linha 5 traz o placar dos portões de todas as paletas (`Fail 0`). Mexer
+  no gerador reconstrói o workspace: afine antes de compilar Rust.
 - Papel novo exige família em todas as sementes (menos a `.reference`); sem isso o gerador recusa
   com `no family '<nome>' in the seed`.
 - Hex só existe gerado ou medido (`tokens.rs`, `report.md`, a fixture congelada). Quem escolhe uma
@@ -328,9 +349,9 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   conhecidos (decisão do dono, 2026-09-27).
 - Toda vista da região ensina `Esc` primeiro, e ele é clicável (`chrome::with_the_way_back`). O
   botão Voltar do mouse sobre o rodapé ou sobre uma janela é o mesmo `Esc`.
-- Tecla nunca é texto no `.ftl`: a sequência vem de uma constante ao lado do binding mais
-  `crate::leader()`, num `{ $keys }` (cobra `keys-are-never-text`). "LEADER" não é tecla de
-  ninguém: em produção é `SUPER`, no `.#dev` é `CTRL ALT SPC`.
+- Tecla nunca é texto no `.ftl`: a sequência sai do código (`leader::taught_keys`, ou uma constante
+  ao lado do binding) mais `crate::leader()`, num `{ $keys }` (cobra `keys-are-never-text`).
+  "LEADER" não é tecla de ninguém: em produção é `SUPER`, no `.#dev` é `CTRL ALT SPC`.
 
 ### Linhas, cores e cursor
 
@@ -393,6 +414,11 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 - Opção que ainda não faz nada diz isso na tela, em vez de parecer funcionar.
 - Nada que o sistema faça sozinho pode perguntar: não há agente polkit na sessão, toda chamada leva
   `auth.no_user_interaction`, e nenhuma ação automática usa `sudo` ou `pkexec`.
+- Um evento do sistema (privacidade, Bluetooth e redes, carregador, programa instalado) é dito no
+  minibuffer (`events.rs`), e nem a primeira leitura de cada fonte nem uma leitura que não respondeu
+  é evento. Ele vira notificação só quando a linha está ocupada ou a fila dela já tem quatro
+  esperando, e o corpo abre dizendo por quê (`notif-minibuffer-was-busy`); um evento contrário
+  substitui o que ainda está na linha ou na fila.
 
 ### Comandos e teclas
 
@@ -404,6 +430,11 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   clipboard sozinho —, `d` é desenvolvimento (ferramentas para quem constrói a distro; hoje só
   `d r`, o redimensionador de tela) e `,` é o grupo do buffer em foco. O relance (`world-glance`) é
   `g`. Numa janela de buffer, a tecla local `, r` é o acorde `C-r`; letra sozinha é texto.
+- **Três conjuntos**, escolhidos por um toque (apertar e soltar sozinho) logo depois da leader, só
+  na raiz: nada é o padrão, `Alt` o das janelas e `Ctrl` a árvore inteira (`leader::Set`,
+  `leader::Tap`), também pelo teclado na tela; botão, roda ou dedo no meio fazem acorde. A frase que ensina uma sequência a tira de `leader::taught_keys`, que parte do
+  padrão (`t`, `ALT .`, `CTRL s b y`). A constante ao lado do binding é da árvore inteira: colada
+  depois de `crate::leader()`, ela ensina, sob um grupo dobrado, uma tecla que faz outra coisa.
 - Comando de uma vista usa `C-`, nunca `M-`: `M-` é a família dos acordes do compositor e não chega
   à janela.
 - O layout de teclado mora num lugar só (`nix/keyboard-xkb.nix`). O xkb não recusa layout que não
@@ -445,7 +476,8 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   leva parênteses: sem eles, a última alternativa libera qualquer ação para qualquer sujeito
   (aconteceu com a regra do resgate).
 - Todo cache tem limite (`assets/cache.nix`). A chave de um cache leva tudo o que muda o desenho —
-  tema, tamanho, escala, versão do formato —, senão o código fica certo e a tela, errada.
+  a paleta (tema e página, `theme::palette()`), tamanho, escala, versão do formato —, senão o
+  código fica certo e a tela, errada.
 
 ## Armadilhas
 
@@ -524,9 +556,10 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   `Emoji_Presentation` — `日本語` são seis células. Orce em células e corte em grafemas; cortar por
   codepoint inventa desenho (cobra `ink-is-not-a-count`).
 - Cor de token não alcança emoji. Tudo o que um processo filho pinta com o valor de uma cor
-  (waveform do ffmpeg, `currentColor` de SVG) leva o tema na chave do cache, senão a textura velha
-  fica na GPU — e o `image::Images` não remove textura por chave.
-- Só um teste chama `theme::set` (no `ronoctua-tokens`), porque os testes rodam em paralelo.
+  (waveform do ffmpeg, `currentColor` de SVG) leva a paleta (`theme::palette()`) na chave do
+  cache, senão a textura velha fica na GPU — e o `image::Images` não remove textura por chave.
+- Só um teste chama `theme::set` e `theme::set_ground` (no `ronoctua-tokens`): os dois mudam o
+  mesmo índice do processo, e os testes rodam em paralelo.
 - Consumidor Nix de cor lê o store (`${themed}/…`), nunca o `colors.nix`, que só tem receitas.
 - O nome de um glifo Nerd Font não leva `nf-` (a classe CSS leva). O console não usa TTF, e sim PSF.
   A família genérica é `sans-serif`.

@@ -924,14 +924,22 @@ impl Content for CameraWindow {
         #[allow(clippy::cast_precision_loss)]
         let (w, h) = (ui.width as f32, ui.height as f32);
 
-        // UNDER THE PICTURE the backdrop; OVER it the bands and outlines; the
-        // text last — the canvas's order, and there is no depth test.
+        // UNDER THE PICTURE the page's own ground; OVER it the bands and
+        // outlines; the text last — the canvas's order, and there is no depth
+        // test.
+        //
+        // THE PAGE'S GROUND, `surface.chrome`, and not the desk's colour it
+        // was: the sentence below ("no picture yet") is drawn on it, in an
+        // ink solved for the page this door wears (`Content::page`, the
+        // windows' answer) — on `surface.backdrop` that ink stood on a ground
+        // no gate measured, and the window ignored the person's answer about
+        // what windows stand on. On a desk's page the chrome IS that desk.
         canvas.under.push(ronoctua_render::quad::Quad {
             x: 0.0,
             y: 0.0,
             width: w,
             height: h,
-            color: tokens::color::SURFACE_BACKDROP,
+            color: tokens::color::SURFACE_CHROME,
         });
 
         // THE PROGRAM, one texture rewritten in place for every frame — see

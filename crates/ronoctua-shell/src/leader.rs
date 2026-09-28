@@ -443,12 +443,399 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
     true
 }
 
+/// WHICH OF THE THREE TREES a sequence walks, chosen by a modifier TAPPED
+/// right after the leader.
+///
+/// # Why there are three
+///
+/// The owner's request (2026-09-28): the key that used to open an app's
+/// SUBMENU opens the app itself, in the footer — `LEADER s n` is the network
+/// where it was `LEADER s n n`. The same key after a tap of `Alt` opens the
+/// app's WINDOW, and after a tap of `Ctrl` the whole tree of before is there,
+/// every submenu as it was. The two doors of an app were only ever a
+/// convention of NAMES — the doubled letter is the footer, `w` the window —
+/// and that convention is what decides which groups fold: see [`collapse`].
+///
+/// # Why a tap and not a chord
+///
+/// Holding `Alt` while typing the letter is `M-s`, and `M-` is the
+/// compositor's family (`AGENTS.md`): it never reaches the footer. And in the
+/// nested loop the leader's own `Ctrl` and `Alt` are HELD by construction when
+/// the sequence starts, so a held modifier cannot mean anything here. A tap —
+/// pressed and released with nothing in between — is a gesture of its own;
+/// see [`Tap`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Set {
+    /// `LEADER` alone: a group with two doors opens its footer door.
+    #[default]
+    Footer,
+    /// `LEADER`, then `Alt`: the same key opens the app's window.
+    Window,
+    /// `LEADER`, then `Ctrl`: the whole tree, every submenu as it was.
+    Full,
+}
+
+/// How the WINDOW set is named where a key is shown: the pending chord
+/// (`SUPER ALT s-`), a taught sequence (`ALT .`) and the leader's hint line.
+///
+/// A constant beside the tables and never text in a `.ftl`
+/// (`keys-are-never-text`): it is a key's name, the same in every language,
+/// as `SPC` is.
+pub const WINDOW_SET_KEY: &str = "ALT";
+
+/// And the FULL set's, for the same three places (`SUPER CTRL s n-`).
+pub const FULL_SET_KEY: &str = "CTRL";
+
+/// The letter a group's SECOND door hangs off — `w`, for window, the letter
+/// every view with a window uses (`. w`, `s n w`, `s u w`). The first door is
+/// the group's own last key doubled. [`folds`] reads both.
+pub const WINDOW_DOOR_KEY: &str = "w";
+
+impl Set {
+    /// The key a sequence in this set is shown with after the leader's, when
+    /// there is one: the default set is the leader alone.
+    #[must_use]
+    pub const fn key(self) -> Option<&'static str> {
+        match self {
+            Self::Footer => None,
+            Self::Window => Some(WINDOW_SET_KEY),
+            Self::Full => Some(FULL_SET_KEY),
+        }
+    }
+
+    /// The command that switches to this set — what the POINTER runs, since
+    /// a click cannot tap a modifier (invariant 19). Its id is also the key
+    /// of the short word the hint line draws beside the key.
+    #[must_use]
+    pub const fn command(self) -> Option<&'static str> {
+        match self {
+            Self::Footer => None,
+            Self::Window => Some("leader-set-window"),
+            Self::Full => Some("leader-set-full"),
+        }
+    }
+
+    /// The three, in the order teaching looks: the default first.
+    pub const ALL: [Self; 3] = [Self::Footer, Self::Window, Self::Full];
+}
+
+/// The three trees, built once and each verified.
+///
+/// Three [`Tree`]s and not one tree with a switch inside: each goes through
+/// [`Tree::build_it`], so a collision the folding would create — a folded
+/// group landing on a key that is a prefix of something — is a BUILD error
+/// in the set it happens in, exactly as it is in the full one.
+#[derive(Debug, Default)]
+pub struct Trees {
+    /// [`Set::Footer`]'s — the one a sequence starts in.
+    pub footer: Tree,
+    /// [`Set::Window`]'s.
+    pub window: Tree,
+    /// [`Set::Full`]'s: `BINDINGS` and `GROUPS` as written, unchanged.
+    pub full: Tree,
+}
+
+impl Trees {
+    /// The tree of one set.
+    #[must_use]
+    pub const fn of(&self, set: Set) -> &Tree {
+        match set {
+            Set::Footer => &self.footer,
+            Set::Window => &self.window,
+            Set::Full => &self.full,
+        }
+    }
+
+    /// The three trees of one list of bindings and groups.
+    ///
+    /// # Errors
+    ///
+    /// EVERY collision of every set, each with the set it is in — the rule
+    /// [`Tree::build_it`] keeps, of fixing a keymap in one build rather than
+    /// in three.
+    pub fn build(
+        bindings: &[Binding],
+        groups: &[GroupNode],
+    ) -> std::result::Result<Self, Vec<(Set, ronoctua_keymap::Collision)>> {
+        let mut failed = Vec::new();
+        let mut one = |set: Set| {
+            let (b, g) = collapse(bindings, groups, set);
+            Tree::build_it(&b, &g)
+                .map_err(|all| failed.extend(all.into_iter().map(|c| (set, c))))
+                .ok()
+        };
+        let (footer, window, full) = (one(Set::Footer), one(Set::Window), one(Set::Full));
+        match (footer, window, full) {
+            (Some(footer), Some(window), Some(full)) if failed.is_empty() => Ok(Self {
+                footer,
+                window,
+                full,
+            }),
+            _ => Err(failed),
+        }
+    }
+}
+
+/// A group that FOLDS into one key: its sequence, and its two doors.
+#[derive(Debug, Clone)]
+pub struct Fold {
+    /// The group's own sequence — the key it becomes (`s n`).
+    pub group: Vec<ronoctua_keymap::Key>,
+    /// The footer's door: the group's last key doubled (`s n n`).
+    pub footer: Binding,
+    /// The window's door: [`WINDOW_DOOR_KEY`] under the group (`s n w`).
+    pub window: Binding,
+}
+
+/// Every group that folds in [`Set::Footer`] and [`Set::Window`].
+///
+/// # The rule, and why it is read and not listed
+///
+/// A group G folds when BOTH `G <G's last key>` and `G w` are bindings, to two
+/// DIFFERENT commands: that is the two-door convention, and it holds, with no
+/// exception, for every app that has a footer and a window. A list of the
+/// groups kept by hand beside the tables would be one more thing to forget
+/// when an app gains a window; the test `the_collapsed_groups_are_these` pins
+/// what the rule answers today, so a new group that folds is a decision
+/// somebody makes on purpose.
+///
+/// `w` itself does not fold, and the rule says why without an exception: its
+/// doubled key IS its `w` (`w w`), one binding and not two doors. A group
+/// with only one door (`RET`, `TAB`, `s q`), or with none (`m`, `s`, `d`),
+/// does not fold either.
+///
+/// # And nothing under `w` folds
+///
+/// `w` IS the window's group, and the groups under it are the window menu's
+/// levels, generated from the menu with the menu's own letters
+/// (`window_menu::leader_bindings`). There `w` is one more letter of a level
+/// and never a second door: `w v v` selects the window and `w v w` its whole
+/// workspace, two deeds of one level that the rule above, read alone, took
+/// for a footer and a window — the pinned test caught it.
+#[must_use]
+pub fn folds(bindings: &[Binding], groups: &[GroupNode]) -> Vec<Fold> {
+    let Ok(window_key) = ronoctua_keymap::Key::parse(WINDOW_DOOR_KEY) else {
+        return Vec::new();
+    };
+    let bound = |seq: &[ronoctua_keymap::Key]| bindings.iter().find(|b| b.sequence == seq);
+    let mut out: Vec<Fold> = Vec::new();
+    for g in groups {
+        let Some(last) = g.sequence.last().copied() else {
+            continue;
+        };
+        if g.sequence.first() == Some(&window_key) || out.iter().any(|f| f.group == g.sequence) {
+            continue;
+        }
+        let doubled: Vec<_> = g.sequence.iter().copied().chain([last]).collect();
+        let windowed: Vec<_> = g.sequence.iter().copied().chain([window_key]).collect();
+        if doubled == windowed {
+            continue;
+        }
+        let (Some(footer), Some(window)) = (bound(&doubled), bound(&windowed)) else {
+            continue;
+        };
+        if (footer.command, footer.argument) == (window.command, window.argument) {
+            continue;
+        }
+        out.push(Fold {
+            group: g.sequence.clone(),
+            footer: footer.clone(),
+            window: window.clone(),
+        });
+    }
+    out
+}
+
+/// The bindings and groups of one set, derived from the full ones.
+///
+/// [`Set::Full`] is the input unchanged. In the other two, every group that
+/// [`folds`] becomes ONE binding — to its footer's door in [`Set::Footer`],
+/// to its window's in [`Set::Window`] — and everything under it, bindings and
+/// groups, leaves that set: the other keys of a folded group (`s n a`, the
+/// aeroplane) are still one tap of `Ctrl` away. A fold inside a folded group
+/// is the outer one's to take away.
+#[must_use]
+pub fn collapse(
+    bindings: &[Binding],
+    groups: &[GroupNode],
+    set: Set,
+) -> (Vec<Binding>, Vec<GroupNode>) {
+    if set == Set::Full {
+        return (bindings.to_vec(), groups.to_vec());
+    }
+    let all = folds(bindings, groups);
+    // THE OUTERMOST ONLY: a fold under another fold is already gone.
+    let outer: Vec<&Fold> = all
+        .iter()
+        .filter(|f| {
+            !all.iter()
+                .any(|o| o.group.len() < f.group.len() && f.group.starts_with(&o.group))
+        })
+        .collect();
+    let under = |seq: &[ronoctua_keymap::Key]| outer.iter().any(|f| seq.starts_with(&f.group));
+    let mut out: Vec<Binding> = bindings
+        .iter()
+        .filter(|b| !under(&b.sequence))
+        .cloned()
+        .collect();
+    for f in &outer {
+        let door = if set == Set::Footer {
+            &f.footer
+        } else {
+            &f.window
+        };
+        out.push(Binding {
+            sequence: f.group.clone(),
+            ..door.clone()
+        });
+    }
+    let kept = groups
+        .iter()
+        .filter(|g| !under(&g.sequence))
+        .cloned()
+        .collect();
+    (out, kept)
+}
+
+/// The keys that run `command` — with `argument` — the shortest way from the
+/// DEFAULT set, written as a sentence teaches them after `crate::leader()`.
+///
+/// The footer's own sequence when it has one (`t`, the queue); else the
+/// window set's, after its key (`ALT .`, the manager's window); else the full
+/// tree's (`CTRL s b y`, answering a pairing). A key taught any other way is
+/// a key that does something else when typed — `t t` in the default set is
+/// the queue and then a key that leads nowhere.
+///
+/// `None` for a command no sequence reaches.
+#[must_use]
+pub fn taught_keys(trees: &Trees, command: &str, argument: Option<&str>) -> Option<String> {
+    Set::ALL.into_iter().find_map(|set| {
+        let keys = ronoctua_keymap::notation(&trees.of(set).sequence_of(command, argument)?);
+        Some(match set.key() {
+            Some(k) => format!("{k} {keys}"),
+            None => keys,
+        })
+    })
+}
+
+/// A modifier TAPPED — pressed and released with no other key in between.
+///
+/// # The three cases it keeps apart
+///
+/// - A CLEAN TAP of `Alt` or `Ctrl` answers the set it stands for.
+/// - A modifier held WITH another key is a chord, and no tap: `Control_R`
+///   held while the arrows page the list (`Footer::navigate`) must go on
+///   paging, and the key in between disarms it. So does a second modifier.
+/// - A RELEASE WITH NO PRESS answers nothing. In the nested loop the leader
+///   IS `Ctrl+Alt+Space`: both are pressed BEFORE the footer has the
+///   keyboard, and it sees only their releases. Counting those would switch
+///   the set on every opening.
+///
+/// `AltGr` (`ISO_Level3_Shift`) is not `Alt`: it is how half the world types
+/// its own letters, and a tap of it is not a request for windows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Tap {
+    /// The modifier pressed alone, still down.
+    armed: Option<smithay_client_toolkit::seat::keyboard::Keysym>,
+}
+
+impl Tap {
+    /// Any key went DOWN.
+    pub fn pressed(&mut self, sym: smithay_client_toolkit::seat::keyboard::Keysym) {
+        self.armed = match (self.armed, set_of_tap(sym)) {
+            // A MODIFIER ALONE arms; the same one again is a repeat of it.
+            (None, Some(_)) => Some(sym),
+            (Some(held), Some(_)) if held == sym => Some(held),
+            // Anything else — a letter, an arrow, a second modifier — is a
+            // chord, and no tap.
+            _ => None,
+        };
+    }
+
+    /// A pointer or a finger ACTED — a button pressed, a wheel turned, a
+    /// finger down — while a modifier may be down: that is a chord with the
+    /// hand, a Ctrl-click or a Ctrl-wheel, and no tap. Without it, the
+    /// release after a Ctrl-click on `ALT windows` switched to the full set.
+    pub const fn pointer_acted(&mut self) {
+        self.armed = None;
+    }
+
+    /// A key came UP: the set a clean tap chose, when this is one.
+    pub fn released(&mut self, sym: smithay_client_toolkit::seat::keyboard::Keysym) -> Option<Set> {
+        match self.armed {
+            Some(held) if held == sym => {
+                self.armed = None;
+                set_of_tap(sym)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Which set a tap of the ON-SCREEN keyboard's modifier chooses — the same
+/// two the physical keys do ([`set_of_tap`]): `AltGr` is not `Alt` there
+/// either.
+#[must_use]
+pub const fn set_of_osk_tap(m: crate::osk::Modifier) -> Option<Set> {
+    match m {
+        crate::osk::Modifier::Alt => Some(Set::Window),
+        crate::osk::Modifier::Ctrl => Some(Set::Full),
+        _ => None,
+    }
+}
+
+/// Which set a tap of this key chooses.
+fn set_of_tap(sym: smithay_client_toolkit::seat::keyboard::Keysym) -> Option<Set> {
+    use smithay_client_toolkit::seat::keyboard::Keysym;
+    match sym {
+        Keysym::Alt_L | Keysym::Alt_R => Some(Set::Window),
+        Keysym::Control_L | Keysym::Control_R => Some(Set::Full),
+        _ => None,
+    }
+}
+
+/// The leader's own hint at the ROOT: the sets a tap would switch to, each
+/// with its key and a short word — `ALT windows · CTRL everything` in the
+/// default set, and only the `CTRL` one in the window set.
+///
+/// Each is a CLICK (invariant 19): a pointer cannot tap a modifier, so the
+/// click runs the command the tap stands for ([`Set::command`]), and the
+/// pointer resting on it reads that command's `cmd-` sentence.
+#[must_use]
+pub fn set_hint(set: Set, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
+    use crate::chrome::Piece;
+    let offered: &[Set] = match set {
+        Set::Footer => &[Set::Window, Set::Full],
+        Set::Window => &[Set::Full],
+        Set::Full => &[],
+    };
+    let mut out = Vec::with_capacity(offered.len() * 3);
+    for s in offered {
+        let (Some(key), Some(id)) = (s.key(), s.command()) else {
+            continue;
+        };
+        if !out.is_empty() {
+            out.push(Piece::separator());
+        }
+        out.push(Piece::key(key, false).about(id).running(id));
+        // THE SPACE BELONGS TO THE WORDS, as `chrome::hint_of_marked` keeps it.
+        out.push(
+            Piece::prose(format!(" {}", texts.t(id)))
+                .about(id)
+                .running(id),
+        );
+    }
+    out
+}
+
 /// The leader's state: nothing, or a sequence in progress.
 #[derive(Debug, Default)]
 pub struct Leader {
     /// The keys already typed after the leader. Empty = a freshly activated leader.
     sequence: Vec<ronoctua_keymap::Key>,
     active_one: bool,
+    /// Which tree the sequence walks. [`Set::Footer`] from every opening.
+    set: Set,
 }
 
 impl Leader {
@@ -470,6 +857,120 @@ impl Leader {
     #[must_use]
     pub fn typed(&self) -> &[ronoctua_keymap::Key] {
         &self.sequence
+    }
+
+    /// The set the sequence walks.
+    #[must_use]
+    pub const fn set_now(&self) -> Set {
+        self.set
+    }
+
+    /// Switches the set — only at the ROOT of an open leader, and the last
+    /// switch wins. `false`, and nothing changed, anywhere else: a set chosen
+    /// halfway through a sequence would give the keys already typed a meaning
+    /// they were not typed with.
+    pub fn set(&mut self, set: Set) -> bool {
+        if !self.active_one || !self.sequence.is_empty() {
+            return false;
+        }
+        self.set = set;
+        true
+    }
+
+    /// The trigger as a sequence shows it: the leader's own label, and the
+    /// set's key after it when the set is not the default.
+    fn head(&self, trigger: &str) -> String {
+        match self.set.key() {
+            Some(k) => format!("{trigger} {k}"),
+            None => trigger.to_owned(),
+        }
+    }
+}
+
+/// What opened the leader — which decides whether its list waits
+/// ([`Patience`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opener {
+    /// A key: the compositor's bind over the control socket, the keyboards'
+    /// daemon, or the on-screen keyboard's leader.
+    Key,
+    /// A click — on the empty minibuffer, or on a row of the list itself.
+    Pointer,
+}
+
+/// Whether the leader's list waits before it is drawn.
+///
+/// # Why a list waits at all
+///
+/// With the bars hidden (`crate::hidden`), a person who knows the sequence
+/// types it in one breath, and a list that opened over the windows on every
+/// leader would flash across the screen on the way to the command. So when a
+/// KEY opened the leader, the list is held back until the hand stops for
+/// [`crate::surface::LIST_PATIENCE`] — counted from the LAST key, because a
+/// person reading the first level and then typing is exactly who should not
+/// wait again. The pending chord is on the minibuffer at once either way.
+///
+/// With the bars visible nothing waits: the list is where it always was. And
+/// a leader opened by the POINTER shows its list at once — a hand on the
+/// mouse cannot "type fast", and a click that answered with nothing for two
+/// seconds would read as a click that did nothing.
+///
+/// # Once shown, shown
+///
+/// Every level after the first, and every change of set, is drawn at once
+/// until the sequence ends: the person has stopped once already, and is
+/// reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Patience {
+    /// The list is held back. The number is the ONE timer that may show it:
+    /// a key re-arms with a new number, and an older timer that fires finds
+    /// its number stale and does nothing.
+    Waiting(u64),
+    /// The list is drawn.
+    #[default]
+    Shown,
+}
+
+impl Patience {
+    /// At the leader's opening: waiting only with the bars hidden and a key
+    /// that opened it.
+    #[must_use]
+    pub const fn at_opening(hidden: bool, by_key: bool, generation: u64) -> Self {
+        if hidden && by_key {
+            Self::Waiting(generation)
+        } else {
+            Self::Shown
+        }
+    }
+
+    /// A key arrived while the leader is open. A list still waiting counts
+    /// again from this key, under `generation`, which is returned for the
+    /// caller to arm a timer with; a shown list answers `None`.
+    pub const fn after_a_key(&mut self, generation: u64) -> Option<u64> {
+        match self {
+            Self::Waiting(g) => {
+                *g = generation;
+                Some(generation)
+            }
+            Self::Shown => None,
+        }
+    }
+
+    /// The timer numbered `generation` ran out. `true` when that SHOWED the
+    /// list — a stale timer, or a list already shown, answers `false`.
+    pub fn ran_out(&mut self, generation: u64) -> bool {
+        if *self == Self::Waiting(generation) {
+            *self = Self::Shown;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether the list is held back right now.
+    #[must_use]
+    pub const fn withheld(self) -> bool {
+        matches!(self, Self::Waiting(_))
     }
 }
 
@@ -510,13 +1011,13 @@ impl Leader {
     /// It ends in `-`, and not in ` …`: it is Doom's notation, and it fits in
     /// two columns fewer. The ellipsis said the same thing taking up
     /// more space — and in a footer where everything elides, space is the resource.
+    ///
+    /// THE SET IS PART OF IT (`SUPER ALT-`, `SUPER CTRL s n-`): the same `s n`
+    /// runs a different thing in each set, and the chord on screen is the one
+    /// place that says which tree the next key walks.
     #[must_use]
     pub fn prefix(&self, trigger: &str) -> String {
-        if self.sequence.is_empty() {
-            format!("{trigger}-")
-        } else {
-            format!("{trigger} {}-", ronoctua_keymap::notation(&self.sequence))
-        }
+        format!("{}-", self.raw_prefix(trigger))
     }
 
     /// The typed sequence, WITHOUT the continuation ellipsis.
@@ -526,36 +1027,40 @@ impl Leader {
     /// destination. Two readings, two functions.
     #[must_use]
     pub fn raw_prefix(&self, trigger: &str) -> String {
+        let head = self.head(trigger);
         if self.sequence.is_empty() {
-            trigger.to_owned()
+            head
         } else {
-            format!("{trigger} {}", ronoctua_keymap::notation(&self.sequence))
+            format!("{head} {}", ronoctua_keymap::notation(&self.sequence))
         }
     }
 
-    /// Activates the leader from scratch.
+    /// Activates the leader from scratch, in the default set.
     pub fn activate(&mut self) {
         self.active_one = true;
         self.sequence.clear();
+        self.set = Set::Footer;
     }
 
     /// Switches it off.
     pub fn finish(&mut self) {
         self.active_one = false;
         self.sequence.clear();
+        self.set = Set::Footer;
     }
 
-    /// Processes a key while the leader is active.
+    /// Processes a key while the leader is active, in the tree of its set.
     ///
     /// `ESC` **always** ends it, even if there is a binding for it. Section
     /// 7.4 puts that as a rule: there has to be an exit that works
     /// without the user knowing what state they are in.
-    pub fn key(&mut self, tree: &Tree, t: ronoctua_keymap::Key) -> Effect {
+    pub fn key(&mut self, trees: &Trees, t: ronoctua_keymap::Key) -> Effect {
         if t.sym == ronoctua_keymap::Sym::Esc {
             self.finish();
             return Effect::Close { other_case: None };
         }
 
+        let tree = trees.of(self.set);
         self.sequence.push(t);
         match tree.resolve(&self.sequence) {
             ronoctua_keymap::Resolution::Command(id, argument) => {
@@ -740,6 +1245,19 @@ pub const BY_NAME_ONLY: &[&str] = &[
     "kiosk-tab",
     "kiosk-tab-move",
     "kiosk-extension",
+    // THE LEADER'S TWO OTHER SETS. Their key is a TAP of `Alt` or `Ctrl` after
+    // the leader, which is no sequence — a modifier alone never enters the
+    // tree — and they are commands so the pointer can click the hint that
+    // teaches the tap, and `LEADER :` can open the leader in either set.
+    "leader-set-window",
+    "leader-set-full",
+    // THE FOOTER'S HIDDEN MODES: their key is the LEADER itself, pressed again
+    // at the root (`crate::hidden`), which no tree can hold — the leader is
+    // the compositor's bind, not a key of the sequence. The root's list
+    // grafts a row that runs them (`hidden::bars_row`), and `LEADER :`
+    // reaches both by name.
+    "footer-hide-push",
+    "footer-hide-cover",
 ];
 
 /// And for the button a standing notice offers.
@@ -767,15 +1285,20 @@ pub const STATE_KEY: &str = "s";
 /// A constant for the reason the two above are, and the one every sequence a
 /// sentence names keeps: a sentence once carried these keys as TEXT, and went
 /// on teaching `n h` after the key became `n n`. What a sentence names is an
-/// argument read from the constant the binding reads (`keys-are-never-text`).
+/// argument, never text (`keys-are-never-text`) — and since the leader has
+/// three sets, it is [`taught_keys`]' answer and not the full tree's
+/// sequence: in the default set `n` alone is the manager.
 pub const NOTIF_OPEN_KEYS: &str = "n n";
 
-/// The two sequences that answer a pairing question from anywhere.
+/// The two sequences that answer a pairing question from anywhere, in the
+/// full tree — the binding reads them.
 ///
 /// The card that carries the question lives twenty seconds and the question
-/// lives fifty-five, so the body names these — and names them as ARGUMENTS,
-/// resolved through `crate::leader()`, for the reason [`NOTIF_OPEN_KEYS`]
-/// gives.
+/// lives fifty-five, so the body names the keys — as ARGUMENTS, resolved
+/// through `crate::leader()`, for the reason [`NOTIF_OPEN_KEYS`] gives. What
+/// it names is [`taught_keys`]'s answer for the command and not this
+/// constant: `s b` is the radio itself in the default set, so from there the
+/// answer is `CTRL s b y`.
 pub const PAIRING_YES_KEYS: &str = "s b y";
 
 /// The refusal's half of [`PAIRING_YES_KEYS`].
@@ -835,7 +1358,7 @@ pub fn condensed_root(entries: Vec<ronoctua_keymap::Entry>) -> Vec<ronoctua_keym
 /// How the condensed row of workspace digits is written in the list.
 pub const RANGE_ROW: &str = "1…9";
 
-pub fn default_of() -> Result<(Tree, Registry)> {
+pub fn default_of() -> Result<(Trees, Registry)> {
     // Labels are text KEYS (invariant 8), and they come from the CONSTANTS
     // generated from `assets/i18n/*.ftl`. Writing the string by hand would compile and
     // would lose the guarantee; with the constant, a key that does not exist is a compile
@@ -904,6 +1427,17 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "mx-open",
             label: key::CMD_MX_OPEN,
+        },
+        // THE LEADER'S OTHER TWO SETS — what a tap of `Alt` or `Ctrl` does
+        // right after the leader, as commands for the pointer and for
+        // `LEADER :`. See [`Set`].
+        Command {
+            id: "leader-set-window",
+            label: key::CMD_LEADER_SET_WINDOW,
+        },
+        Command {
+            id: "leader-set-full",
+            label: key::CMD_LEADER_SET_FULL,
         },
         Command {
             id: "buffer-terminal",
@@ -2202,9 +2736,10 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         },
         // ---------------------------------------------------------------
         // THE THEME CHOOSER — `LEADER s t`. Two commands: the one that opens
-        // the list, and the one the list's `RET` runs. Moving the cursor
-        // PREVIEWS the theme in the footer; `theme-apply` is what writes it,
-        // and the write is what reaches the other doors (see `theme.rs`).
+        // the lists, and the one their `RET` runs. Moving a cursor PREVIEWS
+        // the whole choice everywhere — a preview writes the file, and the
+        // file is what reaches the other doors (`theme::show_everywhere`);
+        // `theme-apply` is what makes it the choice `Esc` no longer undoes.
         // No `theme-next`: `check-keymap` refuses a command with no key, and a
         // key outside the list would cycle a palette nobody can see the name of.
         // ---------------------------------------------------------------
@@ -2639,6 +3174,17 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "modeline-adapt-kiosk",
             label: key::CMD_MODELINE_ADAPT_KIOSK,
         },
+        // THE BARS HIDDEN, one way or the other, or shown again — see
+        // `crate::hidden`. By name only (`BY_NAME_ONLY`): the key is the
+        // leader pressed again at the root.
+        Command {
+            id: "footer-hide-push",
+            label: key::CMD_FOOTER_HIDE_PUSH,
+        },
+        Command {
+            id: "footer-hide-cover",
+            label: key::CMD_FOOTER_HIDE_COVER,
+        },
         Command {
             id: "kiosk-list-down",
             label: key::CMD_KIOSK_LIST_DOWN,
@@ -2966,8 +3512,8 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // THE TWO ANSWERS, reachable from anywhere: a pairing question can
         // arrive while one is somewhere else entirely, and the two keys that
         // answer it are the brain's `b a`/`b p` arrangement.
-        ("s b y", "bluetooth-accept", None),
-        ("s b n", "bluetooth-refuse", None),
+        (PAIRING_YES_KEYS, "bluetooth-accept", None),
+        (PAIRING_NO_KEYS, "bluetooth-refuse", None),
         // `t` for theme, under `s` because a theme is the SYSTEM's skin and not
         // any one buffer's: the same drawer as memory, format and the brain.
         ("s t", "theme-open", None),
@@ -3243,16 +3789,19 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         .map(|(seq, label)| parse_sequence(seq).map(|sequence| GroupNode { sequence, label }))
         .collect();
 
-    let tree = Tree::build_it(&bindings, &groups?).map_err(|collisions| {
+    // THE THREE SETS, each built and each verified: `BINDINGS` and `GROUPS`
+    // are the full tree as written, and the other two are derived from it
+    // (`collapse`) — see `Set` for why there are three.
+    let trees = Trees::build(&bindings, &groups?).map_err(|collisions| {
         let list = collisions
             .iter()
-            .map(|c| format!("  - {c}"))
+            .map(|(set, c)| format!("  - in the {set:?} set: {c}"))
             .collect::<Vec<_>>()
             .join("\n");
         anyhow::anyhow!("the default keymap has a collision:\n{list}")
     })?;
 
-    Ok((tree, registry))
+    Ok((trees, registry))
 }
 
 /// The launcher's own key: put the focused application on the file manager's
@@ -3280,8 +3829,11 @@ pub const SOFTWARE_TRIALS_KEYS: &str = "i t";
 /// for the system's own programs.
 pub const APPS_KEYS: &str = "a";
 
-/// The transfer queue's footer panel, BESIDE its binding — every order the
-/// software view sends says where it can be watched.
+/// The transfer queue's footer panel, BESIDE its binding, in the full tree.
+///
+/// What a sentence teaches is NOT this constant but [`taught_keys`]'s answer
+/// for `transfers-open`: `t` is the queue itself in the default set, and
+/// `t t` typed there is the queue and then a key that leads nowhere.
 pub const TRANSFERS_KEYS: &str = "t t";
 
 /// The brain's page, BESIDE its binding — where the automatic updates are.
@@ -3676,7 +4228,7 @@ mod tests {
         // is only an example of a first-level binding; the icons' `i` was it
         // until `m` became the drawer they moved into.
         assert!(matches!(
-            tree.resolve(&[with_alt]),
+            tree.footer.resolve(&[with_alt]),
             ronoctua_keymap::Resolution::Nothing
         ));
 
@@ -3731,7 +4283,7 @@ mod tests {
         // what it says — which is how a check stops verifying.
         let (tree, registry) = default_of().expect("the default keymap has to close");
 
-        assert!(tree.amount() > 0, "an empty keymap");
+        assert!(tree.full.amount() > 0, "an empty keymap");
 
         // NO ORPHAN COMMAND: every command in the registry has SOME key path
         // to it.
@@ -3747,7 +4299,7 @@ mod tests {
         // What still holds, and is what matters: no command with no
         // path at all. Being reachable by `M-x` alone is not enough — a command that only
         // gets typed is a command only whoever read the code knows exists.
-        let reachable = super::reachable(&tree);
+        let reachable = super::reachable(&tree.full);
         for c in registry.all_ones() {
             assert!(!c.id.is_empty(), "a command with no id");
             assert!(!c.label.is_empty(), "a command with no label key");
@@ -3831,8 +4383,8 @@ mod tests {
         assert!(!l.active_one());
     }
 
-    /// FAILS IF: the file manager stops being a submenu of `.`, or `f` comes
-    /// back.
+    /// FAILS IF: the file manager stops being a submenu of `.` in the full
+    /// tree, stops being `.` itself in the other two, or `f` comes back.
     ///
     /// The owner asked for the shape in as many words — *"não quero que
     /// `LEADER f` exista; quero que `LEADER .` seja um submenu; `LEADER . .`
@@ -3840,41 +4392,55 @@ mod tests {
     /// janela"*. Before it, one thing was reachable by `.`, by `f f` and — the
     /// window — by `f w`.
     ///
-    /// It also pins the half that is easy to lose: `.` ALONE must no longer
-    /// run anything. A prefix that also executes runs a command while somebody
-    /// is still typing, which is the rule `keymap` refuses in writing and the
-    /// reason the doubled key exists at all.
+    /// AND THEN FOR THE THREE SETS (2026-09-28): the submenu is still there,
+    /// whole, after a tap of `Ctrl`; the leader alone runs the footer's door on
+    /// `.`, and after a tap of `Alt` the same `.` is the window. In the full
+    /// tree `.` ALONE still runs nothing — a prefix that also executed would
+    /// run a command while somebody is still typing, which is the rule the
+    /// keymap refuses in writing.
     #[test]
     fn the_manager_is_a_submenu_of_the_dot() {
-        let (tree, _) = default_of().unwrap();
-        let walk = |seq: &[char]| {
+        let (trees, _) = default_of().unwrap();
+        let walk = |set: Set, seq: &[char]| {
             let mut l = Leader::default();
             l.activate();
+            assert!(l.set(set), "the set could not be chosen at the root");
             let mut last = Effect::Close { other_case: None };
             for c in seq {
-                last = l.key(&tree, Key::simple(Sym::Char(*c)));
+                last = l.key(&trees, Key::simple(Sym::Char(*c)));
             }
             last
         };
-        assert_eq!(walk(&['.', '.']), Effect::Run("files-open", None));
-        assert_eq!(walk(&['.', 'w']), Effect::Run("files-window", None));
-        // `.` ALONE IS A GROUP NOW, so it runs nothing and stays open.
-        assert!(
-            !matches!(walk(&['.']), Effect::Run(..)),
-            "`.` still executes, so it cannot honestly be a prefix"
+        assert_eq!(
+            walk(Set::Full, &['.', '.']),
+            Effect::Run("files-open", None)
         );
-        // AND `f` LEADS NOWHERE, which is what "I do not want it to exist"
-        // means: not a group with nothing in it, not a key that runs the
-        // manager by another road.
-        assert!(
-            !matches!(walk(&['f']), Effect::Run(..)),
-            "`f` runs something"
+        assert_eq!(
+            walk(Set::Full, &['.', 'w']),
+            Effect::Run("files-window", None)
         );
-        for c in ['f', 'w'] {
+        // `.` ALONE IS A GROUP in the full tree, so it runs nothing there.
+        assert!(
+            !matches!(walk(Set::Full, &['.']), Effect::Run(..)),
+            "`.` executes in the full tree, so it cannot honestly be a prefix there"
+        );
+        // AND IS EACH DOOR in the other two.
+        assert_eq!(walk(Set::Footer, &['.']), Effect::Run("files-open", None));
+        assert_eq!(walk(Set::Window, &['.']), Effect::Run("files-window", None));
+        // `f` LEADS NOWHERE, in any set — which is what "I do not want it to
+        // exist" means: not a group with nothing in it, not a key that runs
+        // the manager by another road.
+        for set in Set::ALL {
             assert!(
-                !matches!(walk(&['f', c]), Effect::Run(..)),
-                "`f {c}` still reaches a command"
+                !matches!(walk(set, &['f']), Effect::Run(..)),
+                "`f` runs something in the {set:?} set"
             );
+            for c in ['f', 'w'] {
+                assert!(
+                    !matches!(walk(set, &['f', c]), Effect::Run(..)),
+                    "`f {c}` still reaches a command in the {set:?} set"
+                );
+            }
         }
     }
 
@@ -3928,20 +4494,23 @@ mod tests {
     }
 
     /// FAILS IF: the keys the line under the modeline prints to leave an
-    /// overview stop being the keys that do it.
+    /// overview stop being the keys that do it — in ANY of the three sets:
+    /// the line prints them after the leader alone, and `TAB` folds in none.
     #[test]
     fn the_keys_printed_to_leave_an_overview_are_bound() {
-        let (tree, _) = default_of().unwrap();
-        for (keys, wanted) in [
-            (EVERY_WORKSPACE_KEYS, "workspace-all"),
-            (OVERVIEW_KEYS, "workspace-overview"),
-            ("TAB a", "workspace-all"),
-        ] {
-            let seq = parse_sequence(keys).unwrap();
-            assert!(
-                matches!(tree.resolve(&seq), ronoctua_keymap::Resolution::Command(id, None) if id == wanted),
-                "`{keys}` is not `{wanted}`"
-            );
+        let (trees, _) = default_of().unwrap();
+        for set in Set::ALL {
+            for (keys, wanted) in [
+                (EVERY_WORKSPACE_KEYS, "workspace-all"),
+                (OVERVIEW_KEYS, "workspace-overview"),
+                ("TAB a", "workspace-all"),
+            ] {
+                let seq = parse_sequence(keys).unwrap();
+                assert!(
+                    matches!(trees.of(set).resolve(&seq), ronoctua_keymap::Resolution::Command(id, None) if id == wanted),
+                    "`{keys}` is not `{wanted}` in the {set:?} set"
+                );
+            }
         }
     }
 
@@ -3950,7 +4519,9 @@ mod tests {
     /// sentences teach it by stops being the key that runs it.
     #[test]
     fn the_dev_group_is_d_and_the_glance_is_g() {
-        let (tree, _) = default_of().unwrap();
+        // THE DEFAULT SET, which is where a sequence starts; `d` folds in none.
+        let (trees, _) = default_of().unwrap();
+        let tree = &trees.footer;
         let runs = |keys: &str| match tree.resolve(&parse_sequence(keys).unwrap()) {
             ronoctua_keymap::Resolution::Command(id, None) => Some(id),
             _ => None,
@@ -3976,7 +4547,7 @@ mod tests {
     #[test]
     fn the_nine_digits_are_one_row_whose_click_opens_the_workspaces() {
         let (tree, _) = default_of().unwrap();
-        let ronoctua_keymap::Resolution::Prefix(root) = tree.resolve(&[]) else {
+        let ronoctua_keymap::Resolution::Prefix(root) = tree.footer.resolve(&[]) else {
             panic!("the root is not a list");
         };
         let shown = condensed_root(root.clone());
@@ -4075,6 +4646,462 @@ mod tests {
         // Without the ellipsis: in an error message it would lie, because
         // there the sequence has ended and there is no continuation.
         assert_eq!(l.raw_prefix("SPC"), "SPC s");
+    }
+
+    /// FAILS IF: the chord on screen stops saying which set the next key
+    /// walks — `SUPER ALT-`, `SUPER CTRL s n-` — or the default set grows a
+    /// word of its own.
+    #[test]
+    fn the_prefix_names_the_set() {
+        let (trees, _) = default_of().unwrap();
+        let mut l = Leader::default();
+        l.activate();
+        assert!(l.set(Set::Window));
+        assert_eq!(l.prefix("SUPER"), format!("SUPER {WINDOW_SET_KEY}-"));
+        assert_eq!(l.raw_prefix("SUPER"), format!("SUPER {WINDOW_SET_KEY}"));
+        // THE LAST TAP WINS, while nothing has been typed.
+        assert!(l.set(Set::Full));
+        l.key(&trees, Key::simple(Sym::Char('s')));
+        l.key(&trees, Key::simple(Sym::Char('n')));
+        assert_eq!(l.prefix("SUPER"), format!("SUPER {FULL_SET_KEY} s n-"));
+        assert_eq!(l.raw_prefix("SUPER"), format!("SUPER {FULL_SET_KEY} s n"));
+        // AND THE DEFAULT IS THE LEADER ALONE, from every opening.
+        l.activate();
+        assert_eq!(l.set_now(), Set::Footer);
+        assert_eq!(l.prefix("SUPER"), "SUPER-");
+    }
+
+    /// FAILS IF: the set can be switched anywhere but the root of an open
+    /// leader — halfway through `s n` the keys already typed would change
+    /// meaning under the hand that typed them.
+    #[test]
+    fn the_set_switches_only_at_the_root() {
+        let (trees, _) = default_of().unwrap();
+        let mut l = Leader::default();
+        assert!(!l.set(Set::Window), "a closed leader took a set");
+        assert_eq!(l.set_now(), Set::Footer);
+        l.activate();
+        assert!(l.set(Set::Window));
+        assert_eq!(l.set_now(), Set::Window);
+        assert!(matches!(
+            l.key(&trees, Key::simple(Sym::Char('s'))),
+            Effect::Continue { .. }
+        ));
+        assert!(!l.set(Set::Full), "the set switched with `s` typed");
+        assert_eq!(l.set_now(), Set::Window);
+        // AND IT IS WHAT THE NEXT KEY WALKS: `s n` in the window set is the
+        // network's window.
+        assert_eq!(
+            l.key(&trees, Key::simple(Sym::Char('n'))),
+            Effect::Run("network-window", None)
+        );
+        // ENDING THE SEQUENCE puts the default back.
+        assert_eq!(l.set_now(), Set::Footer);
+    }
+
+    /// A binding for the rule's own tests — a CALL and not a tuple, so the
+    /// made-up ids here are not read as keys of the real table by the checks
+    /// that sweep this file for `("seq", "id"` rows.
+    fn bind(seq: &str, command: &'static str) -> Binding {
+        Binding {
+            sequence: parse_sequence(seq).unwrap(),
+            command,
+            label: "x",
+            argument: None,
+        }
+    }
+
+    fn group(seq: &str) -> GroupNode {
+        GroupNode {
+            sequence: parse_sequence(seq).unwrap(),
+            label: "x",
+        }
+    }
+
+    /// FAILS IF: the rule folds a group it should not — one door, one
+    /// binding answering for both, the same command twice — or keeps one it
+    /// should fold, or a fold inside a fold survives its outer one.
+    #[test]
+    fn a_group_folds_when_it_has_two_different_doors() {
+        let bindings = [
+            bind("a a", "a-footer"),
+            bind("a w", "a-window"),
+            bind("a x", "a-other"),
+            // `w`'s doubled key IS its `w`: one binding, not two doors.
+            bind("w w", "w-both"),
+            // AND UNDER `w` THE LETTER `w` IS NO DOOR: a level of the window
+            // menu with two deeds that happen to sit on `v` and `w`.
+            bind("w v v", "v-one"),
+            bind("w v w", "v-other"),
+            // ONE DOOR.
+            bind("b b", "b-footer"),
+            bind("b x", "b-other"),
+            // TWO KEYS, ONE COMMAND.
+            bind("c c", "c-same"),
+            bind("c w", "c-same"),
+            // A FOLD INSIDE A FOLD.
+            bind("d d", "d-footer"),
+            bind("d w", "d-window"),
+            bind("d e e", "e-footer"),
+            bind("d e w", "e-window"),
+        ];
+        let groups = [
+            group("a"),
+            group("w"),
+            group("w v"),
+            group("b"),
+            group("c"),
+            group("d"),
+            group("d e"),
+        ];
+        let folded: Vec<String> = folds(&bindings, &groups)
+            .iter()
+            .map(|f| ronoctua_keymap::notation(&f.group))
+            .collect();
+        assert_eq!(folded, ["a", "d", "d e"]);
+
+        let tree = |set| {
+            let (b, g) = collapse(&bindings, &groups, set);
+            Tree::build_it(&b, &g).expect("a folded tree collides")
+        };
+        let runs = |t: &Tree, keys: &str| t.resolve(&parse_sequence(keys).unwrap());
+        let (footer, window, full) = (tree(Set::Footer), tree(Set::Window), tree(Set::Full));
+        use ronoctua_keymap::Resolution::{Command, Nothing, Prefix};
+        assert_eq!(runs(&footer, "a"), Command("a-footer", None));
+        assert_eq!(runs(&window, "a"), Command("a-window", None));
+        // EVERYTHING UNDER A FOLD LEAVES THE SET, and the fold inside it with it.
+        assert_eq!(runs(&footer, "a x"), Nothing);
+        assert_eq!(runs(&footer, "d"), Command("d-footer", None));
+        assert_eq!(runs(&window, "d"), Command("d-window", None));
+        assert_eq!(runs(&footer, "d e"), Nothing);
+        // WHAT DOES NOT FOLD IS THE SAME IN ALL THREE.
+        for t in [&footer, &window, &full] {
+            assert_eq!(runs(t, "w w"), Command("w-both", None));
+            assert_eq!(runs(t, "w v w"), Command("v-other", None));
+            assert_eq!(runs(t, "b b"), Command("b-footer", None));
+            assert_eq!(runs(t, "c w"), Command("c-same", None));
+            assert!(matches!(runs(t, "b"), Prefix(_)));
+        }
+        // AND THE FULL SET IS THE TABLE AS WRITTEN.
+        assert!(matches!(runs(&full, "a"), Prefix(_)));
+        assert_eq!(runs(&full, "a x"), Command("a-other", None));
+        assert_eq!(runs(&full, "d e e"), Command("e-footer", None));
+    }
+
+    /// FAILS IF: a group folds that did not, or stops folding — the rule's
+    /// answer over the real tables, pinned. A group added tomorrow that keeps
+    /// the two-door convention lands here on purpose, and whoever adds it
+    /// reads why: `LEADER` alone then runs its footer door and `LEADER Alt`
+    /// its window.
+    ///
+    /// `w` is NOT here (its doubled key is its `w`), nor any level of the
+    /// window menu under it (`w v` has `w v v` and `w v w`, two deeds and no
+    /// doors), nor `RET`, `TAB`, `TAB m` or `s q` (one door each), nor `m`,
+    /// `m i`, `s`, `d` or `t i` (no door of their own).
+    #[test]
+    fn the_collapsed_groups_are_these() {
+        use ronoctua_keymap::Resolution;
+        let (trees, _) = default_of().unwrap();
+        // EVERY GROUP OF THE FULL TREE, walked from the root.
+        let mut groups: Vec<Vec<Key>> = Vec::new();
+        let mut edge: Vec<Vec<Key>> = vec![Vec::new()];
+        while let Some(at) = edge.pop() {
+            let Resolution::Prefix(entries) = trees.full.resolve(&at) else {
+                continue;
+            };
+            for e in entries.iter().filter(|e| e.is_group) {
+                let mut seq = at.clone();
+                seq.push(e.sym);
+                groups.push(seq.clone());
+                edge.push(seq);
+            }
+        }
+        let command = |set: Set, seq: &[Key]| match trees.of(set).resolve(seq) {
+            Resolution::Command(id, None) => Some(id),
+            _ => None,
+        };
+        let mut folded: Vec<(String, &str, &str)> = groups
+            .iter()
+            .filter_map(|g| {
+                Some((
+                    ronoctua_keymap::notation(g),
+                    command(Set::Footer, g)?,
+                    command(Set::Window, g)?,
+                ))
+            })
+            .collect();
+        folded.sort_unstable();
+        let mut wanted: Vec<(String, &str, &str)> = [
+            (".", "files-open", "files-window"),
+            ("p", "player-open", "player-window"),
+            ("t", "transfers-open", "transfers-window"),
+            ("n", "notif-open", "notif-window"),
+            ("i", "software-open", "software-window"),
+            ("s h", "atuin-open", "atuin-window"),
+            ("s n", "network-open", "network-window"),
+            ("s s", "syncthing-open", "syncthing-window"),
+            ("s d", "display-open", "display-window"),
+            ("s a", "audio-open", "audio-window"),
+            ("s c", "camera-settings-open", "camera-settings-window"),
+            ("s i", "pointers-open", "pointers-window"),
+            ("s p", "power-open", "power-window"),
+            ("s b", "bluetooth-open", "bluetooth-window"),
+            ("s l", "locale-open", "locale-window"),
+            ("s g", "geo-open", "geo-window"),
+            ("s u", "update-open", "update-watch"),
+        ]
+        .into_iter()
+        .map(|(g, f, w)| (g.to_owned(), f, w))
+        .collect();
+        wanted.sort_unstable();
+        assert_eq!(folded, wanted);
+        // A GROUP FOLDS IN BOTH SETS OR IN NEITHER: a key that is a command
+        // in one and a list in the other would be a third rule nobody wrote.
+        for g in &groups {
+            assert_eq!(
+                command(Set::Footer, g).is_some(),
+                command(Set::Window, g).is_some(),
+                "`{}` folds in one set only",
+                ronoctua_keymap::notation(g)
+            );
+        }
+    }
+
+    /// FAILS IF: the full set stops being the whole tree, or a folded key
+    /// keeps its submenu in the default set.
+    #[test]
+    fn the_three_trees_are_the_three_sets() {
+        use ronoctua_keymap::Resolution;
+        let (trees, _) = default_of().unwrap();
+        let resolve = |set: Set, keys: &str| trees.of(set).resolve(&parse_sequence(keys).unwrap());
+        assert_eq!(
+            resolve(Set::Footer, "s n"),
+            Resolution::Command("network-open", None)
+        );
+        assert_eq!(
+            resolve(Set::Window, "s n"),
+            Resolution::Command("network-window", None)
+        );
+        assert!(matches!(resolve(Set::Full, "s n"), Resolution::Prefix(_)));
+        // THE REST OF A FOLDED GROUP is one tap of `Ctrl` away, and only there.
+        assert_eq!(
+            resolve(Set::Full, "s n a"),
+            Resolution::Command("network-airplane", None)
+        );
+        assert_eq!(resolve(Set::Footer, "s n a"), Resolution::Nothing);
+        // WHAT DOES NOT FOLD IS EVERYWHERE — the window's own letter included.
+        for set in Set::ALL {
+            assert_eq!(
+                resolve(set, "w f"),
+                Resolution::Command("window-screen-full", None)
+            );
+            assert_eq!(
+                resolve(set, "RET RET"),
+                Resolution::Command("buffer-terminal-external", None)
+            );
+            assert!(matches!(resolve(set, "s"), Resolution::Prefix(_)));
+        }
+        // THE FULL SET IS STRICTLY BIGGER: it lost nothing to the folding.
+        assert!(trees.full.amount() > trees.footer.amount());
+        assert!(trees.full.amount() > trees.window.amount());
+    }
+
+    /// FAILS IF: a sentence would teach a key that does something else when
+    /// typed from where every sequence starts.
+    #[test]
+    fn the_taught_keys_start_in_the_default_set() {
+        let (trees, _) = default_of().unwrap();
+        let taught = |id: &str| taught_keys(&trees, id, None);
+        // THE FOOTER'S OWN SEQUENCE, when it has one.
+        assert_eq!(taught("transfers-open").as_deref(), Some("t"));
+        assert_eq!(taught("notif-open").as_deref(), Some("n"));
+        assert_eq!(taught("window-screen-full").as_deref(), Some("w f"));
+        assert_eq!(taught("apps-open").as_deref(), Some(APPS_KEYS));
+        assert_eq!(taught("brain-open").as_deref(), Some(BRAIN_KEYS));
+        // ELSE THE WINDOW SET'S, after its key.
+        assert_eq!(taught("files-window"), Some(format!("{WINDOW_SET_KEY} .")));
+        // ELSE THE FULL TREE'S.
+        assert_eq!(
+            taught("bluetooth-accept"),
+            Some(format!("{FULL_SET_KEY} {PAIRING_YES_KEYS}"))
+        );
+        assert_eq!(
+            taught("software-trials"),
+            Some(format!("{FULL_SET_KEY} {SOFTWARE_TRIALS_KEYS}"))
+        );
+        // AND THE ARGUMENT IS PART OF THE COMMAND.
+        assert_eq!(
+            taught_keys(&trees, "workspace-go", Some("3")).as_deref(),
+            Some("3")
+        );
+        assert_eq!(taught("mx-does-not-exist"), None);
+    }
+
+    /// FAILS IF: a modifier held while the POINTER acts — a Ctrl-click on a
+    /// hint, a Ctrl-wheel over the list, a finger down — counts as a tap
+    /// when it comes up, or a tap after the pointer acted stops counting.
+    #[test]
+    fn a_modifier_held_while_the_pointer_acts_is_no_tap() {
+        use smithay_client_toolkit::seat::keyboard::Keysym;
+        for sym in [Keysym::Control_L, Keysym::Alt_L] {
+            let mut t = Tap::default();
+            t.pressed(sym);
+            t.pointer_acted();
+            assert_eq!(t.released(sym), None, "{sym:?}: a chord with the hand");
+        }
+        // THE POINTER BEFORE THE PRESS takes nothing from the tap after it.
+        let mut t = Tap::default();
+        t.pointer_acted();
+        t.pressed(Keysym::Alt_L);
+        assert_eq!(t.released(Keysym::Alt_L), Some(Set::Window));
+        // AND THE ON-SCREEN KEYBOARD'S TAP chooses what the keys choose.
+        use crate::osk::Modifier;
+        assert_eq!(set_of_osk_tap(Modifier::Alt), Some(Set::Window));
+        assert_eq!(set_of_osk_tap(Modifier::Ctrl), Some(Set::Full));
+        for other in [Modifier::Shift, Modifier::AltGr, Modifier::Super] {
+            assert_eq!(set_of_osk_tap(other), None, "{other:?}");
+        }
+    }
+
+    /// FAILS IF: a tap stops being a tap — a chord counts, a release with no
+    /// press counts, `AltGr` is taken for `Alt`, or `Control_R` held for the
+    /// paging arrows switches the set when it is let go.
+    #[test]
+    fn only_a_clean_tap_switches_the_set() {
+        use smithay_client_toolkit::seat::keyboard::Keysym;
+        let tapped = |keys: &[(bool, Keysym)]| {
+            let mut t = Tap::default();
+            let mut last = None;
+            for (down, sym) in keys {
+                if *down {
+                    t.pressed(*sym);
+                } else {
+                    last = t.released(*sym);
+                }
+            }
+            last
+        };
+        // A CLEAN TAP, either hand.
+        assert_eq!(
+            tapped(&[(true, Keysym::Alt_L), (false, Keysym::Alt_L)]),
+            Some(Set::Window)
+        );
+        assert_eq!(
+            tapped(&[(true, Keysym::Alt_R), (false, Keysym::Alt_R)]),
+            Some(Set::Window)
+        );
+        assert_eq!(
+            tapped(&[(true, Keysym::Control_L), (false, Keysym::Control_L)]),
+            Some(Set::Full)
+        );
+        // THE RIGHT CTRL TAPPED ALONE is a tap too...
+        assert_eq!(
+            tapped(&[(true, Keysym::Control_R), (false, Keysym::Control_R)]),
+            Some(Set::Full)
+        );
+        // ...and HELD WITH AN ARROW it is the paging chord, and no tap.
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::Control_R),
+                (true, Keysym::Right),
+                (false, Keysym::Right),
+                (false, Keysym::Control_R),
+            ]),
+            None
+        );
+        // A KEY IN BETWEEN is a chord.
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::Alt_L),
+                (true, Keysym::n),
+                (false, Keysym::Alt_L),
+            ]),
+            None
+        );
+        // A RELEASE WITH NO PRESS: the leader's own `Ctrl` and `Alt` in the
+        // nested loop, pressed before the footer had the keyboard.
+        assert_eq!(
+            tapped(&[(false, Keysym::Control_L), (false, Keysym::Alt_L)]),
+            None
+        );
+        // TWO MODIFIERS AT ONCE is a chord.
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::Control_L),
+                (true, Keysym::Alt_L),
+                (false, Keysym::Alt_L),
+                (false, Keysym::Control_L),
+            ]),
+            None
+        );
+        // `AltGr` IS NOT `Alt`.
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::ISO_Level3_Shift),
+                (false, Keysym::ISO_Level3_Shift),
+            ]),
+            None
+        );
+        // A REPEAT OF THE SAME MODIFIER is still one tap.
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::Alt_L),
+                (true, Keysym::Alt_L),
+                (false, Keysym::Alt_L),
+            ]),
+            Some(Set::Window)
+        );
+        // AND A TAP AFTER A TAP: each release answers its own.
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::Alt_L),
+                (false, Keysym::Alt_L),
+                (true, Keysym::Control_L),
+                (false, Keysym::Control_L),
+            ]),
+            Some(Set::Full)
+        );
+    }
+
+    /// FAILS IF: the leader's hint at the root stops teaching the taps as
+    /// clicks — the pointer has no other way to a set (invariant 19) — or
+    /// teaches a set the leader is already in.
+    #[test]
+    fn the_root_teaches_the_other_sets_as_clicks() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let keys = |set: Set| -> Vec<(String, Option<crate::chrome::Act>)> {
+            set_hint(set, &texts)
+                .into_iter()
+                .filter(crate::chrome::Piece::is_a_key)
+                .map(|p| (p.text, p.press))
+                .collect()
+        };
+        use crate::chrome::Act;
+        assert_eq!(
+            keys(Set::Footer),
+            [
+                (
+                    WINDOW_SET_KEY.to_owned(),
+                    Some(Act::Run("leader-set-window"))
+                ),
+                (FULL_SET_KEY.to_owned(), Some(Act::Run("leader-set-full"))),
+            ]
+        );
+        assert_eq!(
+            keys(Set::Window),
+            [(FULL_SET_KEY.to_owned(), Some(Act::Run("leader-set-full")))]
+        );
+        assert!(keys(Set::Full).is_empty());
+        // EVERY PIECE SAYS WHICH SHORTCUT IT IS, so the pointer resting on the
+        // words reads the command's sentence too — and the words are a word.
+        for p in set_hint(Set::Footer, &texts) {
+            if p.register == crate::chrome::Register::Separator {
+                continue;
+            }
+            let id = p.id.expect("a piece of a shortcut with no id");
+            assert!(texts.has(&format!("cmd-{id}")), "`{id}` has no sentence");
+            assert!(!p.text.contains('['), "a missing word: {}", p.text);
+        }
     }
 
     #[test]
@@ -4300,6 +5327,11 @@ mod tests {
             "keyboard-restore",
             "help",
             "mx-open",
+            // THE LEADER'S TWO OTHER SETS: no sequence reaches them (a tap
+            // is not a key of the tree), and the hint's click and `LEADER :`
+            // run them through `run_with`.
+            "leader-set-window",
+            "leader-set-full",
             "apps-open",
             "buffer-switch",
             "files-open",
@@ -4489,9 +5521,11 @@ mod tests {
             "kiosk-list-enter",
             "kiosk-tab-earlier",
             "kiosk-tab-later",
+            "footer-hide-push",
+            "footer-hide-cover",
         ];
         let (tree, registry) = default_of().unwrap();
-        for id in super::reachable(&tree) {
+        for id in super::reachable(&tree.full) {
             // The ones that are COMPOSITOR deeds go through the table,
             // consulted by id — and the generator proves, against the
             // compositor's own source, that every one of them exists.
@@ -4523,5 +5557,47 @@ mod tests {
                 "`{id}` is in the handled list and no longer exists"
             );
         }
+    }
+
+    /// FAILS IF: the list waits with the bars visible or when the pointer
+    /// opened the leader, or does not wait when a key opened it with the bars
+    /// hidden.
+    #[test]
+    fn the_list_waits_only_for_a_key_with_the_bars_hidden() {
+        assert_eq!(Patience::at_opening(true, true, 7), Patience::Waiting(7));
+        assert_eq!(Patience::at_opening(true, false, 7), Patience::Shown);
+        assert_eq!(Patience::at_opening(false, true, 7), Patience::Shown);
+        assert_eq!(Patience::at_opening(false, false, 7), Patience::Shown);
+        assert!(Patience::Waiting(1).withheld());
+        assert!(!Patience::Shown.withheld());
+    }
+
+    /// FAILS IF: a key does not start the wait again, a timer armed before
+    /// that key shows the list anyway, the right timer does not show it, or
+    /// a shown list goes back to waiting on a key.
+    #[test]
+    fn the_wait_counts_from_the_last_key() {
+        let mut p = Patience::at_opening(true, true, 1);
+        assert_eq!(p.after_a_key(2), Some(2));
+        // THE FIRST TIMER IS STALE: the key after it moved the count.
+        assert!(!p.ran_out(1));
+        assert!(p.withheld());
+        assert!(p.ran_out(2));
+        assert_eq!(p, Patience::Shown);
+        // ONCE SHOWN, EVERY LEVEL AFTER IT IS SHOWN AT ONCE.
+        assert_eq!(p.after_a_key(3), None);
+        assert!(!p.ran_out(3));
+        assert_eq!(p, Patience::Shown);
+    }
+
+    /// FAILS IF: a new leader opens in any set but the footer's, whatever set
+    /// the last sequence ended in.
+    #[test]
+    fn every_opening_is_in_the_footers_set() {
+        let mut l = Leader::default();
+        assert_eq!(l.set_now(), Set::Footer);
+        l.set = Set::Window;
+        l.activate();
+        assert_eq!(l.set_now(), Set::Footer);
     }
 }

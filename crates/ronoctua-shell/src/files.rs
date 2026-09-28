@@ -5378,17 +5378,34 @@ impl View {
     /// were already on disk under a key that said nothing about whether a
     /// waveform had been drawn into them. *"As waves continuam."*
     ///
-    /// So it carries the theme's position — a waveform and a lit shape are both
-    /// painted in token VALUES — AND the waveform's ink, which is NOT derived
-    /// from the theme: the grid passes none whatever the theme is, and that is
-    /// a decision of the caller's. Written as two spellings of one expression
-    /// it would drift, which is why the key and the ask both come through here.
-    fn grid_tint() -> String {
+    /// So it carries the PALETTE — a waveform and a lit shape are both painted
+    /// in token VALUES, and every theme is solved on four pages — AND the
+    /// waveform's ink, which is NOT derived from the theme: the grid passes
+    /// none whatever the theme is, and that is a decision of the caller's.
+    /// Written as two spellings of one expression it would drift, which is why
+    /// the key and the ask both come through here.
+    ///
+    /// # By id, and never by a number
+    ///
+    /// The palette went in as `theme::palette()`, a bare number, where the
+    /// theme's POSITION had been one — and the two count differently: the
+    /// pictures on disk filed under midnight's `4:` answered moss on the
+    /// chrome, which is also `4:`. The theme's id and the page's id cannot
+    /// meet a key written under the old rule, and survive a reorder of
+    /// `themes.nix` besides.
+    fn grid_tint_on(page: ronoctua_tokens::theme::Ground) -> String {
         format!(
-            "{}:{}",
-            ronoctua_tokens::theme::current().position(),
+            "{}.{}:{}",
+            ronoctua_tokens::theme::current().id(),
+            page.id(),
             Self::GRID_WAVE
         )
+    }
+
+    /// [`Self::grid_tint_on`] the page the process wears — the door's, or the
+    /// footer's pictures' page between its frames.
+    fn grid_tint() -> String {
+        Self::grid_tint_on(ronoctua_tokens::theme::ground())
     }
 
     /// How many cells the widest sidebar row wants.
@@ -7077,6 +7094,18 @@ impl View {
         n: usize,
         side: u32,
     ) -> Option<(String, ronoctua_inspect::Stamp, &'static str)> {
+        self.cell_key_on(n, side, ronoctua_tokens::theme::ground())
+    }
+
+    /// [`Self::cell_key`], on the page `page` — what a door that paints
+    /// several screens, each wearing its own page, looks its pictures up under
+    /// (`Footer::pictures_page`).
+    fn cell_key_on(
+        &self,
+        n: usize,
+        side: u32,
+        page: ronoctua_tokens::theme::Ground,
+    ) -> Option<(String, ronoctua_inspect::Stamp, &'static str)> {
         let i = *self.shown.get(n)?;
         let entry = self.entries.get(i)?;
         // A DIRECTORY HAS NOTHING TO LOOK INTO, and neither has a broken link:
@@ -7089,7 +7118,7 @@ impl View {
         Some((
             // THROUGH THE ONE KEY FUNCTION, which lives beside the map it keys
             // — see `thumbs::thumb_key`.
-            crate::thumbs::thumb_key(&stamp, &Self::grid_tint()),
+            crate::thumbs::thumb_key(&stamp, &Self::grid_tint_on(page)),
             stamp,
             // WHAT IT OPENS AS, and never what it is: a link to a film has a
             // film's thumbnail. See `View::opens`.
@@ -11836,7 +11865,17 @@ impl View {
     /// the box's size is therefore always drawn a little smaller than it was
     /// decoded — invisible until the box moves, and then a picture that changes
     /// size as it scrolls.
+    ///
+    /// # On the page they were asked for on
+    ///
+    /// `page` is the page the pictures were ASKED FOR on ([`Self::wants_thumbs`]
+    /// keys them by the page the process wears): a window's own, or the
+    /// footer's pictures' page — which is not every screen's, since each
+    /// screen of the footer wears its own while it is painted. Looked up under
+    /// the screen's page, the key was another key and the grid was drawn
+    /// without a picture.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn grid_pictures(
         &self,
         width: u16,
@@ -11845,6 +11884,7 @@ impl View {
         cell: f32,
         line: f32,
         top: f32,
+        page: ronoctua_tokens::theme::Ground,
     ) -> Vec<(String, ronoctua_render::image::Area)> {
         let Some(sec) = self.the_listing(width, room) else {
             return Vec::new();
@@ -11861,7 +11901,7 @@ impl View {
             let Some((from, to)) = sec.cells_of(row) else {
                 continue;
             };
-            let Some((key, _, _)) = self.cell_key(row, side) else {
+            let Some((key, _, _)) = self.cell_key_on(row, side, page) else {
                 continue;
             };
             let Some(rgba) = self.thumbs.get(&key) else {
@@ -14970,11 +15010,7 @@ impl View {
         // its key is missing from the GPU cache; a key that ignored the theme
         // would keep the old ink on screen after a switch, and the re-ask a
         // theme change makes would be paid for a picture nobody sees.
-        let key = format!(
-            "{}:{}",
-            stamp.key(),
-            ronoctua_tokens::theme::current().position()
-        );
+        let key = format!("{}:{}", stamp.key(), ronoctua_tokens::theme::palette());
         if self.asked.as_deref() == Some(key.as_str()) {
             return None;
         }
@@ -21568,7 +21604,11 @@ mod tests {
                 | crate::chrome::Register::Glyph
                 | crate::chrome::Register::Label
                 | crate::chrome::Register::Title
-                | crate::chrome::Register::ProseLit => {}
+                | crate::chrome::Register::ProseLit
+                // AND AN ACTION is an event's, on the minibuffer's line; the
+                // manager's hint never offers one.
+                | crate::chrome::Register::Action
+                | crate::chrome::Register::ActionLit => {}
             }
         }
         // AND NO COMMA IN ANY OF THE SENTENCES: on this line a comma reads as
@@ -23252,6 +23292,66 @@ mod tests {
     }
 
     #[test]
+    fn a_thumbnail_asked_on_a_page_is_found_on_that_page_and_named_by_ids() {
+        // THE FOOTER ASKED ON ONE PAGE AND LOOKED ON ANOTHER. Its screens wear
+        // a page each while they are painted, and the grid's pictures were
+        // asked for under whatever page the last screen left on and looked up
+        // under each screen's own — two keys for one picture, and a grid with
+        // none in it. The ask and the lookup take the page now, and agree on
+        // it: found on the page asked on, and on no other.
+        use ronoctua_tokens::theme::{self, Ground};
+        let dir = scratch("grade-pagina");
+        for name in ["a.mp3", "b.mp3", "c.mp3"] {
+            std::fs::write(dir.join(name), b"not really an mp3").unwrap();
+        }
+        let mut v = view_at(&dir);
+        v.reread();
+        v.key(of_view("C-g"));
+        let (cell, line) = (10.8, 26.1);
+        let asked = v.wants_thumbs(120, TALL, cell, line);
+        assert!(!asked.is_empty(), "no cell asked for a picture");
+        let worn = theme::ground();
+        for ask in &asked {
+            assert!(ask.key.ends_with(&View::grid_tint_on(worn)), "{}", ask.key);
+            v.thumbed(crate::thumbs::Made {
+                key: ask.key.clone(),
+                rgba: ronoctua_render::image::Rgba::new(2, 2, vec![0x80; 16]),
+                seconds: None,
+                inside: None,
+                again: false,
+                moves: false,
+            });
+        }
+        let found = v.grid_pictures(120, TALL, 1, cell, line, 0.0, worn);
+        assert_eq!(
+            found.len(),
+            asked.len(),
+            "a picture asked on {worn:?} was not found there"
+        );
+        for other in Ground::ALL.into_iter().filter(|g| *g != worn) {
+            assert!(
+                v.grid_pictures(120, TALL, 1, cell, line, 0.0, other)
+                    .is_empty(),
+                "a picture asked on {worn:?} answered {other:?}: its key does not carry the page"
+            );
+        }
+        // AND THE KEY NAMES THE THEME AND THE PAGE BY ID: never a bare number,
+        // so no picture filed under the old rule — the theme's position, then
+        // the palette's — is ever served under the new one.
+        for page in Ground::ALL {
+            let tint = View::grid_tint_on(page);
+            assert!(
+                tint.starts_with(&format!("{}.{}:", theme::current().id(), page.id())),
+                "{tint}"
+            );
+            for old in 0..theme::all().len() * Ground::ALL.len() {
+                assert_ne!(tint, format!("{old}:{}", View::GRID_WAVE));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_cell_asks_for_no_waveform_and_says_so_in_the_key() {
         // THE OWNER FOUND THIS ONE TWICE. The first time the grid was drawing
         // waveforms; that was fixed, and he checked again and they were still
@@ -23268,11 +23368,7 @@ mod tests {
         // each other's pictures back, and what tells them apart is this
         // string — the stamp cannot, because neither the file nor the size
         // moves when the RULE does.
-        let with_ink = format!(
-            "{}:{}",
-            ronoctua_tokens::theme::current().position(),
-            "#8A7FB8"
-        );
+        let with_ink = format!("{}:{}", ronoctua_tokens::theme::palette(), "#8A7FB8");
         assert_ne!(
             View::grid_tint(),
             with_ink,
@@ -23282,7 +23378,7 @@ mod tests {
         // is exactly the string the stale pictures on his disk carry.
         assert_ne!(
             View::grid_tint(),
-            ronoctua_tokens::theme::current().position().to_string(),
+            ronoctua_tokens::theme::palette().to_string(),
             "the key is the one the retired rule wrote its pictures under"
         );
         // AND THE ASK CARRIES THE SAME NOTHING the key promises: the two are

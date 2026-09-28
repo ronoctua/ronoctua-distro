@@ -473,19 +473,17 @@ mod tests {
         // key tables now, one shortcut per chunk, and nothing about them
         // passes through Fluent's arguments.
         let t = Texts::fresh("en-GB").unwrap();
-        let arg = [
-            ("apply", "C-a"),
-            ("left", "C-h"),
-            ("right", "C-l"),
-            ("close", "C-g"),
-        ];
+        let arg = [("apply", "C-a"), ("left", "C-h"), ("right", "C-l")];
         let m = t.t_marked(key::THEME_HINT, &arg);
         assert_eq!(m.text, t.t_with(key::THEME_HINT, &arg));
         let pieces = m.pieces();
         let rebuilt: String = pieces.iter().map(|(s, _)| *s).collect();
         assert_eq!(rebuilt, m.text, "the pieces have to be the sentence");
         let keys: Vec<&str> = pieces.iter().filter(|(_, k)| *k).map(|(s, _)| *s).collect();
-        assert_eq!(keys, vec!["C-a", "C-h", "C-l", "C-g"]);
+        // THREE, and not four: the chooser's own `Esc` left the sentence — the
+        // way back the region prepends to every hint is the one `Esc` a line
+        // shows (`chrome::with_the_way_back`).
+        assert_eq!(keys, vec!["C-a", "C-h", "C-l"]);
     }
 
     #[test]
@@ -521,17 +519,12 @@ mod tests {
         // offsets, and both are right.
         let en = Texts::fresh("en-GB").unwrap();
         let pt = Texts::fresh("pt-BR").unwrap();
-        let arg = [
-            ("apply", "C-a"),
-            ("left", "C-h"),
-            ("right", "C-l"),
-            ("close", "C-g"),
-        ];
+        let arg = [("apply", "C-a"), ("left", "C-h"), ("right", "C-l")];
         let a = en.t_marked(key::THEME_HINT, &arg);
         let b = pt.t_marked(key::THEME_HINT, &arg);
         assert_ne!(a.at, b.at, "the two languages cannot agree on every offset");
         for m in [&a, &b] {
-            assert_eq!(m.at.len(), 4);
+            assert_eq!(m.at.len(), 3);
             for r in &m.at {
                 assert!(m.text.get(r.clone()).is_some_and(|s| s.starts_with("C-")));
             }

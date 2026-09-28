@@ -61,7 +61,10 @@
       hue = 205;
       chroma = 0.70;
       shift = 4;
-      torsion = -15;
+      # TOWARD THE BLUE, 25 and not -15: a teal band this dark has little
+      # chroma to be told from a rule by, and on the desks' pages it came to
+      # 0.044 (floor 0.05). The brain's line moves away with it (310).
+      torsion = 25;
       paint-chroma = 3.0;
     };
     success = {
@@ -159,7 +162,9 @@
       text-shift = -8;
     };
     brain = {
-      hue = 265;
+      # 310: at 265 the selection band, turned blue above, came within
+      # 0.050 of this line on the absolute page.
+      hue = 310;
     };
     slate = {
       hue = 235;

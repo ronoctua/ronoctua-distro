@@ -391,6 +391,13 @@ pkgs.testers.runNixOSTest {
         # "it narrowed" would become a coincidence. What is asserted is that
         # the list became the PREFIX's, and `n` — the notifications — has a
         # handful of items.
+        #
+        # AFTER A TAP OF `Ctrl`, because `n` is a group only in the FULL set:
+        # the leader alone runs the manager on `n` now (the three sets,
+        # `leader::Set`), and a tap of `Ctrl` right after the leader is what
+        # puts the whole tree back. `xdotool key` presses and releases, which
+        # is exactly a tap.
+        press_key("Control_L")
         press_key("n")
         journal = machine.succeed("journalctl -u footer --no-pager")
         # What is asserted is that it NARROWED, not a number: how many commands
@@ -406,10 +413,10 @@ pkgs.testers.runNixOSTest {
         # the line below, and there was nothing there: pressing the leader and seeing
         # the same screen is indistinguishable from "it did not register the key".
         journal = machine.succeed("journalctl -u footer --no-pager")
-        # `LEADER n-`: the label from the environment, and Doom's notation (`-`,
-        # and not ` …`). `SPC` here would be the fallback, and would prove the
-        # opposite.
-        assert "LEADER n-" in journal, journal
+        # `LEADER CTRL n-`: the label from the environment, the set's key the
+        # tap chose, and Doom's notation (`-`, and not ` …`). `SPC` here would
+        # be the fallback, and would prove the opposite.
+        assert "LEADER CTRL n-" in journal, journal
 
         w, h, x, y = compositor_geometry()
         # POLLED, like every other read of a height that has just changed:
@@ -448,10 +455,11 @@ pkgs.testers.runNixOSTest {
         echo_line = [l for l in journal.splitlines() if "echo area" in l][-1]
         print(f"echo: {echo_line}")
         # THE MESSAGE cites the whole sequence, not only the last key:
-        # `LEADER n z` is what the user typed, and `z` on its own would not
-        # help. The prefix is `n` because the subtest above pressed it — it
-        # used to be `i`, and then `h`, and each stopped being a prefix.
-        assert "LEADER n z" in echo_line, echo_line
+        # `LEADER CTRL n z` is what the user typed, set included, and `z` on
+        # its own would not help. The prefix is `n` because the subtest above
+        # pressed it — it used to be `i`, and then `h`, and each stopped being
+        # a prefix.
+        assert "LEADER CTRL n z" in echo_line, echo_line
         # And in pt-BR, translated — not the raw key.
         assert "echo-" not in echo_line, echo_line
 
@@ -600,18 +608,10 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
         )
-        # TWICE, because `.` is a GROUP now and not a command.
-        #
-        # It opened the manager directly and also hung off a group called `f`,
-        # so one thing was reachable by three sequences; the owner asked for the
-        # one shape and `.` became the prefix. The first press opens the group's
-        # list, the second is the footer's door — the doubling `s n n`, `t t`
-        # and `n n` already keep.
-        #
-        # A prefix cannot also be a command (the registry refuses it), so this
-        # is not a second way of saying the same thing: one press no longer
-        # reaches a manager at all.
-        press_key("period")
+        # ONCE, because the leader alone runs the footer's door of a group
+        # that has two (the three sets, `leader::Set`): `.` is the manager's
+        # group in the full tree — `. .` the footer, `. w` the window — and
+        # in the set a sequence starts in, the group is its footer door.
         press_key("period")
 
         # THE LIST IS ON SCREEN when the region is taller than the two lines at
@@ -855,6 +855,105 @@ pkgs.testers.runNixOSTest {
         journal = machine.succeed("journalctl -u footer --no-pager")
         assert "a command with no registered action" not in journal, journal
 
+    with subtest("the key after the leader chooses one of THREE sets"):
+        # THE OWNER'S THREE SETS (2026-09-28), end to end: the same `s n` is
+        # the network IN THE FOOTER after the leader alone, the network's
+        # WINDOW after a tap of `Alt`, and the network's GROUP — the whole
+        # tree of before — after a tap of `Ctrl`. The unit tests prove the
+        # trees and the tap apart (`leader::tests`); what only this VM reaches
+        # is the tap ARRIVING — a bare modifier through Xvfb, the compositor
+        # and the layer surface, pressed and released with nothing between —
+        # and each door actually opening.
+        #
+        # READ OFF THE JOURNAL AND THE COMPOSITOR'S TREE, never the heights:
+        # two buffer windows cover the screen by now, and `footer_height`
+        # samples a background that is theirs (see the subtest that opened
+        # them).
+        def journal_now():
+            return machine.succeed("journalctl -u footer --no-pager")
+
+        def open_leader():
+            before = journal_now().count("leader active")
+            machine.succeed(
+                "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+                "${ronoctua-shell}/bin/ronoctua-shell leader"
+            )
+            for _ in range(30):
+                if journal_now().count("leader active") > before:
+                    return
+                machine.sleep(1)
+            raise AssertionError("the leader did not open:\n" + journal_now()[-2000:])
+
+        focus_compositor()
+
+        # 1) THE LEADER ALONE: `s n` is the network, in the footer.
+        opened = journal_now().count('command="network-open"')
+        open_leader()
+        press_key("s")
+        press_key("n")
+        machine.wait_until_succeeds(
+            "test $(journalctl -u footer --no-pager | grep -c 'command=\"network-open\"') "
+            f"-gt {opened}",
+            timeout=30,
+        )
+        assert "br.ronoctua.network" not in windows_by_app_id(sock), (
+            "`LEADER s n` opened the network's WINDOW; the leader alone is the footer's door"
+        )
+        press_key("Escape")
+
+        # 2) A TAP OF `Alt`: the same `s n` is the network's window.
+        windows = windows_now(sock)
+        open_leader()
+        press_key("Alt_L")
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep 'set switched.*LEADER ALT-' > /dev/null",
+            timeout=30,
+        )
+        press_key("s")
+        press_key("n")
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep 'command=\"network-window\"' > /dev/null",
+            timeout=30,
+        )
+        try:
+            await_windows(sock, windows + 1, timeout=90)
+        except Exception:
+            print(machine.execute("journalctl -u footer --no-pager | tail -30")[1])
+            raise
+        # BY ITS `app_id`, from the compositor: a window that is not the
+        # network's would answer the count above just as well.
+        assert "br.ronoctua.network" in windows_by_app_id(sock), (
+            f"`LEADER Alt s n` opened no network window: {sorted(windows_by_app_id(sock))}"
+        )
+        # AND IT IS CLOSED AGAIN, so the subtests after this one find the
+        # screen they found before it. It has the focus, being new.
+        machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+            "${ronoctua-shell}/bin/ronoctua-shell command buffer-close"
+        )
+        await_windows(sock, windows, timeout=60)
+
+        # 3) A TAP OF `Ctrl`: `s n` is the network's GROUP again, and the chord
+        # on the minibuffer's line says which set the next key walks.
+        focus_compositor()
+        open_leader()
+        press_key("Control_L")
+        press_key("s")
+        press_key("n")
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep 'LEADER CTRL s n-' > /dev/null",
+            timeout=30,
+        )
+        # A NEW `leader closed`, COUNTED: steps 1 and 2 and every subtest
+        # before this one already logged the line, and a grep for it passed
+        # at once whether or not THIS `Esc` closed the leader.
+        closed = journal_now().count("leader closed")
+        press_key("Escape")
+        machine.wait_until_succeeds(
+            f"test $(journalctl -u footer --no-pager | grep -c 'leader closed') -gt {closed}",
+            timeout=30,
+        )
+
     with subtest("with the Alt HELD the sequence goes on working"):
         # THE DEFECT THIS CATCHES, and that only shows up in real use.
         #
@@ -874,38 +973,286 @@ pkgs.testers.runNixOSTest {
                 "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool " + " ".join(args)
             )
 
-        machine.succeed("journalctl --rotate && journalctl --vacuum-time=1s")
-        # AND THE FOCUS ONCE MORE, BEFORE THE LEADER, for the reason written
-        # above the second browser sequence — including the order.
-        focus_compositor()
-        xdo("keydown", "alt")
-        try:
+        def said_now():
+            return machine.succeed("journalctl -u footer --no-pager")
+
+        def the_leader_opens():
+            before = said_now().count("leader active")
             machine.succeed(
                 "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
                 "${ronoctua-shell}/bin/ronoctua-shell leader"
             )
             machine.wait_until_succeeds(
-                "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
+                f"test $(journalctl -u footer --no-pager | grep -c 'leader active') -gt {before}",
+                timeout=30,
             )
-            # `n` AND NOT `m`, for the collision written above the subtest
-            # before this one: two buffer windows are open by now, and at the
-            # root of a sequence `m` is the FOCUSED BUFFER's prefix, not the
-            # tree's. `n` is a group of the tree and reaches it — `h` was one
-            # too, until it became the `help` command.
-            xdo("key", "n")
+
+        def back_at_rest():
+            # A NEW `leader closed`, counted: the line is in the journal from
+            # every subtest before, and a grep for it proves nothing about
+            # this `Esc`. AT REST is where every subtest after this one starts.
+            closed = said_now().count("leader closed")
+            press_key("Escape")
+            machine.wait_until_succeeds(
+                f"test $(journalctl -u footer --no-pager | grep -c 'leader closed') -gt {closed}",
+                timeout=30,
+            )
+
+        machine.succeed("journalctl --rotate && journalctl --vacuum-time=1s")
+
+        # A) THE HELD ALT, LET GO AT THE ROOT, CHOOSES NO SET. It went down
+        #    before the footer had the keyboard, so the footer sees its
+        #    release and never its press — a tap is a press AND a release with
+        #    nothing between (`leader::Tap`). The leader's own modifiers count
+        #    for nothing, here as in the nested loop, where the leader IS
+        #    `Ctrl+Alt+Space`. Released AT THE ROOT, where a tap would count:
+        #    released after a key, the sequence is no longer at the root and
+        #    nothing could switch whatever the tap did.
+        #
+        # WHAT THE JOURNAL ALREADY SAYS, COUNTED: the vacuum above removes only
+        # what is older than a second, and the subtest before this one said
+        # both `LEADER s-` and `set switched`. What is asserted below is what
+        # THIS subtest adds.
+        switched = said_now().count("set switched")
+        opened_s = said_now().count("LEADER s-")
+        # AND THE FOCUS ONCE MORE, BEFORE THE LEADER, for the reason written
+        # above the second browser sequence — including the order.
+        focus_compositor()
+        xdo("keydown", "alt")
+        try:
+            the_leader_opens()
+        finally:
+            # In the `finally` on purpose: an Alt stuck in Xvfb would spoil
+            # every subtest that comes afterwards.
+            xdo("keyup", "alt")
+        machine.sleep(2)
+        said = said_now()
+        assert said.count("set switched") == switched, (
+            "the held Alt, let go at the root, switched the leader's set:\n\n" + said
+        )
+        # AND THE SEQUENCE GOES ON from the root it stayed at.
+        press_key("s")
+        machine.wait_until_succeeds(
+            f"test $(journalctl -u footer --no-pager | grep -c 'LEADER s-') -gt {opened_s}",
+            timeout=30,
+        )
+        back_at_rest()
+
+        # B) WITH THE ALT STILL HELD, `s` is still `s`.
+        #
+        # `s` AND NOT `n`: `n` was a group of the tree until the leader alone
+        # began running the notification manager on it (the three sets,
+        # `leader::Set`), and a command ends the sequence this reads. `s` —
+        # the system — is a group in every set.
+        opened_s = said_now().count("LEADER s-")
+        focus_compositor()
+        xdo("keydown", "alt")
+        try:
+            the_leader_opens()
+            xdo("key", "s")
             machine.sleep(1)
         finally:
-            # In the `finally` on purpose: an Alt stuck in Xvfb would spoil any
-            # subtest that came afterwards, including in a future where this is
-            # no longer the last one.
             xdo("keyup", "alt")
 
-        journal = machine.succeed("journalctl -u footer --no-pager")
-        # THE PROOF: `n` opened the group. With the defect, the log carries
-        # `is not bound` and the pending sequence never reaches `LEADER n-`.
-        assert "LEADER n-" in journal, (
-            "with the Alt held, `LEADER n` did not open the notifications group.\n"
-            "The key came out as `M-n` and matched nothing.\n\n" + journal
+        journal = said_now()
+        # THE PROOF: `s` opened the group. With the defect, the log carries
+        # `is not bound` and the pending sequence never reaches `LEADER s-`.
+        assert journal.count("LEADER s-") > opened_s, (
+            "with the Alt held, `LEADER s` did not open the system group.\n"
+            "The key came out as `M-s` and matched nothing.\n\n" + journal
         )
+        # AND IT ENDS AT REST: the subtest after this one measures the zone the
+        # two bars reserve, and an `s` list left open would be in it.
+        back_at_rest()
+
+    with subtest("hidden: the bars go, push, cover, and come back"):
+        # THE TWO HIDDEN MODES (`crate::hidden`), measured by what the
+        # COMPOSITOR did and not by what the footer thinks: the zone the footer
+        # reserves is the workspace's `rect` shrinking (`get_workspaces`), and
+        # the heights the footer asked for are its own journal line (`the
+        # footer asked for a geometry`). Pixels would not do here: the footer
+        # at rest is one transparent pixel, which is the backdrop's colour.
+        #
+        # SELF-CONTAINED, and by NAME where a key's meaning belongs to the
+        # leader's sets: `ronoctua-shell command footer-hide-cover` is the same
+        # toggle as `LEADER ALT LEADER`, and opening a footer app is a command
+        # rather than a sequence whose letters another subtest may move.
+        import json
+        import re as _re
+
+        def xdo(*args):
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool " + " ".join(args))
+
+        def shell(*args):
+            machine.succeed(
+                "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+                "${ronoctua-shell}/bin/ronoctua-shell " + " ".join(args)
+            )
+
+        def rect_height():
+            said = machine.succeed(
+                f"SCROLLSOCK={sock} SWAYSOCK={sock} ${scroll}/bin/scrollmsg -t get_workspaces"
+            )
+            focused = [w for w in json.loads(said) if w.get("focused")]
+            assert focused, f"no focused workspace in {said}"
+            return focused[0]["rect"]["height"]
+
+        def heights():
+            said = machine.succeed("journalctl -u footer --no-pager")
+            return [
+                int(h)
+                for h in _re.findall(r"the footer asked for a geometry.*?height=(\d+)", said)
+            ]
+
+        def wait_for_rect(expected, attempts=20):
+            seen = None
+            for _ in range(attempts):
+                seen = rect_height()
+                if seen == expected:
+                    return seen
+                machine.sleep(1)
+            raise AssertionError(f"the workspace is {seen} px tall, expected {expected}")
+
+        def leaders():
+            said = machine.succeed("journalctl -u footer --no-pager")
+            return said.count("leader active")
+
+        def steady(expected):
+            """The footer STAYS as it is, with a pointer resting on its edge:
+            the zone does not move and no geometry is asked for. The owner saw
+            the opposite on 2026-09-28 — the footer changed layer to push, the
+            compositor answered with a `leave`, the `leave` hid the bars, and
+            the edge revealed them again every ~15 ms (1044 turns in three
+            seconds, measured). A single sample of the zone passes that loop
+            half the time; this does not."""
+            import time as _time
+
+            asked = len(heights())
+            seen = []
+            for _ in range(8):
+                _time.sleep(0.25)
+                seen.append(rect_height())
+            again = heights()[asked:]
+            assert seen == [expected] * len(seen), f"the zone moved under a resting pointer: {seen}"
+            assert not again, f"the footer asked for {len(again)} geometries under a resting pointer"
+
+        LINE = ${toString linePx}
+        focus_compositor()
+        w0, h0, x0, y0 = compositor_geometry()
+        # THE POINTER AWAY FROM THE BOTTOM EDGE, or the bars would come up
+        # under it the moment they are hidden.
+        xdo("mousemove", str(x0 + w0 - 5), str(y0 + 5))
+        machine.sleep(1)
+        # AT REST FIRST, asserted: `visible` below is the zone of the two bars
+        # ALONE, and a leader left open by a subtest above — its list's rows
+        # in the zone — made every height after it wrong by that list.
+        for _ in range(10):
+            if last_keyboard_ask() == "None":
+                break
+            machine.sleep(1)
+        assert last_keyboard_ask() == "None", (
+            "the hidden subtest starts with the footer holding the keyboard:\n"
+            + machine.succeed("journalctl -u footer --no-pager")[-2000:]
+        )
+        # AND THE ZONE SETTLED: two reads a second apart that agree.
+        visible = rect_height()
+        for _ in range(10):
+            machine.sleep(1)
+            again = rect_height()
+            if again == visible:
+                break
+            visible = again
+
+        # 1. `LEADER LEADER`: the leader, and the leader again AT THE ROOT.
+        before = leaders()
+        shell("leader")
+        machine.wait_until_succeeds(
+            f"test $(journalctl -u footer --no-pager | grep -c 'leader active') -gt {before}",
+            timeout=30,
+        )
+        shell("leader")
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep 'the bars toggled' > /dev/null", timeout=30
+        )
+        # THE ZONE IS GONE: the workspace grew by the footer's two lines.
+        bare = wait_for_rect(visible + FOOTER)
+        print(f"visible: {visible} px, hidden: {bare} px")
+
+        # 2. A QUICK SEQUENCE never lays the list out: the leader and a key at
+        #    once, well inside the list's two seconds. `g` is the glance, which
+        #    lies over the windows and reserves nothing. ONE COMMAND for both,
+        #    with half a second for the keyboard to be granted: two round trips
+        #    of the driver could take the two seconds by themselves.
+        asked = len(heights())
+        machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+            "${ronoctua-shell}/bin/ronoctua-shell leader && sleep 0.5 && "
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key g"
+        )
+        machine.sleep(1)
+        quick = heights()[asked:]
+        assert quick and max(quick) <= 3 * LINE, (
+            f"a quick sequence laid the list out: heights {quick}, line {LINE}"
+        )
+        assert rect_height() == bare, "a quick sequence moved the zone"
+        machine.sleep(7)
+
+        # 3. STILL, the list comes after the wait — and it lies over the
+        #    windows: the zone does not move.
+        asked = len(heights())
+        shell("leader")
+        machine.sleep(1)
+        assert all(h <= 2 * LINE for h in heights()[asked:]), (
+            f"the list was laid out before the hand stopped: {heights()[asked:]}"
+        )
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep 'after the hand stopped' > /dev/null",
+            timeout=10,
+        )
+        machine.sleep(1)
+        shown = heights()[asked:]
+        assert max(shown) > 3 * LINE, f"the list never came: {shown}"
+        assert rect_height() == bare, "the leader's list pushed the windows"
+        press_key("Escape")
+
+        # 4. A FOOTER APP PUSHES, with the bars still hidden, and `Esc` gives
+        #    the zone back.
+        shell("command", "notif-open")
+        machine.sleep(2)
+        pushed = rect_height()
+        assert pushed < bare, f"an app did not push: {pushed} px against {bare} px"
+        press_key("Escape")
+        wait_for_rect(bare)
+
+        # 5. THE EDGE: the pointer at the bottom row brings the bars up, and
+        #    in push they push; leaving the footer takes them away.
+        xdo("mousemove", str(x0 + 40), str(y0 + h0 - 1))
+        wait_for_rect(bare - FOOTER)
+        steady(bare - FOOTER)
+        xdo("mousemove", str(x0 + w0 - 5), str(y0 + 5))
+        wait_for_rect(bare)
+
+        # 6. COVER: the edge brings the bars up OVER the windows — the footer
+        #    asks for the two lines, and the zone does not move.
+        shell("command", "footer-hide-cover")
+        machine.sleep(2)
+        assert rect_height() == bare, "cover reserved a zone"
+        asked = len(heights())
+        xdo("mousemove", str(x0 + 40), str(y0 + h0 - 1))
+        for _ in range(10):
+            if any(h >= FOOTER for h in heights()[asked:]):
+                break
+            machine.sleep(1)
+        else:
+            raise AssertionError(f"the edge did not bring the bars up in cover: {heights()[asked:]}")
+        machine.sleep(1)
+        assert rect_height() == bare, "the edge pushed in cover"
+        steady(bare)
+        xdo("mousemove", str(x0 + w0 - 5), str(y0 + 5))
+
+        # 7. AND BACK: the same toggle again is the bars visible, with their
+        #    zone.
+        shell("command", "footer-hide-cover")
+        wait_for_rect(visible)
   '';
 }

@@ -1779,6 +1779,12 @@ impl Player {
         // THE PICTURES: a band each, and the frame fitted into it. The band is
         // a surface of the theme in the door, and the content's ground on
         // stage, where a picture alone is framed in black.
+        //
+        // THE THEME'S DESK AS THE LETTERBOX, deliberately, on every page: it
+        // is a frame for a picture and carries no letter (`every-ground-is-
+        // measured` names it among the grounds nothing is written on). On the
+        // desk's own page it is the window's ground, and the letterbox simply
+        // reads as the page around the film.
         for (p, place) in self.pictures.iter_mut().zip(&self.layout.pictures) {
             let band = if stage {
                 stage_area(w, h, area)

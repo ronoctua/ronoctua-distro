@@ -3148,7 +3148,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         s.view.measured_globe(
             crate::files::globe_texture(area),
             gone,
-            ronoctua_tokens::theme::current().position(),
+            ronoctua_tokens::theme::palette(),
         );
     }
     let globe_picture = globe.and_then(|area| {
@@ -3159,6 +3159,8 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // AND EVERY THUMBNAIL ON SCREEN. `Painted::pictures` has been a batch since
     // the globe joined the preview; this is the same batch, longer.
     #[allow(clippy::cast_precision_loss)]
+    // ON THE PAGE THIS DOOR WEARS, which is the one it asked for them on: a
+    // window paints one surface, so its page is the frame's.
     let thumbnails = s.view.grid_pictures(
         s.geo.columns,
         s.geo.room(),
@@ -3166,6 +3168,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         cell,
         line_px,
         f32::from(s.geo.metric.first) * line_px,
+        ronoctua_tokens::theme::ground(),
     );
     let pictures: Vec<(String, ronoctua_render::image::Area)> = picture
         .into_iter()

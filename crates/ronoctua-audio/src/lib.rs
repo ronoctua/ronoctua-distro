@@ -453,6 +453,21 @@ impl Snapshot {
     pub fn is_listening(&self) -> bool {
         self.nodes.iter().any(|n| n.kind == Some(Kind::Recording))
     }
+
+    /// Whether anything that is NOT ours is recording — the microphone's
+    /// event in the minibuffer.
+    ///
+    /// The modeline's mark asks [`Snapshot::is_listening`], and it is right to:
+    /// a microphone the sound view's meter holds open IS open. The event is a
+    /// different question — "did somebody start listening?" — and the meter
+    /// and the studio's capture are this system answering a person who asked
+    /// for them. Both name themselves [`pipewire::OWN_STREAM`].
+    #[must_use]
+    pub fn someone_else_listens(&self) -> bool {
+        self.nodes.iter().any(|n| {
+            n.kind == Some(Kind::Recording) && n.app.as_deref() != Some(pipewire::OWN_STREAM)
+        })
+    }
 }
 
 /// The volume a person reads, out of the amplitude PipeWire keeps.
@@ -948,6 +963,30 @@ mod tests {
             ..Node::default()
         });
         assert!(g.is_listening());
+    }
+
+    /// FAILS IF: the sound view's meter or the studio's capture — both ours,
+    /// both named `OWN_STREAM` — count as somebody starting to listen, or a
+    /// stranger's stream stops counting while one of ours is open beside it.
+    #[test]
+    fn our_own_recordings_are_not_somebody_listening() {
+        let mut g = a_graph();
+        g.nodes.push(Node {
+            id: 121,
+            kind: Some(Kind::Recording),
+            app: Some(pipewire::OWN_STREAM.to_owned()),
+            ..Node::default()
+        });
+        assert!(g.is_listening(), "the mark still says a microphone is open");
+        assert!(!g.someone_else_listens(), "the meter is not somebody else");
+        // A STREAM WITH NO NAME AT ALL is a stranger: nothing says it is ours.
+        g.nodes.push(Node {
+            id: 122,
+            kind: Some(Kind::Recording),
+            app: None,
+            ..Node::default()
+        });
+        assert!(g.someone_else_listens());
     }
 
     #[test]

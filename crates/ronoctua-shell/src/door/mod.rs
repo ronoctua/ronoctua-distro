@@ -831,6 +831,23 @@ pub trait Content: Sized + 'static {
         crate::chrome::FIELDS_LEAD
     }
 
+    /// The PAGE the window wears (`crate::theme::Page`): the palette solved
+    /// on the chrome, or on the desk the person put OUR windows on
+    /// (`LEADER s t` — `crate::theme::windows_page`). On a desk's page the
+    /// chrome IS the desk and every band and ink was solved from it, so the
+    /// window clears with `surface.chrome` and paints as it always did — the
+    /// bands follow the ground. Every buffer it hosts wears it too. A right
+    /// column answers the FOOTER's page: it is the footer's neighbour,
+    /// chrome drawn in a strip (invariant 14), not a window.
+    ///
+    /// Asked at every frame and at every change of the theme's file, never
+    /// kept: a preview and a commit reach the process the same way
+    /// (`crate::theme::wear`), and the theme's watch repaints the door on
+    /// either.
+    fn page(&self) -> crate::theme::Page {
+        crate::theme::windows_page()
+    }
+
     /// The line the header is drawn on — `0`, in every window. A column
     /// answers `1`: its line 0 is its own control line (`crate::column`), and
     /// the header, the drawer and the list move down with it
@@ -1184,6 +1201,11 @@ fn hang_the_watches<C: Content>(
             if let channel::Event::Msg(()) = event
                 && crate::theme::reload()
             {
+                // THE PAGE AT ONCE, not at the next frame: a picture asked of
+                // a child process before it (a waveform, a shape) is painted
+                // with the page's values and keyed by them
+                // (`ronoctua_tokens::theme::palette`).
+                tokens::theme::set_ground(door.content.page());
                 door.ui.ask_paint();
             }
         })
@@ -1372,6 +1394,8 @@ impl<C: Content> Door<C> {
                 RawWindowHandle::Wayland(WaylandWindowHandle::new(surf)),
                 first.0,
                 first.1,
+                // OPAQUE: only the footer's hidden modes are see-through.
+                false,
             )
         };
         let Ok(mut g) = gpu else {
@@ -1467,6 +1491,9 @@ impl<C: Content> Door<C> {
         }
         let lit = self.lit();
         self.bars.clear();
+        // THE PAGE THIS DOOR WEARS, worn for the frame: every colour below
+        // resolves through it, and its chrome is the ground.
+        tokens::theme::set_ground(self.content.page());
         let (Some(gpu), Some(text), Some(quads), Some(images)) = (
             self.gpu.as_mut(),
             self.text.as_mut(),
@@ -1543,6 +1570,7 @@ impl<C: Content> Door<C> {
         images.prepare(&gpu.queue, width, height, &pictures);
         let (quads, images) = (&*quads, &*images);
         if let Err(e) = gpu.frame(
+            tokens::color::SURFACE_CHROME.to_linear(),
             || crate::hidpi::told_before_present(scale, told, &surface),
             |pass| {
                 quads.draw_range(pass, 0, split);

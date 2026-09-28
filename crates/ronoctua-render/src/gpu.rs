@@ -12,7 +12,6 @@
 //! contract written out.
 
 use anyhow::{Context as _, Result};
-use ronoctua_tokens as tokens;
 
 /// The limits we ask the device for, given the adapter that answered.
 ///
@@ -70,6 +69,98 @@ fn fits(v: u32, ceiling: u32, axis: &'static str) -> u32 {
     v.clamp(1, ceiling)
 }
 
+/// The alpha mode a surface is configured with, out of what it offers.
+///
+/// # Why the footer asks and the windows do not
+///
+/// The footer's two hidden modes lay it over the windows on a veil the
+/// window shows through, and leave one pixel of nothing at the screen's edge
+/// (`surface.veil`, `surface.clear`). A surface the compositor composes as
+/// OPAQUE shows its clear colour whatever alpha it carries — the hole comes
+/// out as a strip of chrome. So the footer asks to be see-through and gets the PREMULTIPLIED
+/// mode when the surface offers it; every other door asks nothing and keeps
+/// the first mode offered, which is what all of them got before and is
+/// opaque in practice.
+///
+/// # And when the driver does not offer it
+///
+/// The first mode, as an opaque surface would have, and the caller is told by
+/// [`Gpu::transparent`] answering `false` — the footer says so on the screen
+/// once, rather than looking as if hiding did nothing.
+#[must_use]
+pub fn alpha_mode_for(
+    offered: &[wgpu::CompositeAlphaMode],
+    transparent: bool,
+) -> wgpu::CompositeAlphaMode {
+    if transparent && offered.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+        return wgpu::CompositeAlphaMode::PreMultiplied;
+    }
+    offered
+        .first()
+        .copied()
+        .unwrap_or(wgpu::CompositeAlphaMode::Opaque)
+}
+
+/// The clear of a frame, in the surface's own alpha convention.
+///
+/// # Why premultiplied, and only there
+///
+/// A premultiplied surface is composed as `ours + behind × (1 − α)`. A token
+/// is a colour AND an alpha — `surface.clear` is the chrome at alpha 0 — and
+/// cleared as it is written it would be the chrome ADDED to whatever window
+/// is behind: a glow where a hole was meant. Multiplied through, alpha 0 is
+/// nothing at all and the veil's four fifths is four fifths.
+///
+/// An opaque surface ignores the alpha, and there the colour is what shows:
+/// kept as it is, the clear of a footer that could not be transparent is
+/// the chrome, which is what it painted before any of this existed.
+///
+/// # What draws on top of it, measured in the pinned sources
+///
+/// The quads and the pictures blend with `BlendState::ALPHA_BLENDING`
+/// (`quad.rs`, `image.rs`), and so does glyphon 0.12's text pipeline
+/// (`cache.rs:235`, a straight colour out of `shader.wgsl`'s `fs_main`). Its
+/// colour half is `src × αs + dst × (1 − αs)` and its alpha half is
+/// `αs + αd × (1 − αs)`: over a premultiplied destination that is the
+/// premultiplied `over` — IN LINEAR VALUES.
+///
+/// The target is sRGB, and that is where it stops being exact. The blend
+/// runs on linear values and the store encodes them, so a partial alpha is
+/// stored as `encode(c × α)`, where a compositor blending ENCODED values
+/// (wlroots' GLES2 and pixman renderers) wants `encode(c) × α`. At alpha 0
+/// and 1 the two agree. In between:
+///
+/// - ON THE VEIL, the veil comes out a little lighter than its number says.
+///   Its alpha is a recipe in `colors.nix`, tuned by eye, so the bias is
+///   inside what the tuning already absorbs.
+/// - ON NOTHING (a clear of alpha 0), a letter is NOT validly
+///   premultiplied: at a glyph's edge the stored colour exceeds its alpha,
+///   and over anything but black it comes out as a white fringe round the
+///   glyph. So nothing is lettered on nothing: the rows of a hidden footer
+///   that push stand on the desk's colour, OPAQUE, and the rows that lie
+///   over the windows on the veil (`ronoctua-shell`'s
+///   `hidden::Shape::grounds`). Alpha 0 is left only where no letter is —
+///   the one-pixel edge a hidden footer keeps.
+///
+///   They stood on nothing until 2026-09-28, the desk the windows moved off
+///   showing through, and the fringe was the price; the owner asked for the
+///   desk painted instead — the same look, opaque.
+#[must_use]
+pub fn clear_of(colour: [f32; 4], mode: wgpu::CompositeAlphaMode) -> wgpu::Color {
+    let [r, g, b, a] = colour;
+    let k = if mode == wgpu::CompositeAlphaMode::PreMultiplied {
+        a
+    } else {
+        1.0
+    };
+    wgpu::Color {
+        r: f64::from(r * k),
+        g: f64::from(g * k),
+        b: f64::from(b * k),
+        a: f64::from(a),
+    }
+}
+
 /// A graphics context bound to a surface.
 pub struct Gpu {
     /// The device.
@@ -112,6 +203,10 @@ impl Gpu {
 
     /// Builds the context over handles already validated by the caller.
     ///
+    /// `transparent` asks for a surface the compositor composes with its
+    /// alpha — see [`alpha_mode_for`]; whether it was granted is
+    /// [`Self::transparent`].
+    ///
     /// # Safety
     ///
     /// The caller guarantees that `display` and `window` stay valid
@@ -125,6 +220,7 @@ impl Gpu {
         window: raw_window_handle_shim::RawWindowHandle,
         width: u32,
         height: u32,
+        transparent: bool,
     ) -> Result<Self> {
         // wgpu 30's `InstanceDescriptor` does not implement `Default` (it has a
         // field `display: Option<Box<dyn ...>>` that could not be
@@ -240,7 +336,7 @@ impl Gpu {
             // `Fifo` = vsync. The footer does not animate; drawing more than the
             // refresh rate would only burn battery (section 2 targets laptops).
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode: alpha_mode_for(&caps.alpha_modes, transparent),
             view_formats: vec![],
             // ONE FRAME IN FLIGHT, AND NOT TWO.
             //
@@ -260,6 +356,14 @@ impl Gpu {
         };
         surface.configure(&device, &config);
         step("configure", &mut t);
+        // ASKED AND REFUSED is said, once, where it was decided: the caller
+        // shows it on the screen, and this is what a journal reader finds.
+        if transparent && config.alpha_mode != wgpu::CompositeAlphaMode::PreMultiplied {
+            tracing::warn!(
+                offered = ?caps.alpha_modes,
+                "the surface cannot be see-through here; it stays opaque"
+            );
+        }
 
         tracing::info!(
             adapter = ?adapter.get_info().name,
@@ -296,6 +400,14 @@ impl Gpu {
         self.ceiling
     }
 
+    /// Whether the compositor composes this surface with its alpha — asked
+    /// for at [`Self::new`], and granted only where the surface offers the
+    /// premultiplied mode.
+    #[must_use]
+    pub fn transparent(&self) -> bool {
+        self.config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied
+    }
+
     /// Reconfigures after a resize.
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
@@ -307,7 +419,15 @@ impl Gpu {
     }
 
     /// Draws a frame, and PRESENTS it — which on Wayland is the attach and the
-    /// commit. It clears with the chrome colour and lets `draw` paint on top.
+    /// commit. It clears with `clear` (a token's `to_linear()`, as the
+    /// offscreen twin takes it) and lets `draw` paint on top.
+    ///
+    /// THE CLEAR IS THE CALLER'S, and it was a constant: every door cleared
+    /// with the chrome. Now a door clears with the ground the person chose
+    /// for it, and the footer's hidden modes clear with nothing
+    /// (`surface.clear`) and lay their grounds over it; the colour is
+    /// multiplied through by its alpha on a premultiplied surface — see
+    /// [`clear_of`].
     ///
     /// The clear happens EVEN when there is no text — otherwise the compositor
     /// shows rubbish on the first frame.
@@ -330,7 +450,7 @@ impl Gpu {
     ///
     /// So the hook runs after the texture is in hand and the drawing is
     /// submitted, and never on a frame that is skipped.
-    pub fn frame<B, F>(&mut self, before_present: B, draw: F) -> Result<()>
+    pub fn frame<B, F>(&mut self, clear: [f32; 4], before_present: B, draw: F) -> Result<()>
     where
         B: FnOnce(),
         F: FnOnce(&mut wgpu::RenderPass<'_>) -> Result<()>,
@@ -376,19 +496,14 @@ impl Gpu {
             });
 
         {
-            let [r, g, b, a] = tokens::color::SURFACE_CHROME.to_linear();
+            let cleared = clear_of(clear, self.config.alpha_mode);
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: f64::from(r),
-                            g: f64::from(g),
-                            b: f64::from(b),
-                            a: f64::from(a),
-                        }),
+                        load: wgpu::LoadOp::Clear(cleared),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -439,6 +554,57 @@ impl Gpu {
             "frame presented"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{alpha_mode_for, clear_of};
+    use wgpu::CompositeAlphaMode as Mode;
+
+    /// FAILS IF: a surface that asked to be see-through is handed an opaque
+    /// mode while the compositor offers the premultiplied one, or a surface
+    /// that did not ask stops getting what it got before (the first offered).
+    #[test]
+    fn a_transparent_surface_takes_premultiplied_when_offered() {
+        let offered = [Mode::Opaque, Mode::PreMultiplied];
+        assert_eq!(alpha_mode_for(&offered, true), Mode::PreMultiplied);
+        assert_eq!(alpha_mode_for(&offered, false), Mode::Opaque);
+        // THE FIRST OFFERED, as before, for everything that stays opaque —
+        // whatever order the driver lists them in.
+        assert_eq!(
+            alpha_mode_for(&[Mode::PreMultiplied, Mode::Opaque], false),
+            Mode::PreMultiplied
+        );
+    }
+
+    /// FAILS IF: a driver without the premultiplied mode makes the surface
+    /// pick something other than what an opaque one would, or panics on an
+    /// empty list.
+    #[test]
+    fn without_premultiplied_the_surface_stays_what_it_was() {
+        assert_eq!(alpha_mode_for(&[Mode::Opaque], true), Mode::Opaque);
+        assert_eq!(
+            alpha_mode_for(&[Mode::Opaque, Mode::PostMultiplied], true),
+            Mode::Opaque
+        );
+        assert_eq!(alpha_mode_for(&[], true), Mode::Opaque);
+    }
+
+    /// FAILS IF: the clear of a premultiplied surface keeps its colour at
+    /// alpha 0 — which the compositor ADDS to what is behind (a glow, not a
+    /// hole) — or an opaque surface loses the colour its alpha would scale.
+    #[test]
+    fn the_clear_is_premultiplied_only_where_the_surface_is() {
+        let chrome_at_zero = [0.2, 0.4, 0.6, 0.0];
+        let c = clear_of(chrome_at_zero, Mode::PreMultiplied);
+        assert_eq!((c.r, c.g, c.b, c.a), (0.0, 0.0, 0.0, 0.0));
+        let half = clear_of([0.2, 0.4, 0.8, 0.5], Mode::PreMultiplied);
+        assert!((half.r - 0.1).abs() < 1e-6 && (half.b - 0.4).abs() < 1e-6);
+        // OPAQUE: the alpha is ignored by the compositor, and the colour is
+        // what shows — the chrome, which is what an opaque fallback draws.
+        let o = clear_of(chrome_at_zero, Mode::Opaque);
+        assert!((o.g - 0.4).abs() < 1e-6);
     }
 }
 

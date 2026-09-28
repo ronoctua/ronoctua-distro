@@ -99,9 +99,14 @@ def flatten(prefix: str, obj, out: dict) -> None:
             out[key] = v
 
 
+#: The pages each theme is solved on, in the order of the runtime table's
+#: second index (`ronoctua_tokens::theme::Ground`): the base first.
+PAGES = ("chrome", "backdrop", "near", "absolute")
+
+
 def load_themes(path: pathlib.Path) -> list[dict]:
     """`themes.json` from `nix/themes.nix`: the ordered list of themes, each
-    `{"id": …, "colors": {key: "0xRRGGBBAA"}}`, the first being the default.
+    `{"id": …, "mode": "dark" | "light", "colors": {key: "0xRRGGBBAA"}}`.
 
     Every theme has to name exactly the same colours. The generator over
     there already guarantees it; it is checked again here because a table
@@ -115,9 +120,28 @@ def load_themes(path: pathlib.Path) -> list[dict]:
             raise SystemExit(f"ERROR: a theme in {path} is not {{id, colors}}: {entry!r:.80}")
         if not re.fullmatch(r"[a-z][a-z0-9-]*", entry["id"]):
             raise SystemExit(f"ERROR: the theme id {entry['id']!r} is not kebab-case")
+        # THE MODE IS REFUSED WHEN IT IS NOT ONE OF THE TWO, never read as
+        # dark: a light theme generated as dark would name its white desk
+        # "black" on screen, and nothing would fail.
+        if entry.get("mode") not in ("dark", "light"):
+            raise SystemExit(f"ERROR: the theme {entry['id']!r} says its mode is {entry.get('mode')!r}")
         flat: dict = {}
         flatten("", entry["colors"], flat)
-        themes.append({"id": entry["id"], "colors": flat})
+        # AND ONE PALETTE PER PAGE, in `PAGES` order after the base's: the
+        # same roles solved on each desk (`gen-theme.py`, `Theme.on_page`).
+        # A page that is missing, or one that names other roles than the
+        # base, is refused: a hole in the table is the wrong colour on screen.
+        pages = entry.get("pages")
+        if not isinstance(pages, dict) or sorted(pages) != sorted(PAGES[1:]):
+            raise SystemExit(f"ERROR: the theme {entry['id']!r} does not carry the pages {PAGES[1:]}")
+        palettes = [flat]
+        for page in PAGES[1:]:
+            colours: dict = {}
+            flatten("", pages[page], colours)
+            if set(colours) != set(flat):
+                raise SystemExit(f"ERROR: the theme {entry['id']!r} on {page} names other roles than its base: {sorted(set(colours) ^ set(flat))}")
+            palettes.append(colours)
+        themes.append({"id": entry["id"], "mode": entry["mode"], "colors": flat, "palettes": palettes})
     first = set(themes[0]["colors"])
     for theme in themes[1:]:
         if set(theme["colors"]) != first:
@@ -139,7 +163,7 @@ def main() -> int:
         "--themes",
         type=pathlib.Path,
         required=True,
-        help="themes.json from nix/themes.nix: [{id, colors}], the first is the default",
+        help="themes.json from nix/themes.nix: [{id, mode, colors}], in the chooser's order",
     )
     ap.add_argument(
         "--default-theme",
@@ -510,14 +534,26 @@ def main() -> int:
     A("pub mod themes {")
     A("    /// The ids, in order.")
     A(f"    pub const IDS: [&str; {len(themes)}] = [{', '.join(repr(t['id']) for t in themes).replace(chr(39), chr(34))}];")
-    A("    /// `[theme][role]` -> RGBA, roles in `color`'s order.")
-    A(f"    pub static TABLE: [[[u8; 4]; super::counts::COLORS]; {len(themes)}] = [")
+    A("    /// Which way each theme's ladder climbs, in the same order: `true` for")
+    A("    /// a LIGHT theme (the paper is the ground and the rungs walk toward")
+    A("    /// black). A colour cannot be asked which side it is on, and the shell")
+    A("    /// has to know: the absolute desk is black in one and white in the other.")
+    A(f"    pub const LIGHT: [bool; {len(themes)}] = [{', '.join('true' if t['mode'] == 'light' else 'false' for t in themes)}];")
+    A("    /// The pages each theme is solved on, in the table's second index:")
+    A("    /// the base (the chrome), then each desk (`theme::Ground`).")
+    A(f"    pub const PAGES: [&str; {len(PAGES)}] = [{', '.join(chr(34) + p + chr(34) for p in PAGES)}];")
+    A("    /// `[theme][page][role]` -> RGBA, roles in `color`'s order.")
+    A(f"    pub static TABLE: [[[[u8; 4]; super::counts::COLORS]; {len(PAGES)}]; {len(themes)}] = [")
     for theme in themes:
         A(f"        // {theme['id']}")
         A("        [")
-        for k in roles:
-            r, g, b, a = parse_color(theme["colors"][k])
-            A(f"            [{r}, {g}, {b}, {a}], // {k}")
+        for page, palette in zip(PAGES, theme["palettes"]):
+            A(f"            // {theme['id']} on {page}")
+            A("            [")
+            for k in roles:
+                r, g, b, a = parse_color(palette[k])
+                A(f"                [{r}, {g}, {b}, {a}], // {k}")
+            A("            ],")
         A("        ],")
     A("    ];")
     A("}")
@@ -568,6 +604,8 @@ def main() -> int:
     A(f"    pub const ICONS: usize = {len(icons)};")
     A("    /// The number of themes.")
     A(f"    pub const THEMES: usize = {len(themes)};")
+    A("    /// The number of pages each theme is solved on: the base and the desks.")
+    A(f"    pub const PAGES: usize = {len(PAGES)};")
     A("    /// The index of the theme a fresh machine shows.")
     A("    ///")
     A("    /// NOT nought. See `themes::IDS`, and `assets/themes/themes.nix` for")
@@ -615,7 +653,7 @@ def main() -> int:
     args.out_wit.write_text("\n".join(W))
 
     print(
-        f"OK: {len(colors)} colours in {len(themes)} theme(s), {len(spaces)} spacings, "
+        f"OK: {len(colors)} colours in {len(themes)} theme(s) × {len(PAGES)} pages, {len(spaces)} spacings, "
         f"{len(icons)} icons -> {args.out.name} and {args.out_wit.name}"
     )
     print("OK: no shadow/elevation token (invariant 15)")

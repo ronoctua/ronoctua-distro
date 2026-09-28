@@ -35,7 +35,9 @@
 # contrast on the footer), `text-faint`, `text-muted`, `text`, `text-loud`,
 # `text-strong`, `text-bright` (text, the same), and `on-solid`. The neutral
 # family has `ground`, `chrome`, `window`, `chrome-raised`, `hover`,
-# `chrome-loud`, `border`, `border-strong` and the six text steps.
+# `chrome-loud`, `chrome-band`, `border`, `border-strong`, the three desks
+# (`backdrop`, `near`, `absolute`), each desk's `faint-*` edge and the six
+# text steps.
 #
 # NESTED, and never camelCase: the generator lowercases a key before it splits
 # it, so `subtleStrong` would reach the WIT as `text-subtlestrong`. Two levels
@@ -61,12 +63,31 @@
     # from the void with no border at all.
     buffer = "neutral.window";
     # What the compositor paints where no window is, when the person chose
-    # the theme's colour over black (`LEADER s t`, second column). The one
-    # neutral step below the chrome, in the hue the seed's `backdrop` names:
-    # the desk is the single surface meant to read as the theme's colour, and
-    # it is under everything, so the footer and a window both keep an edge
-    # against it (gated). Black itself is not a token: it is the option's name.
+    # the theme's colour (`LEADER s t`, the second column). The one neutral
+    # step off the chrome in a hue of its own, the seed's `backdrop`: the desk
+    # is the single surface meant to read as the theme's colour, and it is
+    # under everything, so the footer and a window both keep an edge against
+    # it (gated).
+    #
+    # AND IT IS A PAGE, since the person may put the footer and the windows
+    # on the desk's colour (the third and fourth columns): every theme is
+    # solved again with each desk in the chrome's place (`Theme.on_page`),
+    # and a surface on the desk wears that palette — the bands follow the
+    # ground.
     backdrop = "neutral.backdrop";
+    # THE OTHER DESK: the extreme the interface climbs away from — black in a
+    # dark theme, white in a light one, `#000000` or `#FFFFFF` exactly. It was
+    # not a token while its only reader was the compositor and its name was
+    # the option's ("black"); a light theme made that name wrong, and the
+    # footer and the windows may now stand on it, which makes it a ground the
+    # gates have to see.
+    absolute = "neutral.absolute";
+    # THE THIRD DESK, A LIGHT THEME'S: near-white, halfway from the chrome to
+    # the paper in the grounds' own hue and tint — the owner's middle answer
+    # between the white and the theme's colour. Every theme has it, because
+    # every theme has the same keys; a dark one's is the near-black halfway to
+    # the pixel switched off, gated as a ground and never offered.
+    near = "neutral.near";
     # THE FOCUSED ROW of an expanded list (4.3) — what `Enter` is going to run.
     # A change of colour, not an outline and not a box (invariant 15).
     #
@@ -204,6 +225,34 @@
     text-selection = {
       of = "accent.element";
       alpha = 0.45;
+    };
+
+    # THE FOOTER'S TWO HIDDEN MODES (`LEADER LEADER` pushes, `LEADER ALT
+    # LEADER` covers — `crate::hidden`).
+    #
+    # NOTHING: the one-pixel edge a hidden footer keeps, and the clear under a
+    # veil, where the window shows through. The chrome's hue at alpha 0 and
+    # not a colour of its own, so a surface the driver cannot make
+    # see-through (`Gpu::transparent`) clears with the chrome it always had.
+    # A row that pushes the windows away stands on the desk, opaque: the
+    # footer WEARS the desk's page there (`theme::Page`), whose chrome is the
+    # desk.
+    clear = {
+      of = "neutral.chrome";
+      alpha = 0.0;
+    };
+    # AND THE VEIL, where a row lies OVER a window: the page's ground at four
+    # fifths, the window readable underneath and the letters winning. It is
+    # not a card (invariant 15): no border, no radius, no shadow — the
+    # transport's device, one band the width of the screen. Tuned by eye,
+    # like the transport's nine tenths; the blend on an sRGB target makes it
+    # read a little lighter than its number (`ronoctua_render::gpu::clear_of`).
+    #
+    # ONE RECIPE FOR EVERY GROUND: on a desk's page the chrome IS the desk,
+    # so a footer that wears the desk's page lays the desk's veil.
+    veil = {
+      of = "neutral.chrome";
+      alpha = 0.8;
     };
 
     # THE ON-SCREEN KEYBOARD'S KEYS (`LEADER m k`), grounds under a legend.
@@ -898,6 +947,32 @@
       of = "accent.element";
       chroma = 0.20;
     };
+    # THE DISCREET BORDERS (`LEADER s t`, the borders column): the owner asked
+    # for the focused window's outline to be "very discreet" and for every
+    # other one to be "EXTREMELY faint — never transparent: the person still
+    # needs a reference to resize with the mouse".
+    #
+    # The focused one is the accent's ELEMENT rung, the selection band's: the
+    # accent still says "the keyboard is here", a rung quieter than the
+    # standard outline, and the gates hold it between the two it sits between
+    # (`DISCREET_ORDER`). It is also the right column's focus line when the
+    # borders are discreet (`theme::focus_line`), so it is measured against
+    # every ground that line is drawn on.
+    # EVEN QUIETER (the owner, 2026-09-28): the element rung with less than
+    # half its colour — still the accent's hue, still above the faint outline
+    # and below the standard one (`DISCREET_ORDER`).
+    discreet = {
+      of = "accent.element";
+      chroma = 0.45;
+    };
+    # The unfocused one is the DESK'S OWN colour one faint step up the ladder
+    # (`FAINT_RATIO`), so there is one per desk: an outline is measured
+    # against what it lies on, and black and a grey desk are not the same
+    # ground. Opaque, like every outline: an alpha would be elevation
+    # (invariant 15).
+    faint-backdrop = "neutral.faint-backdrop";
+    faint-near = "neutral.faint-near";
+    faint-absolute = "neutral.faint-absolute";
   };
 
   # -------------------------------------------------------------------
@@ -1116,6 +1191,18 @@
     # — the day a theme wants the band's buttons apart from a label column,
     # this is the line to change.
     acts = "label.text";
+    # THE SAME ACTION UNDER THE POINTER — where a click would land.
+    #
+    # An event said on the minibuffer's line carries its entry's actions at the
+    # end of the line (`chrome::Piece::action`), drawn in `acts` so an action
+    # looks the same on the band and on the line, and on that line every
+    # shortcut lights under the pointer (`chrome::lit`). So the action lights
+    # too, the way the hint's keys do: the same rung and more of its own hue
+    # — a small step, which is what the owner asked the lit tones to be.
+    acts-lit = {
+      of = "label.text";
+      chroma = 1.6;
+    };
 
     # ALREADY READ, in the manager's left column. It stays in the list — the
     # list is the record of what happened — and it recedes.

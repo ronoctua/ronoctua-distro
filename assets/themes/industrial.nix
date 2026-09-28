@@ -169,7 +169,10 @@
       text-shift = -8;
     };
     brain = {
-      hue = 265;
+      # 215 AND NOT 265: on the desks' pages the selection band darkens toward
+      # this line, and at 265 — the accent's own neighbourhood — it came
+      # within 0.023 of it (floor 0.05).
+      hue = 215;
     };
     slate = {
       hue = 240;

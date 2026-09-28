@@ -61,13 +61,34 @@ impl Color {
         color::NAMES[self.0 as usize]
     }
 
-    /// Raw components, in RGBA order, in the CURRENT theme.
+    /// Raw components, in RGBA order, in the CURRENT palette: the theme the
+    /// process is in, on the ground it wears ([`theme::Ground`]).
     ///
-    /// Not `const`: it reads which theme the process is in, and that is the
+    /// Not `const`: it reads which palette the process is in, and that is the
     /// whole point.
     #[must_use]
     pub fn to_rgba8(self) -> [u8; 4] {
-        themes::TABLE[theme::index()][self.0 as usize]
+        let (t, g) = theme::index();
+        themes::TABLE[t][g][self.0 as usize]
+    }
+
+    /// Raw components, in RGBA order, in the palette `palette` names — a
+    /// number [`theme::palette`] gave — whatever the process wears NOW.
+    ///
+    /// For a painter that is not on the frame's thread: a worker drawing a
+    /// picture while the footer paints its screens, each wearing its own page
+    /// ([`theme::set_ground`]), would otherwise read whichever page the loop
+    /// had just put on — and a texture keyed for one palette could carry
+    /// another's colours. The palette travels with the ask, and the bytes are
+    /// the ask's.
+    ///
+    /// # Panics
+    ///
+    /// On a number no palette has. It only ever comes from
+    /// [`theme::palette`], so a guessed one is a defect to see, not a colour.
+    #[must_use]
+    pub fn to_rgba8_in(self, palette: usize) -> [u8; 4] {
+        themes::TABLE[palette / counts::PAGES][palette % counts::PAGES][self.0 as usize]
     }
 
     /// Components in `[0.0, 1.0]` in RGBA order, in **LINEAR** space.
@@ -107,7 +128,8 @@ fn linear_of([r, g, b, a]: [u8; 4]) -> [f32; 4] {
     [channel(r), channel(g), channel(b), f32::from(a) / 255.0]
 }
 
-/// Which theme the process resolves its colours through.
+/// Which PALETTE the process resolves its colours through: a theme, and the
+/// ground it is worn on.
 ///
 /// One index, process-wide, behind an atomic: a theme is a property of the
 /// process the way the language is, and threading it through the 280 places
@@ -115,10 +137,61 @@ fn linear_of([r, g, b, a]: [u8; 4]) -> [f32; 4] {
 /// [`set`] is called at start (`theme.json` > `RONOCTUA_THEME` > the first
 /// theme) and again when the person chooses; every `Color` resolves through
 /// it at the moment it is drawn, so the next frame is in the new palette.
+///
+/// # The ground
+///
+/// Every theme is solved on four pages (`nix/scripts/gen-theme.py`): its own
+/// chrome, and each desk the person may put the footer or the windows on
+/// (`LEADER s t`) — the owner's "the bands follow the ground" (2026-09-28).
+/// On a desk's page `color::SURFACE_CHROME` IS that desk, and every text,
+/// band and rule was solved from it; the notification band, the brain's
+/// line, the glance and the outlines are the same on every page. A surface
+/// that stands on a desk wears that page ([`set_ground`]) and paints exactly
+/// as it would on the chrome.
 pub mod theme {
     use core::sync::atomic::{AtomicUsize, Ordering};
 
+    /// The palette: `theme * PAGES + ground`, one word so a frame never reads
+    /// a theme from one store and a ground from another.
     static CURRENT: AtomicUsize = AtomicUsize::new(0);
+
+    /// The page a palette is solved on — the ground everything is measured
+    /// against. In the table's order.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    pub enum Ground {
+        /// The theme's own chrome: the base palette.
+        #[default]
+        Chrome,
+        /// The theme's coloured desk, `surface.backdrop`.
+        Backdrop,
+        /// The near desk, `surface.near` (a light theme's near-white).
+        Near,
+        /// The absolute desk, `surface.absolute`: black or white.
+        Absolute,
+    }
+
+    impl Ground {
+        /// Every page, in the table's order.
+        pub const ALL: [Self; 4] = [Self::Chrome, Self::Backdrop, Self::Near, Self::Absolute];
+
+        /// Where it sits in the table.
+        #[must_use]
+        pub const fn position(self) -> usize {
+            match self {
+                Self::Chrome => 0,
+                Self::Backdrop => 1,
+                Self::Near => 2,
+                Self::Absolute => 3,
+            }
+        }
+
+        /// The page's name, as the generator writes it (`chrome`, `backdrop`,
+        /// `near`, `absolute`).
+        #[must_use]
+        pub const fn id(self) -> &'static str {
+            super::themes::PAGES[self.position()]
+        }
+    }
 
     /// One of the declared themes. Only this module makes them, which is what
     /// keeps an index inside the table.
@@ -139,6 +212,35 @@ pub mod theme {
         pub const fn position(self) -> usize {
             self.index
         }
+
+        /// A LIGHT theme: the paper is its ground and its ladder walks toward
+        /// black. Declared in the seed (`mode`), carried here by the
+        /// generator beside the colours — a colour cannot be asked which side
+        /// of the ladder it is on.
+        #[must_use]
+        pub const fn is_light(self) -> bool {
+            super::themes::LIGHT[self.index]
+        }
+    }
+
+    /// Is the theme every `Color` resolves through right now a light one?
+    ///
+    /// What names the absolute desk — `surface.absolute` is black in a dark
+    /// theme and white in a light one, and the chooser has to say which.
+    #[must_use]
+    pub fn is_light() -> bool {
+        current().is_light()
+    }
+
+    /// Is the theme at `index` (a [`Theme::position`]) a light one?
+    ///
+    /// # Panics
+    ///
+    /// On an index that names no theme — an index is only ever a position a
+    /// `Theme` gave, and a guessed one is a defect to see, not a dark theme.
+    #[must_use]
+    pub const fn is_light_at(index: usize) -> bool {
+        super::themes::LIGHT[index]
     }
 
     /// Every theme, in `assets/themes/themes.nix` order. The first is the default.
@@ -168,18 +270,50 @@ pub mod theme {
     /// The theme every `Color` resolves through right now.
     #[must_use]
     pub fn current() -> Theme {
-        Theme {
-            index: CURRENT.load(Ordering::Relaxed),
-        }
+        Theme { index: index().0 }
     }
 
-    /// Makes `t` the theme every `Color` resolves through, process-wide.
+    /// The ground the process wears right now.
+    #[must_use]
+    pub fn ground() -> Ground {
+        Ground::ALL[index().1]
+    }
+
+    /// The palette as ONE number, for a cache whose picture was painted with
+    /// token values: it changes when the theme OR the ground does, which is
+    /// exactly when such a picture goes stale.
+    #[must_use]
+    pub fn palette() -> usize {
+        CURRENT.load(Ordering::Relaxed)
+    }
+
+    /// Makes `t` the theme every `Color` resolves through, process-wide, on
+    /// the ground the process already wears.
     ///
     /// `true` if it changed. `Relaxed` is enough: one self-contained word,
     /// nothing published alongside it; a frame that started under the old
     /// theme finishes under it, and the next one is in the new.
     pub fn set(t: Theme) -> bool {
-        CURRENT.swap(t.index, Ordering::Relaxed) != t.index
+        let pages = super::counts::PAGES;
+        let was = CURRENT
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |p| {
+                Some(t.index * pages + p % pages)
+            })
+            .unwrap_or_else(|p| p);
+        was / pages != t.index
+    }
+
+    /// Makes `g` the ground the process wears, in the theme it is in: every
+    /// `Color` resolves through that page's palette from here on. `true` if
+    /// it changed.
+    pub fn set_ground(g: Ground) -> bool {
+        let pages = super::counts::PAGES;
+        let was = CURRENT
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |p| {
+                Some(p / pages * pages + g.position())
+            })
+            .unwrap_or_else(|p| p);
+        was % pages != g.position()
     }
 
     /// The variable a NixOS option exports with the machine's default theme
@@ -194,8 +328,10 @@ pub mod theme {
         std::env::var(ENV).ok().and_then(|id| by_id(&id))
     }
 
-    pub(crate) fn index() -> usize {
-        CURRENT.load(Ordering::Relaxed)
+    /// `(theme, ground)`, from the one word.
+    pub(crate) fn index() -> (usize, usize) {
+        let p = CURRENT.load(Ordering::Relaxed);
+        (p / super::counts::PAGES, p % super::counts::PAGES)
     }
 }
 
@@ -467,6 +603,109 @@ mod tests {
     }
 
     #[test]
+    fn a_desks_page_is_its_desk_and_the_band_and_the_brain_never_move() {
+        // ON A DESK'S PAGE THE CHROME IS THE DESK: that is what wearing the
+        // page means, and it is the one fact the painters rely on — they
+        // clear with the chrome and are on the desk.
+        let desks = [
+            (theme::Ground::Backdrop, color::SURFACE_BACKDROP),
+            (theme::Ground::Near, color::SURFACE_NEAR),
+            (theme::Ground::Absolute, color::SURFACE_ABSOLUTE),
+        ];
+        for t in theme::all() {
+            let pages = &themes::TABLE[t.position()];
+            for (g, desk) in desks {
+                assert_eq!(
+                    pages[g.position()][usize::from(color::SURFACE_CHROME.0)],
+                    pages[0][usize::from(desk.0)],
+                    "{} on {g:?}",
+                    t.id()
+                );
+            }
+            // AND WHAT THE OWNER SAID NEVER MOVES, does not: the band, the
+            // brain's line, the glance, the outlines and the desks.
+            for (role, name) in color::NAMES.iter().enumerate() {
+                let fixed = ["notification.", "brain.", "glance.", "border."]
+                    .iter()
+                    .any(|p| name.starts_with(p))
+                    || matches!(
+                        *name,
+                        "surface.backdrop" | "surface.near" | "surface.absolute"
+                    );
+                if fixed {
+                    for g in theme::Ground::ALL {
+                        assert_eq!(
+                            pages[g.position()][role],
+                            pages[0][role],
+                            "{name} moved on {g:?} in {}",
+                            t.id()
+                        );
+                    }
+                }
+            }
+        }
+        // THE GENERATOR'S PAGES ARE THE ENUM'S, in the enum's order: the
+        // table is indexed by `Ground::position`, and a generator that wrote
+        // its pages in another order would put every desk's palette under
+        // another desk's name with nothing failing to build. Said against the
+        // words themselves — `Ground::id` reads `themes::PAGES`, so comparing
+        // the two would compare one expression with itself.
+        assert_eq!(themes::PAGES, ["chrome", "backdrop", "near", "absolute"]);
+        assert_eq!(theme::Ground::ALL.len(), counts::PAGES);
+        assert_eq!(
+            theme::Ground::ALL.map(theme::Ground::position),
+            [0, 1, 2, 3],
+            "the enum's order is not the table's"
+        );
+        assert_eq!(
+            theme::Ground::ALL.map(theme::Ground::id),
+            ["chrome", "backdrop", "near", "absolute"]
+        );
+    }
+
+    #[test]
+    fn a_colour_asked_in_a_palette_is_that_palettes_bytes() {
+        // THE WORKER'S READ (`Color::to_rgba8_in`): the bytes of the palette
+        // it names, and never the one the process happens to wear — every
+        // theme on every page, measured against the table itself so no test
+        // has to move the process-wide palette (`set` belongs to one test).
+        for t in theme::all() {
+            for g in theme::Ground::ALL {
+                let palette = t.position() * counts::PAGES + g.position();
+                for (role, name) in color::NAMES.iter().enumerate() {
+                    let c = Color(u16::try_from(role).expect("a role fits"));
+                    assert_eq!(
+                        c.to_rgba8_in(palette),
+                        themes::TABLE[t.position()][g.position()][role],
+                        "{name} in {} on {g:?}",
+                        t.id()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_theme_says_which_way_it_climbs_and_its_absolute_desk_agrees() {
+        // THE MODE AND THE COLOURS COME FROM ONE GENERATOR RUN, and this is
+        // what proves they travelled together: the absolute desk is the
+        // extreme a theme climbs AWAY from, so it is black exactly when the
+        // theme is dark and white exactly when it is light. A mode read
+        // wrong would name a white desk "black" on the chooser's row.
+        let absolute = usize::from(color::SURFACE_ABSOLUTE.0);
+        for t in theme::all() {
+            let bytes = themes::TABLE[t.position()][0][absolute];
+            let expected = if t.is_light() {
+                [0xFF, 0xFF, 0xFF, 0xFF]
+            } else {
+                [0x00, 0x00, 0x00, 0xFF]
+            };
+            assert_eq!(bytes, expected, "{}", t.id());
+            assert_eq!(theme::is_light_at(t.position()), t.is_light(), "{}", t.id());
+        }
+    }
+
+    #[test]
     fn a_colour_is_a_role_and_the_theme_says_which_bytes() {
         // THE ONE TEST THAT CALLS `set`: the theme is process-wide, and the
         // workspace's tests run in parallel. It restores what it found.
@@ -480,7 +719,7 @@ mod tests {
                 assert_eq!(handle.name(), *name);
                 assert_eq!(
                     handle.to_rgba8(),
-                    themes::TABLE[t.position()][role],
+                    themes::TABLE[t.position()][0][role],
                     "{name} in {}",
                     t.id()
                 );
@@ -490,7 +729,40 @@ mod tests {
             !theme::set(theme::current()),
             "setting the same theme is not a change"
         );
+        // AND THE MODE FOLLOWS THE THEME THE PROCESS IS IN.
+        for t in theme::all() {
+            theme::set(t);
+            assert_eq!(theme::is_light(), t.is_light(), "{}", t.id());
+        }
+        // AND THE GROUND PICKS THE PAGE, keeping the theme — and a theme set
+        // after it keeps the ground: the two are one palette, moved one half
+        // at a time.
+        let t = theme::current();
+        for g in theme::Ground::ALL {
+            theme::set_ground(g);
+            assert_eq!((theme::current(), theme::ground()), (t, g));
+            let role = color::SURFACE_CHROME;
+            assert_eq!(
+                role.to_rgba8(),
+                themes::TABLE[t.position()][g.position()][usize::from(role.0)],
+                "{g:?}"
+            );
+        }
+        assert!(
+            !theme::set_ground(theme::Ground::Absolute),
+            "the same ground is not a change"
+        );
         theme::set(before);
+        assert_eq!(
+            theme::ground(),
+            theme::Ground::Absolute,
+            "a theme set kept the ground"
+        );
+        // AND THE PALETTE NUMBER MOVES WITH EITHER HALF, which is what a
+        // cache keyed by it needs.
+        let on_absolute = theme::palette();
+        theme::set_ground(theme::Ground::Chrome);
+        assert_ne!(theme::palette(), on_absolute);
         // Role equality does not care which theme is in.
         assert_eq!(color::TEXT_DIM, color::TEXT_DIM);
         assert_ne!(color::TEXT_DIM, color::TEXT_PRIMARY);

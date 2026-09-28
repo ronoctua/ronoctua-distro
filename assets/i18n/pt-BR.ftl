@@ -1427,6 +1427,12 @@ which-buffer = Buffer em foco
 hint-state = Estado: { $state } — clique gira, Esc volta, Esc+setas escolhe
 which-state = Estado do buffer em foco
 
+## The leader's three sets: the key tapped right after the leader.
+leader-set-window = janelas
+cmd-leader-set-window = As mesmas teclas, cada uma abrindo o seu app numa janela em vez do rodapé
+leader-set-full = tudo
+cmd-leader-set-full = A árvore inteira de teclas, com cada submenu como era
+
 ## O painel de memoria — LEADER s m
 
 cmd-memory-open = Memória do sistema
@@ -2814,14 +2820,36 @@ update-verdict-stopped = parou aqui
 update-verdict-pending = ainda vem
 
 ## The theme chooser — LEADER s t. The themes are listed by id and have no
-## key; these are the option beside them (the desk under the windows), its
-## answers — one `theme-backdrop-<id>` per answer — and the hint.
+## key; these are the options beside them — the desk under the windows, the
+## ground of the footer, the ground of the windows and the borders — their
+## answers, and the hint. The absolute desk is `theme-backdrop-black` under a
+## dark theme and `theme-backdrop-white` under a light one; the near-white,
+## `theme-backdrop-near`, is offered only under a light theme.
 theme-option-theme = Tema
-theme-option-backdrop = Fundo
+theme-option-backdrop = Variações
+theme-option-footer = Rodapé
+theme-option-windows = Janelas
+theme-option-borders = Bordas
 theme-backdrop-black = Preto
-theme-backdrop-theme = A cor do tema
-theme-hint = { $apply } aplica · { $left }/{ $right } troca de coluna · { $close } volta
+theme-backdrop-white = Branco
+theme-backdrop-near = Quase branco
+theme-backdrop-theme = Cor do tema
+theme-ground-theme = Do tema
+theme-ground-desk = Do fundo
+theme-borders-standard = Padrão
+theme-borders-discreet = Discretas
+theme-hint = { $apply } aplica · { $left }/{ $right } troca de coluna
 echo-theme-unsaved = não deu para gravar o tema: { $error }
+## What the person's theme file says that was refused, said where the file is
+## read. `$file` is the file's name, `$field` its own key (theme, backdrop,
+## footer, windows, borders) and `$value` what it said — the file's words.
+echo-theme-refused = { $file } diz que { $field } é “{ $value }”, que não é uma opção aqui — recusado
+echo-theme-unreadable = não deu para ler { $file }, então todas as escolhas nele foram recusadas: { $error }
+## A write the chooser REFUSED: the file is there and does not read whole,
+## and writing the whole choice over it would lose what it says. `$why` is
+## the sentence that says what did not read (`echo-theme-refused` or
+## `echo-theme-unreadable`).
+echo-theme-kept = { $file } não foi gravado, para nada nele se perder; corrija ou apague à mão: { $why }
 
 ## Energia — a bateria, o carregador, o perfil e o sono (LEADER s p)
 
@@ -3075,6 +3103,53 @@ notif-battery-charged-summary = Bateria carregada
 notif-battery-charged-body = Pode desligar da tomada.
 notif-action-power-panel = Abrir o painel de energia
 notif-action-bluetooth-panel = Abrir o Bluetooth
+
+# O QUE A MÁQUINA FEZ, dito na linha do minibuffer (`events.rs`). O resumo é a
+# linha; o corpo só é lido quando a linha estava ocupada e o evento veio como
+# notificação — e então a última frase diz isso.
+notif-privacy-app = privacidade
+notif-network-app = rede
+notif-minibuffer-was-busy = Isto costuma aparecer no minibuffer, mas ele estava ocupado, então veio como notificação.
+notif-camera-in-use-summary = Uma câmera está aberta por { $programs }
+notif-camera-in-use-body = Ela fica aberta até esse programa soltá-la.
+notif-camera-free-summary = Nenhum programa está mais com uma câmera aberta
+notif-camera-free-body = Todo programa que tinha uma aberta a soltou.
+notif-microphone-in-use-summary = Um microfone está escutando
+notif-microphone-in-use-body = Um programa o abriu. A vista de som diz qual.
+notif-microphone-free-summary = Nenhum microfone está mais escutando
+notif-microphone-free-body = Todo programa que escutava parou.
+notif-studio-recording-started-summary = A câmera está gravando
+notif-studio-recording-started-body = Ela grava até alguém parar.
+notif-studio-recording-stopped-summary = A câmera parou de gravar
+notif-studio-recording-stopped-body = A gravação terminou.
+notif-studio-streaming-started-summary = A câmera está transmitindo
+notif-studio-streaming-started-body = O que ela filma sai ao vivo até a transmissão parar.
+notif-studio-streaming-stopped-summary = A transmissão terminou
+notif-studio-streaming-stopped-body = Nada mais está saindo.
+notif-network-connected-summary = Conectado a { $network }
+notif-network-connected-body = A máquina tem uma saída por ela.
+notif-network-lost-summary = { $network } caiu
+notif-network-lost-body = A máquina não está mais conectada por ela.
+notif-airplane-on-summary = Modo avião ligado
+notif-airplane-on-body = Todo rádio e cabo está desligado.
+notif-airplane-off-summary = Modo avião desligado
+notif-airplane-off-body = Os rádios e o cabo voltaram.
+notif-vpn-up-summary = { $vpn } está no ar
+notif-vpn-up-body = O que sai da máquina passa pelo túnel.
+notif-vpn-down-summary = { $vpn } caiu
+notif-vpn-down-body = O que sai da máquina não passa mais pelo túnel.
+notif-tailnet-up-summary = Na tailnet
+notif-tailnet-up-body = Esta máquina alcança as outras que estão nela.
+notif-tailnet-down-summary = Fora da tailnet
+notif-tailnet-down-body = As outras máquinas dela estão fora de alcance.
+notif-tor-up-summary = Saindo pelo Tor
+notif-tor-up-body = Há um circuito pelo Tor.
+notif-tor-down-summary = Não está mais saindo pelo Tor
+notif-tor-down-body = Não há mais circuito pelo Tor.
+notif-charger-plugged-summary = Carregador conectado
+notif-charger-plugged-body = A energia vem do carregador.
+notif-charger-unplugged-summary = Carregador removido
+notif-charger-unplugged-body = A máquina está na bateria.
 
 # A SAÍDA — as três marcas, e o que o daemon acredita.
 network-way = a internet
@@ -5680,6 +5755,9 @@ cmd-kiosk-extension-options = Abrir as opções de uma extensão
 cmd-kiosk-extension-details = Os detalhes de uma extensão no Chrome
 cmd-kiosk-release = Fazer do quiosque uma janela comum do Chrome de novo
 cmd-modeline-adapt-kiosk = Adaptar a modeline ao quiosque, ou não
+cmd-footer-hide-push = Esconder a modeline e o minibuffer, empurrando as janelas quando algo abre; de novo, mostrá-los
+cmd-footer-hide-cover = Esconder a modeline e o minibuffer, pondo o que abre por cima das janelas; de novo, mostrá-los
+echo-footer-opaque = Esta tela não desenha o rodapé transparente, então as barras ocultas deixam uma faixa opaca.
 cmd-kiosk-list-down = Próxima linha da lista do quiosque
 cmd-kiosk-list-up = Linha anterior da lista do quiosque
 cmd-kiosk-list-enter = A linha da lista do quiosque: a aba para a frente, ou a página da extensão

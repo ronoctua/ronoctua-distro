@@ -441,6 +441,32 @@ pub struct Prefs {
     pub adapt: BTreeMap<String, bool>,
     /// Whether the kiosk's address line is up. Absent is off.
     pub address_line: bool,
+    /// Whether the modeline and the minibuffer are hidden, and how — see
+    /// `crate::hidden`. ABSENT IS VISIBLE: the bars are what a person gets
+    /// until they say otherwise.
+    ///
+    /// AN UNKNOWN VALUE IS A FILE THAT DOES NOT PARSE, and not a default: a
+    /// word misspelt by hand is refused with the sentence every switch of
+    /// this file already says (`echo-modeline-will-not-parse`), rather than
+    /// quietly turning the bars back on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<Hidden>,
+}
+
+/// The two hidden modes of the modeline and the minibuffer.
+///
+/// In both the bars leave the screen at rest and come back at its bottom edge,
+/// and the minibuffer shows itself whenever it has something to say. They
+/// differ in what the footer does to the windows while it shows anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Hidden {
+    /// `LEADER LEADER`: what opens PUSHES the windows away and stands on the
+    /// desk they moved off — the desk's colour, opaque, worn as the desk's
+    /// page (`crate::hidden::Shape::page`).
+    Push,
+    /// `LEADER ALT LEADER`: everything lies OVER the windows, on a veil.
+    Cover,
 }
 
 impl Prefs {
@@ -455,6 +481,34 @@ impl Prefs {
 #[must_use]
 pub fn store() -> ronoctua_store::Store<Prefs> {
     ronoctua_store::Store::at(ronoctua_store::config_dir(), FILE)
+}
+
+/// What the footer does with `modeline.json` as it reads now, against the
+/// copy it holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reread {
+    /// Nothing new — this footer's own write, or nothing changed.
+    Same,
+    /// Another hand changed it: this is the file now.
+    Taken(Prefs),
+    /// The file does not parse: the copy held is kept, and the footer says
+    /// so (`echo-modeline-will-not-parse`).
+    Refused,
+}
+
+/// The file read again, for the watcher — with `parsed`, never `read`.
+///
+/// `read` answers a file that does not parse with the DEFAULT, and the
+/// default is the bars visible and every switch reset: a word misspelt by
+/// hand (`"Cover"`) turned the bars back on and said nothing. A refusal is a
+/// value with a sentence (`AGENTS.md`), and the copy held stays what it was.
+#[must_use]
+pub fn reread(store: &ronoctua_store::Store<Prefs>, held: &Prefs) -> Reread {
+    match store.parsed() {
+        None => Reread::Refused,
+        Some(fresh) if fresh == *held => Reread::Same,
+        Some(fresh) => Reread::Taken(fresh),
+    }
 }
 
 #[cfg(test)]
@@ -499,6 +553,90 @@ mod tests {
     fn the_name_takes_the_accent_with_the_keyboard() {
         assert_eq!(mode_colour(true), ronoctua_tokens::color::STATE_ACCENT);
         assert_ne!(mode_colour(false), ronoctua_tokens::color::STATE_ACCENT);
+    }
+
+    /// FAILS IF: an absent `hidden` reads as anything but visible, one of the
+    /// two modes does not survive a write and a read, or a word nobody wrote
+    /// parses into a mode instead of refusing the file.
+    #[test]
+    fn the_hidden_mode_is_a_word_or_nothing() {
+        let absent: Prefs = serde_json::from_str("{}").expect("parses");
+        assert_eq!(absent.hidden, None);
+        for mode in [Hidden::Push, Hidden::Cover] {
+            let p = Prefs {
+                hidden: Some(mode),
+                ..Prefs::default()
+            };
+            let text = serde_json::to_string(&p).expect("writes");
+            assert_eq!(serde_json::from_str::<Prefs>(&text).expect("reads"), p);
+        }
+        assert_eq!(
+            serde_json::from_str::<Prefs>(r#"{"hidden":"cover"}"#)
+                .expect("parses")
+                .hidden,
+            Some(Hidden::Cover)
+        );
+        // VISIBLE IS WRITTEN AS NOTHING, so a file that never hid stays the
+        // file it was.
+        assert!(
+            !serde_json::to_string(&Prefs::default())
+                .expect("writes")
+                .contains("hidden")
+        );
+        assert!(serde_json::from_str::<Prefs>(r#"{"hidden":"sideways"}"#).is_err());
+        assert!(serde_json::from_str::<Prefs>(r#"{"hidden":"Push"}"#).is_err());
+    }
+
+    /// FAILS IF: `Store::parsed` answers a file with an unknown mode with
+    /// anything but `None` — which is what makes the toggle refuse, with the
+    /// sentence, instead of writing over the person's file.
+    #[test]
+    fn an_unknown_mode_is_refused_by_the_store() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-hidden-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a directory");
+        std::fs::write(dir.join(FILE), r#"{"adapt":{},"hidden":"sideways"}"#).expect("written");
+        let store: ronoctua_store::Store<Prefs> =
+            ronoctua_store::Store::at(Some(dir.clone()), FILE);
+        assert_eq!(store.parsed(), None);
+        std::fs::write(dir.join(FILE), r#"{"hidden":"push"}"#).expect("written");
+        assert_eq!(store.parsed().and_then(|p| p.hidden), Some(Hidden::Push));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the WATCHER takes a file that does not parse as the default
+    /// — the bars back on and every switch reset, in silence — instead of
+    /// keeping the copy it holds and refusing; or stops taking a file another
+    /// hand changed, or takes its own write as news.
+    #[test]
+    fn the_watcher_refuses_an_unknown_mode_and_keeps_its_copy() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-reread-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a directory");
+        let store: ronoctua_store::Store<Prefs> =
+            ronoctua_store::Store::at(Some(dir.clone()), FILE);
+        let held = Prefs {
+            hidden: Some(Hidden::Push),
+            address_line: true,
+            ..Prefs::default()
+        };
+        // A WORD MISSPELT BY HAND: capital C.
+        std::fs::write(dir.join(FILE), r#"{"address_line":true,"hidden":"Cover"}"#)
+            .expect("written");
+        assert_eq!(reread(&store, &held), Reread::Refused);
+        std::fs::write(dir.join(FILE), r#"{"address_line":true,"hidden":"push"}"#)
+            .expect("written");
+        assert_eq!(reread(&store, &held), Reread::Same);
+        std::fs::write(dir.join(FILE), r#"{"hidden":"cover"}"#).expect("written");
+        assert_eq!(
+            reread(&store, &held),
+            Reread::Taken(Prefs {
+                hidden: Some(Hidden::Cover),
+                ..Prefs::default()
+            })
+        );
+        // NO FILE is a fresh machine, and the default is right there.
+        std::fs::remove_file(dir.join(FILE)).expect("removed");
+        assert_eq!(reread(&store, &held), Reread::Taken(Prefs::default()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FAILS IF: an absent switch reads as off, one adapter's switch turns

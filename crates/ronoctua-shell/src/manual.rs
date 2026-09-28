@@ -630,7 +630,7 @@ pub fn gesture_art_key(id: &str) -> String {
     let (w, h) = gesture_art_box();
     format!(
         "gesture:{id}:{w:.0}x{h:.0}:{}",
-        ronoctua_tokens::theme::current().position()
+        ronoctua_tokens::theme::palette()
     )
 }
 

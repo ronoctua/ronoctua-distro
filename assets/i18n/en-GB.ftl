@@ -1430,6 +1430,16 @@ which-buffer = Focused buffer
 hint-state = State: { $state } — click cycles, Esc returns, Esc+arrows chooses
 which-state = State of the focused buffer
 
+## The leader's three sets: the key tapped right after the leader.
+# Alone, a key that has a footer and a window opens the footer; after a tap
+# of Alt it opens the window; after a tap of Ctrl the whole tree is there. The
+# short word is what the hint line draws beside the key; `cmd-` is what the
+# pointer reads, and what `LEADER :` lists.
+leader-set-window = windows
+cmd-leader-set-window = The same keys, each opening its app in a window instead of the footer
+leader-set-full = everything
+cmd-leader-set-full = The whole tree of keys, with every submenu as it was
+
 ## The memory panel — LEADER s m
 
 cmd-memory-open = System memory
@@ -2828,14 +2838,36 @@ update-verdict-stopped = it stopped here
 update-verdict-pending = still to come
 
 ## The theme chooser — LEADER s t. The themes are listed by id and have no
-## key; these are the option beside them (the desk under the windows), its
-## answers — one `theme-backdrop-<id>` per answer — and the hint.
+## key; these are the options beside them — the desk under the windows, the
+## ground of the footer, the ground of the windows and the borders — their
+## answers, and the hint. The absolute desk is `theme-backdrop-black` under a
+## dark theme and `theme-backdrop-white` under a light one; the near-white,
+## `theme-backdrop-near`, is offered only under a light theme.
 theme-option-theme = Theme
-theme-option-backdrop = Background
+theme-option-backdrop = Variations
+theme-option-footer = Footer
+theme-option-windows = Windows
+theme-option-borders = Borders
 theme-backdrop-black = Black
+theme-backdrop-white = White
+theme-backdrop-near = Near white
 theme-backdrop-theme = The theme's colour
-theme-hint = { $apply } applies · { $left }/{ $right } changes column · { $close } goes back
+theme-ground-theme = The theme's
+theme-ground-desk = The desk's
+theme-borders-standard = Standard
+theme-borders-discreet = Discreet
+theme-hint = { $apply } applies · { $left }/{ $right } changes column
 echo-theme-unsaved = the theme could not be saved: { $error }
+## What the person's theme file says that was refused, said where the file is
+## read. `$file` is the file's name, `$field` its own key (theme, backdrop,
+## footer, windows, borders) and `$value` what it said — the file's words.
+echo-theme-refused = { $file } says { $field } is “{ $value }”, which is not an option here — refused
+echo-theme-unreadable = { $file } could not be read, so every choice in it was refused: { $error }
+## A write the chooser REFUSED: the file is there and does not read whole,
+## and writing the whole choice over it would lose what it says. `$why` is
+## the sentence that says what did not read (`echo-theme-refused` or
+## `echo-theme-unreadable`).
+echo-theme-kept = { $file } was not written, so nothing in it is lost; fix it or remove it by hand: { $why }
 
 ## Power — the battery, the charger, the profile and sleep (LEADER s p)
 
@@ -3089,6 +3121,53 @@ notif-battery-charged-summary = Battery charged
 notif-battery-charged-body = You can unplug.
 notif-action-power-panel = Open the power panel
 notif-action-bluetooth-panel = Open Bluetooth
+
+# WHAT THE MACHINE DID, said on the minibuffer's line (`events.rs`). The
+# summary is the line; the body is only read when the line was busy and the
+# event came as a notification instead — and then the last sentence says so.
+notif-privacy-app = privacy
+notif-network-app = network
+notif-minibuffer-was-busy = This usually shows in the minibuffer, but it was busy, so it came as a notification.
+notif-camera-in-use-summary = A camera is open by { $programs }
+notif-camera-in-use-body = It stays open until that program lets it go.
+notif-camera-free-summary = No program has a camera open any more
+notif-camera-free-body = Every program that had one open has let it go.
+notif-microphone-in-use-summary = A microphone is listening
+notif-microphone-in-use-body = A program opened it. The sound view says which.
+notif-microphone-free-summary = No microphone is listening any more
+notif-microphone-free-body = Every program that was listening has stopped.
+notif-studio-recording-started-summary = The camera is recording
+notif-studio-recording-started-body = It records until it is stopped.
+notif-studio-recording-stopped-summary = The camera stopped recording
+notif-studio-recording-stopped-body = The recording has ended.
+notif-studio-streaming-started-summary = The camera is streaming
+notif-studio-streaming-started-body = What it films goes out live until the stream is stopped.
+notif-studio-streaming-stopped-summary = The stream has ended
+notif-studio-streaming-stopped-body = Nothing goes out any more.
+notif-network-connected-summary = Connected to { $network }
+notif-network-connected-body = The machine has a way out through it.
+notif-network-lost-summary = { $network } dropped
+notif-network-lost-body = The machine is no longer connected through it.
+notif-airplane-on-summary = Aeroplane mode is on
+notif-airplane-on-body = Every radio and cable is off.
+notif-airplane-off-summary = Aeroplane mode is off
+notif-airplane-off-body = The radios and the cable are back on.
+notif-vpn-up-summary = { $vpn } is up
+notif-vpn-up-body = What leaves the machine goes through the tunnel.
+notif-vpn-down-summary = { $vpn } is down
+notif-vpn-down-body = What leaves the machine no longer goes through the tunnel.
+notif-tailnet-up-summary = On the tailnet
+notif-tailnet-up-body = This machine reaches the others on it.
+notif-tailnet-down-summary = Off the tailnet
+notif-tailnet-down-body = The other machines on it are out of reach.
+notif-tor-up-summary = Going out through Tor
+notif-tor-up-body = There is a circuit through Tor.
+notif-tor-down-summary = No longer going out through Tor
+notif-tor-down-body = There is no circuit through Tor any more.
+notif-charger-plugged-summary = Charger plugged in
+notif-charger-plugged-body = The power comes from the charger.
+notif-charger-unplugged-summary = Charger unplugged
+notif-charger-unplugged-body = The machine runs on its battery.
 
 # THE WAY OUT — the three marks, and what the daemon believes.
 network-way = the internet
@@ -5692,6 +5771,9 @@ cmd-kiosk-extension-options = Open an extension's options
 cmd-kiosk-extension-details = An extension's details in Chrome
 cmd-kiosk-release = Make the kiosk an ordinary Chrome window again
 cmd-modeline-adapt-kiosk = Adapt the modeline to the kiosk, or not
+cmd-footer-hide-push = Hide the modeline and the minibuffer, pushing the windows away when something opens; again, show them
+cmd-footer-hide-cover = Hide the modeline and the minibuffer, laying what opens over the windows; again, show them
+echo-footer-opaque = This screen cannot draw the footer see-through, so the hidden bars leave an opaque strip.
 cmd-kiosk-list-down = Next row of the kiosk's list
 cmd-kiosk-list-up = Previous row of the kiosk's list
 cmd-kiosk-list-enter = The row of the kiosk's list: the tab to the front, or the extension's page

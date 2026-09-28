@@ -81,6 +81,12 @@ struct Ask {
     /// — never the file or the environment: a photograph is deterministic, as
     /// `--language` already is.
     theme: tokens::theme::Theme,
+    /// The PAGE the buffer's window wears: the theme's chrome unless asked,
+    /// or a desk's (`LEADER s t`, the windows' answer) — where every ink and
+    /// band the buffer draws was solved from that desk, and the window's
+    /// ground IS the desk. A buffer is photographed on each, or the three
+    /// desk palettes are seen only in a VM.
+    page: tokens::theme::Ground,
     /// How many physical pixels one logical pixel is.
     ///
     /// ONE unless asked. A photograph has no screen to be on, so this is not
@@ -125,6 +131,8 @@ usage: ronoctua-render-png <component.wasm> [options]
   --lines <n>         height in cells          (default: 24)
   --language <id>     pt-BR or en-GB           (default: pt-BR)
   --theme <id>        a theme of assets/themes  (default: the first)
+  --page <id>         the page the window wears: chrome, backdrop, near
+                      or absolute                (default: chrome)
   --text <percent>    text size, in percent     (default: 100)
   --scale <n>         physical px per logical   (default: 1)
 
@@ -162,6 +170,19 @@ fn cells(flag: &str, raw: &str) -> Result<u16> {
     Ok(asked)
 }
 
+/// The page a `--page` names, by the generator's own word for it — refused,
+/// with the words it knows, when it is none of them: a photograph on a page
+/// nobody asked for is worse than one that did not happen.
+fn page_by_id(id: &str) -> Result<tokens::theme::Ground> {
+    tokens::theme::Ground::ALL
+        .into_iter()
+        .find(|g| g.id() == id)
+        .with_context(|| {
+            let known: Vec<&str> = tokens::theme::Ground::ALL.iter().map(|g| g.id()).collect();
+            format!("unknown page `{id}`; the pages are {}", known.join(", "))
+        })
+}
+
 fn parse() -> Result<Ask> {
     let mut args = std::env::args().skip(1);
     let first = args.next().context(USAGE)?;
@@ -177,6 +198,7 @@ fn parse() -> Result<Ask> {
         lines: 24,
         language: "pt-BR".to_owned(),
         theme: tokens::theme::default_one(),
+        page: tokens::theme::Ground::Chrome,
         text: tokens::text::NORMAL,
         scale: 1,
         inputs: Vec::new(),
@@ -207,6 +229,7 @@ fn parse() -> Result<Ask> {
                     format!("unknown theme `{id}`; the themes are {}", known.join(", "))
                 })?;
             }
+            "--page" => me.page = page_by_id(&value()?)?,
             "--text" => {
                 // THE RANGE IS NOT REPEATED HERE. It is three tokens
                 // (`font.scale.*`), and a usage line spelling them out is the
@@ -374,8 +397,10 @@ fn parse() -> Result<Ask> {
 fn main() -> Result<()> {
     let ask = parse()?;
     // The theme, before anything resolves a colour: every `Color` is a role
-    // that reads the process's theme when drawn, and this is that theme.
+    // that reads the process's theme when drawn, and this is that theme — and
+    // the page, the way a door wears its own (`door::Door::paint`).
     tokens::theme::set(ask.theme);
+    tokens::theme::set_ground(ask.page);
     tokens::text::set(ask.text);
     let texts = ronoctua_i18n::Texts::fresh(&ask.language)
         .with_context(|| format!("the language `{}` does not exist", ask.language))?;
@@ -552,9 +577,14 @@ fn main() -> Result<()> {
     // THE SAME ORDER AS THE WINDOW'S: the selection is a background, and
     // anything drawn after it stays on top. Drawing it last would hide the very
     // text it exists to highlight.
+    //
+    // AND THE WINDOW'S CLEAR: the page's own ground, `surface.chrome`, which
+    // is what a door clears every frame with (`door::Door::paint`) — and on
+    // a desk's page IS the desk. It was `surface.buffer` here, a ground no
+    // buffer window stands on.
     let drawn = &text;
     let bands_ref = &quads;
-    gpu.frame(tokens::color::SURFACE_BUFFER.to_linear(), |pass| {
+    gpu.frame(tokens::color::SURFACE_CHROME.to_linear(), |pass| {
         bands_ref.draw(pass);
         drawn.draw(ronoctua_render::Atlas::Pinned, pass)
     })?;
@@ -576,7 +606,7 @@ fn main() -> Result<()> {
         );
     }
     println!(
-        "{}: {}x{} px, {} cells by {}, scale {}, {} runs, language {}",
+        "{}: {}x{} px, {} cells by {}, scale {}, {} runs, language {}, theme {} on the {} page",
         ask.out.display(),
         gpu.width,
         gpu.height,
@@ -584,7 +614,33 @@ fn main() -> Result<()> {
         ask.lines,
         ask.scale,
         spans.len(),
-        texts.language()
+        texts.language(),
+        ask.theme.id(),
+        ask.page.id()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_page_is_named_by_the_generators_word_and_nothing_else_is_one() {
+        // A BUFFER ON EVERY PAGE a window may wear: the chrome and the three
+        // desks, each by the word `gen-theme.py` writes its palette under.
+        for g in tokens::theme::Ground::ALL {
+            assert_eq!(page_by_id(g.id()).ok(), Some(g), "{g:?}");
+        }
+        // AND A WORD THAT IS NOT ONE IS REFUSED, naming the ones that are —
+        // the legacy desk's `black` included: that is an answer of the
+        // chooser's, not a page.
+        for wrong in ["black", "desk", "Chrome", ""] {
+            let said = page_by_id(wrong).expect_err(wrong).to_string();
+            assert!(
+                said.contains("chrome") && said.contains("absolute"),
+                "{said}"
+            );
+        }
+    }
 }

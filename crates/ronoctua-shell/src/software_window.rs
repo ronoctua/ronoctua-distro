@@ -195,12 +195,17 @@ pub fn host_it(opening: Opening) -> Result<()> {
             })
             .map_err(|e| anyhow::anyhow!("could not hang the image channel: {e}"))?;
 
+        // THE KEYS ITS SENTENCES TEACH are read from the leader's own trees,
+        // from the set every sequence starts in (`leader::taught_keys`): this
+        // window is a process of its own, and asks the same tables the footer
+        // walks.
+        let (trees, _) = crate::leader::default_of()?;
         let mut readings = Readings::fresh(
             context
                 .as_ref()
                 .map(|c| c.prefs.clone())
                 .unwrap_or_default(),
-            Taught::of_this_leader(),
+            Taught::of_this_leader(&trees),
         );
         readings.zone =
             ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime"));

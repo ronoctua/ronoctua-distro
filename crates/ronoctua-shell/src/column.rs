@@ -37,9 +37,17 @@
 //!
 //! # The focus line
 //!
-//! While any keyboard is on the column, a line in the accent across its top
-//! (`chrome::focus_line`): nothing else turned blue when the column took the
-//! keys. It lies in the leading above line 0 and moves nothing.
+//! While any keyboard is on the column, a line across its top in the colour
+//! a focused window's outline has — the accent, or the discreet outline when
+//! the person asked for discreet borders (`chrome::focus_line`): nothing else
+//! said so when the column took the keys. It lies in the leading above line 0
+//! and moves nothing.
+//!
+//! # The column's ground
+//!
+//! The FOOTER's page (`LEADER s t`): the chrome's palette, or the desk's — a
+//! column is chrome in a strip, the footer's neighbour, and never a window
+//! (`Content::page`).
 //!
 //! # One workspace per column
 //!
@@ -1441,6 +1449,14 @@ impl<T: Tenant> Content for Column<T> {
 
     fn header_line(&self) -> u16 {
         HEADER_LINE
+    }
+
+    /// THE FOOTER'S PAGE, not the windows': a column is chrome drawn in a
+    /// strip beside the footer (invariant 14), and the person's answer for
+    /// the footer (`LEADER s t`) is the answer for it — its tenant wears it
+    /// too.
+    fn page(&self) -> crate::theme::Page {
+        crate::theme::footer_page()
     }
 
     /// A screen that went away took the surface: the column parks, and the

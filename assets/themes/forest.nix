@@ -85,7 +85,9 @@
       # Two Lc up: a green at this chroma reads a shade darker than owl's blue
       # at the same contrast, and the accent has to carry the focus.
       shift = 2;
-      torsion = 15;
+      # 5 AND NOT 15: on the darkest pages the band came 0.045 from a rule
+      # (floor 0.05); five degrees nearer the solid it keeps 0.05 on all four.
+      torsion = 5;
       # The band on green-tinted greys: at the same hue only chroma tells them
       # apart, and a green this dark has little of it to give, so the paint
       # steps run at three times the ladder's — the boundary clamps the rest.

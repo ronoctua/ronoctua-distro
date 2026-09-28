@@ -315,8 +315,8 @@ pub fn divider_lit(x_px: f32, from_px: f32, bottom_px: f32) -> ronoctua_render::
     }
 }
 
-/// THE COLUMN HAS THE KEYBOARD: a line in the accent across its top, edge to
-/// edge (`crate::column`).
+/// THE COLUMN HAS THE KEYBOARD: a line across its top, edge to edge
+/// (`crate::column`), in the colour of a focused window's outline.
 ///
 /// # Why a line, and why there
 ///
@@ -327,6 +327,14 @@ pub fn divider_lit(x_px: f32, from_px: f32, bottom_px: f32) -> ronoctua_render::
 /// focus border is two pixels (`default_border pixel 2`), so this is two too
 /// (`space.column.focusLine`), and a column that has the keys reads the way a
 /// window that has them does.
+///
+/// # Why the borders' colour
+///
+/// For the same reason, and as loud: with discreet borders (`LEADER s t`) the
+/// focused window's outline is `border.discreet`, and an accent line on the
+/// column would be the one loud outline left on the screen. So it is the
+/// accent or the discreet outline, whichever the person chose
+/// (`crate::theme::focus_line`), asked at the moment it is drawn.
 ///
 /// # Why it moves nothing
 ///
@@ -342,7 +350,7 @@ pub fn focus_line(width_px: f32) -> ronoctua_render::quad::Quad {
         y: 0.0,
         width: width_px,
         height: f32::from(tokens::space::COLUMN_FOCUSLINE),
-        color: tokens::color::STATE_ACCENT,
+        color: crate::theme::focus_line(),
     }
 }
 
@@ -432,6 +440,18 @@ pub enum Register {
     ContextualLit,
     /// The same, for the words beside the key.
     ProseLit,
+    /// AN ACTION OFFERED AFTER WHAT THE LINE SAYS — an event's, on the
+    /// minibuffer (`crate::events`), which runs a command of the registry.
+    ///
+    /// Not a key and not prose: it is a VERB somebody presses, and the
+    /// notification band already draws that kind of thing in a tone of its
+    /// own (`notification.acts`) because an action drawn in the message's ink
+    /// read as one more line of the message. The owner asked for an action to
+    /// look like ONE thing wherever it is, so this is that same token — the
+    /// band's button and the line's, told apart from nothing.
+    Action,
+    /// The same action under the pointer, where a click would land.
+    ActionLit,
     /// A KEY THAT A CLICK CANNOT PRESS.
     ///
     /// Every shortcut a header teaches is a CONTROL: a click presses the key
@@ -470,6 +490,8 @@ impl Register {
             Self::AlternateLit => tokens::color::TEXT_SUBTLE_LIT_ALTERNATE,
             Self::ContextualLit => tokens::color::TEXT_SUBTLE_LIT_CONTEXTUAL,
             Self::ProseLit => tokens::color::TEXT_SUBTLE_LIT_PROSE,
+            Self::Action => tokens::color::NOTIFICATION_ACTS,
+            Self::ActionLit => tokens::color::NOTIFICATION_ACTS_LIT,
             Self::Glyph => tokens::color::STATE_ACCENT,
             Self::Label => tokens::color::TEXT_SUBTLE_EXPLAIN,
             Self::Title => tokens::color::TEXT_HEADER_TITLE,
@@ -560,6 +582,22 @@ impl Piece {
             register: Register::Said,
             id: None,
             press: None,
+        }
+    }
+
+    /// An ACTION the line offers — its label, and the command of the registry
+    /// a click runs.
+    ///
+    /// It carries the command as its id too, so the pointer resting on it
+    /// names it and the line under it reads `cmd-<id>` (`hint_sentence`), and
+    /// it lights under the pointer ([`lit`]) like every shortcut does.
+    #[must_use]
+    pub fn action(label: impl Into<String>, command: &'static str) -> Self {
+        Self {
+            text: label.into(),
+            register: Register::Action,
+            id: Some(command),
+            press: Some(Act::Run(command)),
         }
     }
 
@@ -732,6 +770,7 @@ pub fn lit(pieces: &[Piece], id: Option<&str>) -> Vec<Piece> {
                 Register::Alternate => Register::AlternateLit,
                 Register::Contextual => Register::ContextualLit,
                 Register::Prose => Register::ProseLit,
+                Register::Action => Register::ActionLit,
                 other => other,
             };
             Piece {
@@ -740,6 +779,143 @@ pub fn lit(pieces: &[Piece], id: Option<&str>) -> Vec<Piece> {
             }
         })
         .collect()
+}
+
+/// A line that SAYS something and offers what can be done about it: the
+/// sentence, then each action, a dot before every one.
+///
+/// The minibuffer's line for an event (`crate::events`) whose catalogue entry
+/// has actions. The dot is the hint line's own ([`Piece::separator`]), for
+/// the reason the band gives for its: labels side by side in one tone read as
+/// one sentence, and an action's label IS a sentence.
+#[must_use]
+pub fn said_with_actions(
+    said: impl Into<String>,
+    actions: &[(String, &'static str)],
+) -> Vec<Piece> {
+    let mut out = vec![Piece::said(said)];
+    for (label, command) in actions {
+        out.push(Piece::separator());
+        out.push(Piece::action(label.clone(), command));
+    }
+    out
+}
+
+/// Where the actions at the end of a line begin — the dot before the first
+/// of them included, because it is theirs — or `None` for a line with none.
+fn actions_from(pieces: &[Piece]) -> Option<usize> {
+    let first = pieces
+        .iter()
+        .position(|p| matches!(p.register, Register::Action | Register::ActionLit))?;
+    Some(
+        if first > 0 && pieces[first - 1].register == Register::Separator {
+            first - 1
+        } else {
+            first
+        },
+    )
+}
+
+/// The cells a run of pieces takes.
+fn cells_of(pieces: &[Piece]) -> u16 {
+    pieces
+        .iter()
+        .map(|p| ronoctua_render::layout::width(&p.text))
+        .sum()
+}
+
+/// The same line fitted to `room` cells with its actions FLUSH AT THE END:
+/// the sentence is cut when it is too long for what the actions leave, and
+/// followed by air when it is short.
+///
+/// # Why the sentence gives way
+///
+/// [`laid`] cuts whatever overruns, which is the END of a line — and on a line
+/// that ends with its actions, the end is the one part a click needs. So the
+/// actions' cells come off the room before the words are measured, the rule
+/// the band keeps for the button at the end of a line it had to cut.
+///
+/// # Why at the end of the room, and not right after the words
+///
+/// Because what an action DOES is said in the same place the event is: there
+/// is no row under the line at rest (`Footer::explain_rows` takes its row out
+/// of the region, and at rest there is none), so the sentence about the
+/// action under the pointer takes the words' place ([`explained_in_place`]).
+/// With the actions right after the words, a sentence of another length would
+/// move them out from under the pointer that asked, the hover would end, the
+/// words would come back — the loop `Footer::explain_rows` is written about.
+/// Anchored to the end of the room, they never move while the line is up.
+///
+/// A ROOM TOO NARROW FOR BOTH keeps the sentence, and the band's rule again
+/// says why: an action after a sentence nobody could read offers to act on
+/// nothing. The line's drawer (`crate::fold`) shows the whole of it anyway.
+///
+/// A line with no action comes back as it went in.
+#[must_use]
+pub fn room_for_actions(pieces: &[Piece], room: u16) -> Vec<Piece> {
+    let Some(from) = actions_from(pieces) else {
+        return pieces.to_vec();
+    };
+    let tail = cells_of(&pieces[from..]);
+    let Some(head) = room.checked_sub(tail).filter(|h| *h >= tail) else {
+        return pieces.to_vec();
+    };
+    let mut out = Vec::with_capacity(pieces.len() + 1);
+    let mut left = head;
+    for p in &pieces[..from] {
+        let w = ronoctua_render::layout::width(&p.text);
+        if w <= left {
+            out.push(p.clone());
+            left -= w;
+        } else {
+            if left > 0 {
+                out.push(Piece {
+                    text: ronoctua_render::layout::elide_end(&p.text, left),
+                    ..p.clone()
+                });
+            }
+            left = 0;
+        }
+    }
+    // THE AIR THAT PUTS THE ACTIONS AT THE END, as a run of its own: carried
+    // by the sentence it would be drawn in the sentence's ink, and a register
+    // that ever grows a background would paint it.
+    if left > 0 {
+        out.push(Piece::prose(" ".repeat(usize::from(left))));
+    }
+    out.extend(pieces[from..].iter().cloned());
+    out
+}
+
+/// The same line with `sentence` where its words were — the sentence about
+/// the action under the pointer — in exactly the cells the words took, so
+/// the actions stay where they are.
+///
+/// Drawn in [`Register::Explain`], the register the answer to a pointer's
+/// question has on every other line. A line with no action is left alone:
+/// there is nothing on it for the pointer to have asked about.
+#[must_use]
+pub fn explained_in_place(pieces: &[Piece], sentence: &str) -> Vec<Piece> {
+    let Some(from) = actions_from(pieces) else {
+        return pieces.to_vec();
+    };
+    let head = cells_of(&pieces[..from]);
+    if head == 0 {
+        return pieces.to_vec();
+    }
+    let text = ronoctua_render::layout::elide_end(sentence, head);
+    let air = head.saturating_sub(ronoctua_render::layout::width(&text));
+    let mut out = vec![Piece {
+        text,
+        register: Register::Explain,
+        id: None,
+        press: None,
+    }];
+    if air > 0 {
+        out.push(Piece::prose(" ".repeat(usize::from(air))));
+    }
+    out.extend(pieces[from..].iter().cloned());
+    out
 }
 
 /// The one key every view of the footer's region teaches first: `Esc`, the
@@ -2179,11 +2355,13 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
             | Register::AlternateLit
             | Register::ContextualLit => split_at_the_modifier(&p.text)
                 .map_or_else(|| vec![p.text.as_str()], |(a, b)| vec![a, b]),
-            // AND `Explain` NEVER REACHES HERE, because the sentence is not a
-            // PIECE of a hint line: it is drawn on its own row, by each door,
-            // from `Hinted::said`. It is named all the same — a `_` arm would
-            // let the next register added arrive here without anybody
-            // deciding how it is shaped.
+            // AND `Explain` IS A SENTENCE, drawn whole. It reaches here in one
+            // place only — an event's line at rest, where the answer about an
+            // action takes the words' cells (`explained_in_place`); everywhere
+            // else it has a row of its own, drawn by each door from
+            // `Hinted::said`. It is named all the same — a `_` arm would let
+            // the next register added arrive here without anybody deciding
+            // how it is shaped.
             // AND `Said` IS NOT SPLIT EITHER, which is the whole reason it is
             // not `Key`: what it carries is a filename, a date or a path, and
             // a `+` inside one of those is a character rather than a modifier.
@@ -2195,7 +2373,11 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
             | Register::Glyph
             | Register::Label
             | Register::Title
-            | Register::ProseLit => vec![p.text.as_str()],
+            | Register::ProseLit
+            // AN ACTION IS A SENTENCE TOO — "Open it" — and nothing in it is
+            // a modifier to keep a ligature off.
+            | Register::Action
+            | Register::ActionLit => vec![p.text.as_str()],
         };
         for run in runs {
             if left == 0 {
@@ -4311,13 +4493,16 @@ mod tests {
         assert_eq!(h.rows(), 0);
     }
 
-    /// FAILS IF: the focus line stops being the accent, stops running edge
+    /// FAILS IF: the focus line stops wearing the colour the person's
+    /// borders give a focused outline (`crate::theme::focus_line` — the
+    /// accent on the defaults every test process wears), stops running edge
     /// to edge, or grows past the leading above line 0 — where it would
     /// cover the ink of the line under it.
     #[test]
-    fn the_focus_line_is_the_accent_across_the_top() {
+    fn the_focus_line_is_the_outlines_colour_across_the_top() {
         let q = super::focus_line(333.0);
-        assert_eq!(q.color, tokens::color::STATE_ACCENT);
+        assert_eq!(q.color, crate::theme::focus_line());
+        assert_eq!(q.color, tokens::color::STATE_ACCENT, "the defaults");
         assert_eq!((q.x, q.y, q.width), (0.0, 0.0, 333.0));
         assert_eq!(q.height, f32::from(tokens::space::COLUMN_FOCUSLINE));
         // THE INK OF LINE 0 starts under the font's box, which starts half
@@ -4329,5 +4514,144 @@ mod tests {
             "{} over a leading of {leading}",
             q.height
         );
+    }
+
+    /// FAILS IF: an action on a line stops wearing the band's own button
+    /// colour, stops lighting under the pointer, or stops running its command.
+    #[test]
+    fn an_action_is_the_bands_button_and_lights_like_a_shortcut() {
+        let a = Piece::action("Open it", "software-launch-latest");
+        assert_eq!(a.register.color(), tokens::color::NOTIFICATION_ACTS);
+        assert_eq!(a.id, Some("software-launch-latest"));
+        assert_eq!(
+            a.press,
+            Some(super::Act::Run("software-launch-latest")),
+            "a click runs the command"
+        );
+        assert!(!a.is_a_key(), "an action is not a key, and never inert");
+        let line = super::said_with_actions(
+            "Firefox is installed",
+            &[("Open it".to_owned(), "software-launch-latest")],
+        );
+        let lit_line = lit(&line, Some("software-launch-latest"));
+        let action = lit_line.last().expect("the action closes the line");
+        assert_eq!(action.register, Register::ActionLit);
+        assert_eq!(
+            action.register.color(),
+            tokens::color::NOTIFICATION_ACTS_LIT
+        );
+        assert_ne!(
+            tokens::color::NOTIFICATION_ACTS_LIT,
+            tokens::color::NOTIFICATION_ACTS,
+            "lit and at rest are one role"
+        );
+        assert_eq!(
+            lit_line[0].register,
+            Register::Said,
+            "the sentence does not light: it is not a control"
+        );
+    }
+
+    /// FAILS IF: the actions at the end of an event's line stop being marks
+    /// the pointer finds — one per action, carrying its command — or the
+    /// sentence and the dots start answering a click.
+    #[test]
+    fn the_actions_of_a_line_are_placed_and_clickable() {
+        let line = super::said_with_actions(
+            "A camera is open",
+            &[
+                ("First".to_owned(), "camera-settings-open"),
+                ("Second".to_owned(), "software-launch-latest"),
+            ],
+        );
+        let marks = hint_marks(&line, 2, 7, 200);
+        assert_eq!(marks.len(), 2, "{marks:?}");
+        assert_eq!(marks[0].id, "camera-settings-open");
+        assert_eq!(marks[1].id, "software-launch-latest");
+        assert!(
+            marks
+                .iter()
+                .all(|m| matches!(m.press, Some(super::Act::Run(id)) if id == m.id))
+        );
+        // WHERE THEY WERE DRAWN is where they are found: after the sentence
+        // and its dot, on the line they were laid on.
+        let sentence = ronoctua_render::layout::width("A camera is open");
+        let dot = ronoctua_render::layout::width(&Piece::separator().text);
+        assert_eq!(marks[0].at, 2 + sentence + dot);
+        assert!(marks[0].covers(7, marks[0].at));
+        assert!(!marks[0].covers(7, 2), "the sentence is not the action");
+        let spans = hint_spans(&line, ronoctua_render::Size::Grid, 2, 7, 200);
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.text == "First" && s.color == tokens::color::NOTIFICATION_ACTS)
+        );
+    }
+
+    /// FAILS IF: a sentence too long for the line pushes its actions off the
+    /// end — where `laid` cuts — instead of giving way to them, or a room too
+    /// narrow for both loses the sentence.
+    #[test]
+    fn a_long_sentence_gives_way_to_its_actions() {
+        let long = "A very long program name that will never fit on a narrow line is installed";
+        let line =
+            super::said_with_actions(long, &[("Open it".to_owned(), "software-launch-latest")]);
+        let fitted = super::room_for_actions(&line, 40);
+        let marks = hint_marks(&fitted, 0, 0, 40);
+        assert_eq!(marks.len(), 1, "the action was cut off the line");
+        assert_eq!(marks[0].id, "software-launch-latest");
+        assert_eq!(
+            super::cells_of(&fitted),
+            40,
+            "the line is the room, exactly"
+        );
+        assert!(fitted[0].text.ends_with('…'), "{:?}", fitted[0].text);
+        assert_eq!(fitted.last().map(|p| p.text.as_str()), Some("Open it"));
+        // A LINE WITH NO ACTION is left alone.
+        let plain = vec![Piece::said(long)];
+        assert_eq!(super::room_for_actions(&plain, 10), plain);
+        // AND A ROOM TOO NARROW FOR BOTH keeps the sentence whole: `laid`
+        // then cuts the end, and the drawer shows the rest.
+        assert_eq!(super::room_for_actions(&line, 12), line);
+    }
+
+    /// FAILS IF: the actions stop sitting at the END of the room — a short
+    /// sentence pulls them left, so an answer of another length would move
+    /// them — or the answer about the action under the pointer moves them,
+    /// loses the sentence's cells, or takes the action's register.
+    #[test]
+    fn the_answer_about_an_action_takes_the_words_place_and_moves_nothing() {
+        let line = super::said_with_actions(
+            "Mail is ready",
+            &[("Open it".to_owned(), "software-launch-latest")],
+        );
+        let fitted = super::room_for_actions(&line, 60);
+        assert_eq!(
+            super::cells_of(&fitted),
+            60,
+            "short words are followed by air"
+        );
+        let at_rest = hint_marks(&fitted, 2, 0, 60);
+        let action = ronoctua_render::layout::width("Open it");
+        assert_eq!(at_rest.len(), 1);
+        assert_eq!(at_rest[0].at + at_rest[0].cells, 2 + 60, "flush at the end");
+        assert_eq!(at_rest[0].cells, action);
+        for sentence in [
+            "Open",
+            "Open what was installed last, and a great deal more than that",
+        ] {
+            let asked = super::explained_in_place(&fitted, sentence);
+            assert_eq!(
+                hint_marks(&asked, 2, 0, 60),
+                at_rest,
+                "the action moved under the pointer that asked"
+            );
+            assert_eq!(asked[0].register, Register::Explain);
+            assert!(sentence.starts_with(asked[0].text.trim_end_matches('…')));
+            assert_eq!(super::cells_of(&asked), 60);
+        }
+        // A LINE WITH NO ACTION has nothing to explain.
+        let plain = vec![Piece::said("x")];
+        assert_eq!(super::explained_in_place(&plain, "y"), plain);
     }
 }

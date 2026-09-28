@@ -259,10 +259,12 @@ pkgs.testers.runNixOSTest {
         assert left == "", f"a piece was left at the destination: {left}"
         machine.succeed("test -s /root/source/large.bin")
 
-    with subtest("`LEADER t t` opens the panel with the row inside"):
-        # `t` became a GROUP: the screen capture moved to `c s` to make room.
-        # A group that does not resolve is a key that does nothing, and nothing
-        # on screen says which of the two it was.
+    with subtest("`LEADER t` opens the panel with the row inside"):
+        # `t` is the queue's GROUP in the full tree (`t t` the panel, `t w` the
+        # window), and the leader ALONE runs the footer's door of a group with
+        # two (the three sets, `leader::Set`) — so one `t` is the panel. A key
+        # that does not resolve is a key that does nothing, and nothing on
+        # screen says which of the two it was.
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             "${ronoctua-shell}/bin/ronoctua-shell leader"
@@ -270,7 +272,6 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
         )
-        press_key("t")
         press_key("t")
         try:
             journal = machine.wait_until_succeeds(

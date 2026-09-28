@@ -603,6 +603,8 @@ impl Lifeline {
                 RawWindowHandle::Wayland(WaylandWindowHandle::new(surf)),
                 first.0,
                 first.1,
+                // OPAQUE: only the footer's hidden modes are see-through.
+                false,
             )
         };
         let Ok(mut g) = gpu else {
@@ -786,6 +788,7 @@ impl Lifeline {
         }
         let quads_ref = self.quads.as_ref();
         if let Err(e) = gpu.frame(
+            tokens::color::SURFACE_CHROME.to_linear(),
             || crate::hidpi::told_before_present(scale, told, &surface),
             |pass| {
                 if let Some(q) = quads_ref {

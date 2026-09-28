@@ -64,53 +64,73 @@
     # not there. Measured, this takes the contrast failures from 54 to one.
 
   };
+  # SILVER, at the owner's word (2026-09-28): the greys' own cool hue at 0.3
+  # of what it can carry. It is the PAGE of its own palette (the bands
+  # follow the ground), so what holds it is the desks around it and the
+  # window: at 0.048 it is 0.032 off a window (floor 0.03), 0.094 off the
+  # white and 0.073 off the near-white; a darker page cannot pay the text
+  # its floors.
   backdrop = {
     hue = 250;
-    chroma = 0.30;
-    step = 0.070;
+    chroma = 0.3;
+    step = 0.048;
   };
 
   chroma = 1.0;
 
   families = {
     # A BLUE, at the owner's word, and the hue the system already reserves for
-    # focus. Well clear of the protan band.
+    # focus — a STEEL one now, restrained (0.55): silver with a blue edge.
+    # Well clear of the protan band. The torsion turns the bands to 240, not
+    # away to 286, which was lilac: at 252 the selection band on the white
+    # page came 0.048 from a rule (floor 0.05).
     accent = {
-      hue = 264;
-      chroma = 0.91;
-      torsion = 22;
+      hue = 258;
+      chroma = 0.55;
+      torsion = -18;
+      # The key letter is this family's text rung at 2.4 × its chroma; at
+      # the shared 0.35 it was the loudest blue on the screen.
+      text-chroma = 0.22;
       # TWICE THE PAINT CHROMA, and the light ground is why. `surface.selection`
       # is this family's `element` rung, and what tells a selection band from
       # the hover grey and from a rule is almost entirely its COLOUR — but
       # `max_chroma` collapses toward white, so at the shared chroma the band
       # measured ΔE 0.0425 from the hover and 0.0277 from the rule, under a
-      # floor of 0.05 on both. At 2.0 both clear it. Forest, cyber and midnight
-      # raise this knob for the mirror-image reason: tinted greys.
-      paint-chroma = 2.0;
+      # floor of 0.05 on both. At 1.9 both clear it (0.050 off the rule at
+      # 1.8). Forest, cyber and midnight raise this knob for the mirror-image
+      # reason: tinted greys.
+      paint-chroma = 1.9;
     };
+    # THE STATES, restrained to half their chroma or so: the hue still says
+    # which state, the silver says the theme.
     success = {
       hue = 130;
-      chroma = 0.65;
+      chroma = 0.5;
       shift = 16;
     };
     warning = {
       hue = 75;
-      chroma = 0.64;
+      chroma = 0.5;
       shift = 11;
     };
     error = {
       hue = 10;
-      chroma = 0.90;
+      chroma = 0.6;
       shift = -2;
     };
+    # AN INDIGO, not a violet: 288 is 30° off the accent and no lilac. The
+    # text rung keeps 0.36 so a submenu is still told from a key (0.065; at
+    # 0.25 it was 0.054, under the 0.06 floor).
     group = {
-      hue = 300;
-      chroma = 0.90;
+      hue = 288;
+      chroma = 0.5;
+      text-chroma = 0.36;
       shift = 4;
     };
     subtle = {
       hue = 321;
-      text-chroma = 0.12;
+      # 0.16: on the desk's page the inert key came 0.028 from this one.
+      text-chroma = 0.16;
       text-shift = -3;
     };
     # The sentence under an opened line of shortcuts: a COOL grey, quieter
@@ -123,16 +143,18 @@
     # A CONNECTED BLUETOOTH DEVICE on the modeline (`modeline.device`): a
     # faded blue, so a device reads as a device beside the other marks.
     # The greys here are a cold blue already (250), so the device takes more
-    # colour, or it is the text beside it.
+    # colour, or it is the text beside it: 0.55 (0.45 comes within 0.038 of
+    # it, under the 0.04 floor).
     device = {
       hue = 235;
-      text-chroma = 0.7;
+      text-chroma = 0.55;
       text-shift = 0;
     };
     # The camera's marks (`modeline.watching`): a faded pink leaning to red.
     watching = {
-      hue = 350;
-      text-chroma = 0.5;
+      # 340: 0.057 from the error's red on the desk's page at 350.
+      hue = 340;
+      text-chroma = 0.35;
       text-shift = 0;
     };
     # THE DRAWER'S MARK (`modeline.drawer`): a faded green, the device blue's
@@ -173,7 +195,7 @@
     # `overrides` block at the foot of this file.
     answer = {
       hue = 30;
-      text-chroma = 0.60;
+      text-chroma = 0.45;
     };
     grey = {
       hue = 250;
@@ -185,31 +207,37 @@
       text-chroma = 0.0;
       text-shift = -8;
     };
+    # THE BRAIN'S LINE keeps its colour on every page, and a silver line on
+    # a silver desk is no line: at 258 it was 0.005 from the desk. A pale
+    # sage (150, a fifth more chroma) is the quietest hue that clears it.
     brain = {
-      hue = 264;
+      hue = 150;
+      paint-chroma = 1.2;
     };
     slate = {
       hue = 274;
       text-chroma = 0.24;
     };
+    # THE CONTENT'S HUES (the syntax palette), at 0.6 of what they were: a
+    # page of code in a silver theme is not the loudest thing on it.
     sky = {
       hue = 226;
-      chroma = 1.0;
+      chroma = 0.6;
       shift = 27;
     };
     azure = {
       hue = 236;
-      chroma = 1.0;
+      chroma = 0.6;
       shift = 19;
     };
     cyan = {
       hue = 213;
-      chroma = 0.94;
+      chroma = 0.6;
       shift = 9;
     };
     orange = {
       hue = 51;
-      chroma = 1.0;
+      chroma = 0.6;
       shift = 10;
     };
   };

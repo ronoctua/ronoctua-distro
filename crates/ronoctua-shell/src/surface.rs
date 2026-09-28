@@ -403,7 +403,13 @@ struct Footer {
     /// switching language at runtime would require reloading the bundle, and
     /// nothing in the system does that today.
     texts: std::rc::Rc<ronoctua_i18n::Texts>,
-    tree: ronoctua_keymap::Tree,
+    /// The leader's three trees, one per set (`crate::leader::Set`). The key
+    /// walks the one of the leader's set; a sentence that TEACHES a key asks
+    /// `crate::leader::taught_keys`, which starts from the default set.
+    tree: crate::leader::Trees,
+    /// A modifier tapped alone, pressed and not yet released — how `Alt` and
+    /// `Ctrl` right after the leader choose its set (`crate::leader::Tap`).
+    tap: crate::leader::Tap,
     /// The which-key lines on display. Empty when the leader is not running.
     inputs: Vec<ronoctua_keymap::Entry>,
 
@@ -624,6 +630,15 @@ struct Footer {
     /// area says `SPC g x is not bound`, and that is what turns a mute error into
     /// information.
     echo: Option<(String, std::time::Instant)>,
+    /// What the machine did — every source's last reading, so the next one is
+    /// compared with it and the first is only a baseline. See [`crate::events`].
+    events: crate::events::Watch,
+    /// The event said on the minibuffer's line, and the ones waiting for it.
+    ///
+    /// Beside [`Footer::echo`] and never in it: the echo is the shell answering
+    /// a person and takes the line at once, and an event it interrupts goes
+    /// back to the front of this queue rather than being lost under it.
+    event_line: crate::events::Line,
     /// The `M-x`. It uses THE surface too: prompt on the minibuffer's line and
     /// candidates in the expanded region, the same mechanism as which-key.
     mx: crate::minibuffer::Minibuffer,
@@ -977,6 +992,31 @@ struct Footer {
     address_hint: Option<String>,
     /// The screen a fullscreen window covers, while one does — see [`Edge`].
     edge: Option<Edge>,
+    /// The footer's rows as they were last APPLIED — see `crate::hidden`.
+    ///
+    /// A FIELD, and read by every row sum, because those sums are under
+    /// `metric` and `metric` may not ask what the footer holds
+    /// (`the-footer-does-not-ask-itself`). It is worked out afresh in
+    /// `apply_geometry`, and `draw_and_paint` asks for a geometry whenever the
+    /// fresh one differs — which is what makes an echo, a focus, a flash or a
+    /// band that comes and goes move a hidden footer without each of them
+    /// having to know it.
+    shape: crate::hidden::Shape,
+    /// The connector of the screen whose footer the pointer is on — the edge
+    /// that brings hidden bars up there (`crate::hidden::geometry`).
+    revealed_on: Option<String>,
+    /// Whether the leader's list waits — see `crate::leader::Patience` — and
+    /// the number the next timer carries.
+    list_patience: crate::leader::Patience,
+    patience_generation: u64,
+    /// Whether the footer already said it cannot be see-through here: said
+    /// once, the first time a mode needs it.
+    said_opaque: bool,
+    /// `modeline.json` did not parse when the footer started: the footer
+    /// started from the default — there was no copy to keep — and owes the
+    /// person the sentence, said once when the loop draws
+    /// (`say_if_the_modeline_was_refused`).
+    modeline_refused: bool,
     /// What is selected, as far as this footer knows — see `crate::selection`.
     selection: crate::selection::Selection,
     /// The view the last geometry was asked for — the opened line closes when
@@ -1316,6 +1356,11 @@ struct PerSeat {
     on_band: bool,
     /// Whether this pointer rests on the glance line, by the same rule.
     on_glance: bool,
+    /// Whether this pointer rests on the minibuffer's line (or its opened
+    /// drawer) — an event said there does not go while ANY pointer does, so
+    /// the hand reaching for its action finds it still there
+    /// (`events::Line::tick`).
+    on_minibuffer: bool,
     /// Which CELL of that row, counting from the region's left edge.
     ///
     /// Only the file manager needs it, and it needs it badly: ten of its cells
@@ -1323,6 +1368,16 @@ struct PerSeat {
     /// group's `w` from the owner's `r`. It is what makes both the explanation
     /// on hover and the click on a bit possible at all.
     cell_under_pointer: Option<u16>,
+    /// Where the pointer is across the surface, in PIXELS, from its left
+    /// edge — set wherever the cell is.
+    ///
+    /// The cell is enough for a column that begins and ends on whole cells.
+    /// The theme chooser's lists do not: each is bounded by a rule drawn in
+    /// the MIDDLE of its cell (`files::rule_x`), so which list the pointer is
+    /// over — the band that lights and the list a click chooses in — is
+    /// decided on the pixel, by the same arithmetic the rules are drawn with
+    /// (`theme_chooser::Layout::column_at_px`).
+    x_under_pointer: Option<f64>,
     /// The scrollbar is being DRAGGED right now.
     ///
     /// Without this state, the button pressed over the bar fell into the same path
@@ -1533,6 +1588,20 @@ impl ViewState {
     const fn grabs(self) -> bool {
         !matches!(self, Self::NoneOf)
     }
+
+    /// Whether this view is an APP of the footer — what, with the bars hidden
+    /// to push, pushes the windows away (`crate::hidden`).
+    ///
+    /// Not the leader's list, the command finder or the window menu: those
+    /// are the keyboard passing through on its way to something else, and
+    /// they lie over the windows like the minibuffer they hang from. Every
+    /// other view holds something a person reads or works in.
+    const fn is_an_app(self) -> bool {
+        !matches!(
+            self,
+            Self::NoneOf | Self::Leader | Self::Commands | Self::WindowMenu
+        )
+    }
 }
 
 /// The surface of ONE output.
@@ -1634,8 +1703,9 @@ struct Screen {
     /// The keyboard interactivity this surface was last asked for — see
     /// [`commit_now`].
     keyboard: KeyboardInteractivity,
-    /// Whether this screen's footer is on the `overlay` layer, over a
-    /// fullscreen window — see [`Edge`].
+    /// Whether this screen's footer is on the `overlay` layer: over a
+    /// fullscreen window (see [`Edge`]), or hidden and lying over the windows
+    /// (`crate::hidden::geometry`).
     overlay: bool,
     configured: bool,
     /// Assembled on the first `configure`, when there is a size. They stay `None`
@@ -1718,11 +1788,12 @@ struct ExpansionRow {
     separator: bool,
     /// Does the text stay in the RIGHT column when the key is empty?
     ///
-    /// Yes where the two columns are two LISTS side by side — the theme
-    /// chooser's themes and the choices about them — and a row whose left
-    /// list has ended still belongs to the right one. No everywhere else: a
-    /// line with no key takes the whole width, which is the manual's and the
-    /// history's case, and the reason `text_start` moves the text left.
+    /// Yes where the left column holds something that is not a key — a
+    /// gesture's drawing in the manual — and the line beside it still belongs
+    /// to the right one. No everywhere else: a line with no key takes the
+    /// whole width, which is the history's case, and the reason `text_start`
+    /// moves the text left. (The theme chooser, which used this for two lists
+    /// side by side, lays its five columns out as fields of its own.)
     aside: bool,
     key_color: tokens::Color,
     text_color: tokens::Color,
@@ -1758,6 +1829,13 @@ struct ExpansionRow {
 /// would have two answers.
 pub(crate) const ECHO_SECONDS: u64 = 3;
 
+/// How long the leader's list waits for the hand to stop, with the bars
+/// hidden and a key that opened it — see `crate::leader::Patience`.
+///
+/// Two seconds: longer than the pause between two keys of a sequence somebody
+/// knows, shorter than the pause of somebody reading for the next one.
+pub(crate) const LIST_PATIENCE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// What a click on a line of the expansion does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Click {
@@ -1766,6 +1844,10 @@ enum Click {
     /// Uniform on purpose: on a group, it goes down one level; on a command, it
     /// runs. Node new path, and nothing that only the mouse reaches.
     Key(ronoctua_keymap::Key),
+    /// The leader again — the root's row that hides the bars or brings them
+    /// back (`crate::hidden::bars_row`). No tree has the leader as a key, so
+    /// pressing the row's key is the leader ARRIVING, which is what this does.
+    Leader,
     /// Choose the candidate at index `n` in the finder and confirm.
     Candidate(usize),
     /// A row of the shell history's view, by its place in the drawn list.
@@ -2527,16 +2609,6 @@ pub fn wheel_lines(left: &mut f64) -> i64 {
 /// of as loose text.
 pub const SEPARATOR_OF: &str = ":";
 
-/// The cell a check mark would have taken, when there is no check.
-///
-/// The theme chooser's right column carries its own mark inside the TEXT —
-/// the margin's icon column belongs to the left list — so every row of that
-/// column has to reserve the cell whether it is ticked or not, and so does
-/// the column's TITLE. It is a constant because that last one was missed:
-/// the title sat one cell left of the answers it named, which the owner read
-/// as two columns with no rule between them.
-pub const BLANK_MARK: &str = " ";
-
 /// The mark of a SUBMENU in the shortcut list.
 ///
 /// The convention comes from Doom, where `+file` says "this opens more keys"
@@ -2726,6 +2798,9 @@ pub fn run() -> Result<()> {
 
     // THE TWO DIRECTORIES, found once and handed to everything that persists.
     let notes = ronoctua_notify::store::Where::of_env();
+    // THE MODELINE'S SWITCHES, `None` when the file does not parse.
+    let modeline_at_start = crate::adapt::store().parsed();
+    let modeline_refused = modeline_at_start.is_none();
     let mut state = Footer {
         conn: conn.clone(),
         // THE DRAG-AND-DROP MACHINERY. `None` where the compositor has no
@@ -2748,6 +2823,7 @@ pub fn run() -> Result<()> {
         leader: Leader::default(),
         texts: std::rc::Rc::new(crate::language::texts()),
         tree,
+        tap: crate::leader::Tap::default(),
         inputs: Vec::new(),
         buffer_bindings: Vec::new(),
         buffer_pid: None,
@@ -2812,6 +2888,8 @@ pub fn run() -> Result<()> {
         band_hint: None,
         leader_label: crate::leader(),
         echo: None,
+        events: crate::events::Watch::default(),
+        event_line: crate::events::Line::default(),
         mx: crate::minibuffer::Minibuffer::default(),
         pointers: crate::seats::Seats::default(),
         shapes: crate::cursor_shape::Shapes::bind(&globals, &qh),
@@ -2942,11 +3020,19 @@ pub fn run() -> Result<()> {
         kiosk_timer: false,
         kiosk_launch_sender: None,
         address_row_applied: false,
-        modeline: crate::adapt::store().read(),
+        // `parsed`, and not `read`: a file that does not parse is refused
+        // with its sentence, not quietly the default (`adapt::reread`).
+        modeline: modeline_at_start.unwrap_or_default(),
+        modeline_refused,
         _modeline_watch: None,
         adapter_drawn: Vec::new(),
         address_hint: None,
         edge: None,
+        shape: crate::hidden::Shape::default(),
+        revealed_on: None,
+        list_patience: crate::leader::Patience::Shown,
+        patience_generation: 0,
+        said_opaque: false,
         selection: crate::selection::Selection::default(),
         view_before: ViewState::NoneOf,
         untrailing: std::collections::BTreeSet::new(),
@@ -3150,6 +3236,8 @@ pub fn run() -> Result<()> {
     // And the fragments beside it made to agree with the choice, before the
     // watch: a rebuild may have moved the generator's output.
     crate::theme::sync_with_file();
+    // AND WHAT THE FILE HAD REFUSED IS SAID, where the file is read.
+    state.say_what_the_theme_file_refused();
     // AND THE FOREIGN APPLICATIONS TOLD how big the text is, once, here.
     //
     // dconf remembers between sessions, so this is usually writing what is
@@ -3520,7 +3608,7 @@ pub fn run() -> Result<()> {
         .insert_source(orders, |event, (), state: &mut Footer| {
             if let channel::Event::Msg(o) = event {
                 match o {
-                    Order::Leader => state.activate_leader(),
+                    Order::Leader => state.activate_leader(crate::leader::Opener::Key),
                     // THE SAME `run_command` as the key. A command coming from outside and a
                     // command coming from the keymap have to do the SAME thing — two
                     // paths for the same id are what made the terminal's chord open
@@ -3782,7 +3870,7 @@ pub fn run() -> Result<()> {
             .as_ref()
             .map(|c| c.prefs.clone())
             .unwrap_or_default(),
-        crate::software_feed::Taught::of_this_leader(),
+        crate::software_feed::Taught::of_this_leader(&state.tree),
     );
     let (software_wake, software_woke) = channel::channel::<()>();
     state.software_wake = Some(software_wake);
@@ -3976,31 +4064,47 @@ pub fn run() -> Result<()> {
     // AND WHO HAS A CAMERA OPEN — any program, from `/proc`. A browser opens
     // the device directly and no graph hears of it, so the kernel's answer is
     // the only one that covers everybody; measured, a walk costs under 8 ms.
-    let (holders_sender, holders_events) = channel::channel::<Vec<String>>();
+    //
+    // EACH ONE TOLD OURS OR THEIRS BY ITS LINEAGE: what holds the device
+    // during the studio's preview or recording is the studio's own `ffmpeg`,
+    // named like anybody's (`events::OUR_CAMERA_HOLDERS`).
+    let (holders_sender, holders_events) = channel::channel::<Vec<crate::events::CameraHolder>>();
     let _ = std::thread::Builder::new()
         .name("camera-holders".into())
         .spawn(move || {
-            let mut last: Option<Vec<String>> = None;
+            let mut last: Option<Vec<crate::events::CameraHolder>> = None;
             loop {
-                let mut names: Vec<String> = ronoctua_memory::camera::holders("/dev/video")
-                    .into_iter()
-                    .map(|h| h.name)
-                    .collect();
-                names.sort();
-                names.dedup();
-                if last.as_ref() != Some(&names) {
-                    if holders_sender.send(names.clone()).is_err() {
+                let mut holders: Vec<crate::events::CameraHolder> =
+                    ronoctua_memory::camera::holders("/dev/video")
+                        .into_iter()
+                        .map(|h| crate::events::CameraHolder {
+                            ours: h.under(crate::events::OUR_CAMERA_HOLDERS),
+                            name: h.name,
+                        })
+                        .collect();
+                holders.sort();
+                holders.dedup();
+                if last.as_ref() != Some(&holders) {
+                    if holders_sender.send(holders.clone()).is_err() {
                         return;
                     }
-                    last = Some(names);
+                    last = Some(holders);
                 }
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }
         });
     handle
         .insert_source(holders_events, |event, (), state: &mut Footer| {
-            if let channel::Event::Msg(names) = event {
+            if let channel::Event::Msg(holders) = event {
+                // A CAMERA OPENING OR CLOSING IS SAID — the thread's first
+                // list is only the baseline (`events::Watch::camera`).
+                let said = state.events.camera(&holders);
+                // THE MODELINE'S MARK COUNTS EVERYBODY, ours included: a
+                // camera the studio has open is a camera open.
+                let mut names: Vec<String> = holders.into_iter().map(|h| h.name).collect();
+                names.dedup();
                 state.camera_holders = names;
+                state.said_now(said);
                 state.draw_and_paint();
             }
         })
@@ -4308,6 +4412,15 @@ pub fn run() -> Result<()> {
                 // Both on the SAME tick: a second clock just for the echo area would
                 // wake the loop twice a second for nothing.
                 let won = state.expire_echo(now);
+                // AND THE EVENT ON THE LINE, after the echo: when the
+                // person's echo has just gone, the event it interrupted
+                // takes the line back in this same second.
+                let spoke = state.events_tick(now);
+                // AND A DRAWER LEFT OPEN ON A LINE THAT HAS JUST EMPTIED
+                // closes with it.
+                if won || spoke {
+                    state.close_the_drawer_of_an_empty_line();
+                }
                 // AND THE DIRECTORY, when the manager is open. One `stat` a second
                 // against the directory's mtime: something else moved a file into
                 // it, an operation of ours finished, an archive was unpacked. A
@@ -4418,6 +4531,7 @@ pub fn run() -> Result<()> {
                     state.apply_geometry(state.interactivity());
                     state.draw_and_paint();
                 } else if won
+                    || spoke
                     || changed
                     || bar
                     || blinking
@@ -4695,6 +4809,11 @@ impl Footer {
     /// The modeline is on line [`Footer::modeline_line`], in the same top-down
     /// coordinates the band and the expansion use.
     fn segment_at(&self, x: f64, y: f64) -> Option<&'static str> {
+        // A HIDDEN MODELINE HAS NOTHING TO HIT (`crate::hidden`) — and its
+        // line may be the minibuffer's now.
+        if !self.shape.draws_modeline() {
+            return None;
+        }
         let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
         if line_height <= 0.0 {
             return None;
@@ -4781,6 +4900,10 @@ impl Footer {
     /// is drawn at `modeline.edgeLeft`, which `hint_marks` already put into
     /// the marks.
     fn hint_under(&self, x: f64, y: f64) -> Option<&'static str> {
+        // A HIDDEN MINIBUFFER HAS NO SHORTCUT ON IT (`crate::hidden`).
+        if !self.shape.draws_minibuffer() {
+            return None;
+        }
         let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
         let cell_px = f64::from(crate::chrome::cell_width());
         if line_height <= 0.0 || cell_px <= 0.0 || x < 0.0 || y < 0.0 {
@@ -5869,6 +5992,21 @@ impl OutputHandler for Footer {
     ) {
         let before = self.screens.len();
         self.screens.retain(|t| t.output != output);
+        // THE EDGE OF A SCREEN THAT WENT goes with it: no `leave` will come
+        // from a surface that no longer exists, and a pointer "on" it would
+        // hold the hidden bars up everywhere (`crate::hidden`). Asked of the
+        // screens LEFT, because the one that went may no longer be named.
+        let still_there = self.revealed_on.as_ref().is_none_or(|name| {
+            self.screens.iter().any(|t| {
+                self.outputs
+                    .info(&t.output)
+                    .and_then(|o| o.name)
+                    .is_some_and(|n| &n == name)
+            })
+        });
+        if !still_there {
+            self.revealed_on = None;
+        }
         if self.screens.len() != before {
             tracing::info!(
                 screens = self.screens.len(),
@@ -6260,6 +6398,9 @@ impl KeyboardHandler for Footer {
         // (it was released with the focus somewhere else), the footer would keep
         // routing every key to the navigation.
         self.right_ctrl = false;
+        // AND A HALF-MADE TAP, for the same reason: its release will not come
+        // here, and a release that does come later must not finish it.
+        self.tap = crate::leader::Tap::default();
         // AND THE MODIFIERS WHOLE, for the same reason and with more cause: a
         // state that only updates with focus cannot keep holding without focus.
         // Keeping `alt: true` here makes EVERY key of the next sequence come out
@@ -6319,9 +6460,7 @@ impl KeyboardHandler for Footer {
         event: KeyEvent,
     ) {
         self.keyboards.switch_to(kb, &mut self.mods);
-        if event.keysym == Keysym::Control_R {
-            self.right_ctrl = false;
-        }
+        self.key_released(event.keysym);
     }
 
     fn update_modifiers(
@@ -6462,7 +6601,19 @@ impl PointerHandler for Footer {
         for serial in crate::cursor_shape::enters(events) {
             self.shapes.entered(self.pointers.seat_of(pointer), serial);
         }
+        // A BUTTON OR A WHEEL while a modifier is down is a chord with the
+        // hand, and the modifier coming up after it is no tap
+        // (`leader::Tap::pointer_acted`).
+        if events.iter().any(|e| {
+            matches!(
+                e.kind,
+                PointerEventKind::Press { .. } | PointerEventKind::Axis { .. }
+            )
+        }) {
+            self.tap.pointer_acted();
+        }
         self.edge_follows_the_pointer(events);
+        self.reveal_follows_the_pointer(events);
         self.pointers.switch_to(pointer, &mut self.here);
         // THE KEYBOARD FIRST: a press on a key is the key's, and never reaches
         // the rows above it.
@@ -6488,6 +6639,9 @@ impl TouchHandler for Footer {
         id: i32,
         position: (f64, f64),
     ) {
+        // A FINGER DOWN is the pointer acting, for a tap under way
+        // (`leader::Tap::pointer_acted`).
+        self.tap.pointer_acted();
         let seat = self.touches.seat_of(touch).cloned();
         if let Some(cap) = self.osk_at(&surface, position.0, position.1) {
             self.fingers.push((id, None));
@@ -6737,9 +6891,11 @@ impl Footer {
                     if self.on_a_drawn_bar(&e.surface, e.position.0, e.position.1) {
                         self.here.row_under_pointer = None;
                         self.here.cell_under_pointer = None;
+                        self.here.x_under_pointer = None;
                     } else {
                         self.here.row_under_pointer = self.row_at(e.position.0, e.position.1);
                         self.here.cell_under_pointer = self.cell_at(e.position.0);
+                        self.here.x_under_pointer = Some(e.position.0);
                     }
                     // AND WHICH THUMBNAIL, so a film under the hand starts its
                     // tour. It opens no file — see `View::hover_thumb`.
@@ -6782,6 +6938,11 @@ impl Footer {
                     // questions.
                     self.here.on_band = self.band_row_at(e.position.0, e.position.1).is_some();
                     held_changed |= self.hold_the_band_if_anyone_reads_it();
+                    // AND ON THE MINIBUFFER'S LINE an event said there stays
+                    // while the hand is on it — reaching for its action takes
+                    // longer than the three seconds it would otherwise have.
+                    // The clock that retires it reads this (`events_tick`).
+                    self.here.on_minibuffer = self.on_the_minibuffer(e.position.1);
                     // AND THE GLANCE'S CLOCK, by the same rule and for the
                     // same reason: what is being read is the line, and the
                     // gaps between its places are as much of it as the words.
@@ -6906,6 +7067,7 @@ impl Footer {
                     // half of starting it: a child process for a cell nobody is
                     // over is a pipe for nothing.
                     self.here.cell_under_pointer = None;
+                    self.here.x_under_pointer = None;
                     self.here.row_under_pointer = None;
                     self.hover_a_thumbnail();
                     // THE CLOCK GOES ON. A pointer that leaves the surface
@@ -6914,6 +7076,8 @@ impl Footer {
                     // hand came back — which is for ever, if it does not.
                     self.here.on_band = false;
                     held_changed |= self.hold_the_band_if_anyone_reads_it();
+                    // AND THE MINIBUFFER'S, for the same reason.
+                    self.here.on_minibuffer = false;
                     // AND THE GLANCE'S, for the reason just above: a pointer
                     // that leaves sends no motion on the way out, so a glance
                     // held at the edge would stay held for ever.
@@ -6921,6 +7085,7 @@ impl Footer {
                     self.here.under_pointer = false;
                     self.here.row_under_pointer = None;
                     self.here.cell_under_pointer = None;
+                    self.here.x_under_pointer = None;
                     self.here.segment_under_pointer = None;
                     self.here.segment_held = None;
                     self.address_hint = None;
@@ -6976,6 +7141,7 @@ impl Footer {
                 PointerEventKind::Press { button, .. } if button == RIGHT_BUTTON => {
                     self.here.row_under_pointer = self.row_at(e.position.0, e.position.1);
                     self.here.cell_under_pointer = self.cell_at(e.position.0);
+                    self.here.x_under_pointer = Some(e.position.0);
                     // THE MODELINE FIRST, because it is not a row: a press on
                     // line 0 has no `ExpansionRow` behind it, and everything
                     // below asks the row what it is.
@@ -7030,6 +7196,7 @@ impl Footer {
                         });
                     self.here.row_under_pointer = self.row_at(e.position.0, e.position.1);
                     self.here.cell_under_pointer = self.cell_at(e.position.0);
+                    self.here.x_under_pointer = Some(e.position.0);
                     // WHAT THE LISTING'S GESTURE NEEDS, taken before the view
                     // is borrowed at the end of this arm: the width and the
                     // height the region is drawn at, the modifiers, and the
@@ -7342,6 +7509,27 @@ impl Footer {
             self.toggle_fold();
         }
         if let Some(act) = hint_act {
+            // AN EVENT'S ACTION WAS CLICKED: with an event on the line and no
+            // echo of the shell's over it, the line's only controls are that
+            // event's actions — and one acted on is an event done with.
+            let acted_on = if self.echo.is_none() {
+                self.event_line.done()
+            } else {
+                None
+            };
+            if acted_on.is_some() {
+                self.forget_the_line_under_the_pointer();
+                self.close_the_drawer_of_an_empty_line();
+            }
+            // AND AN INSTALL'S "OPEN IT" OPENS THE PROGRAM THAT LINE NAMES,
+            // and not whatever finished last (`events::launch_of`).
+            if let (Some(e), crate::chrome::Act::Run(command)) = (&acted_on, act)
+                && let Some(id) = crate::events::launch_of(e, command)
+            {
+                let id = id.to_owned();
+                self.software_launch_latest(Some(&id));
+                return;
+            }
             self.hint_clicked(act);
             return;
         }
@@ -7353,7 +7541,10 @@ impl Footer {
             {
                 self.hand_the_region_to(&unit);
             }
-            self.activate_leader();
+            // BY THE POINTER, so the list is there at once: a hand on the
+            // mouse cannot type fast, and two seconds of nothing would read
+            // as a click that missed.
+            self.activate_leader(crate::leader::Opener::Pointer);
             return;
         }
         if let Some(hit) = brain_hit {
@@ -7616,14 +7807,46 @@ impl Footer {
 
     /// Creates one output's surface.
     fn create_screen(&mut self, qh: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        // A SCREEN BORN WHILE THE BARS ARE HIDDEN is born at the geometry the
+        // other screens have (`crate::hidden::geometry`): the one-pixel edge,
+        // lying over, at rest. Born at the two lines, it kept a veiled strip
+        // and reserved two lines on the new monitor until something else
+        // asked for a geometry — nothing a monitor plugged in changes does:
+        // the guard in `draw_and_paint` compares shapes, and a hotplug moves
+        // none. With the bars visible it is born as it always was.
+        let hidden_now = self.shape.hidden.then(|| {
+            let without_the_edge = crate::hidden::Shape::of(self.shape_inputs(false));
+            let revealing = u32::from(self.shape.lines().saturating_sub(without_the_edge.lines()));
+            crate::hidden::geometry(
+                self.shape,
+                self.wanted_lines(),
+                revealing,
+                false,
+                u32::from(self.keyboard_rows()),
+                tokens::metrics::line_height(tokens::text::size()),
+            )
+        });
+        let (born_height, born_zone, born_over) = hidden_now.map_or(
+            (
+                self.requested_height,
+                i32::try_from(self.requested_height).unwrap_or(i32::MAX),
+                false,
+            ),
+            |g| (g.height, g.zone, g.overlay),
+        );
         let surface_of = self._compositor.create_surface(qh);
         let layer = self.layer_shell.create_layer_surface(
             qh,
             surface_of,
             // `Top`, not `Overlay`: the footer stays above the windows but
             // BELOW screen-lock dialogs. Overlay would put it on top of the
-            // lock.
-            Layer::Top,
+            // lock. (`Overlay` only while hidden and lying over the windows —
+            // see `crate::hidden::geometry`.)
+            if born_over {
+                Layer::Overlay
+            } else {
+                Layer::Top
+            },
             Some(crate::NAMESPACE),
             // An EXPLICIT output: it is what makes "one surface per output" be
             // true. Without it the compositor chooses, and two surfaces could
@@ -7633,10 +7856,10 @@ impl Footer {
 
         // Anchored at the bottom and on both sides: the whole width (section 4.1).
         layer.set_anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-        layer.set_size(0, self.requested_height);
+        layer.set_size(0, born_height);
 
         // Exclusive zone = the two lines. The buffers' content stops here.
-        layer.set_exclusive_zone(self.requested_height as i32);
+        layer.set_exclusive_zone(born_zone);
 
         // At rest the footer does NOT capture the keyboard. It starts capturing
         // only while the leader is active (section 7.4), and goes back to `None`
@@ -7674,8 +7897,8 @@ impl Footer {
             output,
             layer,
             width: 0,
-            height: self.requested_height,
-            asked: (0, self.requested_height),
+            height: born_height,
+            asked: (0, born_height),
             output_height,
             // ONE TO ONE UNTIL THE COMPOSITOR SAYS OTHERWISE — see
             // `crate::hidpi`.
@@ -7686,7 +7909,7 @@ impl Footer {
             size_owed: None,
             drawn_ahead: false,
             keyboard: KeyboardInteractivity::None,
-            overlay: false,
+            overlay: born_over,
             configured: false,
             gpu: None,
             text: None,
@@ -7695,7 +7918,7 @@ impl Footer {
         });
 
         tracing::info!(
-            height = self.requested_height,
+            height = born_height,
             screens = self.screens.len(),
             namespace = crate::NAMESPACE,
             "layer-shell surface created, awaiting configure"
@@ -8758,6 +8981,11 @@ impl Footer {
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
+            // THE LEADER'S OTHER TWO SETS, by name: what a tap of `Alt` or
+            // `Ctrl` does right after the leader, for the pointer that cannot
+            // tap one (the leader's hint line) and for `LEADER :`.
+            "leader-set-window" => self.leader_set_by_name(crate::leader::Set::Window),
+            "leader-set-full" => self.leader_set_by_name(crate::leader::Set::Full),
             // THE APP FINDER. It opens with the catalogue ALREADY READY: the sweep
             // ran at startup, in a thread, and what happens here is a copy of an
             // `Arc` and a filter over memory.
@@ -8847,11 +9075,13 @@ impl Footer {
                 // the committed theme, and `Esc` would then leave it on screen.
                 if self.theme_chooser.is_none() {
                     self.theme_chooser = Some(crate::theme_chooser::View::fresh_one(
-                        crate::theme::committed_backdrop(),
+                        crate::theme::committed(),
                         // ASKED ONCE, BEFORE THE FIRST PREVIEW. From here on
                         // the file exists whether or not anybody chose, because
-                        // that is how a preview reaches the other doors.
-                        crate::theme::chosen_before(),
+                        // that is how a preview reaches the other doors — and
+                        // a file that did not read whole is one no preview
+                        // may write over (`theme::Before`).
+                        crate::theme::before(),
                     ));
                 }
                 self.first_page();
@@ -8947,16 +9177,16 @@ impl Footer {
                 match crate::theme::persist(chosen) {
                     Ok(()) => {
                         v.commit();
-                        tokens::theme::set(chosen.theme);
+                        crate::theme::wear(chosen);
                         self.theme_chooser = None;
                         self.first_page();
                         self.apply_geometry(self.interactivity());
                     }
+                    // A FILE THAT DOES NOT READ WHOLE IS NOT WRITTEN OVER,
+                    // and the line says so — with what did not read — as it
+                    // says a disk that refused.
                     Err(e) => {
-                        let text = self.texts.t_with(
-                            ronoctua_i18n::key::ECHO_THEME_UNSAVED,
-                            &[("error", &e.to_string())],
-                        );
+                        let text = e.said(&self.texts);
                         self.echo_message(text);
                     }
                 }
@@ -9185,6 +9415,10 @@ impl Footer {
             // this machine does by itself may put a question in front of
             // somebody who is not there.
             "brain-clock-automatic" => self.keep_the_clock_right(),
+            // THE BARS HIDDEN, or back — `crate::hidden`. By name from
+            // `LEADER :`, and from the root's grafted row.
+            "footer-hide-push" => self.toggle_the_bars(crate::adapt::Hidden::Push),
+            "footer-hide-cover" => self.toggle_the_bars(crate::adapt::Hidden::Cover),
             // `LEADER s u n` — the whole sequence, now, outside any schedule.
             "system-update" => self.start_the_update(),
             // `LEADER s u u` — the view that watches it, in the footer's
@@ -9277,9 +9511,28 @@ impl Footer {
     /// arrived "sometimes a little faster, sometimes a little slower", which is
     /// what the owner read off the screen, because a watcher has a cadence.
     /// Asking is the same one unix-socket round trip either way.
-    fn show_theme_everywhere(&self, choice: crate::theme::Choice) {
-        crate::theme::show_everywhere(choice);
+    fn show_theme_everywhere(&mut self, choice: crate::theme::Choice) {
+        // A PREVIEW THE FILE REFUSED is said, every time: the footer wears it
+        // and the other doors do not, and the line is where that difference
+        // is explained (`theme::NotWritten::Kept`).
+        if let Err(e) = crate::theme::show_everywhere(choice) {
+            let text = e.said(&self.texts);
+            self.echo_message(text);
+        }
         self.tell_the_compositor_to_reread();
+    }
+
+    /// The theme chooser's preview of `choice`, whichever gesture moved a
+    /// cursor — an arrow or a click: this door wears it, marks it as its OWN
+    /// write (see `theme_changed`: the watcher hands it back a moment later,
+    /// and it must not be read as somebody's choice), and shows it to every
+    /// other door through the file.
+    fn preview_theme(&mut self, choice: crate::theme::Choice) {
+        crate::theme::wear(choice);
+        if let Some(v) = self.theme_chooser.as_mut() {
+            v.previewing(choice);
+        }
+        self.show_theme_everywhere(choice);
     }
 
     /// One round trip, and QUIET when there is nobody to answer.
@@ -11150,6 +11403,27 @@ impl Footer {
 
     /// Recomputes the layout and paints. The pair shows up in every event source.
     fn draw_and_paint(&mut self) {
+        // WHAT THE MINIBUFFER HAD STILL TO SAY goes to the band when the line
+        // became somebody's — a view opened, a question, the fullscreen edge.
+        // Asked HERE because every one of those ends in a frame, and a list of
+        // the ways the line can be taken is the list that forgets one.
+        self.events_yield_the_line();
+        // A MODE THIS SCREEN CANNOT DRAW, said once and before the shape is
+        // asked: the sentence is an echo, and an echo is part of the shape.
+        self.say_if_opaque();
+        // AND A `modeline.json` THE FOOTER STARTED WITHOUT, for the same
+        // reason and in the same place.
+        self.say_if_the_modeline_was_refused();
+        // THE ONE GUARD FOR THE HIDDEN MODES (`crate::hidden`). An echo that
+        // came or went, a focus that moved onto a kiosk, a flash, the band, a
+        // list that stopped waiting: none of them asks for a geometry, and
+        // with the bars visible none had to — the rows they touch were always
+        // there. Hidden, each of them moves a row in or out, and asking here
+        // is asking once for all of them. A comparison of two small values
+        // when nothing moved.
+        if self.shape_now() != self.shape {
+            self.apply_geometry(self.interactivity());
+        }
         // WHAT THE PANELS NEED, asked ONCE PER FRAME and in one place.
         //
         // Every other arrangement was a list of the ways the cursor can move —
@@ -11267,10 +11541,7 @@ impl Footer {
     fn theme_changed(&mut self) {
         let changed = crate::theme::reload();
         if let Some(v) = self.theme_chooser.as_mut() {
-            let on_disk = crate::theme::Choice {
-                theme: tokens::theme::current(),
-                backdrop: crate::theme::committed_backdrop(),
-            };
+            let on_disk = crate::theme::committed();
             // A DOOR DOES NOT LEARN ITS OWN PREVIEW BACK AS A CHOICE.
             //
             // This moved `committed` unconditionally, and since a preview
@@ -11292,9 +11563,24 @@ impl Footer {
         // A file written by hand (or by another footer) carries no fragments
         // with it; this door is the one that copies them.
         crate::theme::sync_with_file();
-        if changed || self.theme_chooser.is_some() {
+        let said = self.say_what_the_theme_file_refused();
+        if changed || said || self.theme_chooser.is_some() {
             self.draw_and_paint();
         }
+    }
+
+    /// What the theme's file had REFUSED — an answer this system does not
+    /// know, or a file that does not read — said on the minibuffer's line,
+    /// here where the file is read. A refusal only the journal knows is a
+    /// choice that "reset itself"; the log keeps every one, the line the
+    /// first. `true` if something was said.
+    fn say_what_the_theme_file_refused(&mut self) -> bool {
+        let Some(first) = crate::theme::refused().into_iter().next() else {
+            return false;
+        };
+        let text = first.said(&self.texts);
+        self.echo_message(text);
+        true
     }
 
     /// Asks the inspector about the file under the manager's cursor.
@@ -11303,6 +11589,9 @@ impl Footer {
     /// same file has already been asked about — all three decided by
     /// `files::View::wants_look`, which is the one place that knows.
     fn look_again(&mut self) {
+        // ON THE PAGE THE FRAME WILL LOOK THEM UP UNDER, and not the one the
+        // last screen of the last frame left on (`wear_the_pictures_page`).
+        self.wear_the_pictures_page();
         if let Some(queue) = self.files_looking.as_ref()
             && let Some(view) = self.files.as_mut()
             && let Some(ask) = view.wants_look(u32::from(tokens::space::FILES_PANELPIXELS))
@@ -11445,6 +11734,8 @@ impl Footer {
     /// arrival CLAMPS, a person's key FOLLOWS.
     fn typed(&mut self, event: KeyEvent) {
         self.took_a_key(event);
+        // A LIST STILL WAITING COUNTS FROM THIS KEY (`crate::leader::Patience`).
+        self.patience_after_a_key();
         // THE PAINT IS ONLY OWED WHEN THE PAGE ACTUALLY MOVED. The branch
         // above has already drawn what the key did; this is the second half of
         // the frame, and it costs nothing on the keys that scroll nothing.
@@ -11454,6 +11745,14 @@ impl Footer {
     }
 
     fn took_a_key(&mut self, event: KeyEvent) {
+        // EVERY KEY THAT GOES DOWN IS TOLD TO THE TAP, before anything can
+        // swallow it: a modifier alone arms it and any other key disarms it,
+        // which is what tells a TAP of `Alt` or `Ctrl` — the leader's set —
+        // from the same modifier held in a chord. `Control_R` held for the
+        // paging arrows below stays a chord for exactly that reason. See
+        // `crate::leader::Tap`; the release half is `key_released`.
+        self.tap.pressed(event.keysym);
+
         // The RIGHT `Ctrl`, tracked by its keysym.
         //
         // It does not come in the `Modifiers`: xkb merges both Ctrls into a single
@@ -11635,9 +11934,10 @@ impl Footer {
         }
 
         // THE THEME CHOOSER: the network list's keys, with one difference —
-        // moving the cursor is a PREVIEW, so the theme is set on the way and put
-        // back on `Esc`. See `theme_chooser.rs` for why the preview is this
-        // door's alone.
+        // moving a cursor is a PREVIEW, so the choice is shown on the way and
+        // put back on `Esc`. See `theme_chooser.rs` for why a preview writes
+        // the file every other door watches. (Its keys are further down,
+        // after the language's and the regions'.)
         // THE LANGUAGE AND REGION VIEW. No preview: choosing a language
         // WRITES, because the file is how the other doors hear about it, and
         // there is nothing to put back on `Esc`. Every key is read by its
@@ -11691,8 +11991,15 @@ impl Footer {
                         // said, or AWAY when there was none: a machine that
                         // never chose must not be given a file by having
                         // looked at the list.
-                        tokens::theme::set(v.committed().theme);
-                        crate::theme::put_everything_back(v.committed(), v.chosen_before());
+                        crate::theme::wear(v.committed());
+                        // AND A FILE THAT IS NOT WHAT THE CHOOSER LEFT — one
+                        // that no longer reads whole — is left alone, and
+                        // the line says why.
+                        if let Err(e) = crate::theme::put_everything_back(v.committed(), v.before())
+                        {
+                            let text = e.said(&self.texts);
+                            self.echo_message(text);
+                        }
                         // AND THE DESK COMES BACK IN THE SAME BREATH, for the
                         // reason it went: the compositor never notices on its
                         // own, and `Esc` would leave the previewed desk on
@@ -11705,32 +12012,22 @@ impl Footer {
                 }
                 Sym::Down | Sym::Up => {
                     let step = if key.sym == Sym::Down { 1 } else { -1 };
-                    // THE PAIR IS TAKEN INSIDE THE BORROW AND SHOWN OUTSIDE
-                    // IT: `v` holds `self`, and telling the compositor is the
+                    // EVERY CURSOR PREVIEWS THE WHOLE CHOICE — the five
+                    // answers, whichever column the keyboard is in — and a
+                    // cursor at its end previews nothing new, so nothing is
+                    // written. Taken inside the borrow and shown outside it:
+                    // `v` holds `self`, and telling the compositor is the
                     // footer's own business.
-                    let mut shown = None;
-                    if let Some(v) = self.theme_chooser.as_mut() {
-                        // EITHER CURSOR PREVIEWS THE WHOLE PAIR. It used to
-                        // matter which one moved — the theme repainted this
-                        // door alone and the desk went to the compositor alone
-                        // — so what the person saw was a theme worn by one
-                        // strip of the screen. The owner asked for all of it
-                        // to move together, and a preview is a PAIR either
-                        // way; see `theme::show_everywhere`.
-                        let (crate::theme_chooser::Moved::Theme(c)
-                        | crate::theme_chooser::Moved::Desk(c)) = v.move_by(step);
-                        tokens::theme::set(c.theme);
-                        shown = Some(c);
-                    }
+                    let shown = self.theme_chooser.as_mut().and_then(|v| v.move_by(step));
                     if let Some(c) = shown {
-                        if let Some(v) = self.theme_chooser.as_mut() {
-                            v.previewing(c);
-                        }
-                        self.show_theme_everywhere(c);
+                        self.preview_theme(c);
                     }
                     self.draw_and_paint();
                 }
                 Sym::Left | Sym::Right => {
+                    // FROM COLUMN TO COLUMN, five of them, each keeping its
+                    // own cursor: crossing previews nothing, because no
+                    // answer changed.
                     let step = if key.sym == Sym::Right { 1 } else { -1 };
                     if let Some(v) = self.theme_chooser.as_mut() {
                         v.cross(step);
@@ -12106,6 +12403,102 @@ impl Footer {
         }
     }
 
+    /// Says, once, that a hidden mode cannot be see-through on this machine —
+    /// the surface was refused the premultiplied mode (`Gpu::transparent`),
+    /// so a hidden footer is drawn opaque. Without it the person would see
+    /// the bars go and a strip of chrome stay, and nothing saying why.
+    fn say_if_opaque(&mut self) {
+        if self.said_opaque || self.modeline.hidden.is_none() {
+            return;
+        }
+        let opaque = self
+            .screens
+            .iter()
+            .any(|t| t.gpu.as_ref().is_some_and(|g| !g.transparent()));
+        if opaque {
+            self.said_opaque = true;
+            let m = self.texts.t(ronoctua_i18n::key::ECHO_FOOTER_OPAQUE);
+            self.echo_message(m);
+        }
+    }
+
+    /// Says, once, that `modeline.json` did not parse when the footer started
+    /// — the footer came up with the default switches, the bars visible, and
+    /// without the sentence the person would see their hidden bars back and
+    /// nothing saying why (`adapt::reread` is the same refusal on a change).
+    fn say_if_the_modeline_was_refused(&mut self) {
+        if !self.modeline_refused {
+            return;
+        }
+        self.modeline_refused = false;
+        let m = self
+            .texts
+            .t(ronoctua_i18n::key::ECHO_MODELINE_WILL_NOT_PARSE);
+        self.echo_message(m);
+    }
+
+    /// `footer-hide-push`, `footer-hide-cover`, and the leader pressed again
+    /// at the root: the bars hidden that way, or back when they already are —
+    /// see `crate::hidden`.
+    ///
+    /// THE LEADER ENDS FIRST, with its keyboard, and the switch is written
+    /// into `modeline.json` MERGED with what the file says now — the toggle is
+    /// taken from the file, so a mode set by another hand is the one toggled.
+    /// A file that will not parse is refused with its sentence and written
+    /// over by nobody (`write_the_modeline`).
+    fn toggle_the_bars(&mut self, mode: crate::adapt::Hidden) {
+        if self.leader.active_one() {
+            self.close_leader();
+        }
+        tracing::info!(?mode, "the bars toggled");
+        self.write_the_modeline(|p| p.hidden = crate::hidden::toggled(p.hidden, mode));
+    }
+
+    /// Arms the ONE timer that may show a waiting list — numbered, the way
+    /// `wait_for_the_keyboard` numbers its own, so a key that re-armed it
+    /// leaves the older timer finding its number stale.
+    fn wait_for_the_hand(&mut self, generation: u64) {
+        let Some(handle) = self.repeat.clone() else {
+            // NO LOOP TO WAIT ON — a unit test's footer: the list is shown.
+            self.list_patience = crate::leader::Patience::Shown;
+            return;
+        };
+        let armed = handle.insert_source(
+            calloop::timer::Timer::from_duration(LIST_PATIENCE),
+            move |_, (), state: &mut Self| {
+                state.patience_ran_out(generation);
+                calloop::timer::TimeoutAction::Drop
+            },
+        );
+        if let Err(e) = armed {
+            tracing::warn!(error = %e, "could not arm the list's wait; showing it now");
+            self.list_patience = crate::leader::Patience::Shown;
+        }
+    }
+
+    /// The hand stopped: the waiting list is shown, if this timer is still
+    /// the one that may show it.
+    fn patience_ran_out(&mut self, generation: u64) {
+        if !self.leader.active_one() || !self.list_patience.ran_out(generation) {
+            return;
+        }
+        tracing::info!("the leader's list, after the hand stopped");
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// A key arrived: a list still waiting counts again from it.
+    fn patience_after_a_key(&mut self) {
+        if !self.leader.active_one() {
+            return;
+        }
+        let next = self.patience_generation.wrapping_add(1);
+        if let Some(generation) = self.list_patience.after_a_key(next) {
+            self.patience_generation = generation;
+            self.wait_for_the_hand(generation);
+        }
+    }
+
     /// Owes a paint, to happen once the event queue is empty.
     ///
     /// For the bursts — pointer motion, the wheel, a held-down arrow — where
@@ -12118,7 +12511,30 @@ impl Footer {
     ///
     /// The keyboard request is `Exclusive` on purpose. `OnDemand` would give
     /// focus only on a click, and the footer has nothing clickable.
-    fn activate_leader(&mut self) {
+    ///
+    /// `by` is what opened it: a key's list waits with the bars hidden, a
+    /// click's does not (`crate::leader::Patience`).
+    fn activate_leader(&mut self, by: crate::leader::Opener) {
+        // THE LEADER AGAIN, AT THE ROOT, hides the bars or brings them back
+        // (`crate::hidden::leader_again`): `LEADER LEADER` in the footer's
+        // set pushes, `LEADER ALT LEADER` covers, and in the full set — or
+        // with anything typed, the buffer's `,` and the `w s` states included
+        // — it starts the sequence over as it always did.
+        let typed_nothing =
+            self.leader.at_root() && self.buffer_pending.is_empty() && !self.state_pending;
+        // ONLY A LEADER THAT IS THE VIEW counts as open here: one made active
+        // under a footer app or the command finder is not on the screen — the
+        // app still has the region and the keys — and the leader pressed
+        // again there starts it over, as it always did, instead of hiding the
+        // bars from a list the person cannot see.
+        if let Some(mode) = crate::hidden::leader_again(
+            self.leader.active_one() && self.view() == ViewState::Leader,
+            typed_nothing,
+            self.leader.set_now(),
+        ) {
+            self.toggle_the_bars(mode);
+            return;
+        }
         // "which-key in one frame" (5.2), counted from here.
         //
         // What stays OUT: the compositor receives the key and runs `ronoctua-shell
@@ -12133,7 +12549,28 @@ impl Footer {
             g.mark_as("which-key", std::time::Instant::now());
         }
         self.leader.activate();
+        // A TAP IS COUNTED FROM THE LEADER'S OWN START: a modifier that went
+        // down before it is no answer to it.
+        self.tap = crate::leader::Tap::default();
+        // THE LIST WAITS, with the bars hidden and a key that opened it: the
+        // chord is on the minibuffer at once, the list when the hand stops.
+        self.patience_generation = self.patience_generation.wrapping_add(1);
+        self.list_patience = crate::leader::Patience::at_opening(
+            self.modeline.hidden.is_some(),
+            by == crate::leader::Opener::Key,
+            self.patience_generation,
+        );
+        if let crate::leader::Patience::Waiting(generation) = self.list_patience {
+            self.wait_for_the_hand(generation);
+        }
         self.first_page();
+        // THE PERSON'S LAST ECHO GIVES THE LINE UP, as it does on every key
+        // of a sequence (`apply_leader_effect_with`): the echo outranks the
+        // chord and the sets' hint on the minibuffer's line, and a
+        // `cancelled` or a `not bound` from the leader just before hid both —
+        // and the hint's clicks with them — for its three seconds. An EVENT's
+        // echo has its own rules and stays (`crate::events`).
+        self.echo = None;
         // WHAT THE FOCUSED BUFFER ANSWERS TO, asked once, here.
         //
         // The row only appears when it published something: a window that is not
@@ -12142,27 +12579,15 @@ impl Footer {
         // that there was something there.
         self.refresh_buffer_keymap();
 
-        self.inputs = match self.tree.resolve(&[]) {
-            ronoctua_keymap::Resolution::Prefix(e) => crate::leader::condensed_root(e),
+        self.inputs = match self.leader_root() {
+            Some(e) => e,
             // A keymap with no binding at all: there is nothing to show, and
             // capturing the keyboard would only take input away from the buffers.
-            _ => {
+            None => {
                 self.leader.finish();
                 return;
             }
         };
-        // The buffer's row goes in only when there IS a buffer answering.
-        if !self.buffer_bindings.is_empty()
-            && let Ok(key) = ronoctua_keymap::Key::parse(ronoctua_protocol::LOCAL_PREFIX)
-        {
-            self.inputs.push(ronoctua_keymap::Entry {
-                key: ronoctua_protocol::LOCAL_PREFIX.to_owned(),
-                sym: key,
-                label: ronoctua_i18n::key::WHICH_BUFFER.to_owned(),
-                command: None,
-                is_group: true,
-            });
-        }
         // THE INHERITANCE IS RECAPTURED HERE, and not only on the `enter`.
         //
         // Whatever is held at the instant the sequence starts is not its — the
@@ -12183,6 +12608,132 @@ impl Footer {
         // height CHANGES. Here it always changes, so this is redundant today —
         // and it was exactly that bet that left the finder without redrawing on filter.
         self.draw_and_paint();
+    }
+
+    /// The ROOT of the list in the leader's current set: the tree's first
+    /// level with the nine digits drawn as one row, and the focused buffer's
+    /// `,` row when there is a buffer answering.
+    ///
+    /// One function for the two moments the root is shown — the leader
+    /// opening, and its set switching — so a set's root cannot come out
+    /// missing a row the opening has. The `w s` row is grafted under `w`
+    /// (`apply_leader_effect_with`), which is a group in every set.
+    ///
+    /// `None` for a tree with no binding at all.
+    fn leader_root(&self) -> Option<Vec<ronoctua_keymap::Entry>> {
+        let ronoctua_keymap::Resolution::Prefix(e) =
+            self.tree.of(self.leader.set_now()).resolve(&[])
+        else {
+            return None;
+        };
+        let mut inputs = crate::leader::condensed_root(e);
+        // The buffer's row goes in only when there IS a buffer answering.
+        if !self.buffer_bindings.is_empty()
+            && let Ok(key) = ronoctua_keymap::Key::parse(ronoctua_protocol::LOCAL_PREFIX)
+        {
+            inputs.push(ronoctua_keymap::Entry {
+                key: ronoctua_protocol::LOCAL_PREFIX.to_owned(),
+                sym: key,
+                label: ronoctua_i18n::key::WHICH_BUFFER.to_owned(),
+                command: None,
+                is_group: true,
+            });
+        }
+        // AND THE LEADER ITSELF, as a row: the toggle of the hidden bars in
+        // this set, which the tree cannot hold (`crate::hidden::bars_row`) —
+        // on the list so the pointer reaches it, and so the list says it. It
+        // is grafted HERE, where every root is built, so a set switch swaps it
+        // for the other set's toggle.
+        if let Some(row) = crate::hidden::bars_row(self.leader.set_now(), &self.leader_label) {
+            inputs.push(row);
+        }
+        Some(inputs)
+    }
+
+    /// A key came UP — from the compositor's keyboard or from an independent
+    /// one: the right `Ctrl` stops being held, and a clean TAP of `Alt` or
+    /// `Ctrl` chooses the leader's set.
+    fn key_released(&mut self, sym: Keysym) {
+        if sym == Keysym::Control_R {
+            self.right_ctrl = false;
+        }
+        if let Some(set) = self.tap.released(sym) {
+            self.set_tapped(set);
+        }
+    }
+
+    /// A tap chose a set. It counts only where the leader is the view and
+    /// nothing has been typed — the `,` group included — and everywhere else
+    /// a modifier alone is ignored, exactly as it always was: `translate`
+    /// drops it, and no view reads it.
+    fn set_tapped(&mut self, set: crate::leader::Set) {
+        if self.view() != ViewState::Leader
+            || !self.leader.at_root()
+            || !self.buffer_pending.is_empty()
+        {
+            return;
+        }
+        self.switch_leader_set(set);
+    }
+
+    /// Switches the open leader to `set` and shows that set's root.
+    ///
+    /// `false`, and nothing changed, when the leader is not at its root —
+    /// see `leader::Leader::set`.
+    fn switch_leader_set(&mut self, set: crate::leader::Set) -> bool {
+        if !self.leader.set(set) {
+            return false;
+        }
+        match self.leader_root() {
+            Some(e) => self.inputs = e,
+            None => {
+                self.close_leader();
+                self.draw_and_paint();
+                return true;
+            }
+        }
+        self.first_page();
+        // A SWITCH IS A PERSON'S KEY like any other of the sequence: the last
+        // echo gives the line to the new chord and its hint (see
+        // `activate_leader`).
+        self.echo = None;
+        tracing::info!(
+            ?set,
+            inputs = self.inputs.len(),
+            prefix = %self.leader.prefix(&self.leader_label),
+            "the leader's set switched"
+        );
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+        true
+    }
+
+    /// `leader-set-window` and `leader-set-full`, run by NAME — the click on
+    /// the leader's hint, `LEADER :`, the control socket. A closed leader
+    /// opens in that set; an open one at its root switches; one halfway
+    /// through a sequence starts over at the root, in that set.
+    fn leader_set_by_name(&mut self, set: crate::leader::Set) {
+        if !self.leader.active_one() || !self.leader.at_root() || !self.buffer_pending.is_empty() {
+            // AN OPEN LEADER IS ENDED FIRST, and not just trimmed back to its
+            // root: `activate_leader` on an open leader with nothing typed is
+            // the leader pressed AGAIN, which toggles the hidden bars
+            // (`crate::hidden::leader_again`). Clearing a pending `,` and
+            // then activating was exactly that — a set asked for by name hid
+            // the footer instead.
+            self.leader.finish();
+            self.buffer_pending.clear();
+            self.state_pending = false;
+            // BY NAME IS NOT BY KEY: a click, `LEADER :` or the socket asked
+            // for this set, and none of them "types fast" — the list shows at
+            // once (`crate::leader::Patience`).
+            self.activate_leader(crate::leader::Opener::Pointer);
+        }
+        // AND A LIST THAT WAS WAITING for a key-opened leader shows now: the
+        // set was chosen by the pointer or by name, and none of them types
+        // fast. The switch below lays it out; the old timer, when it fires,
+        // finds it shown. A TAP keeps waiting — it does not come through here.
+        self.list_patience = crate::leader::Patience::Shown;
+        self.switch_leader_set(set);
     }
 
     /// Makes sure the focused item's image is decoded.
@@ -12878,6 +13429,11 @@ impl Footer {
             text,
             std::time::Instant::now() + std::time::Duration::from_secs(ECHO_SECONDS),
         ));
+        // THE PERSON'S ANSWER TAKES THE LINE AT ONCE, and an event on it goes
+        // back to the front of the queue to be said whole afterwards.
+        if self.event_line.interrupted() {
+            self.forget_the_line_under_the_pointer();
+        }
     }
 
     /// Wipes the message if it expired. Gives back `true` if something changed.
@@ -12891,10 +13447,165 @@ impl Footer {
         }
     }
 
+    /// Is an echo on the minibuffer's line — the shell's own, or an event's?
+    fn echo_on_the_line(&self) -> bool {
+        self.echo.is_some() || self.event_line.on_the_line().is_some()
+    }
+
+    /// What holds the minibuffer's line, for an event that wants it.
+    ///
+    /// Asked of the one place each answer lives: `view()` for the views and
+    /// the leader, the minibuffer for a question, the fold for the drawer, and
+    /// the fullscreen edge for a screen whose footer is down to one pixel —
+    /// with a pointer at the edge it is up, and the line is seen.
+    fn busy_for_events(&self) -> crate::events::Busy {
+        crate::events::Busy {
+            view: self.grabbing(),
+            typing: self.mx.line().is_some(),
+            drawer: self.fold.open,
+            covered: self.edge.as_ref().is_some_and(|e| !e.inside),
+        }
+    }
+
+    /// What the machine did, said: on the minibuffer's line when it is free,
+    /// on the band when it is not — and past the queue's cap.
+    ///
+    /// Every source hands its events here and nowhere else, so "where does an
+    /// event go" has one answer (`events::route`).
+    fn said_now(&mut self, events: Vec<crate::events::Event>) {
+        if events.is_empty() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let busy = self.busy_for_events();
+        let mut to_the_band = Vec::new();
+        let mut on_the_line = false;
+        for e in events {
+            tracing::info!(event = e.tag, ?busy, "an event of the machine");
+            match crate::events::route(busy) {
+                crate::events::Route::Echo => {
+                    let before = self.event_line.on_the_line().map(|e| e.tag);
+                    if let Some(over) = self.event_line.arrive(e, self.echo.is_some(), now) {
+                        to_the_band.push(over);
+                    }
+                    on_the_line |= self.event_line.on_the_line().map(|e| e.tag) != before;
+                }
+                crate::events::Route::Notification => to_the_band.push(e),
+            }
+        }
+        if on_the_line {
+            self.forget_the_line_under_the_pointer();
+        }
+        if to_the_band.is_empty() {
+            if on_the_line {
+                self.draw_and_paint();
+            }
+            return;
+        }
+        for e in &to_the_band {
+            let n = crate::events::notification(e, &self.texts);
+            self.arrived(n, now);
+        }
+        self.after_the_queue_moved();
+    }
+
+    /// The events still to be said, handed to the band when the line became
+    /// somebody's — asked once per frame, at the top of `draw_and_paint`,
+    /// which is where every change of what holds the line ends up.
+    ///
+    /// Does not paint: it is called from the paint.
+    fn events_yield_the_line(&mut self) {
+        if self.event_line.is_empty() {
+            return;
+        }
+        let handed = self
+            .event_line
+            .yielded(self.busy_for_events(), std::time::Instant::now());
+        if handed.is_empty() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        for e in &handed {
+            tracing::info!(
+                event = e.tag,
+                "the minibuffer became busy; the event goes to the band"
+            );
+            let n = crate::events::notification(e, &self.texts);
+            self.arrived(n, now);
+        }
+        self.forget_the_line_under_the_pointer();
+        self.save_history();
+        self.apply_geometry(self.interactivity());
+    }
+
+    /// The footer's second, for the event on the line: it goes when its time
+    /// is up — never while a pointer rests on the line — and the next one
+    /// takes the line when nothing else holds it. `true` if the line changed.
+    fn events_tick(&mut self, now: std::time::Instant) -> bool {
+        let held = self.pointers.lit(&self.here).any(|(_, p)| p.on_minibuffer);
+        let moved = self.event_line.tick(now, self.echo.is_some(), held);
+        if moved {
+            self.forget_the_line_under_the_pointer();
+        }
+        moved
+    }
+
+    /// The drawer of a line that has EMPTIED at rest closes, with its height.
+    ///
+    /// Opened to read an event or an echo whole, it stayed open after what it
+    /// showed had gone: nothing closes it at rest but the chevron — the
+    /// footer at rest has no keyboard for `Esc` — and an open drawer counts
+    /// the line as busy (`busy_for_events`), so every event after it went to
+    /// the band while the line was empty. The same stale shape the views had
+    /// (`apply_geometry` closes the drawer when the view changes).
+    fn close_the_drawer_of_an_empty_line(&mut self) {
+        if self.fold.open
+            && self.view() == ViewState::NoneOf
+            && !self.echo_on_the_line()
+            && self.mx.line().is_none()
+        {
+            self.fold.close();
+            self.apply_geometry(self.interactivity());
+        }
+    }
+
+    /// The line changed under a pointer resting on it: what was said about
+    /// the action it was on is about an action that is gone.
+    ///
+    /// The next motion asks again (`hint_under`), which is the rule — what the
+    /// pointer is told about is what was DRAWN.
+    fn forget_the_line_under_the_pointer(&mut self) {
+        self.hint_said = None;
+        self.hint_lit = None;
+    }
+
+    /// The minibuffer's line for an event: its summary, and at the end the
+    /// actions its catalogue entry offers (`chrome::Piece::action`).
+    fn event_pieces(&self, e: &crate::events::Event) -> Vec<crate::chrome::Piece> {
+        let actions = crate::events::actions_of(e, &self.book, &self.command_registry, &self.texts);
+        crate::chrome::said_with_actions(e.summary(&self.texts), &actions)
+    }
+
+    /// Whether a point is on the minibuffer's line or its opened drawer.
+    fn on_the_minibuffer(&self, y: f64) -> bool {
+        let Some(f) = self.metric() else {
+            return false;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let Some(line) = f.line_at(y as f32) else {
+            return false;
+        };
+        let first = self.minibuffer_line();
+        line >= first && line <= first + self.fold_rows()
+    }
+
     /// Leaves the leader: gives the keyboard back and returns to two lines.
     fn close_leader(&mut self) {
         self.leader.finish();
         self.inputs.clear();
+        // AND A LIST THAT WAS WAITING IS NOT ANY MORE: its timer, when it
+        // fires, finds nothing to show.
+        self.list_patience = crate::leader::Patience::Shown;
         tracing::info!("leader closed");
         // IT GIVES THE KEYBOARD BACK ONLY IF NOBODY ELSE WANTS IT.
         //
@@ -13006,6 +13717,83 @@ impl Footer {
         self.view().grabs()
     }
 
+    /// The page this frame's PICTURES are asked for and looked up under —
+    /// thumbnails, the preview, the globe, the gestures' drawings. See
+    /// `crate::hidden::Shape::pictures_page` for why one, and which.
+    fn pictures_page(&self) -> crate::theme::Page {
+        let edge_out = self
+            .edge
+            .as_ref()
+            .is_some_and(|e| e.inside || self.grabbing());
+        self.shape.pictures_page(
+            edge_out,
+            crate::theme::footer_page(),
+            crate::theme::desk_page(),
+        )
+    }
+
+    /// Wears the pictures' page, process-wide, and says which it is.
+    ///
+    /// OUTSIDE THE PAINT'S LOOP THE PROCESS WEARS IT: before a picture is
+    /// asked for (`look_again`, `prepare_gesture_art`) and after every screen
+    /// has worn its own page (`paint`). So every key built between frames —
+    /// a thumbnail under the pointer, the grid a key moved — names the page
+    /// the frame will look it up under.
+    fn wear_the_pictures_page(&self) -> crate::theme::Page {
+        let page = self.pictures_page();
+        tokens::theme::set_ground(page);
+        page
+    }
+
+    /// The footer's rows as the facts call for them NOW — see
+    /// `crate::hidden`.
+    ///
+    /// Asked by `apply_geometry`, which keeps the answer in `shape`, and by
+    /// `draw_and_paint`, which asks for a geometry when the two differ. NEVER
+    /// by a row sum: those read the field, because they are under `metric`.
+    fn shape_now(&self) -> crate::hidden::Shape {
+        crate::hidden::Shape::of(self.shape_inputs(self.revealed_on.is_some()))
+    }
+
+    /// The facts the shape is made of — with the edge as asked, so the
+    /// geometry can also ask what the footer would be WITHOUT the pointer.
+    fn shape_inputs(&self, revealed: bool) -> crate::hidden::Inputs {
+        let view = self.view();
+        crate::hidden::Inputs {
+            hidden: self.modeline.hidden,
+            revealed,
+            // A KIOSK, ADAPTED OR NOT: the switch is about what the modeline
+            // says, and this is about whether the bars are there to say it.
+            kiosk_focused: self
+                .windows
+                .focused()
+                .is_some_and(|w| self.kiosk.pair_of(w.id).is_some()),
+            app_open: view.is_an_app(),
+            minibuffer_busy: self.minibuffer_busy(),
+            band_or_brain: self.band_rows() > 0 || self.brain_rows() > 0,
+            keyboard_out: self.keyboard_rows() > 0,
+            list_withheld: matches!(view, ViewState::Leader) && self.list_patience.withheld(),
+        }
+    }
+
+    /// Whether the minibuffer has something to say — what, with the bars
+    /// hidden, brings its line up on its own.
+    ///
+    /// A view that has the keyboard (the leader's chord, a view's keys), an
+    /// echo, a question, the volume's flash, and the opened line: the drawer
+    /// hangs from the minibuffer, and a drawer with no line above it would be
+    /// rows of a sentence whose first words are gone.
+    fn minibuffer_busy(&self) -> bool {
+        self.grabbing()
+            // AN EVENT'S ECHO IS AN ECHO (`crate::events`): it lives in its own
+            // queue and not in `self.echo`, and a line that carries one is a
+            // line that has to be drawn.
+            || self.echo_on_the_line()
+            || self.mx.line().is_some()
+            || self.flashing_on_the_minibuffer()
+            || self.fold.open
+    }
+
     /// What to ask the compositor for right now.
     const fn interactivity(&self) -> KeyboardInteractivity {
         if self.grabbing() {
@@ -13070,7 +13858,9 @@ impl Footer {
     /// leader, a finder or a question each own the line; an echo is the
     /// shell answering somebody; the open drawer is the line grown.
     fn minibuffer_is_free(&self) -> bool {
-        minibuffer_free(self.view(), self.echo.is_some(), self.fold.open)
+        // AN EVENT SAID THERE IS AN ECHO TOO: it is on the line for the
+        // echo's time, and a flash drawn over it would hide both.
+        minibuffer_free(self.view(), self.echo_on_the_line(), self.fold.open)
     }
 
     /// Which line of the surface that row is on, when it is up.
@@ -13891,16 +14681,7 @@ impl Footer {
         let mut leader = false;
         for o in outs {
             match o {
-                Out::Key(code, down) => {
-                    let keymap = self.osk.as_mut().and_then(crate::osk::Board::keymap_text);
-                    let seat = seat.clone().or_else(|| self.seats.seats().next());
-                    if let (Some(k), Some(keymap), Some(seat)) =
-                        (self.osk_keys.as_mut(), keymap, seat)
-                    {
-                        k.ready(qh, &seat, &keymap);
-                        k.key(code, down);
-                    }
-                }
+                Out::Key(code, down) => self.osk_key_out(qh, seat.clone(), code, down),
                 Out::Leader => leader = true,
                 Out::Hide => hide = true,
                 Out::Keep => keep = true,
@@ -13909,6 +14690,30 @@ impl Footer {
                     self.echo_message(m);
                 }
             }
+        }
+        // A LONE `Alt` OR `Ctrl` TAPPED HERE, at the leader's root, IS THE
+        // TAP that chooses the leader's set (`leader::Tap`). This keyboard
+        // latches a tapped modifier and sends its key-up only after the next
+        // key — which by then made it a chord, `LEADER M-s is not bound` — so
+        // the latch is given up at once, its key-up sent, and the set taken
+        // here. The footer's own `Tap` is cleared first: the key-up coming
+        // back through the compositor must not switch a second time.
+        if self.view() == ViewState::Leader
+            && self.leader.at_root()
+            && self.buffer_pending.is_empty()
+            && let Some((modifier, ups)) = self
+                .osk
+                .as_mut()
+                .and_then(crate::osk::Board::spend_a_lone_tap)
+            && let Some(set) = crate::leader::set_of_osk_tap(modifier)
+        {
+            for o in ups {
+                if let Out::Key(code, down) = o {
+                    self.osk_key_out(qh, seat.clone(), code, down);
+                }
+            }
+            self.tap = crate::leader::Tap::default();
+            self.set_tapped(set);
         }
         if keep && let Some(board) = self.osk.as_ref() {
             let store = crate::osk::store();
@@ -13936,9 +14741,26 @@ impl Footer {
             self.apply_geometry(self.interactivity());
         }
         if leader {
-            self.activate_leader();
+            self.activate_leader(crate::leader::Opener::Key);
         }
         self.draw_and_paint();
+    }
+
+    /// One key of the on-screen keyboard out to the focused window, through
+    /// the virtual keyboard of `seat` (or the first seat).
+    fn osk_key_out(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        seat: Option<wl_seat::WlSeat>,
+        code: u16,
+        down: bool,
+    ) {
+        let keymap = self.osk.as_mut().and_then(crate::osk::Board::keymap_text);
+        let seat = seat.or_else(|| self.seats.seats().next());
+        if let (Some(k), Some(keymap), Some(seat)) = (self.osk_keys.as_mut(), keymap, seat) {
+            k.ready(qh, &seat, &keymap);
+            k.key(code, down);
+        }
     }
 
     /// The keyboard's part of a pointer's frame: the presses and releases it
@@ -14137,8 +14959,13 @@ impl Footer {
     }
 
     /// Which line of the surface the minibuffer is on. Glued under the modeline.
+    ///
+    /// ON THE MODELINE'S OWN LINE when the modeline is hidden and the
+    /// minibuffer is not (`crate::hidden`): the rows are counted from the
+    /// applied shape, a field — never worked out here, which is under
+    /// `metric`.
     fn minibuffer_line(&self) -> u16 {
-        self.modeline_line() + 1
+        self.modeline_line() + self.shape.modeline_rows
     }
 
     /// How many lines the OPENED minibuffer line takes. `0` while it is folded.
@@ -14155,7 +14982,7 @@ impl Footer {
     /// continuing: a drawer that opened somewhere else would be a second thing
     /// on screen rather than the same one, longer.
     fn fold_line_at(&self) -> u16 {
-        self.modeline_line() + FOOTER_LINES
+        self.modeline_line() + self.shape.lines()
     }
 
     /// How many lines the shortcut's explanation takes: one, or none.
@@ -14196,7 +15023,19 @@ impl Footer {
         // of the region and the region is measured before the frame: cleared
         // in there, the listing would be laid out one row short of what it
         // drew until something else asked for a frame.
+        //
+        // THE SHELL'S OWN ECHO, and not an event's: an event said on the line
+        // carries its actions, which ARE on screen, and the sentence under
+        // one is `cmd-<id>` like any shortcut's. The line forgets the pointer
+        // whenever the event on it changes, so this never explains an action
+        // that has gone.
         if self.echo.is_some() {
+            return 0;
+        }
+        // AND NOT WHILE THE LEADER'S LIST WAITS: the row comes out of the
+        // region, and a region held back has none to give — taken anyway, it
+        // would be a row ADDED to a footer drawn without its region.
+        if !self.shape.region_shown {
             return 0;
         }
         // REMEMBERED, NEVER MEASURED HERE. See `region_can_spare_a_row`: this
@@ -14212,7 +15051,7 @@ impl Footer {
     /// because then the drawer IS the hint. It is what was asked for: *"uma
     /// linha abaixo dos atalhos"*.
     fn explain_line_at(&self) -> u16 {
-        self.modeline_line() + FOOTER_LINES + self.fold_rows()
+        self.modeline_line() + self.shape.lines() + self.fold_rows()
     }
 
     /// Which line of the surface the brain's is on, when it is on one.
@@ -14225,7 +15064,7 @@ impl Footer {
     /// which is exactly the defect [`Self::first_of_expansion`] exists to
     /// remove.
     fn brain_line_at(&self) -> u16 {
-        self.modeline_line() + FOOTER_LINES + self.fold_rows() + self.explain_rows()
+        self.modeline_line() + self.shape.lines() + self.fold_rows() + self.explain_rows()
     }
 
     /// The first line of the expanded region.
@@ -14235,8 +15074,11 @@ impl Footer {
     /// the same thing, and the one that gets it wrong is the one nobody looks
     /// at: the cursor describes the line above.
     fn first_of_expansion(&self) -> u16 {
+        // THE BARS' ROWS FROM THE APPLIED SHAPE, which is a field: this sum
+        // is under `metric`, and a shape worked out here would be the footer
+        // asking itself what it holds.
         self.modeline_line()
-            + FOOTER_LINES
+            + self.shape.lines()
             + self.fold_rows()
             + self.explain_rows()
             + self.brain_rows()
@@ -14273,17 +15115,31 @@ impl Footer {
         // two terms of one sum could be taken from two different answers on the
         // frame the region crosses two lines — one line of footer, wrong, until
         // something else asked for a frame.
-        let region = u32::try_from(self.expansion_rows()).unwrap_or(0);
-        let lines = u32::from(
-            FOOTER_LINES
+        pixels_of(self.wanted_lines())
+    }
+
+    /// The rows the footer shows right now, every one of them — what
+    /// [`Self::wanted_height`] turns into pixels.
+    ///
+    /// THE BARS FROM THE APPLIED SHAPE, and the region only while it is drawn:
+    /// the leader's list waiting (`crate::leader::Patience`) is a region
+    /// that takes no height.
+    fn wanted_lines(&self) -> u32 {
+        // THE REGION IS MEASURED FIRST — see `wanted_height` for why.
+        let region = if self.shape.region_shown {
+            u32::try_from(self.expansion_rows()).unwrap_or(0)
+        } else {
+            0
+        };
+        u32::from(
+            self.shape.lines()
                 + self.band_rows()
                 + self.above_rows()
                 + self.fold_rows()
                 + self.explain_rows()
                 + self.brain_rows()
                 + self.keyboard_rows(),
-        ) + region;
-        (tokens::metrics::line_height(tokens::text::size()) * lines as f32).ceil() as u32
+        ) + region
     }
 
     /// How far the expansion may grow, in lines.
@@ -14343,6 +15199,12 @@ impl Footer {
         // number of rows the footer is spending, exactly as the brain's line
         // is, and leaving it out would let the two together walk past the
         // budget without either being blamed.
+        // THE TWO BARS ALWAYS, AND NOT THE APPLIED SHAPE'S: with the bars
+        // hidden (`crate::hidden`) the modeline comes and goes under the
+        // pointer, and a ceiling that followed it would shrink an open view
+        // by a line whenever the hand touched the bottom of the screen. The
+        // budget is the whole footer's, measured as if both bars were up —
+        // the larger of the two, which never lets the region past it.
         expansion_ceiling(
             smaller,
             // AND THE KEYBOARD, which is fixed for as long as it is out: an
@@ -14931,109 +15793,30 @@ impl Footer {
         if self.view() == ViewState::Themes
             && let Some(v) = self.theme_chooser.as_ref()
         {
-            // TWO LISTS SIDE BY SIDE, one row per line of the longer. Left, one
-            // row per theme: the id in the key column (an identifier, as the
-            // `M-x` list shows command ids — no name in the person's
-            // language) and a check mark on the one the file says. Right, the
-            // choices about a theme: a header naming the option, then one row
-            // per answer with the check on the answer the file says, drawn in
-            // the text column and kept there when the left list has ended
-            // (`aside`). The focused item — of whichever list has the
-            // keyboard — is drawn in the accent, the network list's
-            // convention; the band under a row is the file manager's alone.
-            // THE OTHER LIST'S CURSOR STAYS VISIBLE, in the primary text over
-            // rows in the secondary: `RET` applies the pair under BOTH
-            // cursors, so both have to be readable — the manager's precedent,
-            // where a section that lost the focus keeps a quiet mark.
-            // The colours of the rows are the theme under the cursor's,
-            // because that theme IS the process's while the cursor rests
-            // there — the list is its own swatch. The desk has no swatch here:
-            // its preview is the compositor's (`theme_chooser.rs`).
-            use crate::theme_chooser::{Column, DeskRow, ThemeRow, View};
-            let committed = v.committed();
-            let themes: Vec<tokens::theme::Theme> = tokens::theme::all().collect();
-            return (0..View::rows())
-                .map(|i| {
-                    // BOTH LISTS ARE A LIST, and both open with a title in the
-                    // colour every other list in this distro gives one. The
-                    // right one had a title in `text.dim` — the tone the
-                    // modeline gives to what dies first in the elision — and
-                    // the left one had none at all, which the owner read off
-                    // the screen as a region that was not built to the shape
-                    // of the rest.
-                    let row = View::theme_row(i);
-                    let theme = match row {
-                        ThemeRow::Theme(n) => themes.get(n).copied(),
-                        ThemeRow::Header | ThemeRow::Empty => None,
-                    };
-                    let theme_focus =
-                        v.column() == Column::Themes && row == ThemeRow::Theme(v.cursor());
-                    // THE CHECK IS PART OF THE TEXT in the right list, and its
-                    // cell is kept when it is absent, so the answers line up:
-                    // the margin's icon column belongs to the LEFT list, and
-                    // this column has to pay for its own mark.
-                    //
-                    // THE TITLE PAYS THE SAME CELL. It did not, and the owner
-                    // read the result off the screen: `Theme` sat over the
-                    // theme ids while `Background` sat over the CHECK, one
-                    // cell to the left of the answers it names — two titles
-                    // with no rule between them. Both now sit over the NAMES
-                    // of the things their list holds, and the two texts come
-                    // out of one expression so they cannot drift apart again.
-                    let marked = |mark: &str, label: &str| format!("{mark} {label}");
-                    let (text, text_color) = match View::desk_row(i) {
-                        DeskRow::Header => (
-                            marked(
-                                BLANK_MARK,
-                                &self.texts.t(ronoctua_i18n::key::THEME_OPTION_BACKDROP),
-                            ),
-                            tokens::color::TEXT_HEADING,
-                        ),
-                        DeskRow::Answer(b) => {
-                            let under_cursor = b == v.focused_backdrop();
-                            let focus = v.column() == Column::Desk && under_cursor;
-                            let mark = if b == committed.backdrop {
-                                tokens::icon::SUCCESS.to_string()
-                            } else {
-                                BLANK_MARK.to_owned()
-                            };
-                            (
-                                marked(&mark, &self.texts.t(b.text_key())),
-                                if focus {
-                                    tokens::color::STATE_ACCENT
-                                } else if under_cursor {
-                                    tokens::color::TEXT_PRIMARY
-                                } else {
-                                    tokens::color::TEXT_SECONDARY
-                                },
-                            )
-                        }
-                        DeskRow::Empty => (String::new(), tokens::color::TEXT_PRIMARY),
-                    };
-                    let key = match row {
-                        ThemeRow::Header => self.texts.t(ronoctua_i18n::key::THEME_OPTION_THEME),
-                        ThemeRow::Theme(_) => theme.map_or_else(String::new, |t| t.id().to_owned()),
-                        ThemeRow::Empty => String::new(),
-                    };
-                    ExpansionRow {
-                        icon: theme
-                            .filter(|t| *t == committed.theme)
-                            .map(|_| tokens::icon::SUCCESS),
-                        key,
-                        text,
-                        key_flush_right: false,
-                        separator: false,
-                        aside: true,
-                        click: Some(Click::Theme(i)),
-                        key_color: match row {
-                            ThemeRow::Header => tokens::color::TEXT_HEADING,
-                            _ if theme_focus => tokens::color::STATE_ACCENT,
-                            ThemeRow::Theme(n) if n == v.cursor() => tokens::color::TEXT_PRIMARY,
-                            _ => tokens::color::TEXT_SECONDARY,
-                        },
-                        text_color,
-                        ..ExpansionRow::empty_one()
-                    }
+            // FIVE LISTS SIDE BY SIDE — the themes and the four choices about
+            // a theme — each laid out by the chooser as FIELDS of its own
+            // (`theme_chooser::View::lines`), the shape the notification
+            // manager's two columns already have. They were two lists poured
+            // into one key/text pair, and the pair is one row to everything
+            // downstream: the pointer's band ran across both lists, which is
+            // what the owner reported. As fields, every column has its own
+            // cells, and the band, the click and the rules all ask the one
+            // `theme_chooser::Layout` where they are.
+            //
+            // The colours of the rows are the theme under the cursors',
+            // because that choice IS the process's while the cursors rest
+            // there — the list is its own swatch.
+            let columns = self.screen_columns();
+            return v
+                .lines(&self.texts, columns)
+                .into_iter()
+                .enumerate()
+                .map(|(i, fields)| ExpansionRow {
+                    // THE TITLES' ROW TAKES NO CLICK, so the pointer lights
+                    // nothing there: a title is not a place for a cursor.
+                    click: (i > 0).then_some(Click::Theme(i)),
+                    fields,
+                    ..ExpansionRow::empty_one()
                 })
                 .collect();
         }
@@ -15446,7 +16229,19 @@ impl Footer {
                         None => format!("{GROUP_MARK}{}", self.texts.t(&e.label)),
                     },
                     description: Some(self.texts.t(&e.label)),
-                    click: Some(Click::Key(e.sym)),
+                    // THE LEADER'S OWN ROW is the leader again, not a key of
+                    // the tree — see `Click::Leader`.
+                    click: Some(
+                        if e.command
+                            .as_deref()
+                            .and_then(crate::hidden::mode_of)
+                            .is_some()
+                        {
+                            Click::Leader
+                        } else {
+                            Click::Key(e.sym)
+                        },
+                    ),
                     text_color: if e.is_group {
                         tokens::color::TEXT_GROUP
                     } else {
@@ -15865,6 +16660,10 @@ impl Footer {
     /// the whole of what the drawer draws — a wheel on the summary row is a
     /// wheel on the drawer, because they are one thing.
     fn pointer_on_fold(&self, y: f64) -> bool {
+        // NO LINE, NO BAND: with the bars hidden the row is somebody else's.
+        if !self.shape.draws_minibuffer() {
+            return false;
+        }
         let Some(f) = self.metric() else {
             return false;
         };
@@ -15921,7 +16720,9 @@ impl Footer {
     /// The fold's chevron, the fold's bar and the modeline's segments are
     /// asked BEFORE this at the call site, so each keeps the meaning it has.
     fn on_the_empty_minibuffer(&self, x: f64, y: f64) -> bool {
-        if self.view() != ViewState::NoneOf {
+        // NOT WHERE THERE IS NO LINE: with the bars hidden and the pointer
+        // off the edge, the row is somebody else's (`crate::hidden`).
+        if self.view() != ViewState::NoneOf || !self.shape.draws_minibuffer() {
             return false;
         }
         let Some(f) = self.metric() else {
@@ -17309,6 +18110,7 @@ impl Footer {
                 let effect = self.leader.key(&self.tree, t);
                 self.apply_leader_effect(effect);
             }
+            Some(Click::Leader) => self.activate_leader(crate::leader::Opener::Pointer),
             // THE CLIPBOARD'S ROW, and the VIEW turns it into a target. It
             // used to hand out `Candidate`, which routes into the `M-x`
             // finder — so with `M-x` closed the candidate list was empty and
@@ -17652,33 +18454,42 @@ impl Footer {
                 }
             }
             Some(Click::Theme(n)) => {
-                // WHICH LIST comes from the cell, as the manager's columns do:
-                // the row is shared by the two, and the colon's column is the
-                // seam the grid drew them on either side of.
-                let grid = self.grid();
-                let cell = self.here.cell_under_pointer.unwrap_or(0) % grid.width.max(1);
-                let on_the_right = cell >= grid.colon;
-                if let Some(v) = self.theme_chooser.as_mut() {
-                    // THE POINTER PREVIEWS WHAT THE ARROWS DO — the whole pair,
-                    // wherever it landed. See the key branch above.
-                    let moved = if on_the_right {
-                        v.focus_desk_row(n).is_some()
-                    } else {
-                        v.focus_theme_row(n).is_some()
-                    };
-                    let shown = moved.then(|| {
-                        let c = v.focused_choice();
-                        tokens::theme::set(c.theme);
-                        // THE POINTER'S PREVIEW IS MARKED TOO, for the reason
-                        // `theme_changed` gives: this door wrote the file, and
-                        // it must not read that back as somebody's choice.
-                        v.previewing(c);
-                        c
-                    });
-                    if let Some(c) = shown {
-                        self.show_theme_everywhere(c);
+                // WHICH LIST comes from the pointer's PIXEL, through the same
+                // `theme_chooser::Layout` the band and the rules are drawn
+                // from — so the column that lights is the column the click
+                // takes, to the pixel of the rule between them. Past the last
+                // column there is none, and nothing happens.
+                #[allow(clippy::cast_possible_truncation)]
+                let Some(column) = self.here.x_under_pointer.and_then(|x| {
+                    crate::theme_chooser::View::column_under(
+                        self.screen_columns(),
+                        x as f32,
+                        crate::chrome::cell_width(),
+                    )
+                }) else {
+                    return;
+                };
+                let Some(clicked) = self.theme_chooser.as_mut().map(|v| v.clicked(column, n))
+                else {
+                    return;
+                };
+                match clicked {
+                    // THE POINTER PREVIEWS WHAT THE ARROWS DO — the whole
+                    // choice, wherever it landed.
+                    crate::theme_chooser::Clicked::Previewed(c) => {
+                        self.preview_theme(c);
+                        self.draw_and_paint();
                     }
-                    self.draw_and_paint();
+                    crate::theme_chooser::Clicked::Focused => self.draw_and_paint(),
+                    // THE SECOND CLICK IS `RET` (invariant 19): the command
+                    // the view's table binds to it, run the way the key runs
+                    // it.
+                    crate::theme_chooser::Clicked::Again => {
+                        self.run_command("theme-apply");
+                        self.apply_geometry(self.interactivity());
+                        self.draw_and_paint();
+                    }
+                    crate::theme_chooser::Clicked::Nothing => {}
                 }
             }
             // EVERYTHING THE MANAGER OWNS, through ONE resolution.
@@ -18095,15 +18906,28 @@ impl Footer {
         // It is not a detail: if only the focused screen grew, the zone would be
         // different between monitors and the buffers on one of them would reflow
         // when screen focus changed — with nothing having changed in them (section 9.2).
-        let height = self.wanted_height();
+        //
+        // THE SHAPE FIRST, because every row sum below reads it
+        // (`crate::hidden`): the rows the facts call for now, and what they
+        // would be without the pointer at an edge — the rows only the edge
+        // adds are the ones a screen the pointer is NOT on leaves out when it
+        // would otherwise show nothing.
+        let fresh = self.shape_now();
+        let without_the_edge = crate::hidden::Shape::of(self.shape_inputs(false));
+        self.shape = fresh;
+        let lines = self.wanted_lines();
+        let height = pixels_of(lines);
+        let revealing = u32::from(fresh.lines().saturating_sub(without_the_edge.lines()));
+        let line_px = tokens::metrics::line_height(tokens::text::size());
         // THE KIOSK'S ADDRESS ROW this height counted — what a later change
         // of it is measured against (`kiosk_errands`).
         self.address_row_applied = self.address_line_shown();
         self.keyboard_hold
             .asked_for(matches!(keyboard, KeyboardInteractivity::Exclusive));
         // THE ZONE FOLLOWS THE HEIGHT. See the top of the module: the expansion
-        // pushes the buffers, it does not cover them.
-        let exclusive = height as i32;
+        // pushes the buffers, it does not cover them — while the bars are
+        // visible. Hidden, the zone is the whole surface when anything on it
+        // pushes and nothing otherwise, per screen (`crate::hidden::geometry`).
         // A NEW HEIGHT TRAVELS WITH THE FRAME DRAWN AT IT.
         //
         // It was committed ALONE, before any frame at the new height existed:
@@ -18132,16 +18956,31 @@ impl Footer {
             .map(|e| (e.output.clone(), e.inside || grabbing));
         for i in 0..self.screens.len() {
             let t = &self.screens[i];
-            let covered = edge.as_ref().filter(|(name, _)| {
-                self.outputs
-                    .info(&t.output)
-                    .and_then(|o| o.name)
-                    .is_some_and(|n| &n == name)
-            });
-            // OVERLAY ONLY WHILE COVERED: above a fullscreen window, and never
-            // otherwise — the lock sits over every layer, but a footer that
-            // needs no overlay has no business asking for it.
-            let wants_overlay = covered.is_some();
+            let connector = self.outputs.info(&t.output).and_then(|o| o.name);
+            let covered = edge
+                .as_ref()
+                .filter(|(name, _)| connector.as_ref().is_some_and(|n| n == name));
+            // THIS SCREEN'S OWN HEIGHT, ZONE AND LAYER: the rows are one
+            // arithmetic for every screen, and a screen the pointer is not on
+            // keeps one pixel when only the pointer's edge would put anything
+            // on it.
+            let revealed_here = connector.is_some() && connector == self.revealed_on;
+            let wanted = crate::hidden::geometry(
+                fresh,
+                lines,
+                revealing,
+                revealed_here,
+                u32::from(self.keyboard_rows()),
+                line_px,
+            );
+            let (own, exclusive) = (wanted.height, wanted.zone);
+            // OVERLAY WHILE COVERED — above a fullscreen window — and while a
+            // hidden footer lies over the windows: there the whole width,
+            // above a right column that is on `top` (invariant 14, see
+            // `crate::hidden::geometry`). Never otherwise — the lock sits over
+            // every layer, but a footer that needs no overlay has no business
+            // asking for it.
+            let wants_overlay = covered.is_some() || wanted.overlay;
             t.layer.set_layer(if wants_overlay {
                 Layer::Overlay
             } else {
@@ -18149,13 +18988,13 @@ impl Footer {
             });
             let height = match covered {
                 Some((_, false)) => 1,
-                _ => height,
+                _ => own,
             };
             t.layer.set_keyboard_interactivity(keyboard);
             // A LAYER THAT MOVES IS COMMITTED NOW, and never with a frame.
             //
-            // Going to the overlay means the footer is UNDER a fullscreen
-            // window at that instant, and the compositor sends no frame
+            // Going to the overlay for the fullscreen edge means the footer is
+            // UNDER a fullscreen window at that instant, and the compositor sends no frame
             // callback to a surface nobody sees — the driver waited for one
             // with no deadline, the commit carrying the new layer never left,
             // and the footer froze: no leader, no menu, no emergency binds,
@@ -18228,6 +19067,8 @@ impl Footer {
         tracing::info!(
             keyboard = ?keyboard,
             height,
+            hidden = ?self.modeline.hidden,
+            pushing = fresh.pushing,
             "the footer asked for a geometry"
         );
     }
@@ -18443,7 +19284,11 @@ impl Footer {
         // two places the arguments can be edited apart.
         let first = crate::hidpi::physical(self.screens[i].asked, self.screens[i].scale);
         #[allow(unsafe_code)]
-        let gpu = unsafe { ronoctua_render::gpu::Gpu::new(display, window, first.0, first.1) };
+        // SEE-THROUGH, when the surface offers it: the hidden modes draw the
+        // footer over the windows (`crate::hidden`). With the bars visible
+        // every pixel is opaque anyway, so nothing else changes.
+        let gpu =
+            unsafe { ronoctua_render::gpu::Gpu::new(display, window, first.0, first.1, true) };
 
         match gpu {
             Ok(mut g) => {
@@ -18510,6 +19355,13 @@ impl Footer {
     /// What changes per screen is the WIDTH, and that is why the layout is
     /// resolved inside the loop: a narrow monitor elides segments the wide one shows.
     fn paint(&mut self) {
+        // THE PICTURES' PAGE FIRST: every picture asked for below (the icons,
+        // the software view's, the gestures' drawings) and every one the loop
+        // looks up is keyed on it, whatever page each screen wears while it
+        // is painted — a picture asked for under one palette and looked for
+        // under another is a picture never found (`wear_the_pictures_page`).
+        let pictures = self.wear_the_pictures_page();
+        let pictures_palette = tokens::theme::palette();
         // THE MISSING ICONS, ASKED FOR BEFORE ANY BORROW.
         //
         // Here is the only place that knows what is visible — and scrolling and
@@ -18556,7 +19408,16 @@ impl Footer {
             .leader
             .active_one()
             .then(|| self.leader.prefix(&self.leader_label));
-        let echo = self.echo.as_ref().map(|(t, _)| t.clone());
+        // THE ECHO, AS PIECES: the shell's own answer in one run, or — when
+        // the shell has nothing to answer — an event of the machine, with the
+        // actions its catalogue entry offers at the end (`crate::events`).
+        // The person's answer first, always: it is what they just asked for,
+        // and the event it interrupted waits at the front of its queue.
+        let echo: Option<Vec<crate::chrome::Piece>> = self
+            .echo
+            .as_ref()
+            .map(|(t, _)| vec![crate::chrome::Piece::said(t.clone())])
+            .or_else(|| self.event_line.on_the_line().map(|e| self.event_pieces(e)));
 
         // THE PREVIEW COMES OUT HERE, before the loop's mutable borrows. It is a
         // REFERENCE: cloning 33 MB of RGBA per frame would be worse than having
@@ -18762,6 +19623,12 @@ impl Footer {
         // THE PLAYER'S ROWS ARE LAID OUT BESIDE ITS PICTURE, and so is its
         // hint's row under the cursor.
         let player_columns = self.player_columns();
+        // THE LEADER'S SET, while nothing has been typed: at its ROOT the
+        // leader's line teaches the taps that switch it — as clicks, since the
+        // pointer cannot tap a modifier (invariant 19). Past the root there is
+        // no set to choose, and the line is the sequence alone.
+        let leader_set = (self.leader.at_root() && self.buffer_pending.is_empty())
+            .then(|| self.leader.set_now());
         let hint = move || {
             match showing {
                 // THE FILE MANAGER teaches its own keys, and only while it is
@@ -18881,8 +19748,15 @@ impl Footer {
             // typed, and `NoneOf` has nothing to go back from.
             // THE LEADER TOO, where the line is the sequence being typed: the
             // way back goes after it (see where the line is built), and `Esc`
-            // there ends the whole sequence, as the leader's rule has it.
-            .or_else(|| (showing == ViewState::Leader).then(Vec::new))
+            // there ends the whole sequence, as the leader's rule has it. At
+            // the root the other sets follow it (`leader::set_hint`).
+            .or_else(|| {
+                (showing == ViewState::Leader).then(|| {
+                    leader_set
+                        .map(|s| crate::leader::set_hint(s, texts))
+                        .unwrap_or_default()
+                })
+            })
             .map(|h| match showing {
                 ViewState::NoneOf | ViewState::Commands => h,
                 _ => crate::chrome::with_the_way_back(h, texts),
@@ -18900,7 +19774,15 @@ impl Footer {
         let pages = self.pages();
         let offset = self.current_offset();
         // ONLY THE PAGE THAT IS DRAWN gets built. See `expansion_window`.
-        let all_of = self.expansion_window(offset, grid.per_page());
+        //
+        // AND NONE WHILE THE LEADER'S LIST WAITS (`crate::leader::Patience`):
+        // the region takes no height then, and rows laid out under the
+        // minibuffer would land on whatever is below it — the keyboard.
+        let all_of = if self.shape.region_shown {
+            self.expansion_window(offset, grid.per_page())
+        } else {
+            Vec::new()
+        };
         // AND THE MANAGER'S STRIP UNDER IT.
         //
         // It is NOT part of the list: it does not scroll, it is pinned below
@@ -18952,7 +19834,11 @@ impl Footer {
         //
         // Whoever SCROLLS has no counter: the bar already says the position, and
         // "page 2 of 5" in running text does not answer where you are.
-        let indicator = (navigation == Navigation::Page && pages > 1).then(|| {
+        // AND ONLY WHERE THE LIST AND THE LINE ARE BOTH DRAWN: a counter of
+        // pages nobody can see, on a line that is not there, is a control the
+        // pointer would find in `page_control` and nothing on the screen.
+        let counted = self.shape.region_shown && self.shape.draws_minibuffer();
+        let indicator = (counted && navigation == Navigation::Page && pages > 1).then(|| {
             format!(
                 "{}  {}/{pages}",
                 self.texts.t(ronoctua_i18n::key::EXPANSION_PAGE),
@@ -19222,8 +20108,12 @@ impl Footer {
         // is painted in its own cursor's colour; a place two cursors share
         // takes the first one's, so the picture is the same on every frame.
         let columns_now = self.screen_columns();
-        let mut under_the_pointers: Vec<(tokens::Color, Option<usize>, Option<u16>, _)> =
-            Vec::new();
+        // AND IN THE THEME CHOOSER A ROW HOLDS FIVE LISTS, each with its own
+        // hover: what one band covers there is a row AND a column, so a
+        // second pointer on another list of the same row lights its own
+        // (`seats::first_of_each`), where keyed by the row it lit nothing.
+        let lists = self.view() == ViewState::Themes;
+        let mut lit = Vec::new();
         for (color, p) in self.pointers.lit(&self.here) {
             let place = match self.files.as_ref() {
                 Some(v) => p.row_under_pointer.and_then(|line| {
@@ -19239,12 +20129,26 @@ impl Footer {
             // stronger would dim the very row one is standing on, which is the
             // opposite of what either band is for.
             .filter(|p| Some(*p) != focused_row);
-            if let Some(place) = place
-                && !under_the_pointers.iter().any(|(_, _, _, q)| *q == place)
-            {
-                under_the_pointers.push((color, p.row_under_pointer, p.cell_under_pointer, place));
+            #[allow(clippy::cast_possible_truncation)]
+            let x = p.x_under_pointer.map(|x| x as f32);
+            let list = x.filter(|_| lists).and_then(|x| {
+                crate::theme_chooser::View::column_under(
+                    columns_now,
+                    x,
+                    crate::chrome::cell_width(),
+                )
+            });
+            if let Some(place) = place {
+                lit.push((
+                    (place, list),
+                    (color, p.row_under_pointer, p.cell_under_pointer, x, place),
+                ));
             }
         }
+        let under_the_pointers: Vec<_> = crate::seats::first_of_each(lit)
+            .into_iter()
+            .map(|(_, pointer)| pointer)
+            .collect();
         // Does the footer have the keyboard? It is what decides whether the
         // accent stays on the window (the compositor's border) or comes to the
         // buffer's name.
@@ -19276,12 +20180,63 @@ impl Footer {
         });
         let first_paint = self.frames_painted < 3;
         let mut painted = false;
+        // THE SCREEN THE FULLSCREEN EDGE HOLDS OUT over its window — the
+        // pointer on it, or a region with the keyboard — by its connector: it
+        // is painted as the visible footer is, whatever the mode
+        // (`crate::hidden::Shape::painted`).
+        let grabbing = self.grabbing();
+        let edge_out: Option<String> = self
+            .edge
+            .as_ref()
+            .filter(|e| e.inside || grabbing)
+            .map(|e| e.output.clone());
+        // THE NARROWEST SCREEN'S COLUMNS, which an event's actions are placed
+        // for on every screen (`room_for_the_actions`).
+        #[allow(clippy::cast_precision_loss)]
+        let narrowest_columns = self
+            .screens
+            .iter()
+            .filter(|t| t.width > 0)
+            .map(|t| tokens::metrics::columns(t.width as f32, tokens::text::size()))
+            .min();
 
         for index in 0..self.screens.len() {
             let width = self.screens[index].width;
             if width == 0 {
                 continue;
             }
+            // HOW THIS SCREEN IS GROUNDED: the shape, or the visible footer's
+            // look over a fullscreen window.
+            let over_a_fullscreen_window = edge_out.is_some()
+                && self
+                    .outputs
+                    .info(&self.screens[index].output)
+                    .and_then(|o| o.name)
+                    == edge_out;
+            let look = self.shape.painted(over_a_fullscreen_window);
+            // THE PAGE THIS SCREEN WEARS (`crate::hidden::Shape::page`), asked
+            // of what the person chose at the moment it is drawn — a preview
+            // and a commit are the same read (`crate::theme::wear`): the
+            // chrome's palette, or a desk's, where the chrome IS the desk and
+            // every band and ink was solved from it (the bands follow the
+            // ground). Worn for this screen's frame: every colour below
+            // resolves through it; the band, the brain's line and the glance
+            // are the same on every page.
+            let page = look.page(crate::theme::footer_page(), crate::theme::desk_page());
+            tokens::theme::set_ground(page);
+            // WHAT IT LAYS FIRST (`crate::hidden::Shape::grounds`): the page's
+            // ground, or — with the bars hidden — nothing (`surface.clear`),
+            // which a see-through surface shows as the window behind it
+            // (`ronoctua_render::gpu::clear_of`).
+            let grounds = look.grounds(page);
+            let clear = grounds.clear.to_linear();
+            // A SCREEN CUT TO ITS EDGE with the bars hidden shows NOTHING —
+            // the one transparent pixel the pointer finds, never the top row
+            // of rows another screen is showing (`crate::hidden::geometry`).
+            // It is still laid out like every other screen: the pointer's
+            // tables are the last screen's, and the screen the pointer IS on
+            // has the same rows.
+            let bare = self.shape.hidden && self.screens[index].height <= 1;
             // THE SURFACE'S BOTTOM, in pixels. A divider that stops at
             // `lines * line_height` stops short — the line height is
             // fractional — and that is the gap the owner photographed under
@@ -19356,6 +20311,15 @@ impl Footer {
                 .into_iter()
                 .find(|w| w.current)
                 .and_then(|w| crate::workspaces::id_of(w.number));
+            // A MODELINE THAT IS NOT DRAWN IS NOT HIT (`crate::hidden`): its
+            // two tables are emptied with it, as `brain_placed` is when the
+            // brain has no line — a click on the row where it would be must
+            // reach whatever IS there.
+            let (placed, drawn) = if self.shape.draws_modeline() {
+                (placed, drawn)
+            } else {
+                (Vec::new(), Vec::new())
+            };
             self.adapter_drawn = drawn;
             self.modeline_placed = placed
                 .iter()
@@ -19601,7 +20565,13 @@ impl Footer {
             // below), and also whenever it is already open — otherwise the one
             // gesture that closes it would disappear with what it carried.
             let held = self.fold;
-            let held_pieces = hint();
+            // WHILE THE LIST WAITS, ONLY THE KEYS TYPED (the owner,
+            // 2026-09-28): the shortcuts on the right come with the list,
+            // after the wait — a person typing a sequence they know sees what
+            // they pressed and nothing else. The pending chord is drawn by the
+            // branch below that carries it alone.
+            let waiting = self.view() == ViewState::Leader && self.list_patience.withheld();
+            let held_pieces = if waiting { None } else { hint() };
             // THE LINE AS PIECES, whatever is on it.
             //
             // The hint arrives in two registers already; the other five are
@@ -19614,8 +20584,14 @@ impl Footer {
             // fourth, so with an echo on the line the fold measured a sentence
             // nobody could see. Two orders for one line is the same defect as
             // two painters for one line, and this wave removed both.
-            let line_pieces: Vec<crate::chrome::Piece> = if let Some(e) = &echo {
-                vec![crate::chrome::Piece::said(e.clone())]
+            // A MINIBUFFER THAT IS NOT DRAWN CARRIES NOTHING (`crate::hidden`):
+            // no pieces, so no shortcut in `hint_placed`, no chevron in
+            // `fold_control` and no counter in `page_control` — every table
+            // of this line is written from what is on it.
+            let line_pieces: Vec<crate::chrome::Piece> = if !self.shape.draws_minibuffer() {
+                Vec::new()
+            } else if let Some(e) = &echo {
+                e.clone()
             } else if let Some(d) = &explanation {
                 // ALREADY IN PIECES, because a sentence about a fact has two
                 // halves: the name of it and the fact itself. See
@@ -19675,7 +20651,7 @@ impl Footer {
                 && prompt_mx.is_none()
                 && held_pieces.is_none()
                 && pending.is_none();
-            let opens = held.open || !at_rest;
+            let opens = self.shape.draws_minibuffer() && (held.open || !at_rest);
             // THE RIGHT END OF THE LINE, COUNTED FROM THE BORDER — the control,
             // and the page counter one cell of air to its left — so the air
             // after the control is the modeline's one cell at every width.
@@ -19692,11 +20668,13 @@ impl Footer {
                     None => crate::chrome::from_the_edge(columns, w),
                 }
             });
-            // THE TEXT STOPS ONE CELL BEFORE WHATEVER STANDS AT THE RIGHT.
-            let mini_room = match indicator_at.or(chevron_at) {
-                Some(at) => at.saturating_sub(tokens::space::MODELINE_EDGELEFT + 1),
-                None => plain_room,
-            };
+            // THE TEXT STOPS ONE CELL BEFORE WHATEVER STANDS AT THE RIGHT —
+            // one arithmetic, `minibuffer_room`, for this screen and for the
+            // narrowest one the event's actions are placed for.
+            let indicator_cells = indicator.as_deref().map(layout::width);
+            let mini_room = minibuffer_room(columns, indicator_cells, opens);
+            let action_room =
+                room_for_the_actions(columns, narrowest_columns, indicator_cells, opens);
             // WHERE EVERY SHORTCUT OF THIS LINE LANDED, for the pointer.
             //
             // Collected while drawing and never rebuilt afterwards — see
@@ -19719,8 +20697,25 @@ impl Footer {
             // WHILE THE DRAWER IS OPEN it draws this line too, from the wrap,
             // so nothing is painted here.
             if !held.open && !line_pieces.is_empty() {
+                // AN EVENT'S ACTIONS STAY WHOLE at the end of the line: its
+                // sentence is what gives way (`chrome::room_for_actions`). The
+                // drawer below wraps the whole line and needs no such cut.
+                // PLACED FOR THE NARROWEST SCREEN, so they are in the same
+                // cells on every screen (`room_for_the_actions`).
+                let mut one_line = crate::chrome::room_for_actions(&line_pieces, action_room);
+                // AND WHAT THE ACTION UNDER THE POINTER DOES is said in the
+                // words' place: at rest there is no row under the line to say
+                // it on (`explain_rows`), and the actions do not move for it.
+                // `hint_said` is only ever about a mark this line drew, and
+                // with an event on it the only marks are its actions.
+                if self.echo.is_none()
+                    && self.event_line.on_the_line().is_some()
+                    && let Some(said) = self.hint_said.as_deref()
+                {
+                    one_line = crate::chrome::explained_in_place(&one_line, said);
+                }
                 spans.extend(crate::chrome::hint_spans(
-                    &line_pieces,
+                    &one_line,
                     ronoctua_render::Size::Grid,
                     tokens::space::MODELINE_EDGELEFT,
                     mini_line,
@@ -19729,9 +20724,10 @@ impl Footer {
                 // AND THE MARKS ONLY WHEN THERE ARE SHORTCUTS ON IT: a line
                 // showing a message has nothing for the pointer to name, and
                 // `hint_marks` says so by returning none — it filters on a
-                // run's id, and only a hint's runs carry one.
+                // run's id, and only a hint's runs carry one. An event's
+                // actions carry theirs, and are marked like any shortcut.
                 marks.extend(crate::chrome::hint_marks(
-                    &line_pieces,
+                    &one_line,
                     tokens::space::MODELINE_EDGELEFT,
                     mini_line,
                     mini_room,
@@ -19739,7 +20735,8 @@ impl Footer {
             }
 
             // THE VOLUME OR THE BRIGHTNESS, on this line when it was free.
-            if line_pieces.is_empty()
+            if self.shape.draws_minibuffer()
+                && line_pieces.is_empty()
                 && at_rest
                 && self.glance.is_some()
                 && let Some(said) = self.sound.as_ref().filter(|_| self.sound_on_minibuffer)
@@ -19850,6 +20847,16 @@ impl Footer {
                             line,
                             mini_room,
                         ));
+                        // AND WHAT ON IT IS A CONTROL ANSWERS, row by row: an
+                        // event's actions, wrapped into the drawer, are where
+                        // the line was opened to read them. The rest carries
+                        // no id, and `hint_marks` marks nothing for it.
+                        marks.extend(crate::chrome::hint_marks(
+                            &row,
+                            tokens::space::MODELINE_EDGELEFT,
+                            line,
+                            mini_room,
+                        ));
                     }
                 }
                 self.fold_scroll = scroll;
@@ -19954,7 +20961,16 @@ impl Footer {
                     //
                     // A COLOUR and not a box: invariant 15, and the same choice
                     // the focused row already makes.
-                    let on_this_row = self.here.row_under_pointer == Some(i);
+                    //
+                    // NOT IN THE THEME CHOOSER, where that colour — the accent
+                    // — IS the cursor (`theme_chooser::View::lines`): lit under
+                    // the pointer, an answer would read as the one the keyboard
+                    // is on. Its pointer says where it is with the band alone,
+                    // which is the rule this system keeps: the pointer's mark
+                    // is not the cursor. There is no explanation on its message
+                    // line for the colour to point at either.
+                    let on_this_row =
+                        self.here.row_under_pointer == Some(i) && self.view() != ViewState::Themes;
                     // WHICH field, asked ONCE and by the walk the click makes.
                     // See `files::Row::field_index_at`: `covers` answers "may
                     // this field own the cell", and two packed fields both say
@@ -20176,6 +21192,8 @@ impl Footer {
                     tokens::metrics::cell_width(tokens::text::size()),
                     line_height,
                     f32::from(first_of_expansion) * line_height,
+                    // THE PAGE THEY WERE ASKED FOR ON, and not this screen's.
+                    pictures,
                 )
             });
             if let Some(v) = self.files.as_ref() {
@@ -20326,11 +21344,9 @@ impl Footer {
                     let gone = (place.map_or(0, |(_, _, cut)| cut) as f32 * line_height) as u32;
                     // THE BOX THE PICTURE IS DRAWN IN, and not the box it was
                     // measured from — see `files::globe_texture`.
-                    v.measured_globe(
-                        crate::files::globe_texture(a),
-                        gone,
-                        tokens::theme::current().position(),
-                    );
+                    // THE PICTURES' PALETTE, and not this screen's: one globe
+                    // for every screen, painted in one palette.
+                    v.measured_globe(crate::files::globe_texture(a), gone, pictures_palette);
                     if let (Some(key), Some(rgba)) = (v.globe_key(), v.globe_frame()) {
                         file_globe =
                             Some((key, crate::files::picture_in(a, rgba.width, rgba.height)));
@@ -20514,8 +21530,11 @@ impl Footer {
             // them with no rule and no box (invariant 15). Glued as they are now,
             // that difference is the only thing that still tells them apart.
             //
-            // The rest of the surface is already `surface.chrome`, the color the
-            // `frame` clears with.
+            // The rest of the surface is already the footer's ground, the
+            // colour the `frame` clears with. When the person puts the footer
+            // on the desk (`LEADER s t`, 2026-09-28) the modeline stands on
+            // the desk too, with no band: a strip of chrome across the desk
+            // would be the footer that answer took away.
             //
             // AND THE FILM'S CONTROLS, WORKED OUT HERE AND APPENDED LAST.
             //
@@ -20562,13 +21581,42 @@ impl Footer {
             }
             // EVERY BAR THIS SCREEN DRAWS, by its track — see `crate::bars`.
             let mut bars_drawn = crate::bars::Drawn::default();
-            let mut backgrounds = vec![ronoctua_render::quad::Quad {
-                x: 0.0,
-                y: f32::from(modeline_line) * line_height,
-                width: width as f32,
-                height: line_height,
-                color: tokens::color::MODELINE_BACKGROUND,
-            }];
+            let mut backgrounds = Vec::new();
+            // THE ROWS' GROUND, with the bars hidden (`crate::hidden`): one
+            // band from the modeline's line to the region's floor, under
+            // every row that is not the band's. Lying over the windows it is
+            // the page's VEIL (its ground at four fifths, the window showing
+            // through); pushing them away it is the page's ground, opaque —
+            // the desk's page, so the desk the windows moved off, painted
+            // rather than shown through, because text on nothing came out
+            // fringed (`crate::hidden::Shape::grounds`). FIRST, so the brain's
+            // line, the keyboard, a selection and a hover are painted over it
+            // with their own grounds.
+            if let Some(color) = grounds.rows {
+                let top = f32::from(modeline_line) * line_height;
+                if bottom > top {
+                    backgrounds.push(ronoctua_render::quad::Quad {
+                        x: 0.0,
+                        y: top,
+                        width: width as f32,
+                        height: bottom - top,
+                        color,
+                    });
+                }
+            }
+            // THE MODELINE'S OWN GROUND only with the bars visible and the
+            // chrome's page worn: hidden, the modeline is on the veil or the
+            // desk like the line under it, and on a desk's page the modeline
+            // has the desk's colour (the owner) — no band of chrome across it.
+            if let Some(color) = grounds.modeline {
+                backgrounds.push(ronoctua_render::quad::Quad {
+                    x: 0.0,
+                    y: f32::from(modeline_line) * line_height,
+                    width: width as f32,
+                    height: line_height,
+                    color,
+                });
+            }
             if let Some(color) = owner_tint {
                 backgrounds.push(ronoctua_render::quad::Quad {
                     x: 0.0,
@@ -20638,6 +21686,27 @@ impl Footer {
             // the text. Laid out once, for this screen's width, and kept for
             // the finger — see `keyboard_drawn`.
             if let Some((key_grounds, key_legends)) = keyboards.get_mut(index) {
+                // AND ITS OWN GROUND, whatever the frame cleared with: the
+                // air between its keys was the clear colour, which is nothing
+                // with the bars hidden. The ground is its PAGE's —
+                // `surface.chrome` of the page this screen wears
+                // (`crate::hidden::Shape::page`): the footer's answer, or the desk's
+                // page while its rows push the windows away, where the chrome
+                // IS the desk. So the keyboard is desk-coloured in `Push` and
+                // on the footer's page in `Cover`, like every row it pushes
+                // beside, and its caps (`surface.key.*`) are bands solved and
+                // gated on every page (the bands follow the ground).
+                #[allow(clippy::cast_precision_loss)]
+                let full = self.screens[index].height as f32;
+                if !key_grounds.is_empty() && full > bottom {
+                    backgrounds.push(ronoctua_render::quad::Quad {
+                        x: 0.0,
+                        y: bottom,
+                        width: width as f32,
+                        height: full - bottom,
+                        color: tokens::color::SURFACE_CHROME,
+                    });
+                }
                 backgrounds.append(key_grounds);
                 spans.append(key_legends);
             }
@@ -20766,7 +21835,7 @@ impl Footer {
                     color: tokens::color::SURFACE_HOVER,
                 });
             }
-            for &(color, row_p, cell_p, (base, grid_y)) in &under_the_pointers {
+            for &(color, row_p, cell_p, x_p, (base, grid_y)) in &under_the_pointers {
                 let cell = tokens::metrics::cell_width(tokens::text::size());
                 // AND IT STOPS AT THE SIDEBAR'S EDGE.
                 //
@@ -20825,6 +21894,41 @@ impl Footer {
                         self.notification_hover_px(columns, line, cell_p.unwrap_or(0), cell)
                     })
                     .unwrap_or((band_at, band_wide));
+                // THE THEME CHOOSER'S BAND IS ITS COLUMN'S, and there is none
+                // where that column has nothing on this row.
+                //
+                // Five lists side by side, and the owner asked for each to
+                // have its own hover: a band across the row lit five answers
+                // for one pointer. The rectangle comes from the chooser's
+                // `Layout`, which the click and the rules ask too — and it
+                // does NOT fall back to the row's width like the answers
+                // above: a title, or a column whose list ended above this
+                // row, lights nothing, because clicking it does nothing.
+                let (band_at, band_wide) = if self.view() == ViewState::Themes {
+                    let row =
+                        row_p
+                            .and_then(|line| visible.get(line))
+                            .and_then(|l| match l.click {
+                                Some(Click::Theme(n)) => Some(n),
+                                _ => None,
+                            });
+                    match row.zip(x_p).and_then(|(n, x)| {
+                        crate::theme_chooser::View::band_px(
+                            self.screen_columns(),
+                            n,
+                            x,
+                            cell,
+                            self.theme_chooser
+                                .as_ref()
+                                .is_some_and(crate::theme_chooser::View::shows_light),
+                        )
+                    }) {
+                        Some(band) => band,
+                        None => continue,
+                    }
+                } else {
+                    (band_at, band_wide)
+                };
                 #[allow(clippy::cast_precision_loss)]
                 let tall = line_height
                     * self.files.as_ref().map_or(1, |v| {
@@ -20861,27 +21965,31 @@ impl Footer {
                 backgrounds.extend(qr_quads);
             }
 
-            // AND THE ONE BETWEEN THE THEME CHOOSER'S TWO LISTS.
+            // AND THE ONES BETWEEN THE THEME CHOOSER'S FIVE LISTS.
             //
-            // Two lists side by side with nothing between them read as one
-            // list with a ragged right half, which is what the owner saw. The
+            // Lists side by side with nothing between them read as one list
+            // with a ragged right half, which is what the owner saw. The
             // separation is a RULE, because a rule and whitespace are the only
             // two this design admits (invariant 15) — and it comes out of
             // `chrome`, because `separators-come-from-chrome` refuses a fourth
             // answer to where a separator lives.
             //
-            // AT THE SEAM THE GRID ALREADY DREW THEM ON EITHER SIDE OF. The
-            // key column ends at `colon` and the text column starts at
-            // `colon + 2`; the pointer decides which list it is in by the same
-            // number. Putting the rule anywhere else would make the line the
-            // eye sees and the line the mouse obeys two different places.
+            // AT THE CELLS THE CHOOSER'S `Layout` RESERVED FOR THEM, each line
+            // in the middle of its own cell (`files::rule_x`), which is the
+            // same pixel every column's hover band stops at and the pixel the
+            // click divides the columns at (`Layout::column_at_px`). Putting a
+            // rule anywhere else would make the line the eye sees and the line
+            // the mouse obeys two different places.
             if self.view() == ViewState::Themes && self.theme_chooser.is_some() {
                 let cell = tokens::metrics::cell_width(tokens::text::size());
-                backgrounds.push(crate::chrome::divider(
-                    f32::from(grid.colon.saturating_add(1)) * cell,
-                    f32::from(first_of_expansion) * line_height,
-                    bottom,
-                ));
+                let layout = crate::theme_chooser::Layout::of(self.screen_columns());
+                for at in layout.rules() {
+                    backgrounds.push(crate::chrome::divider(
+                        crate::files::rule_x(at, crate::chrome::FIELDS_LEAD, cell),
+                        f32::from(first_of_expansion) * line_height,
+                        bottom,
+                    ));
+                }
             }
 
             // AND THE ONE BETWEEN THE SIDEBAR AND THE LISTING, which is the
@@ -21256,6 +22364,9 @@ impl Footer {
                         im.upload_it(&gpu.device, &gpu.queue, key, rgba);
                     }
                 }
+                if bare {
+                    batch.clear();
+                }
                 im.prepare(&gpu.queue, logical_w, logical_h, &batch);
             }
             // THE FILM'S CONTROLS, LAST AND ON TOP.
@@ -21265,6 +22376,11 @@ impl Footer {
             // arrive and leave with the pointer, and all three are painted
             // AFTER the pictures — the picture keeps the whole panel now, so a
             // rectangle drawn with the other backgrounds would be under it.
+            if bare {
+                backgrounds.clear();
+                transport_now.clear();
+                spans.clear();
+            }
             #[allow(clippy::cast_possible_truncation)]
             let under = backgrounds.len() as u32;
             backgrounds.extend(transport_now);
@@ -21301,6 +22417,7 @@ impl Footer {
             // with a light capture underneath.
             let images = screen.images.as_ref();
             if let Err(e) = gpu.frame(
+                clear,
                 || {
                     if let Some((height, zone)) = owed.take() {
                         layer.set_size(0, height);
@@ -21343,6 +22460,11 @@ impl Footer {
                 );
             }
         }
+
+        // AND THE PICTURES' PAGE IS WORN AGAIN, now that every screen has worn
+        // its own: what is keyed between this frame and the next is keyed on
+        // it (`wear_the_pictures_page`).
+        tokens::theme::set_ground(pictures);
 
         if painted && self.frames_painted < 3 {
             self.frames_painted += 1;
@@ -21423,6 +22545,62 @@ const fn above_row_taken(
     address: bool,
 ) -> bool {
     (glance && !(sound && sound_on_minibuffer)) || address
+}
+
+/// A count of the footer's rows in pixels — `ceil(line height × rows)`, and
+/// ONE PIXEL when there are none: a hidden footer at rest, which is the edge
+/// the pointer finds (`crate::hidden::geometry`, which is the same sum).
+/// The room the minibuffer's line gives its text on a screen `columns` wide:
+/// from the margin to one cell before whatever stands at its right end — the
+/// page counter (`indicator_cells` wide) and the drawer's chevron.
+fn minibuffer_room(columns: u16, indicator_cells: Option<u16>, chevron: bool) -> u16 {
+    let taken = indicator_cells.map_or(0, |w| w + 1);
+    let plain_room = columns
+        .saturating_sub(tokens::space::MODELINE_EDGELEFT)
+        .saturating_sub(taken);
+    let chevron_at = chevron.then(|| crate::chrome::from_the_edge(columns, 1));
+    let indicator_at = indicator_cells.map(|w| match chevron_at {
+        Some(c) => c.saturating_sub(1 + w),
+        None => crate::chrome::from_the_edge(columns, w),
+    });
+    match indicator_at.or(chevron_at) {
+        Some(at) => at.saturating_sub(tokens::space::MODELINE_EDGELEFT + 1),
+        None => plain_room,
+    }
+}
+
+/// The room an event's actions are placed in (`chrome::room_for_actions`) on
+/// a screen `own_columns` wide, when the narrowest screen is
+/// `narrowest_columns`: THAT screen's room, on every screen.
+///
+/// # Why the narrowest
+///
+/// The actions sit at the end of the room, and each screen's room ends at
+/// its own right edge: on two monitors of different widths "Open it" was
+/// drawn in different cells, while the pointer's table (`hint_placed`) is
+/// one — the last screen's. A click on the action of the other screen found
+/// nothing, and a click in the air where the last screen's sat ran it. Placed
+/// for the narrowest room, the actions are in the same cells everywhere, and
+/// every screen has room for them.
+fn room_for_the_actions(
+    own_columns: u16,
+    narrowest_columns: Option<u16>,
+    indicator_cells: Option<u16>,
+    chevron: bool,
+) -> u16 {
+    let columns = narrowest_columns.map_or(own_columns, |n| n.min(own_columns));
+    minibuffer_room(columns, indicator_cells, chevron)
+}
+
+fn pixels_of(lines: u32) -> u32 {
+    if lines == 0 {
+        return 1;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let exact = tokens::metrics::line_height(tokens::text::size()) * lines as f32;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let px = exact.ceil() as u32;
+    px
 }
 
 fn expansion_ceiling(screen_height: Option<u32>, fixed: usize) -> usize {
@@ -21827,6 +23005,10 @@ impl Footer {
                 .as_ref()
                 .is_some_and(ronoctua_audio::Snapshot::is_listening),
         );
+        // A STRANGER'S MICROPHONE OPENING OR CLOSING IS SAID — at the end,
+        // once the view has settled on the new reading. The sound view's own
+        // meter and the studio's capture are not strangers.
+        let said = self.events.microphone(&s);
         self.audio_snapshot = Some(s);
         let marks_after = (
             self.audio_snapshot
@@ -21846,11 +23028,17 @@ impl Footer {
             self.apply_geometry(self.interactivity());
             self.draw_and_paint();
         }
+        self.said_now(said);
     }
 
     fn power_arrived(&mut self, s: ronoctua_power::Snapshot) {
         let before = self.power_snapshot.take();
         let now = std::time::Instant::now();
+        // THE CHARGER PLUGGED OR PULLED is an event; the battery's alarms
+        // below stay notifications, always — they may want something done.
+        // Said at the END, once the new reading is the one the modeline
+        // draws from: a frame painted in between would have no battery.
+        let said = self.events.power(&s);
         let mut raised = false;
         for alarm in ronoctua_power::alarms(before.as_ref(), &s) {
             if let Some(b) = s.display.as_ref() {
@@ -21944,6 +23132,7 @@ impl Footer {
         if raised {
             self.after_the_queue_moved();
         }
+        self.said_now(said);
     }
 
     /// `power.json` changed under the footer: the profile it names is applied
@@ -22206,38 +23395,32 @@ impl Footer {
     /// 16, 14, 15, 14 — so "it crossed" has to be remembered, and what
     /// remembers is `bluetooth_alarmed`. A device leaving takes its memory
     /// with it, so plugging the same mouse back in at 12% says so again.
-    fn radio_alarms(&mut self, was: &ronoctua_bluetooth::Scene) {
+    ///
+    /// # Why coming and going are not raised here any more
+    ///
+    /// They are EVENTS now, said on the minibuffer's line (`crate::events`),
+    /// and this gives them back for the caller to say once the view has
+    /// settled. They keep their tags, so on the band — when the line was busy
+    /// — the two filters that quiet a device coming and going still quiet
+    /// them. And the first scene is only the baseline: this used to raise
+    /// "connected" once per device at every start of the footer.
+    fn radio_alarms(&mut self) -> Vec<crate::events::Event> {
         use std::collections::BTreeSet;
         let now = std::time::Instant::now();
         let named = |d: &ronoctua_bluetooth::Device| d.label.clone();
-        // THE THREE LISTS ARE DECIDED FIRST, and only then is anything
-        // raised. `arrived` takes `&mut self`, and the scene lives in `self`
-        // — so walking the scene while raising borrows it twice. This is the
-        // same shape `power_arrived` has for the same reason.
-        let before: BTreeSet<String> = was.connected().iter().map(|d| d.at.clone()).collect();
+        let said = self.events.radio(&self.bluetooth_scene);
+        // THE LIST IS DECIDED FIRST, and only then is anything raised.
+        // `arrived` takes `&mut self`, and the scene lives in `self` — so
+        // walking the scene while raising borrows it twice. This is the same
+        // shape `power_arrived` has for the same reason.
         let there: BTreeSet<String> = self
             .bluetooth_scene
             .connected()
             .iter()
             .map(|d| d.at.clone())
             .collect();
-        let came: Vec<(String, Option<u8>)> = self
-            .bluetooth_scene
-            .connected()
-            .iter()
-            .filter(|d| !before.contains(&d.at))
-            .map(|d| (named(d), None))
-            .collect();
-        // WHAT WENT is read from the OLD scene, because the new one no longer
-        // has it — that is the whole reason the two are compared.
-        let went: Vec<(String, Option<u8>)> = was
-            .connected()
-            .iter()
-            .filter(|d| !there.contains(&d.at))
-            .map(|d| (named(d), None))
-            .collect();
-        // AND THE ONES THAT ARE RUNNING OUT, on the crossing of the same
-        // number the modeline turns red at.
+        // THE ONES THAT ARE RUNNING OUT, on the crossing of the same number
+        // the modeline turns red at.
         let mut running_out: Vec<(String, Option<u8>)> = Vec::new();
         let mut told: BTreeSet<String> = std::mem::take(&mut self.bluetooth_alarmed);
         for d in self.bluetooth_scene.connected() {
@@ -22256,20 +23439,15 @@ impl Footer {
         self.bluetooth_alarmed = told;
 
         let mut raised = false;
-        for (tag, who) in [
-            (BLUETOOTH_CONNECTED, came),
-            (BLUETOOTH_DISCONNECTED, went),
-            (BLUETOOTH_BATTERY_LOW, running_out),
-        ] {
-            for (name, pct) in who {
-                let n = self.radio_notification(tag, &name, pct);
-                self.arrived(n, now);
-                raised = true;
-            }
+        for (name, pct) in running_out {
+            let n = self.radio_notification(BLUETOOTH_BATTERY_LOW, &name, pct);
+            self.arrived(n, now);
+            raised = true;
         }
         if raised {
             self.after_the_queue_moved();
         }
+        said
     }
 
     /// One of the radio's three, in the shape the catalogue recognises.
@@ -22572,6 +23750,57 @@ impl Footer {
         {
             tracing::info!(inside = now, "the pointer at the fullscreen edge");
             edge.inside = now;
+            self.apply_geometry(self.interactivity());
+        }
+    }
+
+    /// A pointer at a screen's bottom edge brings hidden bars up on that
+    /// screen, and leaving the footer there takes them away again — see
+    /// `crate::hidden::at_the_edge` for why the edge and not the whole
+    /// surface.
+    ///
+    /// FOLLOWED WITH THE BARS VISIBLE TOO, and only acted on while hidden: a
+    /// pointer resting at the bottom when the bars are hidden by a key is
+    /// already on the edge, and the bars come up under it at once.
+    fn reveal_follows_the_pointer(&mut self, events: &[PointerEvent]) {
+        let mut now = self.revealed_on.clone();
+        for e in events {
+            let Some(t) = self
+                .screens
+                .iter()
+                .find(|t| t.layer.wl_surface() == &e.surface)
+            else {
+                continue;
+            };
+            // THE CONNECTOR ONLY WHEN IT DECIDES SOMETHING: a motion over the
+            // footer arrives per pixel, and asking the output's name clones
+            // what the compositor said about it.
+            let connector = || self.outputs.info(&t.output).and_then(|o| o.name);
+            // THE HEIGHT THE COMPOSITOR CONFIGURED (`asked`), which is the
+            // surface this event's coordinates belong to — not `height`, which
+            // a geometry drawn ahead has already moved (`apply_geometry`). A
+            // pointer crossing back into a footer that had just been told to
+            // shrink to its pixel, before the compositor applied it, was on
+            // "the edge" of a one-pixel surface at any `y`, and the bars came
+            // back under a hand nowhere near the bottom.
+            match e.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. }
+                    if crate::hidden::at_the_edge(e.position.1, t.asked.1) =>
+                {
+                    now = connector();
+                }
+                PointerEventKind::Leave { .. } if now.is_some() && now == connector() => {
+                    now = None;
+                }
+                _ => {}
+            }
+        }
+        if now == self.revealed_on {
+            return;
+        }
+        tracing::debug!(screen = ?now, "the pointer at the footer's edge");
+        self.revealed_on = now;
+        if self.modeline.hidden.is_some() {
             self.apply_geometry(self.interactivity());
         }
     }
@@ -22928,22 +24157,35 @@ impl Footer {
         if let Err(e) = store.write(&now) {
             tracing::warn!(error = %e, "could not write modeline.json");
         }
-        if self.above_rows() != was {
+        // AND THE SHAPE, which the bars' mode is part of (`crate::hidden`).
+        if self.above_rows() != was || self.shape_now() != self.shape {
             self.apply_geometry(self.interactivity());
         }
         self.draw_and_paint();
     }
 
     /// `modeline.json` changed on disk: taken, unless it is what this footer
-    /// wrote.
+    /// wrote — and REFUSED, with its sentence, when it does not parse: the
+    /// copy this footer holds stays, rather than the default turning the bars
+    /// back on in silence (`adapt::reread`).
     fn modeline_changed(&mut self) {
-        let fresh = crate::adapt::store().read();
-        if fresh == self.modeline {
-            return;
-        }
+        let fresh = match crate::adapt::reread(&crate::adapt::store(), &self.modeline) {
+            crate::adapt::Reread::Same => return,
+            crate::adapt::Reread::Refused => {
+                let m = self
+                    .texts
+                    .t(ronoctua_i18n::key::ECHO_MODELINE_WILL_NOT_PARSE);
+                self.echo_message(m);
+                self.draw_and_paint();
+                return;
+            }
+            crate::adapt::Reread::Taken(fresh) => fresh,
+        };
         let was = self.above_rows();
         self.modeline = fresh;
-        if self.above_rows() != was {
+        // AND THE SHAPE: the bars hidden or shown by another hand — a second
+        // footer, or the file edited — move this one too.
+        if self.above_rows() != was || self.shape_now() != self.shape {
             self.apply_geometry(self.interactivity());
         }
         self.draw_and_paint();
@@ -24230,11 +25472,15 @@ impl Footer {
             let n = self.studio_notification(&path, photo);
             self.arrived(n, std::time::Instant::now());
         }
+        // AND ITS RECORDING AND STREAM STARTING OR ENDING are events — the
+        // file written stays the notification above, with its actions.
+        let said = self.events.studio(s.as_ref());
         self.studio = s;
         self.camera_mark_allowed =
             ronoctua_studio::prefs::store().read().mark == ronoctua_studio::prefs::Mark::WhenInUse;
         self.camera_reread();
         self.draw_and_paint();
+        self.said_now(said);
     }
 
     /// A photo or a recording, as a notification the catalogue recognises by
@@ -24377,7 +25623,7 @@ impl Footer {
                     return;
                 }
                 self.hand_the_region_to(&unit);
-                self.activate_leader();
+                self.activate_leader(crate::leader::Opener::Key);
             }
             Said::Daemon(FromDaemon::Key { unit, code, value }) => {
                 let Some(owner) = self.keys.owner.as_mut().filter(|o| o.unit == unit) else {
@@ -24385,10 +25631,14 @@ impl Footer {
                 };
                 let (event, down, mods) = owner.key(code, value);
                 self.mods = mods;
+                // THE SAME TWO HALVES the compositor's keyboard goes through:
+                // `typed` for the press, `key_released` for the release — so
+                // a tap of `Alt` on an independent keyboard chooses the
+                // leader's set exactly as it does on the seat's.
                 if down {
                     self.typed(event);
-                } else if event.keysym == Keysym::Control_R {
-                    self.right_ctrl = false;
+                } else {
+                    self.key_released(event.keysym);
                 }
                 if !self.grabbing() {
                     self.keys.release();
@@ -24856,7 +26106,7 @@ impl Footer {
             ));
         }
         let r = &mut self.software_readings;
-        r.taught = crate::software_feed::Taught::of_this_leader();
+        r.taught = crate::software_feed::Taught::of_this_leader(&self.tree);
         r.zone = self.zone.clone();
         r.now = crate::software_feed::seconds_now();
         r.home = Some(ctx.roots.home);
@@ -25449,6 +26699,7 @@ impl Footer {
         }
         // A TRIAL KEPT OR STOPPED, Android started or stopped.
         self.software_read_running();
+        let mut said = Vec::new();
         for job in ended {
             if let Some(id) = crate::transfers::opens(job) {
                 self.software_latest = Some(id.to_owned());
@@ -25460,6 +26711,24 @@ impl Footer {
                 ronoctua_transfers::Work::Software { label, .. } => label.clone(),
                 _ => String::new(),
             };
+            // A PROGRAM PUT IN THE LAUNCHER IS AN EVENT, said on the
+            // minibuffer's line with the entry's one action at its end —
+            // opening what was just installed (`software-launch-latest`).
+            // Every other end stays the notification it always was.
+            if matches!(
+                end,
+                crate::software::Ended::Installed | crate::software::Ended::WebCreated
+            ) {
+                // WITH WHAT ITS ACTION OPENS: this job's own desktop id, taken
+                // now, and not `software_latest`, which the next job in the
+                // batch overwrites.
+                said.push(crate::events::Event::installed(
+                    software_tag(end),
+                    &app,
+                    crate::transfers::opens(job),
+                ));
+                continue;
+            }
             let why = if end == crate::software::Ended::Failed {
                 crate::software::failure_said(job, &self.texts)
             } else {
@@ -25472,6 +26741,7 @@ impl Footer {
                 &why,
             );
         }
+        self.said_now(said);
     }
 
     /// One of the software centre's notifications, in words.
@@ -25944,6 +27214,9 @@ impl Footer {
             self.net.airplane(),
             self.net.tunnel().is_some(),
         );
+        // A NETWORK, A TUNNEL OR THE AEROPLANE COMING AND GOING is said —
+        // after the repaint below, once the modeline draws the new reading.
+        let said = self.events.network(&s);
         self.net = s;
         let after = (
             self.net.adrift(),
@@ -25957,6 +27230,7 @@ impl Footer {
             self.apply_geometry(self.interactivity());
             self.draw_and_paint();
         }
+        self.said_now(said);
     }
 
     /// Keeps the network view's cursor on a row that exists.
@@ -26007,6 +27281,9 @@ impl Footer {
         match e {
             ronoctua_tunnel::Event::Scene(scene) => {
                 let before = (self.tunnels.on_tailnet(), self.tunnels.through_tor());
+                // THE TAILNET OR TOR COMING AND GOING is said; the thread's
+                // first scene is only the baseline.
+                let said = self.events.tunnels(&scene);
                 self.tunnels = *scene;
                 let after = (self.tunnels.on_tailnet(), self.tunnels.through_tor());
                 if before != after || self.network.is_some() {
@@ -26019,6 +27296,7 @@ impl Footer {
                     self.apply_geometry(self.interactivity());
                     self.draw_and_paint();
                 }
+                self.said_now(said);
             }
             // A REFUSAL IS A SENTENCE, and the daemon's own words are what
             // says why: there are no error names here worth a table of their
@@ -26097,20 +27375,23 @@ impl Footer {
         // not. The keys work for the whole time, and this is where somebody
         // reads them. They are arguments and never text in the `.ftl`, which
         // `keys-are-never-text` holds to.
+        //
+        // AND THEY ARE THE KEYS FROM WHERE A SEQUENCE STARTS: `s b` is the
+        // radio itself in the leader's default set, so the answer is a tap of
+        // `Ctrl` away — `taught_keys` says so, and not the full tree's
+        // constant, which typed as it is would open the radio and stop.
         let leader = crate::leader();
+        let keys = |command: &str| {
+            crate::leader::taught_keys(&self.tree, command, None)
+                .map_or_else(String::new, |k| format!("{leader} {k}"))
+        };
         let body = format!(
             "{body}\n{}",
             self.texts.t_with(
                 ronoctua_i18n::key::NOTIF_BLUETOOTH_PAIRING_KEYS,
                 &[
-                    (
-                        "yes",
-                        &format!("{leader} {}", crate::leader::PAIRING_YES_KEYS)
-                    ),
-                    (
-                        "no",
-                        &format!("{leader} {}", crate::leader::PAIRING_NO_KEYS)
-                    ),
+                    ("yes", &keys("bluetooth-accept")),
+                    ("no", &keys("bluetooth-refuse")),
                 ],
             )
         );
@@ -26134,9 +27415,9 @@ impl Footer {
     /// a reading that draws the same pixels is a frame wasted.
     fn bluetooth_arrived(&mut self, scene: ronoctua_bluetooth::Scene) {
         let before = crate::bluetooth::modeline(&self.bluetooth_scene);
-        let was = std::mem::replace(&mut self.bluetooth_scene, scene);
+        self.bluetooth_scene = scene;
         let after = crate::bluetooth::modeline(&self.bluetooth_scene);
-        self.radio_alarms(&was);
+        let said = self.radio_alarms();
         // A QUESTION THAT ONLY TOLD ends when the device pairs: nothing
         // calls the agent back for those, and a sentence left on the screen
         // about a pairing that finished is a screen that stopped being true.
@@ -26183,6 +27464,8 @@ impl Footer {
             self.apply_geometry(self.interactivity());
             self.draw_and_paint();
         }
+        // A DEVICE COMING OR GOING, said once the view has settled.
+        self.said_now(said);
     }
 
     /// Opens the view, on the list or on one device.
@@ -27186,6 +28469,35 @@ fn narrow_buffer_keymap(
 
 #[cfg(test)]
 mod tests {
+    /// FAILS IF: an event's actions are drawn in different cells on two
+    /// screens of different widths — the pointer's table is one, so a click
+    /// on the other screen's action missed and a click in the air ran it —
+    /// or the narrow screen has no room for them.
+    #[test]
+    fn an_events_actions_are_in_the_same_cells_on_every_screen() {
+        use super::{minibuffer_room, room_for_the_actions, tokens};
+        let line = crate::chrome::said_with_actions(
+            "GIMP is installed",
+            &[("Open it".to_owned(), "software-launch-latest")],
+        );
+        let (narrow, wide) = (90_u16, 160_u16);
+        for (indicator, chevron) in [(None, true), (Some(4), true), (None, false)] {
+            let placed = |columns: u16| -> Vec<(u16, u16, &'static str)> {
+                let room = minibuffer_room(columns, indicator, chevron);
+                let one = crate::chrome::room_for_actions(
+                    &line,
+                    room_for_the_actions(columns, Some(narrow), indicator, chevron),
+                );
+                crate::chrome::hint_marks(&one, tokens::space::MODELINE_EDGELEFT, 0, room)
+                    .into_iter()
+                    .map(|m| (m.at, m.cells, m.id))
+                    .collect()
+            };
+            assert_eq!(placed(narrow).len(), 1, "the action is drawn");
+            assert_eq!(placed(narrow), placed(wide), "{indicator:?} {chevron}");
+        }
+    }
+
     /// FAILS IF: two ends of a software job raise one notification, or an
     /// end raises a tag the trial's closing also uses — the catalogue could
     /// not tell them apart (`notifications-table-generated` ties each tag to
@@ -27202,6 +28514,43 @@ mod tests {
         tags.dedup();
         assert_eq!(tags.len(), n, "{tags:?}");
         assert!(tags.iter().all(|t| t.starts_with("software-")));
+    }
+
+    /// FAILS IF: with the bars hidden to push, the leader's list, the command
+    /// finder or the window menu push the windows away — they are the
+    /// keyboard passing through — or a view a person works in stops pushing.
+    #[test]
+    fn only_an_app_of_the_footer_pushes() {
+        use super::ViewState;
+        for passing in [
+            ViewState::NoneOf,
+            ViewState::Leader,
+            ViewState::Commands,
+            ViewState::WindowMenu,
+        ] {
+            assert!(!passing.is_an_app(), "{passing:?}");
+        }
+        for app in [
+            ViewState::Files,
+            ViewState::Network,
+            ViewState::Notifications,
+            ViewState::Kiosk,
+            ViewState::Transfers,
+            ViewState::Applications,
+        ] {
+            assert!(app.is_an_app(), "{app:?}");
+        }
+    }
+
+    /// FAILS IF: two rows' worth of lines is not the pixels the footer has
+    /// always asked for, or nothing is anything but the one pixel of the edge.
+    #[test]
+    fn no_rows_is_one_pixel() {
+        assert_eq!(super::pixels_of(0), 1);
+        assert_eq!(
+            super::pixels_of(u32::from(super::FOOTER_LINES)),
+            ronoctua_tokens::metrics::footer_height(ronoctua_tokens::text::size()).ceil() as u32
+        );
     }
 
     /// FAILS IF: a device's mark loses its own colour, the alarm stops
@@ -27951,7 +29300,10 @@ mod tests {
         // the incident; the browsers now live under `m`, so `m` is the
         // first-level group this walks through.
         use ronoctua_keymap::{Key, Resolution, Sym};
-        let (tree, _) = crate::leader::default_of().expect("the default keymap has to close");
+        // THE DEFAULT SET, which is where a sequence starts — and `m` folds
+        // in none.
+        let (trees, _) = crate::leader::default_of().expect("the default keymap has to close");
+        let tree = &trees.footer;
 
         assert!(
             matches!(

@@ -1112,19 +1112,21 @@ fn interned(arg: String) -> &'static str {
 /// there is not (`SUPER + S-z`) — written the way which-key and the manual
 /// write them, and read from the SAME tables, so a rebinding moves this too.
 /// `None` for what only the menu reaches.
+///
+/// The sequence is `leader::taught_keys`' — from the leader's DEFAULT set,
+/// the one every sequence starts in, as every sentence that teaches a key
+/// reads it. `w` folds in no set, so the menu's own cells read the same as
+/// they always did; a deed whose key is under a folded group comes out with
+/// the tap that reaches it (`CTRL …`).
 #[must_use]
-pub fn taught(tree: &ronoctua_keymap::Tree, does: &Does) -> Option<String> {
+pub fn taught(trees: &crate::leader::Trees, does: &Does) -> Option<String> {
     let (id, arg) = match does {
         Does::Run(id) => (*id, None),
         Does::RunWith(id, arg) => (*id, Some(arg.as_str())),
         _ => return None,
     };
-    if let Some(seq) = tree.sequence_of(id, arg).as_ref() {
-        return Some(format!(
-            "{} {}",
-            crate::leader(),
-            ronoctua_keymap::notation(seq)
-        ));
+    if let Some(keys) = crate::leader::taught_keys(trees, id, arg) {
+        return Some(format!("{} {keys}", crate::leader()));
     }
     // THE CHORDS, built once: the region is drawn every frame, and the
     // table is four hundred binds spelt out.
@@ -1507,6 +1509,14 @@ mod tests {
     #[test]
     fn a_cell_teaches_its_key_outside_the_menu() {
         let (tree, _) = crate::leader::default_of().expect("the default keymap");
+        // `w` FOLDS IN NO SET, so the menu's cells teach the same keys in the
+        // default set as they do in the full tree.
+        assert_eq!(
+            taught(&tree, &Does::Run("window-screen-full")),
+            tree.full
+                .sequence_of("window-screen-full", None)
+                .map(|s| format!("{} {}", crate::leader(), ronoctua_keymap::notation(&s)))
+        );
         let full = taught(&tree, &Does::Run("window-screen-full")).expect("a key");
         assert!(full.ends_with(" w f"), "{full}");
         assert!(full.starts_with(&crate::leader()), "{full}");
@@ -1566,7 +1576,7 @@ mod tests {
                         Does::RunWith(id, arg) => (*id, Some(arg.clone())),
                         _ => continue,
                     };
-                    if tree.sequence_of(id, arg.as_deref()).is_none() {
+                    if tree.full.sequence_of(id, arg.as_deref()).is_none() {
                         let name = match arg {
                             Some(a) => format!("{id} {a}"),
                             None => id.to_owned(),

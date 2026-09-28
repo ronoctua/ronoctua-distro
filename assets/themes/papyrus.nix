@@ -48,10 +48,15 @@
     # the multiplied one run into the same gamut ceiling and move together.
     chroma = 0.32;
   };
+  # A PAPER A SHADE UNDER THE FOOTER, desaturated at the owner's word: the
+  # warm grey of the sheet itself (0.3 of what the hue can carry). It is the
+  # PAGE of its own palette (the bands follow the ground), so what holds it
+  # is the desks around it and the window: at 0.045 it is 0.031 off a window
+  # (floor 0.03), 0.094 off the white and 0.068 off the near-white.
   backdrop = {
     hue = 60;
-    chroma = 0.11;
-    step = 0.070;
+    chroma = 0.3;
+    step = 0.045;
   };
 
   chroma = 1.0;
@@ -95,7 +100,9 @@
     };
     subtle = {
       hue = 330;
-      text-chroma = 0.12;
+      # 0.16: on the desk's page the inert key came 0.029 from this one at
+      # 0.12 (floor 0.03).
+      text-chroma = 0.16;
       text-shift = -3;
     };
     # The sentence under an opened line of shortcuts: a COOL grey, quieter
@@ -122,7 +129,8 @@
     # quietness in another hue — a place windows are kept, not an alarm.
     drawer = {
       hue = 150;
-      text-chroma = 0.36;
+      # 0.42: 0.058 from the device's mark on the desk's page at 0.36.
+      text-chroma = 0.42;
       text-shift = 0;
     };
     # THE CAPTURE'S GUIDES (`capture.guide`): the two lines through the
@@ -158,8 +166,18 @@
       text-chroma = 0.0;
       text-shift = -8;
     };
+    # THE BRAIN'S LINE keeps its colour on every page, so it has to stand
+    # apart from the desk's: at the accent's own 245 it was 0.028 from the
+    # desk and 0.044 from the selection band on the white page (floors 0.04,
+    # 0.05). A sea-green, 190, clears both.
     brain = {
-      hue = 245;
+      hue = 190;
+    };
+    # THE VALUE OF A ROW ONE CAN ACT ON, as a family of its own — see the
+    # `overrides` block at the foot of this file.
+    answer = {
+      hue = 30;
+      text-chroma = 0.6;
     };
     slate = {
       hue = 265;
@@ -187,8 +205,12 @@
     };
   };
 
-  # The only light theme that needs no override: `text.answer` is a chroma
-  # multiplier, and this is the one light ramp that has chroma to multiply.
-  # See `text.chroma` above for what that costs.
-  overrides = { };
+  # `text.answer` MULTIPLIES `text.primary`'s chroma, and on the desk's page
+  # the ink is darker and has less to multiply: 0.025 apart (floor 0.035).
+  # A family of its own instead, the answer cyber and flashbang already give.
+  overrides = {
+    text = {
+      answer = "answer.text-strong";
+    };
+  };
 }

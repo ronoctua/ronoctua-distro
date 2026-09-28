@@ -4297,11 +4297,9 @@ let
     # AND WHICH OF THEM A CONTRAST GATE MEASURES A TONE ON.
     #
     # NARROWED TO THE THREE ASSIGNMENTS THAT ARE THE ANSWER, and not grepped
-    # over the file: `surface.backdrop` is named half a dozen times in
-    # `DISTANCE_GATES` — it is told apart from the chrome and from the content's
-    # black — and a sweep of the whole generator read that as "measured". It is
-    # not: nothing is ever DRAWN on the compositor's desk, which is the exact
-    # claim this check exists to make somebody write down.
+    # over the file: a surface named in `DISTANCE_GATES` is told apart from
+    # another, which says nothing about whether a tone reads ON it, and a
+    # sweep of the whole generator read that as "measured".
     gated = set()
     for name in ("SIX_GROUNDS", "RAISED_GROUNDS", "CONTRAST_GATES"):
         m = re.search(r"\n" + name + r"\s*=\s*\(", generator)
@@ -4318,7 +4316,18 @@ let
     # and never a page — and the day something draws a word on one, the promise
     # is the thing to change.
     NO_TEXT = {
-        "surface.backdrop": "the compositor's desk, where no window is: the shell draws nothing on it at all",
+        # THE DESKS carry text only as the PAGE of their own palette
+        # (`Theme.on_page`, 2026-09-28: the bands follow the ground): a footer
+        # or a window on a desk wears that page, where the desk is
+        # `surface.chrome` and every tone is measured on it. No tone of any
+        # palette is drawn on these three roles. The one painter that names
+        # `surface.backdrop` itself is the player's picture band, which a
+        # frame of film covers and no letter is drawn on; the camera's window
+        # stood on it with a sentence over it until it was given its page's
+        # ground (`camera_window.rs`).
+        "surface.backdrop": "a desk: text on it is its own page's, measured there as surface.chrome; the player's picture band carries no text",
+        "surface.near": "a desk: text on it is its own page's, measured there as surface.chrome",
+        "surface.absolute": "a desk: text on it is its own page's, measured there as surface.chrome",
         "surface.atlas.land": "a continent's fill inside the globe's own picture",
         "surface.atlas.ocean": "the water behind it",
         "surface.atlas.lake": "a lake cut out of a continent",
@@ -4326,8 +4335,30 @@ let
         "surface.mesh": "the ground a 3D part is lit against, in the worker's own pixmap",
         "surface.wave": "the ink of an audio waveform, which is a drawing of a sound",
     }
+    # AND THE FOOTER'S CLEAR COLOURS, which DO carry text and are not measured
+    # — the owner's decision (2026-09-28), and a different promise from the one
+    # above. What is under them is a window, which no gate can know, so no
+    # number here would be the truth; the letters on them keep the tones the
+    # Pen measured on the footer's ground. A separate list so the day one of
+    # them becomes a real ground, the promise to change is this one. (A row
+    # that pushes the windows away is not here: it is painted in the desk,
+    # opaque, and the desks are measured.)
+    CLEARED = {
+        "surface.clear": "the hidden footer's one-pixel edge, and the clear under a veil; the veil or the window is what shows",
+        "surface.veil": "the hidden footer's veil over a window, the page's ground at four fifths; its text keeps the page's tones",
+    }
     wrong = []
+    for name in sorted(CLEARED):
+        if name not in surfaces:
+            wrong.append(name + " is excused as a clear colour and colors.nix no longer declares it")
+        elif name in gated or name in NO_TEXT:
+            wrong.append(
+                name + " is excused as a clear colour AND measured or declared textless; "
+                "one list answers for it"
+            )
     for name in sorted(surfaces):
+        if name in CLEARED:
+            continue
         if name in gated:
             if name in NO_TEXT:
                 wrong.append(
@@ -4356,8 +4387,8 @@ let
         print("       the build would say so. That is what `surface.header` was.", file=sys.stderr)
         raise SystemExit(1)
     print(
-        f"OK: {len(surfaces)} surfaces, {len(surfaces) - len(NO_TEXT)} of them measured "
-        f"and {len(NO_TEXT)} declared to carry no text"
+        f"OK: {len(surfaces)} surfaces, {len(surfaces) - len(NO_TEXT) - len(CLEARED)} of them "
+        f"measured, {len(NO_TEXT)} declared to carry no text and {len(CLEARED)} clear colours"
     )
     END
   '';
@@ -9195,8 +9226,11 @@ let
     # runs, because that arrives with no view open and this `match` is the
     # only thing between it and nothing at all.
     #
-    # Each row of `BINDINGS` is `("s n l", "network-lan", …)`.
-    bound = set(re.findall(r'^\s*\("[^"]*", "([a-z0-9-]+)"', keymap, re.M))
+    # Each row of `BINDINGS` is `("s n l", "network-lan", …)` — or, where the
+    # sequence is TAUGHT somewhere else too, a constant in its place:
+    # `(PAIRING_YES_KEYS, "bluetooth-accept", …)`. A row the pattern did not
+    # read was a key this check could not see lead nowhere.
+    bound = set(re.findall(r'^\s*\((?:"[^"]*"|[A-Z_]+), "([a-z0-9-]+)"', keymap, re.M))
     floor(len(bound), 60, "bindings in the keymap")
 
     gaps = sorted(bound - handled - generated)
@@ -11235,7 +11269,9 @@ let
   # A view is swept when one of its `files::Row`s carries a LIVE `focused` — a
   # bound name, an expression, or the field's shorthand — and skipped when every
   # one is the literal `false`. `theme_chooser.rs` is the only one skipped, and
-  # correctly: its two lists are drawn by `surface.rs`, which holds the cursor.
+  # correctly: its five lists are fields it lays out itself (`View::lines`),
+  # never a `files::Row`, and the cursor is a colour it names there — the
+  # accent on the list that has the keyboard, the primary text on the others.
   #
   # A swept view passes by naming `TEXT_HERE_ACTS` or `TEXT_HERE_READ`. Those
   # two exist for one purpose — `colors.nix` calls the family `text.here`, "the
@@ -11650,7 +11686,7 @@ let
         if re.search(r"^(?:pub )?struct View\b", code_of(f.read_text()), re.M)
     )
     floor(len(VIEWS), 8, "views found by their `struct View`")
-    wrong, checked = [], 0
+    wrong, checked, borrowed = [], 0, {}
     for name in VIEWS:
         f = shell / name
         # `code_of` and not the raw text: a `key::SOMETHING` named in a comment
@@ -11666,10 +11702,29 @@ let
         # Two duplicates were sitting in the part it never opened.
         cut = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", body, re.M)
         code = body[: cut.start()] if cut else body
-        keys = sorted({
-            m.group(1).lower().replace("_", "-")
-            for m in re.finditer(r"key::([A-Z0-9_]+)", code)
-        })
+        named = {m.group(1) for m in re.finditer(r"key::([A-Z0-9_]+)", code)}
+        # AND THE LABELS IT DRAWS THROUGH ANOTHER MODULE'S `text_key`.
+        #
+        # The theme chooser names its five TITLES itself and every one of its
+        # ANSWERS through `text_key` — `Backdrop`, `Ground` and `Borders` keep
+        # the key of their own name beside the answer, in `theme.rs`, a file
+        # with no `View`. Swept as its own file alone, the chooser gave this
+        # check five labels and none of the thirteen the person reads under
+        # them, so two answers saying one word passed. A view that calls a
+        # `text_key` has every `fn text_key` of the modules it imports
+        # (`use crate::<module>::`) read as its own.
+        if re.search(r"\btext_key\b", code):
+            for module in sorted(set(re.findall(r"\buse crate::([a-z_]+)::", code))):
+                other = shell / f"{module}.rs"
+                if not other.exists():
+                    continue
+                theirs = without_tests(code_of(other.read_text()))
+                for fn in re.finditer(r"\bfn text_key\b", theirs):
+                    said = must(scope(theirs[fn.start():], r"fn text_key\b"), f"{module}.rs's `fn text_key`")
+                    found = set(re.findall(r"key::([A-Z0-9_]+)", said))
+                    borrowed[name] = borrowed.get(name, 0) + len(found)
+                    named |= found
+        keys = sorted(k.lower().replace("_", "-") for k in named)
         # A FORMAT IS NOT A LABEL. `{ $dbm } dBm` is the shape of a number with
         # a unit, and two different facts may well be measured in the same
         # unit — a fact about decibels, not a defect.
@@ -11685,6 +11740,9 @@ let
 
     # THE FLOOR SCALES WITH THE LANGUAGES, since every one of them is swept.
     floor(checked, 200 * len(LANGUAGES), "labels read across the views")
+    # AND THE CHOOSER'S ANSWERS ARE READ: four names of a desk (black, white,
+    # near-white, the theme's colour), two grounds, two borders.
+    floor(borrowed.get("theme_chooser.rs", 0), 8, "answer labels the theme chooser draws through `text_key`")
 
     if wrong:
         print("ERROR: one view, two labels, one word.", file=sys.stderr)
@@ -21046,7 +21104,16 @@ let
       for theme in sys.argv[2:]:
           if theme not in report:
               sys.exit(f"ERROR: the report has no `{theme}`")
-          rows = [f for f in report[theme]["findings"]
+          # THE BASE PAGE'S ROWS. Every theme is solved on four pages
+          # (`PAGES` in gen-theme.py) and the report keeps each page's rows
+          # apart; the reference is the palette the theme was designed on,
+          # its CHROME, so the regression runs there and nowhere else. The
+          # report once kept one flat `findings` list per theme, and reading
+          # that name after the pages came in was a KeyError, not a verdict.
+          pages = report[theme].get("pages")
+          if not isinstance(pages, dict) or "chrome" not in pages:
+              sys.exit(f"ERROR: the report's `{theme}` has no base page; its shape moved: {sorted(report[theme])}")
+          rows = [f for f in pages["chrome"]
                   if f["gate"] == "regression" and not f["subject"].endswith(" alpha")]
           if not rows:
               sys.exit(f"ERROR: no regression rows for {theme}: its reference is not being compared")
@@ -21137,10 +21204,11 @@ let
   '';
 
   # THE FRAGMENTS EVERY THEME SHIPS FOR THE CONSUMERS OUTSIDE THE SHELL — and
-  # the compositor's own parser on the compositor's two. The footer copies
-  # these files verbatim when the theme or the desk changes; a fragment the
-  # compositor refused would be a border that never follows, with the refusal
-  # in a log nobody reads and a nag window this distro turns off.
+  # the compositor's own parser on the compositor's six. The footer copies
+  # these files verbatim when the theme or an answer about it changes
+  # (`theme::fragments`); a fragment the compositor refused would be a border
+  # that never follows, with the refusal in a log nobody reads and a nag
+  # window this distro turns off.
   #
   # EACH ONE IS VALIDATED UNDER A CONFIG THAT ALREADY PAINTS A DESK, as the
   # system's does (`output * bg`). That is the line the whole arrangement
@@ -21151,6 +21219,13 @@ let
   # inside one file and merged an included one — and the shape of the proof is
   # the same either way: put the fragment under a config that already says the
   # thing it says.
+  #
+  # AND EACH SAYS WHAT ITS NAME SAYS, read against the palette's own bytes:
+  # the desk (`surface.backdrop`, `surface.near`, or the absolute one —
+  # `#000000` in a dark theme and `#FFFFFF` in a light one, whatever the
+  # palette says), the
+  # outlines (standard, or the discreet one on the focused window and the
+  # desk's own faint one on every other), and the terminal's background.
   themes-have-fragments =
     mkCheck "themes-have-fragments"
       [
@@ -21167,43 +21242,107 @@ let
         export WLR_BACKENDS=headless
         export WLR_RENDERER=pixman
 
+        compositor="scroll-backdrop-standard.conf scroll-backdrop-discreet.conf scroll-near-standard.conf scroll-near-discreet.conf scroll-absolute-standard.conf scroll-absolute-discreet.conf"
+        terminal="ghostty-theme.conf ghostty-backdrop.conf ghostty-near.conf ghostty-absolute.conf"
         for id in ${lib.escapeShellArgs themes}; do
           d=${themed}/$id
-          for f in compositor-border-active compositor-border-inactive compositor-background scroll-black.conf scroll-backdrop.conf ghostty.conf mode; do
+          # THE BYTES OF A TOKEN, as `#RRGGBB`, from the palette the shell's
+          # table is generated from.
+          hex() { jq -r --arg k "$1" '.[$k]' "${themed}/$id.json" | sed -E 's/^0x([0-9A-F]{6})FF$/#\1/'; }
+          for f in compositor-border-active compositor-border-inactive compositor-background $compositor $terminal mode; do
             test -s "$d/$f" || { echo "ERROR: the theme $id has no fragment $f" >&2; exit 1; }
+          done
+          # THE OLD NAMES ARE GONE: a footer that still copied one would copy
+          # a desk nobody chose.
+          for f in scroll-black.conf scroll-backdrop.conf ghostty.conf; do
+            if [ -e "$d/$f" ]; then
+              echo "ERROR: $id still ships $f, a name no answer copies any more" >&2; exit 1
+            fi
           done
           for f in compositor-border-active compositor-border-inactive compositor-background; do
             grep -qE '^#[0-9A-F]{6}$' "$d/$f" || {
               echo "ERROR: $id/$f is not a #RRGGBB: $(cat "$d/$f")" >&2; exit 1; }
           done
-          # THE SEVENTH IS NOT A COLOUR, so it is read rather than matched
+          # THE STATIC CONFIG IS WHAT A FRESH MACHINE SHOWS, and a fresh
+          # machine is on the default answers: the theme's own desk and the
+          # standard borders (`theme::Choice::with_theme`, whose fragment is
+          # `scroll-backdrop-standard.conf` — `theme.rs` tests that name). No
+          # `theme.json`, no fragment copied, so the three static values are
+          # the desk and the outlines on screen, and the footer's hidden rows
+          # are painted in that default desk's page. A static desk that is not
+          # the default answer's is a strip of another colour across it — it
+          # was `surface.base` until 2026-09-28.
+          default=$d/scroll-backdrop-standard.conf
+          grep -qxF "output * bg $(cat "$d/compositor-background") solid_color" "$default" || {
+            echo "ERROR: $id's static desk $(cat "$d/compositor-background") is not the default answer's:" >&2
+            grep '^output' "$default" >&2; exit 1; }
+          test "$(cat "$d/compositor-background")" = "$(hex surface.backdrop)" || {
+            echo "ERROR: $id's static desk is not surface.backdrop, the desk of the default answer" >&2; exit 1; }
+          for pair in "client.focused compositor-border-active" "client.unfocused compositor-border-inactive"; do
+            set -- $pair
+            grep -qE "^$1 $(cat "$d/$2")( |$)" "$default" || {
+              echo "ERROR: $id's static $2 is not what the default answer's fragment says for $1:" >&2
+              grep "^$1 " "$default" >&2; exit 1; }
+          done
+          # THE MODE IS NOT A COLOUR, so it is read rather than matched
           # against a hex: `nix/modules/foreign.nix` branches on this word and
           # an unknown one would leave GTK and Qt wearing the wrong side.
-          case "$(cat "$d/mode")" in
-            dark|light) ;;
-            *) echo "ERROR: the theme $id says its mode is '$(cat "$d/mode")'" >&2; exit 1 ;;
+          mode=$(cat "$d/mode")
+          case "$mode" in
+            dark) absolute='#000000' ;;
+            light) absolute='#FFFFFF' ;;
+            *) echo "ERROR: the theme $id says its mode is '$mode'" >&2; exit 1 ;;
           esac
-          for f in scroll-black.conf scroll-backdrop.conf; do
+          # AND THE ABSOLUTE DESK IS THE EXTREME OF THAT MODE, in the palette
+          # itself — black is not the name of the option any more.
+          test "$(hex surface.absolute)" = "$absolute" || {
+            echo "ERROR: $id is $mode and its surface.absolute is $(hex surface.absolute), not $absolute" >&2; exit 1; }
+          for f in $compositor; do
             printf 'output * bg #123456 solid_color\ninclude "%s"\n' "$d/$f" > "$id.conf"
             scroll --validate --config "$id.conf" > said.txt 2>&1 || true
-            grep -q 'Error' said.txt && {
+            if grep -q 'Error' said.txt; then
               echo "ERROR: the compositor refuses $id/$f under a config that already paints a desk:" >&2
-              cat said.txt >&2; exit 1; }
-            grep -qE '^client\.focused #' "$d/$f" || {
-              echo "ERROR: $id/$f carries no border" >&2; exit 1; }
+              cat said.txt >&2; exit 1
+            fi
+            desk=$(echo "$f" | sed -E 's/^scroll-([a-z]+)-[a-z]+\.conf$/\1/')
+            borders=$(echo "$f" | sed -E 's/^scroll-[a-z]+-([a-z]+)\.conf$/\1/')
+            case "$desk" in
+              backdrop) want=$(hex surface.backdrop) ;;
+              near) want=$(hex surface.near) ;;
+              absolute) want=$absolute ;;
+            esac
+            grep -qE "^output \* bg $want solid_color$" "$d/$f" || {
+              echo "ERROR: $id/$f does not paint the $desk desk $want:" >&2
+              grep 'output \*' "$d/$f" >&2; exit 1; }
+            case "$borders" in
+              standard) focused=$(hex border.active); others=$(hex border.inactive); resting=$others ;;
+              discreet) focused=$(hex border.discreet); others=$focused; resting=$(hex "border.faint-$desk") ;;
+            esac
+            # ALL FIVE SLOTS, the indicator and the child border included: a
+            # slot left at the compositor's default is a colour nobody chose.
+            for line in "client.focused $focused" "client.focused_inactive $others" "client.unfocused $resting"; do
+              grep -qxF "$line $(echo "$line" | awk '{print $2" "$2" "$2" "$2}')" "$d/$f" || {
+                echo "ERROR: $id/$f does not say '$line' in all five slots:" >&2
+                grep '^client\.' "$d/$f" >&2; exit 1; }
+            done
+            grep -qxF "client.selected $(hex border.selected) $(hex border.selected) $(hex border.selected) $(hex border.selected) $(hex border.selected)" "$d/$f" || {
+              echo "ERROR: $id/$f changed the selected outline, which no answer about the borders touches" >&2; exit 1; }
           done
-          # The desk each fragment names: black by name, and the theme's own
-          # `surface.backdrop` — the same bytes the shell's table has.
-          grep -qE '^output \* bg #000000 solid_color$' "$d/scroll-black.conf" || {
-            echo "ERROR: $id/scroll-black.conf does not paint black" >&2; exit 1; }
-          desk=$(jq -r '."surface.backdrop"' "${themed}/$id.json" | sed -E 's/^0x([0-9A-F]{6})FF$/#\1/')
-          grep -qE "^output \* bg $desk solid_color$" "$d/scroll-backdrop.conf" || {
-            echo "ERROR: $id/scroll-backdrop.conf does not paint the theme's desk $desk:" >&2
-            grep 'output \*' "$d/scroll-backdrop.conf" >&2; exit 1; }
-          grep -q '^palette = 15=#' "$d/ghostty.conf" || {
-            echo "ERROR: $id/ghostty.conf has no sixteenth ANSI colour" >&2; exit 1; }
+          for ground in theme backdrop near absolute; do
+            f=ghostty-$ground.conf
+            case "$ground" in
+              theme) want=$(hex terminal.background) ;;
+              backdrop) want=$(hex surface.backdrop) ;;
+              near) want=$(hex surface.near) ;;
+              absolute) want=$absolute ;;
+            esac
+            grep -qxF "background = $want" "$d/$f" || {
+              echo "ERROR: $id/$f does not stand on $want:" >&2; grep '^background' "$d/$f" >&2; exit 1; }
+            grep -q '^palette = 15=#' "$d/$f" || {
+              echo "ERROR: $id/$f has no sixteenth ANSI colour" >&2; exit 1; }
+          done
         done
-        echo "OK: every theme carries its seven fragments, and the compositor merges each desk over one already painted"
+        echo "OK: every theme carries its fragments — six desks-and-borders, four terminal grounds — each says what its name says, the compositor merges each over a desk already painted, and the static desk and outlines are the default answer's"
       '';
 
   # GHOSTTY STILL RELOADS ON THE SIGNAL THIS SYSTEM SENDS.
@@ -21279,7 +21418,10 @@ let
         # would be overwritten by a file that carries no size at all.
         test "$(wc -l < lines)" -eq 3 || {
           echo "ERROR: three config-file lines were expected:" >&2; cat lines >&2; exit 1; }
-        sed -n 1p lines | grep -q '/ghostty.conf$' || {
+        # The machine's own palette is the theme's ground (`ghostty-theme.conf`
+        # in the generator's output, a store path); the person's copy of the
+        # same name, on the next line, is optional and lives in their home.
+        sed -n 1p lines | grep -q ':config-file = /nix/store/.*/ghostty-theme\.conf$' || {
           echo "ERROR: the first include is not the generated palette:" >&2; cat lines >&2; exit 1; }
         sed -n 2p lines | grep -q '= ?/home/.*/.config/ronoctua/ghostty-theme.conf$' || {
           echo "ERROR: the second include is not the person's optional theme:" >&2; cat lines >&2; exit 1; }

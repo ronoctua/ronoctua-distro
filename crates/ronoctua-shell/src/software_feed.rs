@@ -568,7 +568,7 @@ pub fn read_running(ctx: Context, post: impl FnOnce(Running) + Send + 'static) {
 pub struct Taught {
     /// The launcher (`LEADER a`).
     pub launcher: String,
-    /// The queue (`LEADER t t`).
+    /// The queue (`LEADER t`).
     pub queue: String,
     /// The brain's page, where the automatic updates are (`LEADER b`).
     pub brain: String,
@@ -737,17 +737,25 @@ pub fn seconds_now() -> u64 {
 }
 
 impl Taught {
-    /// The sequences of THIS instance's leader: `crate::leader()` and the
-    /// constants beside the bindings — a key is never text
+    /// The sequences of THIS instance's leader: `crate::leader()` and what
+    /// `leader::taught_keys` finds for each command — a key is never text
     /// (`keys-are-never-text`).
+    ///
+    /// FROM THE LEADER'S DEFAULT SET, and not from the constants beside the
+    /// bindings: those are the full tree's, and `t t` — the queue's there —
+    /// typed where every sequence starts is the queue and then a key that
+    /// leads nowhere. The queue is `t` now.
     #[must_use]
-    pub fn of_this_leader() -> Self {
+    pub fn of_this_leader(trees: &crate::leader::Trees) -> Self {
         let leader = crate::leader();
-        let of = |keys: &str| format!("{leader} {keys}");
+        let of = |command: &str| {
+            crate::leader::taught_keys(trees, command, None)
+                .map_or_else(String::new, |keys| format!("{leader} {keys}"))
+        };
         Self {
-            launcher: of(crate::leader::APPS_KEYS),
-            queue: of(crate::leader::TRANSFERS_KEYS),
-            brain: of(crate::leader::BRAIN_KEYS),
+            launcher: of("apps-open"),
+            queue: of("transfers-open"),
+            brain: of("brain-open"),
         }
     }
 }
@@ -1415,5 +1423,25 @@ mod tests {
     fn identity_folds_accents_case_and_punctuation() {
         assert_eq!(identity("GIMP"), identity("gimp"));
         assert_eq!(identity("Café Notes!"), "cafenotes");
+    }
+
+    /// FAILS IF: a sentence of the software view teaches a key that, typed
+    /// where every sequence starts, does something else — the queue's was
+    /// `t t`, which in the default set is the queue and then a key that
+    /// leads nowhere — or one of the three comes out empty.
+    #[test]
+    fn the_taught_keys_are_the_default_sets() {
+        let (trees, _) = crate::leader::default_of().expect("the default keymap");
+        let taught = Taught::of_this_leader(&trees);
+        let leader = crate::leader();
+        assert_eq!(taught.queue, format!("{leader} t"));
+        assert_eq!(
+            taught.launcher,
+            format!("{leader} {}", crate::leader::APPS_KEYS)
+        );
+        assert_eq!(
+            taught.brain,
+            format!("{leader} {}", crate::leader::BRAIN_KEYS)
+        );
     }
 }

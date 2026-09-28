@@ -33,13 +33,16 @@ against, not solved against.
 
 # What comes out
 
-`themes.json` — `[{"id", "colors": {flat key: "0xRRGGBBAA"}}, …]` in the
-order of `assets/themes/themes.nix`, the first being the default; every theme
-has the identical key set or this exits 1. Per theme: `<id>.json` (the flat
-map), `<id>.primitives.json` (every primitive with L, C, h, its anchor and any
-shortfall), the fragments consumers outside the shell read (`<id>/compositor-*`,
-`<id>/ghostty.conf`), and `report.md` + `report.json` with every gate's
-margin and the regression against the frozen reference.
+`themes.json` — `[{"id", "mode", "colors": {flat key: "0xRRGGBBAA"}}, …]` in
+the order of `assets/themes/themes.nix`, the first being the default; every
+theme has the identical key set or this exits 1. Every theme carries its
+`pages` too: the same roles solved on each desk (`PAGES`, `Theme.on_page`).
+Per theme: `<id>.json` (the flat map of the base), `<id>.<page>.json` (each
+desk's page), `<id>.primitives.json` (every primitive with L, C, h, its anchor and
+any shortfall), the fragments consumers outside the shell read
+(`<id>/compositor-*`, `<id>/scroll-<desk>-<borders>.conf`,
+`<id>/ghostty-<ground>.conf`), and `report.md` + `report.json` with every
+gate's margin and the regression against the frozen reference.
 
 Any Fail exits 1 with the finding on stderr. Warn and Note are in the report.
 """
@@ -47,6 +50,7 @@ Any Fail exits 1 with the finding on stderr. Warn and Note are in the report.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import os
@@ -126,7 +130,7 @@ TEXT_STEPS = (
 #: is allowed to be the theme, and a BAND or a RULE is a signal drawn on top
 #: of it, so its colour has to stay its own. The tint falls off as the ladder
 #: climbs out of the background and into the signals.
-NEUTRAL_GROUNDS = frozenset({"ground", "chrome", "window", "chrome-raised", "chrome-loud", "chrome-band"})
+NEUTRAL_GROUNDS = frozenset({"ground", "chrome", "window", "chrome-raised", "chrome-loud", "chrome-band", "near"})
 NEUTRAL_PAINT = (
     ("window", 0.018),
     ("chrome-raised", 0.053),
@@ -160,18 +164,70 @@ NEUTRAL_PAINT = (
     ("border-strong", 0.178),
 )
 #: The one neutral step BELOW the chrome: the desk the compositor paints where
-#: no window is, when the person asks for the theme's own instead of black
-#: (`LEADER s t`). The window's step, mirrored: a window stands one step above
-#: the chrome, the desk one step below it, so a window on the desk is two
-#: steps up and the footer's chrome one. Its hue and relative chroma are the
+#: no window is, when the person asks for the theme's own instead of the
+#: absolute one (`LEADER s t`). The window's step, mirrored: a window stands
+#: one step above the chrome, the desk one step below it, so a window on the
+#: desk is two steps up and the footer's chrome one. Its hue and relative chroma are the
 #: seed's `backdrop` — the only neutral step with a hue of its own, because
 #: this is the one surface that is MEANT to read as the theme's colour — or
 #: not to, which is why the STEP is the seed's too. A desk with no chroma has
 #: only its lightness left to be told from the footer's chrome, and one step is
 #: not enough of it: owl asked for a grey desk and, at the mirrored step, it
 #: measured ΔE 0.026 from the chrome — legal and marginal, which is not a place
-#: to leave a surface the eye is meant to read as another thing.
+#: to leave a surface the eye is meant to read as another thing. And in a
+#: light theme the step has no grey rung left to land between — the chrome's
+#: signals are all below it — so there it is the CHROMA that tells the desk
+#: from the bands drawn on it (see the light seeds).
 NEUTRAL_BACKDROP = "backdrop"
+#: THE OTHER DESK, and the one neutral step that is not solved at all: the
+#: extreme the interface climbs AWAY from — black in a dark theme, white in a
+#: light one — with no chroma, so it is `#000000` or `#FFFFFF` byte for byte.
+#: It was a literal here, spelled as the option's name ("black"), and a light
+#: theme made the name a lie: the pixel switched off is not the far end of a
+#: ladder that descends from the paper. One word for both polarities, and the
+#: mode says which extreme it is.
+NEUTRAL_ABSOLUTE = "absolute"
+#: THE THIRD DESK, NEAR THE ABSOLUTE ONE, and it is a light theme's: the
+#: owner asked for a near-white between the chrome and the paper, in the
+#: grounds' own hue and tint (2026-09-28). It sits `NEAR_SHARE` of the way
+#: from the chrome to the ground — the paper in a light theme, and black in a
+#: dark one, where it exists only because every theme has the same keys: the
+#: chooser does not offer it there, so it is gated as a GROUND and never as
+#: an option (`NEAR_GATES`).
+#:
+#: WHY IT IS NOT A SECOND SIDE OF `backdrop`: the coloured desk keeps its
+#: place below the chrome, and the near-white is a desk of its own beside it,
+#: so a light theme offers three and a dark one two.
+NEUTRAL_NEAR = "near"
+#: Halfway: a light chrome sits 0.043 below the paper, and each half of that
+#: is over the ladder's minimum step (`LADDER_MIN_STEP`) on both sides.
+NEAR_SHARE = 0.5
+#: THE EDGE OF A WINDOW NOBODY IS LOOKING AT, when the person asked for the
+#: borders to be discreet — one per desk, because it is measured against the
+#: desk it lies on: `faint-<desk>` is that desk moved one faint step up the
+#: interface's own ladder, in the desk's hue and chroma.
+NEUTRAL_FAINT = {"faint-backdrop": NEUTRAL_BACKDROP, "faint-near": NEUTRAL_NEAR, "faint-absolute": NEUTRAL_ABSOLUTE}
+#: HOW FAINT, and it is a LUMINANCE RATIO and not a ΔE — the one step in this
+#: file solved against the WCAG ratio, which is written for text and does not
+#: model it; an outline is not text.
+#:
+#: The owner's words were "extremely faint, and never transparent: the person
+#: still needs a reference to resize with the mouse". ΔE_ok cannot say that at
+#: both ends: its cube root has no linear toe, so the first byte above black is
+#: already 0.067 away and a step the eye barely finds there measures 0.14,
+#: while the same step off white measures 0.018. The ratio, with its flare of
+#: 0.05, is one number at both extremes and on every grey between: 1.05 is
+#: `#090909` on black, `#F9F9F9` on white, and about the ladder's own smallest
+#: rung (the chrome against a window is 1.035 in owl) — the quietest step this
+#: palette already asks the eye to see. `FAINT_EDGE_FLOOR` and
+#: `FAINT_EDGE_CEILING` gate it from both sides.
+FAINT_RATIO = 1.05
+#: The neutral steps a page of the base does NOT solve again (`Theme.on_page`):
+#: the ground and the desks, which are what a page stands on and beside.
+NOT_ON_THE_PAGE = frozenset({"ground", NEUTRAL_BACKDROP, NEUTRAL_NEAR, NEUTRAL_ABSOLUTE, *NEUTRAL_FAINT})
+#: How far under the most a page can pay its light ladder tops out
+#: (`Theme._ceiling`): one of the ladder's small steps.
+PAGE_CEILING_MARGIN = 2.0
 #: Below this |Lc| of the ground on a solid, `on-solid` switches to the
 #: strongest text instead.
 ON_SOLID_FLOOR = 45.0
@@ -252,9 +308,6 @@ REGRESSION_TOLERANCE = 0.03
 #: scene matches with an 18% fuzz, so a quarter keeps a margin over it, and the
 #: content floor sits just above the fuzz itself.
 FILM_COLOURS = ("#FF00FF", "#00FFFF", "#FFFF00", "#FF6000")
-#: The desk when the person wants none of the theme's colour under the
-#: windows: the pixel switched off, by name.
-BLACK = "#000000"
 FILM_FLOOR, FILM_CONTENT_FLOOR = 0.25, 0.18
 #: Groups whose tokens are CONTENT (a code preview, a chart) and may come
 #: closer to the film colours: a Warn, not a Fail. The terminal palette is
@@ -428,6 +481,33 @@ class Theme:
             raise Refusal(f"{source}: the recipes need the families {absent}, and the seed does not define them")
 
         self._memo: dict[tuple[str, str, float], Swatch] = {}
+        #: The base palette this one is a PAGE of, and which desk is its page
+        #: — `None` and `"chrome"` for the base itself (`on_page`).
+        self.base: Theme | None = None
+        self.page_name = "chrome"
+        self._page: Swatch | None = None
+
+    # -- the page: the ground every role is solved against ----------------
+
+    def on_page(self, desk: str) -> "Theme":
+        """This theme solved again with `desk` as its PAGE — the chrome's
+        place, which every text anchor, band and rule is solved against.
+
+        The owner's answer (2026-09-28) to a footer or a window standing on a
+        desk: the bands follow the ground. A hover row, a selection, a rule,
+        the text itself are measured from the ground they are drawn on, so on
+        a desk they are solved from the desk — not the chrome's tones laid on
+        a colour they were never measured on. What must NOT move is taken
+        from the base unchanged: the ground and the desks themselves (they
+        are what the page IS), and the roles `IDENTICAL_ON_EVERY_PAGE` names.
+        """
+        page = copy.copy(self)
+        page._memo = {}
+        page.base = self
+        page.page_name = desk
+        page._page = self.primitive("neutral", desk)
+        page.chrome = page._page.lch[0]
+        return page
 
     # -- the chrome, the reference of every solve --------------------------
 
@@ -449,7 +529,22 @@ class Theme:
         """
         if self.rising > 0.0:
             return lc + self.lift
-        return self.lift + (LIGHT_LC_CEILING - self.lift) * lc / 100.0
+        return self.lift + (self._ceiling() - self.lift) * lc / 100.0
+
+    def _ceiling(self) -> float:
+        """The top of a light ladder: `LIGHT_LC_CEILING`, or — on a page
+        darker than the chrome, where black ink cannot pay for the SECOND
+        highest rung — lowered until it can, so the two top rungs stay two
+        instead of one black (measured: on a desk page at L 0.907 every
+        family's `text-strong` and `text-bright` were the same `#000000`).
+        Only as far as that: every rung lowered is contrast taken from every
+        ink on the page."""
+        if self.base is None:
+            return LIGHT_LC_CEILING
+        assert self._page is not None
+        reachable = cs.apca_magnitude((0.0, 0.0, 0.0), self._page.rgb) - PAGE_CEILING_MARGIN
+        second = TEXT_STEPS[-2][1] / 100.0
+        return min(LIGHT_LC_CEILING, self.lift + (reachable - self.lift) / second)
 
     def _toward(self, delta: float) -> float:
         """A distance from the chrome, signed by the mode — what the anchor PRINTS.
@@ -466,14 +561,72 @@ class Theme:
             reference_lightness=chrome.lch[0], reference_rgb=chrome.rgb, direction=self.rising,
         )
         lch, rgb8 = cs.screen_colour(l, hue, rel)
-        return Swatch(lch, rgb8, anchor, shortfall)
+        solved = Swatch(lch, rgb8, anchor, shortfall)
+        if self.base is None:
+            return solved
+        # ON A PAGE, NEVER WEAKER THAN THE BASE. An ink solved from a page
+        # with MORE room than the chrome — white under a light theme, black or
+        # a dark desk under a dark one — comes out paler, because it only has
+        # to reach the same Lc; and the grounds that do not follow the page
+        # (the notification band, the brain's line: `IDENTICAL_ON_EVERY_PAGE`)
+        # then carry an ink weaker than the one they were measured with.
+        # Measured on papyrus's white page: `text.primary` on the band 63.7
+        # under a floor of 65. So a page takes whichever of the two reads more
+        # on it — its own where it has LESS room than the chrome, the base's
+        # where it has more.
+        kept = self.base._solve_text(hue, rel, lc, anchor)
+        if cs.apca_magnitude(kept.rgb, chrome.rgb) > cs.apca_magnitude(solved.rgb, chrome.rgb):
+            return Swatch(kept.lch, kept.rgb8, f"{anchor}, the base's: it reads more on the {self.page_name} page", kept.shortfall)
+        return solved
 
     def _paint(self, hue: float, rel: float, delta: float, anchor: str) -> Swatch:
+        if self.base is not None:
+            return self._paint_on_the_page(hue, rel, delta, anchor)
         l, shortfall = cs.solve_lightness(
             ("delta-l", delta), lambda _: hue, rel, reference_lightness=self.chrome, direction=self.rising
         )
         lch, rgb8 = cs.screen_colour(l, hue, rel)
         return Swatch(lch, rgb8, anchor, shortfall)
+
+    def _paint_on_the_page(self, hue: float, rel: float, delta: float, anchor: str) -> Swatch:
+        """A paint step on a desk's page: the SAME STEP OF LIGHT the base takes
+        from its chrome, taken from the page.
+
+        Not the same step of lightness. A paint step is a ΔL from the chrome,
+        which is right where the base's chrome is — a grey the ladder was
+        designed on — and wrong at the ends: on a black page the window's
+        0.018 is the byte 0, and on a white one a hover band's 0.07 is a
+        smaller step of light than it is off a mid grey. A LUMINANCE RATIO,
+        with the flare the faint outline is solved with (`FAINT_RATIO`), is
+        one measure at both ends: the page's hover band is as far from the
+        page, in light, as the base's is from the chrome.
+        """
+        assert self.base is not None
+
+        def luminance(l: float) -> float:
+            return max(0.0, min(1.0, l)) ** 3
+
+        base_from = self.base.chrome
+        base_to = max(0.0, min(1.0, base_from + self.rising * delta))
+        up = base_to >= base_from
+        yf, yt = luminance(base_from), luminance(base_to)
+        ratio = (max(yf, yt) + 0.05) / (min(yf, yt) + 0.05)
+        yp = luminance(self.chrome)
+        target = (yp + 0.05) * ratio - 0.05 if up else (yp + 0.05) / ratio - 0.05
+        shortfall = None
+        if not 0.0 <= target <= 1.0:
+            target = min(1.0, max(0.0, target))
+            shortfall = ratio
+        l = target ** (1.0 / 3.0)
+        # AND THE SAME COLOUR: the base's CHROMA, not its relative chroma. How
+        # much chroma a hue can carry moves with lightness, so the same share
+        # of it is a paler band on a white page than on the chrome — measured,
+        # the selection came to 0.043 from the rule on papyrus's white page
+        # (floor 0.05), the pair being told apart by colour alone.
+        kept = cs.screen_colour(base_to, hue, rel)[0][1]
+        room = cs.max_chroma(l, hue)
+        lch, rgb8 = cs.screen_colour(l, hue, min(1.0, kept / room) if room > 0.0 else 0.0)
+        return Swatch(lch, rgb8, f"{anchor}, as light on the {self.page_name} page", shortfall)
 
     # -- primitives --------------------------------------------------------
 
@@ -488,6 +641,14 @@ class Theme:
         return swatch
 
     def _neutral(self, step: str, scale: float) -> Swatch:
+        if self.base is not None:
+            # A PAGE OF THE BASE: the chrome is the desk, and the steps that are
+            # not solved from the chrome are the base's own.
+            if step == "chrome":
+                assert self._page is not None
+                return self._page
+            if step in NOT_ON_THE_PAGE:
+                return self.base.primitive("neutral", step, scale)
         hue = self.neutral_hue
         tint = self._rel(self.ground_tint if step in NEUTRAL_GROUNDS else self.tint, scale)
         if step == "ground":
@@ -518,10 +679,49 @@ class Theme:
             # darker than they are.
             delta = -self.backdrop_step * self.rising
             return self._paint(self.backdrop_hue, self._rel(self.backdrop_chroma, scale), delta, f"chrome {self._toward(delta):+}, h {self.backdrop_hue:.0f}")
+        if step == NEUTRAL_NEAR:
+            l = self.chrome + (self.ground - self.chrome) * NEAR_SHARE
+            lch, rgb8 = cs.screen_colour(l, hue, tint)
+            return Swatch(lch, rgb8, f"L {l:.4f}, {NEAR_SHARE:g} of the way from the chrome to the ground")
+        if step == NEUTRAL_ABSOLUTE:
+            extreme = 0.0 if self.rising > 0.0 else 1.0
+            lch, rgb8 = cs.screen_colour(extreme, hue, 0.0)
+            return Swatch(lch, rgb8, f"fixed L {extreme:g}, no chroma")
+        if step in NEUTRAL_FAINT:
+            return self._faint(NEUTRAL_FAINT[step], scale)
         for name, lc in TEXT_STEPS:
             if name == step:
                 return self._solve_text(self.text_hue, self._rel(self.text_chroma, scale), lc, f"Lc {lc} on chrome")
         raise Refusal(f"{self.source}: the neutral family has no step {step!r}")
+
+    def _faint(self, desk_step: str, scale: float) -> Swatch:
+        """`desk_step` moved up the interface's ladder until its luminance is
+        `FAINT_RATIO` away — measured on the bytes, as the APCA solve is."""
+        desk = self.primitive("neutral", desk_step)
+        if desk_step == NEUTRAL_BACKDROP:
+            hue, rel = self.backdrop_hue, self._rel(self.backdrop_chroma, scale)
+        elif desk_step == NEUTRAL_NEAR:
+            hue, rel = self.neutral_hue, self._rel(self.ground_tint, scale)
+        else:
+            hue, rel = self.neutral_hue, 0.0
+
+        def ratio(l: float) -> float:
+            return cs.wcag_ratio(cs.dequantize(cs.screen_colour(l, hue, rel)[1]), desk.rgb)
+
+        near, far = desk.lch[0], 1.0 if self.rising > 0.0 else 0.0
+        shortfall = None
+        if ratio(far) < FAINT_RATIO:
+            near, shortfall = far, ratio(far)
+        else:
+            for _ in range(40):
+                middle = (near + far) / 2.0
+                if ratio(middle) < FAINT_RATIO:
+                    near = middle
+                else:
+                    far = middle
+            near = far
+        lch, rgb8 = cs.screen_colour(near, hue, rel)
+        return Swatch(lch, rgb8, f"{desk_step} × {FAINT_RATIO} in luminance", shortfall)
 
     def _chromatic(self, family: str, step: str, scale: float) -> Swatch:
         if family not in self.families:
@@ -552,7 +752,7 @@ class Theme:
 
     def every_primitive(self) -> dict[str, Swatch]:
         out: dict[str, Swatch] = {}
-        for step in ("ground", "chrome", NEUTRAL_BACKDROP, *(n for n, _ in NEUTRAL_PAINT), *(n for n, _ in TEXT_STEPS)):
+        for step in ("ground", "chrome", NEUTRAL_BACKDROP, NEUTRAL_NEAR, NEUTRAL_ABSOLUTE, *NEUTRAL_FAINT, *(n for n, _ in NEUTRAL_PAINT), *(n for n, _ in TEXT_STEPS)):
             out[f"neutral.{step}"] = self.primitive("neutral", step)
         for family in self.families:
             for step in (*(n for n, _, _ in PAINT_STEPS), *(n for n, _, _ in SOLID_STEPS), *(n for n, _ in TEXT_STEPS), "on-solid"):
@@ -708,6 +908,13 @@ def terminal_table(theme: "Theme") -> tuple[tuple[str, str, str], ...]:
 #: is black; in a light one it is white, and exempting black there would gate
 #: the ink and excuse the paper.
 NEAR_THE_PAPER = {"dark": "ansi.black", "light": "ansi.white"}
+#: THE TERMINAL'S BACKGROUND on each page: the base palette's own window, or
+#: — on a desk's page, when the person puts the windows on the desk — the desk
+#: itself, which is that page's `surface.chrome` (`ghostty-<page>.conf`, one
+#: per page, each with that page's palette).
+TERMINAL_BACKGROUND = {"chrome": "terminal.background", "backdrop": "surface.chrome", "near": "surface.chrome", "absolute": "surface.chrome"}
+#: The fragment each page's terminal palette is written to.
+TERMINAL_FRAGMENT = {"chrome": "ghostty-theme.conf", "backdrop": "ghostty-backdrop.conf", "near": "ghostty-near.conf", "absolute": "ghostty-absolute.conf"}
 #: The ANSI order Ghostty's `palette = N=` wants.
 ANSI_ORDER = ("black", "red", "green", "yellow", "blue", "magenta", "cyan", "white")
 #: The categorical set: eight hues (the reference ships six by default and
@@ -788,12 +995,25 @@ def shaped_tokens(theme: Theme) -> dict[str, Resolved]:
     cursor_hues = cs.even_delta_e_hues(CURSOR_COUNT, CURSOR_START_HUE, CURSOR_L, cursor_rel)
     hover_l = theme.primitive("neutral", "hover").lch[0]
     selection_l = theme.primitive("accent", "element").lch[0]
+    polarity = "dark" if theme.rising > 0.0 else "light"
+
+    def band(l: float, hue: float, rel: float, base_l: float | None) -> tuple:
+        # ON A PAGE, THE BASE'S CHROMA — see `Theme._paint_on_the_page`: eight
+        # bands told apart by hue alone lose that at a lightness with less room.
+        if base_l is None:
+            return cs.screen_colour(l, hue, rel)
+        kept = cs.screen_colour(base_l, hue, rel)[0][1]
+        room = cs.max_chroma(l, hue)
+        return cs.screen_colour(l, hue, min(1.0, kept / room) if room > 0.0 else 0.0)
+
+    base_hover_l = theme.base.primitive("neutral", "hover").lch[0] if theme.base is not None else None
+    base_selection_l = theme.base.primitive("accent", "element").lch[0] if theme.base is not None else None
     for i, hue in enumerate(cursor_hues):
         lch, rgb8 = cs.screen_colour(CURSOR_L, hue, cursor_rel)
         put(f"cursor.fill.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, L {CURSOR_L:.2f}, equal ΔE arcs from the accent"), "computed")
-        lch, rgb8 = cs.screen_colour(hover_l, hue, CURSOR_HOVER_CHROMA["dark" if theme.rising > 0.0 else "light"])
+        lch, rgb8 = band(hover_l, hue, CURSOR_HOVER_CHROMA[polarity], base_hover_l)
         put(f"cursor.hover.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, at the neutral hover's L {hover_l:.3f}"), "computed")
-        lch, rgb8 = cs.screen_colour(selection_l, hue, CURSOR_SELECTION_CHROMA["dark" if theme.rising > 0.0 else "light"])
+        lch, rgb8 = band(selection_l, hue, CURSOR_SELECTION_CHROMA[polarity], base_selection_l)
         put(f"cursor.selection.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, at the selection's L {selection_l:.3f}"), "computed")
     lch, rgb8 = cs.screen_colour(CURSOR_OUTLINE_L, CURSOR_START_HUE, 0.0)
     put("cursor.outline", Swatch(lch, rgb8, f"achromatic, L {CURSOR_OUTLINE_L:.2f}"), "computed")
@@ -834,6 +1054,73 @@ SIX_GROUNDS = ("surface.chrome", "modeline.background", "notification.background
 # name is sliced (`[:5]`), and a list whose length is part of another rule is a
 # list nobody may add to.
 RAISED_GROUNDS = ("surface.container", "surface.header")
+
+#: THE DESKS, AND THE PALETTE EACH ONE IS THE PAGE OF (2026-09-28).
+#
+# The person may put the footer and our windows on the desk's colour
+# (`LEADER s t`). The first answer to that laid the chrome's own tones on the
+# desk and gated every one of them there too, and it forced the light themes'
+# desks into a colour: a grey desk sits among the chrome's bands, and a band
+# on it could not be told from it. The owner chose the other way: THE BANDS
+# FOLLOW THE GROUND. Each desk is the PAGE of a palette of its own
+# (`Theme.on_page`) — the chrome's place taken by the desk, and every text,
+# band and rule solved again from it — and a surface standing on a desk wears
+# that palette. So no tone SOLVED for the base is drawn on a desk, and a desk
+# is measured as the page of its palette, where it is `surface.chrome`. The
+# roles copied from the base (`IDENTICAL_ON_EVERY_PAGE`) are the one way a
+# base tone reaches a desk's page — the notification manager draws `read`,
+# `suppressed` and `loud` on its own ground — and they are gated there like
+# every other tone, since every page runs every contrast gate.
+#
+# THE ORDER IS THE RUNTIME TABLE'S (`ronoctua_tokens::theme::Ground`): the
+# base palette first, whose page is the chrome.
+PAGES = ("chrome", "backdrop", "near", "absolute")
+#: The desks, by the page name each one gives its palette.
+DESKS = {"backdrop": "surface.backdrop", "near": "surface.near", "absolute": "surface.absolute"}
+#: THE ROLES THAT ARE THE SAME ON EVERY PAGE, copied from the base into each
+#: page's palette. The notification band and the brain's line keep their own
+#: grounds and inks whatever the footer stands on (the owner: they never change
+#: with these options), and so do the glance's two stripes; the desks are what
+#: the pages ARE; the outlines are the compositor's, whose fragments carry the
+#: base.
+IDENTICAL_ON_EVERY_PAGE = ("notification.", "brain.", "glance.", "border.")
+IDENTICAL_KEYS = frozenset(DESKS.values())
+
+
+def identical_on_every_page(key: str) -> bool:
+    return key in IDENTICAL_KEYS or key.startswith(IDENTICAL_ON_EVERY_PAGE)
+
+
+#: THE GATES THAT BELONG TO THE BASE ALONE, because they measure the chrome
+#: against the ground and the desks it stands beside — the footer's chrome and
+#: a window's page over the desk under them. On a page of a desk the "chrome"
+#: IS that desk, and these would measure it against itself. Every other gate
+#: runs on every page.
+BASE_ONLY_PAIRS = frozenset(
+    {
+        ("surface.base", "surface.chrome"),
+        ("surface.backdrop", "surface.chrome"),
+        ("surface.backdrop", "surface.buffer"),
+        ("surface.near", "surface.chrome"),
+        ("surface.near", "surface.buffer"),
+        ("surface.absolute", "surface.chrome"),
+        ("surface.absolute", "surface.buffer"),
+        # AND THE MODELINE'S OWN BAND: on a desk's page the modeline wears
+        # the page (the owner: it has the desk's colour), so the page's
+        # `modeline.background` IS its `surface.chrome` (`page_roles`).
+        ("surface.chrome", "modeline.background"),
+    }
+)
+
+
+def page_roles(page_tokens: dict[str, "Resolved"], base_tokens: dict[str, "Resolved"]) -> None:
+    """What a page's palette says that is not solved from the page: the roles
+    `IDENTICAL_ON_EVERY_PAGE` names, copied from the base; and the modeline's
+    ground, which on a desk's page is the page itself."""
+    for key in page_tokens:
+        if identical_on_every_page(key):
+            page_tokens[key] = base_tokens[key]
+    page_tokens["modeline.background"] = page_tokens["surface.chrome"]
 
 #: (text key, ground keys, Fail below, Warn below). Lc = |APCA|.
 CONTRAST_GATES = (
@@ -999,11 +1286,30 @@ CONTRAST_GATES = (
     ("modeline.drawer", ("modeline.background",), 40, 45),
     ("notification.quiet", ("notification.background",), 43, 45),
     ("notification.loud", ("notification.background",), 45, 60),
+    # AND THE MANAGER'S TONES, on the grounds the manager draws them on.
+    #
+    # `read`, `suppressed` and `loud` are the same on every page
+    # (`IDENTICAL_ON_EVERY_PAGE`), but the notification MANAGER — the region,
+    # a window, a column — draws them on its own ground, which wears the
+    # footer's or the windows' page: its chrome, its hover band, its
+    # selection. Until these rows nothing measured `read` or `suppressed` on
+    # any ground at all (they were `text.dim`'s primitive, and "the same as
+    # something measured" is not a measurement), and `loud` only on the band.
+    # Every page runs these, so a seed that sank one of them on a desk's
+    # page fails here. The floors are the tones they sit beside: `text.dim`'s
+    # for the two that recede, `state.warning`'s for the one that shouts.
+    ("notification.read", ("surface.chrome", "surface.hover", "surface.selection"), 15, 20),
+    ("notification.suppressed", ("surface.chrome", "surface.hover", "surface.selection"), 15, 20),
+    ("notification.loud", ("surface.chrome", "surface.hover", "surface.selection"), 45, 50),
     ("notification.countdown", ("notification.background",), 15, 20),
     # AN ACTION IS READ AND PRESSED, so it holds the same floor as the message
     # it sits under — a button one has to lean in to read is worse than one
     # drawn in the message's own colour.
     ("notification.acts", ("notification.background",), 43, 45),
+    # AND ON THE MINIBUFFER'S LINE, where an event said there offers its
+    # entry's actions after its sentence — at rest and under the pointer.
+    ("notification.acts", ("surface.chrome",), 43, 45),
+    ("notification.acts-lit", ("surface.chrome", "notification.background"), 43, 45),
     ("state.accent", ("surface.chrome",), 45, 50),
     ("state.success", ("surface.chrome",), 45, 50),
     ("state.warning", ("surface.chrome",), 45, 50),
@@ -1062,17 +1368,40 @@ LIGHT_DISTANCE_FLOORS = {
     # seven — the six-tenths above, applied to the one pair that had the least
     # room to begin with.
     ("text.subtle.default", "text.subtle.faint"): (0.045, 0.055),
+    # THE OWNER'S EXCEPTION (2026-09-28): a light theme's three desks are
+    # three close papers — white, near-white and the theme's own — and the
+    # 0.10 that keeps a coloured desk from black in a dark theme would force
+    # this one into a colour (it did: a peach, then a lilac). Measured 0.0940
+    # (papyrus) and 0.0941 (flashbang); 0.07 is a clear step and a half of a
+    # JND past what the eye splits.
+    ("surface.backdrop", "surface.absolute"): (0.07, 0.08),
 }
 
 #: Pairs that must be TOLD APART: (a, b, Fail below, Warn below), in ΔE_ok.
 DISTANCE_GATES = (
     ("surface.base", "surface.chrome", 0.10, 0.15),
-    # The desk is the ALTERNATIVE to black: one the eye cannot tell from black
-    # is a choice that does nothing. And the footer and a window both stand on
-    # it, so each needs an edge of its own against it.
-    ("surface.backdrop", "surface.base", 0.10, 0.12),
+    # The desk is the ALTERNATIVE to the absolute one (black, or white in a
+    # light theme): one the eye cannot tell from it is a choice that does
+    # nothing. And the footer and a window both stand on it, so each needs an
+    # edge of its own against it.
+    ("surface.backdrop", "surface.absolute", 0.10, 0.12),
     ("surface.backdrop", "surface.chrome", 0.02, 0.03),
     ("surface.backdrop", "surface.buffer", 0.03, 0.04),
+    # AND THE ABSOLUTE DESK THE SAME TWO EDGES. It is the content's own ground
+    # in every dark theme, so the first is `surface.base vs surface.buffer`
+    # under another name; in a light theme it is the paper's white, which the
+    # footer sits one step off.
+    ("surface.absolute", "surface.chrome", 0.02, 0.03),
+    ("surface.absolute", "surface.buffer", 0.03, 0.04),
+    # THE DISCREET FOCUSED OUTLINE is also the right column's focus line
+    # (`theme::focus_line`), and that line is drawn on the footer's page: the
+    # chrome, or — on a desk's page — the desk (every page runs this row).
+    ("border.discreet", "surface.chrome", 0.05, 0.06),
+    # THE BAND BESIDE THE PAGE. The notification band keeps the base's ground
+    # on every page (`IDENTICAL_ON_EVERY_PAGE`), and on a desk's page there is
+    # no modeline band between the two: the band sits on the desk-coloured
+    # rows. The floor is the one it keeps against the modeline's band.
+    ("notification.background", "surface.chrome", 0.02, 0.024),
     ("surface.chrome", "modeline.background", 0.03, 0.04),
     ("modeline.background", "notification.background", 0.02, 0.024),
     ("surface.chrome", "surface.hover", 0.05, 0.06),
@@ -1228,6 +1557,12 @@ DISTANCE_GATES = (
     # other is pressed — and for a while they were the same colour. This is
     # what says they cannot go back to it in some theme nobody looked at.
     ("notification.quiet", "notification.acts", 0.04, 0.05),
+    # AN ACTION UNDER THE POINTER, told from the same action at rest by the
+    # small step every lit shortcut takes (`text.subtle.lit.*` above); and on
+    # the minibuffer's line it follows the sentence it offers to act on, drawn
+    # in the discreet register's loud tone.
+    ("notification.acts-lit", "notification.acts", 0.012, 0.02),
+    ("notification.acts", "text.subtle.strong", 0.04, 0.05),
     # THE GLANCE'S TWO GROUNDS, which are drawn EDGE TO EDGE on one line: one
     # place ends where the next begins, with nothing between them. If a theme
     # ever solved them to the same tone the alternation would simply not be
@@ -1257,6 +1592,24 @@ DISTANCE_GATES = (
     # It is not hypothetical: `cyber` was drafted at a ramp chroma of 0.16 and
     # landed at ΔE 0.010, while the three themes before it sat at 0.055.
     ("text.answer", "text.primary", 0.035, 0.045),
+)
+#: THE NEAR DESK AMONG THE OTHERS, measured where the chooser offers it: in a
+#: LIGHT theme only. A dark theme has the token (every theme has the same keys)
+#: and a palette whose page it is, gated like every page, but it is never
+#: offered — a "near" in the file is worn as the absolute desk under a dark
+#: theme — so nothing there sets it beside the others.
+#:
+#: THE OWNER'S EXCEPTIONS (2026-09-28): between any two other desks the floor
+#: is 0.10, the "a choice that does nothing" floor. A light theme's three are
+#: MEANT to be close papers: near-white and white one JND apart (0.02), and
+#: the theme's own desk a clear step off the near-white (0.05) — see
+#: `LIGHT_DISTANCE_FLOORS` for it against the white. The last two rows are the
+#: floors every desk keeps against the chrome and a window, on the base.
+NEAR_GATES = (
+    ("surface.near", "surface.absolute", 0.02, 0.025),
+    ("surface.near", "surface.backdrop", 0.05, 0.06),
+    ("surface.near", "surface.chrome", 0.02, 0.03),
+    ("surface.near", "surface.buffer", 0.03, 0.04),
 )
 #: Pairs reported but never gated: they are never drawn side by side.
 DISTANCE_NOTES = (
@@ -1322,6 +1675,23 @@ LEVEL_TOP_FLOOR = (45, 50)
 #: of as a silence: it has to stay NEAR the ground. Measured Lc 0.0000 on all
 #: three grounds in all ten themes — it is the ground, exactly.
 LEVEL_BOTTOM_CEILING = 10.0
+#: THE DISCREET BORDERS (`LEADER s t`, the borders column), per desk: the
+#: faint unfocused outline and the desk it lies on.
+DISCREET_DESKS = (
+    ("surface.backdrop", "border.faint-backdrop"),
+    ("surface.near", "border.faint-near"),
+    ("surface.absolute", "border.faint-absolute"),
+)
+#: The faint outline against its desk, both ways. VISIBLE — ΔE_ok off the
+#: bytes, so an outline quantised onto the desk's own bytes is a Fail and not a
+#: rounding — and FAINT, in the ratio it is solved in (see `FAINT_RATIO`): past
+#: 1.10 it is a border, not a reference for the pointer.
+FAINT_EDGE_FLOOR, FAINT_EDGE_CEILING = (0.012, 0.015), (1.10, 1.08)
+#: The three outlines on one desk, in order: the discreet FOCUSED one clearly
+#: stronger than the faint one and clearly weaker than the standard focused
+#: one — "clearly" being a JND and a half of ΔE_ok between each pair's
+#: distances from the desk.
+DISCREET_ORDER = (0.03, 0.04)
 
 
 class Finding:
@@ -1341,7 +1711,14 @@ def _level(measured: float, fail: float, warn: float, higher_is_better: bool = T
 
 
 def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, Swatch]) -> list[Finding]:
+    """Every gate, on one palette: the base (`theme.page_name == "chrome"`) or
+    the page of a desk. The same tables for both; what differs is written
+    here and says why — `BASE_ONLY_PAIRS`, the desks among themselves and
+    their outlines (the same tokens on every page, measured once, on the
+    base), the ladder rungs that start at the ground, and the terminal's
+    background."""
     findings: list[Finding] = []
+    base = theme.page_name == "chrome"
 
     def lc(text: str, ground: str) -> float:
         return cs.apca_magnitude(tokens[text].rgb, tokens[ground].rgb)
@@ -1372,21 +1749,51 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
     for name, _, _ in TERMINAL:
         if name.startswith("ansi.") and name != near:
             floor = TERMINAL_DIM_FLOOR if name == dim else TERMINAL_FLOOR
-            v = lc(f"terminal.{name}", "terminal.background")
-            findings.append(Finding(_level(v, *floor), "contrast", f"terminal.{name} on terminal.background", v, f"Lc ≥ {floor[0]}"))
+            # THE BACKGROUND THIS PAGE'S FRAGMENT WRITES: the base's window,
+            # or the desk (`TERMINAL_BACKGROUND`, `write_fragments`).
+            background = TERMINAL_BACKGROUND[theme.page_name]
+            v = lc(f"terminal.{name}", background)
+            findings.append(Finding(_level(v, *floor), "contrast", f"terminal.{name} on {background}", v, f"Lc ≥ {floor[0]}"))
 
     for a, b, fail, warn in DISTANCE_GATES:
+        if not base and (a, b) in BASE_ONLY_PAIRS:
+            continue
         low, band = LIGHT_DISTANCE_FLOORS.get((a, b), (fail, warn)) if light else (fail, warn)
         v = de(a, b)
         findings.append(Finding(_level(v, low, band), "distance", f"{a} vs {b}", v, f"ΔE ≥ {low} (warn < {band})"))
+    for a, b, fail, warn in NEAR_GATES if light and base else ():
+        v = de(a, b)
+        findings.append(Finding(_level(v, fail, warn), "desk", f"{a} vs {b}", v, f"ΔE ≥ {fail} (warn < {warn})"))
+    # THE DISCREET BORDERS, on each desk: the faint outline visible and faint,
+    # and the three outlines in order — faint, discreet, standard. Outlines and
+    # desks are the same on every page, so they are measured on the base.
+    for desk, faint in DISCREET_DESKS if base else ():
+        v = de(faint, desk)
+        findings.append(Finding(_level(v, *FAINT_EDGE_FLOOR), "borders", f"{faint} vs {desk}", v, f"ΔE ≥ {FAINT_EDGE_FLOOR[0]} — never transparent"))
+        v = cs.wcag_ratio(tokens[faint].rgb, tokens[desk].rgb)
+        findings.append(Finding(_level(v, *FAINT_EDGE_CEILING, higher_is_better=False), "borders", f"{faint} on {desk}, luminance ratio", v, f"≤ {FAINT_EDGE_CEILING[0]} — extremely faint"))
+        v = de("border.discreet", desk) - de(faint, desk)
+        findings.append(Finding(_level(v, *DISCREET_ORDER), "borders", f"border.discreet over {faint}, on {desk}", v, f"ΔE apart ≥ {DISCREET_ORDER[0]}"))
+        v = de("border.active", desk) - de("border.discreet", desk)
+        findings.append(Finding(_level(v, *DISCREET_ORDER), "borders", f"border.active over border.discreet, on {desk}", v, f"ΔE apart ≥ {DISCREET_ORDER[0]}"))
     for a, b in DISTANCE_NOTES:
         findings.append(Finding("Note", "distance", f"{a} vs {b}", de(a, b), "reported only: never adjacent"))
 
-    ladders = [("neutral", ("ground", "chrome", "window", "chrome-raised", "chrome-loud", "chrome-band")), # THE DESK'S CHAIN IS THE ONE THAT REORDERS, because the desk is the one rung
-        # that does not mirror (see NEUTRAL_BACKDROP): in a dark interface it lies
-        # between the ground and the chrome, and in a light one it is past the chrome
-        # on the far side. Same three rungs, read outward from the ground either way.
-        ("neutral", ("ground", "backdrop", "chrome") if theme.rising > 0.0 else ("ground", "chrome", "backdrop")), ("neutral", ("chrome", "hover", "border", "border-strong")), ("neutral", tuple(n for n, _ in TEXT_STEPS))]
+    ladders = [("neutral", ("chrome", "window", "chrome-raised", "chrome-loud", "chrome-band")), ("neutral", ("chrome", "hover", "border", "border-strong")), ("neutral", tuple(n for n, _ in TEXT_STEPS))]
+    if base:
+        # THE RUNGS FROM THE GROUND, on the base alone: on a desk's page the
+        # "chrome" is that desk, and a rung from the ground to it measures the
+        # desk against itself or against the black it may be.
+        ladders += [
+            ("neutral", ("ground", "chrome")),
+            # THE DESK'S CHAIN IS THE ONE THAT REORDERS, because the desk is
+            # the one rung that does not mirror (see NEUTRAL_BACKDROP): in a
+            # dark interface it lies between the ground and the chrome, and in
+            # a light one it is past the chrome on the far side.
+            ("neutral", ("ground", "backdrop", "chrome") if theme.rising > 0.0 else ("ground", "chrome", "backdrop")),
+            # AND THE NEAR DESK, between the ground and the chrome in both.
+            ("neutral", ("ground", "near", "chrome")),
+        ]
     for family in theme.families:
         ladders.append((family, tuple(n for n, _, _ in PAINT_STEPS)))
         ladders.append((family, tuple(n for n, _ in TEXT_STEPS)))
@@ -1540,9 +1947,9 @@ def regression(theme: Theme, tokens: dict[str, Resolved], reference: dict) -> li
 # ---------------------------------------------------------------------------
 
 
-def write_fragments(directory: pathlib.Path, theme_id: str, mode: str, tokens: dict[str, Resolved]) -> None:
+def write_fragments(directory: pathlib.Path, theme_id: str, mode: str, palettes: dict[str, dict[str, Resolved]]) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    hexes = {k: cs.format_hex(v.rgb8) for k, v in tokens.items()}
+    hexes = {k: cs.format_hex(v.rgb8) for k, v in palettes["chrome"].items()}
     # THE POLARITY, AS A FRAGMENT, because a colour cannot be asked what side
     # it is on. `nix/modules/foreign.nix` dresses GTK and Qt, and until a light
     # theme existed it could answer `prefer-dark` and be right nine times out
@@ -1551,65 +1958,98 @@ def write_fragments(directory: pathlib.Path, theme_id: str, mode: str, tokens: d
     # `<id>.json`, which is a flat map of token to hex that two generators and
     # the extension parse: one non-colour key there is a shape nobody expects.
     (directory / "mode").write_text(mode)
-    # THE COMPOSITOR: three values for the static config, and TWO fragments
-    # per theme — one per answer to "what is under the windows". The footer
-    # copies the one the person chose into the configuration directory when
-    # the theme or the answer changes.
-    # `black` is spelled as the colour it names, not as `surface.base`: the
-    # option is "black", and a theme whose ground is not black keeps it so.
+    # THE COMPOSITOR: three values for the static config, and SIX fragments
+    # per theme — one per pair of answers to "what is under the windows" (the
+    # desk: the theme's, the near one, the absolute one) and "how loud are
+    # their outlines" (the borders). A dark theme's near fragments exist and
+    # are never copied: there a "near" answer is worn as the absolute desk. The footer copies
+    # the one the person chose into the configuration directory when the theme
+    # or either answer changes (`theme::fragments`).
+    #
+    # THE STATIC THREE ARE THE DEFAULT ANSWERS' FRAGMENT, `scroll-backdrop-
+    # standard.conf`, said as three values: the theme's own desk and the
+    # standard borders. A machine with no `theme.json` has no fragment at all
+    # (`theme::sync_with_file`), so what the static config paints IS what a
+    # fresh machine shows — and the shell's default answer (`Backdrop::Theme`,
+    # `Borders::Standard`) is what the footer's hidden rows wear on it. The
+    # desk was `surface.base` here, a desk no answer names: the rows that push
+    # the windows away were painted `surface.backdrop` over it, a strip across
+    # the desk on every machine that never chose. `themes-have-fragments`
+    # holds these three to that fragment.
     (directory / "compositor-border-active").write_text(hexes["border.active"])
     (directory / "compositor-border-inactive").write_text(hexes["border.inactive"])
-    (directory / "compositor-background").write_text(hexes["surface.base"])
+    (directory / "compositor-background").write_text(hexes["surface.backdrop"])
     # THE CURSORS, for `nix/cursors.nix`: one line per colour, the inside and
     # the rim, in the order the numbers go. A file and not a read of the JSON
     # so the cursor build depends on exactly these bytes.
     (directory / "cursor-colours").write_text(
         "".join(f"{hexes[f'cursor.fill.{WORDS[i + 1]}']} {hexes['cursor.outline']}\n" for i in range(CURSOR_COUNT))
     )
-    for name, desk in (
-        ("scroll-black.conf", BLACK),
-        ("scroll-backdrop.conf", hexes["surface.backdrop"]),
-    ):
-        (directory / name).write_text(
-            f"# GENERATED by nix/scripts/gen-theme.py for the theme `{theme_id}`. Do not edit.\n"
-            "# Included by the system's compositor config; it is re-read on `reload`.\n"
-            "#\n"
-            "# `client.focused` takes FIVE colours and only two of them are ours to\n"
-            "# pick: the border and the indicator. The rest are decorations that\n"
-            "# `default_border pixel` never paints, so repeating the border colour\n"
-            "# into them is honest rather than a guess.\n"
-            "#\n"
-            "# A LATER FILE SIMPLY WINS: `client.focused` overwrites the whole\n"
-            "# setting and the desk is merged last-wins, so there is no node to\n"
-            "# merge and no ordering to get right.\n"
-            f'client.focused {hexes["border.active"]} {hexes["border.active"]} '
-            f'{hexes["border.active"]} {hexes["border.active"]} {hexes["border.active"]}\n'
-            f'client.focused_inactive {hexes["border.inactive"]} {hexes["border.inactive"]} '
-            f'{hexes["border.inactive"]} {hexes["border.inactive"]} {hexes["border.inactive"]}\n'
-            f'client.unfocused {hexes["border.inactive"]} {hexes["border.inactive"]} '
-            f'{hexes["border.inactive"]} {hexes["border.inactive"]} {hexes["border.inactive"]}\n'
-            # THE SELECTED OUTLINE, the compositor's fixed green until now —
-            # focused or not, the same colour: what it says is "marked".
-            f'client.selected {hexes["border.selected"]} {hexes["border.selected"]} '
-            f'{hexes["border.selected"]} {hexes["border.selected"]} {hexes["border.selected"]}\n'
-            f'client.selected_focused {hexes["border.selected"]} {hexes["border.selected"]} '
-            f'{hexes["border.selected"]} {hexes["border.selected"]} {hexes["border.selected"]}\n'
-            f"output * bg {desk} solid_color\n"
-        )
-    lines = [
-        f"# GENERATED by nix/scripts/gen-theme.py for the theme `{theme_id}`. Do not edit.",
-        f"background = {hexes['terminal.background']}",
-        f"foreground = {hexes['terminal.foreground']}",
-        f"cursor-color = {hexes['terminal.cursor']}",
-        f"cursor-text = {hexes['terminal.cursor-text']}",
-        f"selection-background = {hexes['terminal.selection-background']}",
-        f"selection-foreground = {hexes['terminal.selection-foreground']}",
-    ]
-    for i, name in enumerate(ANSI_ORDER):
-        lines.append(f"palette = {i}={hexes[f'terminal.ansi.{name}']}")
-    for i, name in enumerate(ANSI_ORDER):
-        lines.append(f"palette = {i + 8}={hexes[f'terminal.ansi.bright-{name}']}")
-    (directory / "ghostty.conf").write_text("\n".join(lines) + "\n")
+
+    def five(key: str) -> str:
+        return " ".join([hexes[key]] * 5)
+
+    for desk in ("backdrop", "near", "absolute"):
+        ground = f"surface.{desk}"
+        for borders in ("standard", "discreet"):
+            if borders == "standard":
+                focused, focused_inactive, unfocused = "border.active", "border.inactive", "border.inactive"
+            else:
+                # DISCREET: the focused window in a quiet outline and every
+                # other one in an EXTREMELY faint one — never none, because
+                # the outline is what the pointer finds to resize by. The
+                # faint colour is the desk's own (`border.faint-<desk>`): it
+                # is measured against the desk it lies on.
+                #
+                # `focused_inactive` IS AN UNFOCUSED WINDOW HERE. In this
+                # compositor every column is a container, so the window each
+                # column last focused — nearly every window on the screen —
+                # wears that class; given the discreet colour, focused and
+                # unfocused looked alike (the owner saw it, 2026-09-28).
+                faint = f"border.faint-{desk}"
+                focused, focused_inactive, unfocused = "border.discreet", faint, faint
+            (directory / f"scroll-{desk}-{borders}.conf").write_text(
+                f"# GENERATED by nix/scripts/gen-theme.py for the theme `{theme_id}`. Do not edit.\n"
+                f"# The desk `{desk}` and the `{borders}` borders.\n"
+                "# Included by the system's compositor config; it is re-read on `reload`.\n"
+                "#\n"
+                "# `client.focused` takes FIVE colours and only two of them are ours to\n"
+                "# pick: the border and the indicator. The rest are decorations that\n"
+                "# `default_border pixel` never paints, so repeating the border colour\n"
+                "# into them is honest rather than a guess.\n"
+                "#\n"
+                "# A LATER FILE SIMPLY WINS: `client.focused` overwrites the whole\n"
+                "# setting and the desk is merged last-wins, so there is no node to\n"
+                "# merge and no ordering to get right.\n"
+                f"client.focused {five(focused)}\n"
+                f"client.focused_inactive {five(focused_inactive)}\n"
+                f"client.unfocused {five(unfocused)}\n"
+                # THE SELECTED OUTLINE, the compositor's fixed green until now —
+                # focused or not, the same colour: what it says is "marked", and
+                # the borders' answer does not quiet it.
+                f'client.selected {five("border.selected")}\n'
+                f'client.selected_focused {five("border.selected")}\n'
+                f"output * bg {hexes[ground]} solid_color\n"
+            )
+    # THE TERMINAL, one fragment per page its windows may stand on, each in
+    # THAT page's palette: the base's on its own window, and a desk's page's
+    # on the desk (`TERMINAL_BACKGROUND`), gated there.
+    for page, fragment in TERMINAL_FRAGMENT.items():
+        tones = {k: cs.format_hex(v.rgb8) for k, v in palettes[page].items()}
+        lines = [
+            f"# GENERATED by nix/scripts/gen-theme.py for the theme `{theme_id}`, on the `{page}` page. Do not edit.",
+            f"background = {tones[TERMINAL_BACKGROUND[page]]}",
+            f"foreground = {tones['terminal.foreground']}",
+            f"cursor-color = {tones['terminal.cursor']}",
+            f"cursor-text = {tones['terminal.cursor-text']}",
+            f"selection-background = {tones['terminal.selection-background']}",
+            f"selection-foreground = {tones['terminal.selection-foreground']}",
+        ]
+        for i, ansi in enumerate(ANSI_ORDER):
+            lines.append(f"palette = {i}={tones[f'terminal.ansi.{ansi}']}")
+        for i, ansi in enumerate(ANSI_ORDER):
+            lines.append(f"palette = {i + 8}={tones[f'terminal.ansi.bright-{ansi}']}")
+        (directory / fragment).write_text("\n".join(lines) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -1618,18 +2058,37 @@ def write_fragments(directory: pathlib.Path, theme_id: str, mode: str, tokens: d
 
 
 def report_markdown(results: dict[str, dict]) -> str:
-    out = ["# Themes — the gates, measured", ""]
+    def counts(findings) -> dict[str, int]:
+        return {lvl: sum(1 for f in findings if f.level == lvl) for lvl in ("Fail", "Warn", "Note", "OK")}
+
+    def score(c: dict[str, int]) -> str:
+        return f"Fail {c['Fail']} · Warn {c['Warn']} · Note {c['Note']} · OK {c['OK']}"
+
+    every = [f for r in results.values() for pr in r["pages"].values() for f in pr["findings"]]
+    palettes = sum(len(r["pages"]) for r in results.values())
+    # LINE FIVE IS THE SCORE, of every palette at once: the line a person
+    # reads after `nix build .#themes` (AGENTS.md).
+    out = [
+        "# Themes — the gates, measured",
+        "",
+        f"{palettes} palettes: {len(results)} themes × {', '.join(PAGES)} (the page each is solved on).",
+        "",
+        f"all · {score(counts(every))}",
+        "",
+    ]
     for theme_id, r in results.items():
-        counts = {lvl: sum(1 for f in r["findings"] if f.level == lvl) for lvl in ("Fail", "Warn", "Note", "OK")}
         # THE POLARITY IS ON THE LINE, because every contrast row below is a
         # MAGNITUDE (`apca_magnitude`) and a magnitude cannot say which side
         # the ink is on. Without this a reviewer reading `Lc 87` has no way to
         # tell a light theme from a dark one anywhere in the report.
-        out += [f"## {theme_id}", "", f"{r['mode']} · Fail {counts['Fail']} · Warn {counts['Warn']} · Note {counts['Note']} · OK {counts['OK']}", ""]
-        worth = [f for f in r["findings"] if f.level != "OK"]
+        out += [f"## {theme_id}", ""]
+        for page, pr in r["pages"].items():
+            out.append(f"{r['mode']} · on {page} · {score(counts(pr['findings']))}")
+        out.append("")
+        worth = [(page, f) for page, pr in r["pages"].items() for f in pr["findings"] if f.level != "OK"]
         if worth:
-            out += ["| level | gate | subject | measured | threshold | note |", "|---|---|---|---|---|---|"]
-            out += [f"| {f.level} | {f.gate} | {f.subject} | {f.measured:.4f} | {f.threshold} | {f.note} |" for f in worth]
+            out += ["| page | level | gate | subject | measured | threshold | note |", "|---|---|---|---|---|---|---|"]
+            out += [f"| {page} | {f.level} | {f.gate} | {f.subject} | {f.measured:.4f} | {f.threshold} | {f.note} |" for page, f in worth]
             out.append("")
         if r["regression"]:
             out += ["### Regression against the frozen reference", "", "| key | ΔE_ok | generated | reference | level |", "|---|---|---|---|---|"]
@@ -1715,26 +2174,42 @@ def main() -> int:
                 if key not in merged:
                     raise Refusal(f"{source}: overrides `{key}`, which is not a token")
                 merged[key] = recipe
-            tokens = {key: resolve_recipe(theme, key, recipe, source) for key, recipe in merged.items()}
-            for key, tok in shaped_tokens(theme).items():
-                if key in tokens:
-                    raise Refusal(f"the shape `{key}` collides with a recipe")
-                check_key(key, "gen-theme.py")
-                tokens[key] = tok
+            def solved(on: Theme) -> dict[str, Resolved]:
+                out = {key: resolve_recipe(on, key, recipe, source) for key, recipe in merged.items()}
+                for key, tok in shaped_tokens(on).items():
+                    if key in out:
+                        raise Refusal(f"the shape `{key}` collides with a recipe")
+                    check_key(key, "gen-theme.py")
+                    out[key] = tok
+                return out
+
+            tokens = solved(theme)
             primitives = theme.every_primitive()
             findings = run_gates(theme, tokens, primitives)
             regress = regression(theme, tokens, json.loads(references[theme_id].read_text())) if theme_id in references else []
+            # THE PAGES: the same recipes solved again on each desk, and the
+            # roles that never move copied from the base (`Theme.on_page`).
+            pages = {"chrome": {"tokens": tokens, "primitives": primitives, "findings": findings + regress}}
+            for page in PAGES[1:]:
+                on = theme.on_page(page)
+                page_tokens = solved(on)
+                page_roles(page_tokens, tokens)
+                page_primitives = on.every_primitive()
+                pages[page] = {"tokens": page_tokens, "primitives": page_primitives, "findings": run_gates(on, page_tokens, page_primitives)}
             cvd = {}
             for i, a in enumerate(STATE_SOLIDS):
                 for b in STATE_SOLIDS[i + 1 :]:
                     cvd[f"{a} vs {b}"] = {d: cs.cvd_separation(tokens[f"state.{a}"].rgb, tokens[f"state.{b}"].rgb, d) for d in cs.DEFICIENCIES}
             families = [(name, fam["hue"], theme.primitive(name, "solid")) for name, fam in theme.families.items()]
-            results[theme_id] = {"mode": theme.mode, "tokens": tokens, "primitives": primitives, "findings": findings + regress, "regression": regress, "cvd": cvd, "families": families}
+            results[theme_id] = {"mode": theme.mode, "tokens": tokens, "primitives": primitives, "findings": findings + regress, "regression": regress, "cvd": cvd, "families": families, "pages": pages}
             key_sets[theme_id] = sorted(tokens)
-            for f in findings + regress:
-                if f.level == "Fail":
-                    failed = True
-                    print(f"FAIL [{theme_id}] {f.gate}: {f.subject} = {f.measured:.4f}, wanted {f.threshold} {f.note}", file=sys.stderr)
+            for page, r in pages.items():
+                if sorted(r["tokens"]) != key_sets[theme_id]:
+                    raise Refusal(f"the page `{page}` of {theme_id} does not have the base's keys")
+                for f in r["findings"]:
+                    if f.level == "Fail":
+                        failed = True
+                        print(f"FAIL [{theme_id} on {page}] {f.gate}: {f.subject} = {f.measured:.4f}, wanted {f.threshold} {f.note}", file=sys.stderr)
 
         first = key_sets[ids[0]]
         for theme_id, keys in key_sets.items():
@@ -1745,20 +2220,30 @@ def main() -> int:
         combined = []
         for theme_id in ids:
             flat = {k: t.token for k, t in results[theme_id]["tokens"].items()}
-            combined.append({"id": theme_id, "colors": flat})
+            # THE MODE TRAVELS WITH THE COLOURS, because the shell has to know
+            # it at run time: the absolute desk is named "black" in a dark
+            # theme and "white" in a light one, and a colour cannot be asked
+            # which side of the ladder it is on (`ronoctua_tokens::theme::is_light`).
+            # AND EVERY PAGE'S PALETTE BESIDE IT, in `PAGES` order: the runtime
+            # table is `[theme][page][role]` (`ronoctua_tokens::theme::Ground`).
+            grounds = {page: {k: t.token for k, t in results[theme_id]["pages"][page]["tokens"].items()} for page in PAGES[1:]}
+            combined.append({"id": theme_id, "mode": results[theme_id]["mode"], "colors": flat, "pages": grounds})
             (args.out / f"{theme_id}.json").write_text(json.dumps(flat, indent=2, sort_keys=True) + "\n")
+            for page, colours in grounds.items():
+                (args.out / f"{theme_id}.{page}.json").write_text(json.dumps(colours, indent=2, sort_keys=True) + "\n")
             (args.out / f"{theme_id}.primitives.json").write_text(
                 json.dumps({k: v.describe() for k, v in results[theme_id]["primitives"].items()}, indent=2) + "\n"
             )
-            write_fragments(args.out / theme_id, theme_id, results[theme_id]["mode"], results[theme_id]["tokens"])
+            write_fragments(args.out / theme_id, theme_id, results[theme_id]["mode"], {page: r["tokens"] for page, r in results[theme_id]["pages"].items()})
         (args.out / "themes.json").write_text(json.dumps(combined, indent=1) + "\n")
         (args.out / "report.md").write_text(report_markdown(results))
         (args.out / "report.json").write_text(
-            json.dumps({tid: {"findings": [f.row() for f in r["findings"]], "cvd": r["cvd"]} for tid, r in results.items()}, indent=1) + "\n"
+            json.dumps({tid: {"pages": {page: [f.row() for f in pr["findings"]] for page, pr in r["pages"].items()}, "cvd": r["cvd"]} for tid, r in results.items()}, indent=1) + "\n"
         )
         for theme_id in ids:
-            fs = results[theme_id]["findings"]
-            print(f"OK: {theme_id}: {len(results[theme_id]['tokens'])} tokens, Fail {sum(f.level == 'Fail' for f in fs)}, Warn {sum(f.level == 'Warn' for f in fs)}, Note {sum(f.level == 'Note' for f in fs)}")
+            for page, pr in results[theme_id]["pages"].items():
+                fs = pr["findings"]
+                print(f"OK: {theme_id} on {page}: {len(pr['tokens'])} tokens, Fail {sum(f.level == 'Fail' for f in fs)}, Warn {sum(f.level == 'Warn' for f in fs)}, Note {sum(f.level == 'Note' for f in fs)}")
         if failed and not args.report_only:
             print("ERROR: a gate failed; see the lines above and report.md", file=sys.stderr)
             return 1

@@ -171,7 +171,10 @@ let
     client.unfocused @BORDER_INACTIVE@ @BORDER_INACTIVE@ @BORDER_INACTIVE@ @BORDER_INACTIVE@ @BORDER_INACTIVE@
 
     # THE DESK. The only `output` field this file owns — see the guard in the
-    # derivation below for why that matters.
+    # derivation below for why that matters. It is the DEFAULT answer's desk,
+    # the theme's own (`surface.backdrop`), with the standard outlines above:
+    # a machine that never chose has no fragment to include, and this is what
+    # it shows (`themes-have-fragments` holds the three to that answer).
     output * bg @BACKGROUND@ solid_color
 
     # NO SCALE IS WRITTEN, and that is a decision rather than an omission.
@@ -262,6 +265,9 @@ let
     # The three colours, from the solved palette. `#RRGGBB`, already: the
     # generator writes what the compositor reads, and none of the three is
     # translucent — a border with alpha would be elevation (invariant 15).
+    # Nor is any outline in the fragments below: the discreet borders' faint
+    # one is a colour of its own a faint step off the desk, opaque, and never
+    # a transparent border.
     substituteInPlace $out \
       --subst-var-by BORDER_ACTIVE "$(cat ${palette}/compositor-border-active)" \
       --subst-var-by BORDER_INACTIVE "$(cat ${palette}/compositor-border-inactive)" \
@@ -312,9 +318,13 @@ let
     # ignores whether the file loaded. So there is no flag to remember and a
     # first boot is clean.
     #
-    # `gen-theme.py` writes two theme fragments — one per desk, black or the
-    # theme's own `surface.backdrop` — and the footer copies the chosen one
-    # here. `ronoctua-display` writes the screens one. Both are re-read when
+    # `gen-theme.py` writes six theme fragments — one per desk (the theme's
+    # own `surface.backdrop`, a light theme's near-white `surface.near`, or
+    # the absolute `surface.absolute`, black or white) and per borders
+    # (standard or discreet),
+    # `scroll-<desk>-<borders>.conf` — and the footer copies the chosen one
+    # here (`theme::fragments`). `ronoctua-display` writes the screens one.
+    # Both are re-read when
     # the shell asks for a re-read, and a refusal comes back to it on the same
     # call rather than as an event nobody is listening for.
     {

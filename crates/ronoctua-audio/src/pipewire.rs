@@ -291,28 +291,71 @@ fn why_of(said: &str) -> Refusal {
 ///
 /// When this build has no `pw-cat`, or the program cannot be run.
 pub fn record(target: u32) -> Result<std::process::Child> {
-    recorder(
+    recorder(&record_args(target), "the meter", "the footer")
+}
+
+/// What the meter's `pw-cat` is told, after the shepherd — see [`record`].
+fn record_args(target: u32) -> Vec<String> {
+    recording_args(
         "8000",
         "1",
-        &["--target", &target.to_string()],
-        "the meter",
-        "the footer",
+        &["--target", &target.to_string(), "-P", &own_properties("")],
     )
+}
+
+/// The `application.name` every stream this module opens gives itself.
+///
+/// # Why our streams carry a name of their own
+///
+/// Because the machine says in the minibuffer when a microphone opens and
+/// closes (`ronoctua-shell`'s `events`), and two of the streams that open one
+/// are OURS: the sound view's meter, which listens for as long as the cursor
+/// rests on a microphone, and the studio's capture, whose recording is an event
+/// of its own. Unnamed, both answered to `pw-cat` — the name ANY other
+/// program's `pw-cat` or `pw-record` gives too — so telling ours apart meant
+/// either missing a stranger or announcing the meter every time the cursor
+/// moved. A name only this module writes is the one reading of the graph that
+/// cannot mistake one for the other.
+pub const OWN_STREAM: &str = "ronoctua-audio";
+
+/// The `-P` of one of our recordings: our name, and whatever else it needs.
+///
+/// ONE OBJECT, because `pw-cat` merges each `-P` into the stream's properties
+/// and a second one would work today and be a second place to look tomorrow.
+fn own_properties(more: &str) -> String {
+    format!("{{ application.name = \"{OWN_STREAM}\"{more} }}")
 }
 
 /// THE ONE PLACE `--record` IS WRITTEN, for the meter and the studio alike —
 /// what opens a microphone is built once (`one-pipewire-boundary`).
 ///
+/// A PURE FUNCTION, so what each recording is told is a value a test reads
+/// (`every_stream_we_open_says_it_is_ours`): the name that keeps our own
+/// streams out of the minibuffer's microphone events is in the ARGUMENTS, and
+/// a test of the string alone passed with a caller that had dropped it.
+fn recording_args(rate: &str, channels: &str, extra: &[&str]) -> Vec<String> {
+    [
+        "--record",
+        "--format",
+        "s16",
+        "--rate",
+        rate,
+        "--channels",
+        channels,
+    ]
+    .into_iter()
+    .chain(extra.iter().copied())
+    .chain(std::iter::once("-"))
+    .map(ToOwned::to_owned)
+    .collect()
+}
+
+/// Starts `pw-cat` with `args` (`recording_args`).
+///
 /// THE SHEPHERD FIRST, WHEN THERE IS ONE. `setpriv` sets the death signal and
 /// then EXECS, so the recorder's parent is still this process — the guard
 /// costs a process image, not a process.
-fn recorder(
-    rate: &str,
-    channels: &str,
-    extra: &[&str],
-    what: &str,
-    parent: &str,
-) -> Result<std::process::Child> {
+fn recorder(args: &[String], what: &str, parent: &str) -> Result<std::process::Child> {
     let program = PW_CAT.context("this build has no pw-cat")?;
     let (spawn, lead) = match SETPRIV.filter(|p| !p.is_empty()) {
         Some(setpriv) => (setpriv, vec!["--pdeathsig", "KILL", "--", program]),
@@ -323,17 +366,7 @@ fn recorder(
     };
     std::process::Command::new(spawn)
         .args(lead)
-        .args([
-            "--record",
-            "--format",
-            "s16",
-            "--rate",
-            rate,
-            "--channels",
-            channels,
-        ])
-        .args(extra)
-        .arg("-")
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -374,22 +407,75 @@ pub const CAPTURE_CHANNELS: u32 = 2;
 ///
 /// When this build has no `pw-cat`, or the program cannot be run.
 pub fn capture(what: Capture) -> Result<std::process::Child> {
-    let extra: &[&str] = match what {
-        Capture::Microphone => &[],
-        Capture::Desktop => &["-P", "{ stream.capture.sink = true }"],
-    };
-    recorder(
+    recorder(&capture_args(what), "a recording", "the studio")
+}
+
+/// What the studio's `pw-cat` is told, after the shepherd — see [`capture`].
+fn capture_args(what: Capture) -> Vec<String> {
+    let properties = own_properties(match what {
+        Capture::Microphone => "",
+        Capture::Desktop => " stream.capture.sink = true",
+    });
+    recording_args(
         &CAPTURE_RATE.to_string(),
         &CAPTURE_CHANNELS.to_string(),
-        extra,
-        "a recording",
-        "the studio",
+        &["-P", &properties],
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The one `-P` object in a recording's arguments.
+    fn properties_of(args: &[String]) -> &str {
+        let at = args
+            .iter()
+            .position(|a| a == "-P")
+            .unwrap_or_else(|| panic!("no -P in {args:?}"));
+        assert_eq!(
+            args.iter().filter(|a| *a == "-P").count(),
+            1,
+            "one object: {args:?}"
+        );
+        args.get(at + 1).map_or("", String::as_str)
+    }
+
+    /// FAILS IF: one of our recordings — the meter or either of the studio's
+    /// — opens without our name, which is what keeps it out of the
+    /// minibuffer's microphone events; or the desktop's capture loses the
+    /// property that makes it record the sink. Read off the ARGUMENTS each
+    /// caller passes, not the string alone.
+    #[test]
+    fn every_stream_we_open_says_it_is_ours() {
+        let ours = format!("application.name = \"{OWN_STREAM}\"");
+        for (what, args) in [
+            ("the meter", record_args(7)),
+            ("the microphone", capture_args(Capture::Microphone)),
+            ("the desktop", capture_args(Capture::Desktop)),
+        ] {
+            // THE SAME RECORDING every caller builds — `recording_args` is the
+            // one place its flag is written (`one-pipewire-boundary`).
+            assert_eq!(
+                args.first(),
+                recording_args("1", "1", &[]).first(),
+                "{what}"
+            );
+            assert_eq!(args.last().map(String::as_str), Some("-"), "{what}");
+            let p = properties_of(&args);
+            assert!(p.contains(&ours), "{what}: {p}");
+            assert!(p.starts_with('{') && p.ends_with('}'), "{what}: {p}");
+        }
+        assert!(
+            properties_of(&capture_args(Capture::Desktop)).contains("stream.capture.sink = true")
+        );
+        assert!(!properties_of(&capture_args(Capture::Microphone)).contains("capture.sink"));
+        assert!(
+            record_args(7)
+                .windows(2)
+                .any(|w| w[0] == "--target" && w[1] == "7")
+        );
+    }
 
     #[test]
     fn the_volume_argument_is_the_perceived_fraction() {

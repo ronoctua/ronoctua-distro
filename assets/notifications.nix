@@ -712,6 +712,436 @@
         }
       ];
     };
+
+    # WHAT THE MACHINE DID, AND THE BAND ONLY WHEN THE MINIBUFFER WAS BUSY.
+    #
+    # Each of these is an EVENT (`ronoctua-shell`'s `events.rs`), the owner's
+    # choice of 2026-09-28: a camera or a microphone opening and closing, the
+    # camera's own recording and stream, a network, a tunnel or the aeroplane
+    # coming and going, the charger. An event is SAID on the minibuffer's line
+    # — its summary, for as long as any other echo — whether the modeline is
+    # showing or not, and this row is read only when that line was somebody
+    # else's: a view open, a question being typed, the line's drawer open, the
+    # screen under a fullscreen window, or four events already waiting. Then
+    # the event comes here, and its body OPENS with the sentence that says why
+    # (`notif-minibuffer-was-busy`).
+    #
+    # THE BLUETOOTH DEVICES AND THE PROGRAM INSTALLED ARE EVENTS TOO, and keep
+    # the rows above: the two filters that quiet a device coming and going
+    # match its TAG, so the fallback stays as quiet as it always was.
+    #
+    # FULL AND QUICK: the minibuffer's pace — gone by itself — and the band's
+    # second line, because the sentence that says WHY the event is on the band
+    # opens its body (`events::notification`), and a `brief` entry is one line
+    # that never shows it. And AUTO-READ, except the two a person would want
+    # the bell to keep: a camera or a microphone that opened while the line was
+    # busy.
+    #
+    # NONE CARRIES AN ACTION. The line offers what the catalogue offers
+    # (`chrome::Piece::action`), and every one of these is a fact to be read,
+    # not a thing to do.
+    camera-in-use = {
+      when = [
+        {
+          field = "tag";
+          is = "camera-in-use";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 30;
+      icon = "camera-in-use";
+      tags = [
+        "camera-in-use"
+        "privacy"
+      ];
+      actions = [ ];
+    };
+    camera-free = {
+      when = [
+        {
+          field = "tag";
+          is = "camera-free";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "md-webcam_off";
+      tags = [
+        "camera-free"
+        "privacy"
+      ];
+      actions = [ ];
+    };
+    microphone-in-use = {
+      when = [
+        {
+          field = "tag";
+          is = "microphone-in-use";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 30;
+      icon = "microphone";
+      tags = [
+        "microphone-in-use"
+        "privacy"
+      ];
+      actions = [ ];
+    };
+    microphone-free = {
+      when = [
+        {
+          field = "tag";
+          is = "microphone-free";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "md-microphone_off";
+      tags = [
+        "microphone-free"
+        "privacy"
+      ];
+      actions = [ ];
+    };
+    studio-recording-started = {
+      when = [
+        {
+          field = "tag";
+          is = "studio-recording-started";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "studio-record";
+      tags = [
+        "studio-recording-started"
+        "privacy"
+        "media"
+      ];
+      actions = [ ];
+    };
+    studio-recording-stopped = {
+      when = [
+        {
+          field = "tag";
+          is = "studio-recording-stopped";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "studio-stop";
+      tags = [
+        "studio-recording-stopped"
+        "privacy"
+        "media"
+      ];
+      actions = [ ];
+    };
+    studio-streaming-started = {
+      when = [
+        {
+          field = "tag";
+          is = "studio-streaming-started";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "studio-stream";
+      tags = [
+        "studio-streaming-started"
+        "privacy"
+        "media"
+      ];
+      actions = [ ];
+    };
+    studio-streaming-stopped = {
+      when = [
+        {
+          field = "tag";
+          is = "studio-streaming-stopped";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "md-broadcast_off";
+      tags = [
+        "studio-streaming-stopped"
+        "privacy"
+        "media"
+      ];
+      actions = [ ];
+    };
+    network-connected = {
+      when = [
+        {
+          field = "tag";
+          is = "network-connected";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "md-lan_connect";
+      tags = [
+        "network-connected"
+        "network"
+      ];
+      actions = [ ];
+    };
+    network-lost = {
+      when = [
+        {
+          field = "tag";
+          is = "network-lost";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "md-lan_disconnect";
+      tags = [
+        "network-lost"
+        "network"
+      ];
+      actions = [ ];
+    };
+    airplane-on = {
+      when = [
+        {
+          field = "tag";
+          is = "airplane-on";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "airplane";
+      tags = [
+        "airplane-on"
+        "network"
+      ];
+      actions = [ ];
+    };
+    airplane-off = {
+      when = [
+        {
+          field = "tag";
+          is = "airplane-off";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "md-airplane_off";
+      tags = [
+        "airplane-off"
+        "network"
+      ];
+      actions = [ ];
+    };
+    vpn-up = {
+      when = [
+        {
+          field = "tag";
+          is = "vpn-up";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "vpn";
+      tags = [
+        "vpn-up"
+        "network"
+      ];
+      actions = [ ];
+    };
+    vpn-down = {
+      when = [
+        {
+          field = "tag";
+          is = "vpn-down";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "vpn";
+      tags = [
+        "vpn-down"
+        "network"
+      ];
+      actions = [ ];
+    };
+    tailnet-up = {
+      when = [
+        {
+          field = "tag";
+          is = "tailnet-up";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "tailscale";
+      tags = [
+        "tailnet-up"
+        "network"
+      ];
+      actions = [ ];
+    };
+    tailnet-down = {
+      when = [
+        {
+          field = "tag";
+          is = "tailnet-down";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "tailscale";
+      tags = [
+        "tailnet-down"
+        "network"
+      ];
+      actions = [ ];
+    };
+    tor-up = {
+      when = [
+        {
+          field = "tag";
+          is = "tor-up";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "tor";
+      tags = [
+        "tor-up"
+        "network"
+      ];
+      actions = [ ];
+    };
+    tor-down = {
+      when = [
+        {
+          field = "tag";
+          is = "tor-down";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "tor";
+      tags = [
+        "tor-down"
+        "network"
+      ];
+      actions = [ ];
+    };
+    charger-plugged = {
+      when = [
+        {
+          field = "tag";
+          is = "charger-plugged";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "md-power_plug";
+      tags = [
+        "charger-plugged"
+        "power"
+      ];
+      actions = [ ];
+    };
+    charger-unplugged = {
+      when = [
+        {
+          field = "tag";
+          is = "charger-unplugged";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "md-power_plug_off";
+      tags = [
+        "charger-unplugged"
+        "power"
+      ];
+      actions = [ ];
+    };
   };
 
   # ===================================================================

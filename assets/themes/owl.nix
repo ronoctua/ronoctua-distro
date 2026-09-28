@@ -276,7 +276,9 @@
     };
     # The brain's line: a blue-cast ground with neutral near-white text.
     brain = {
-      hue = 264;
+      # 250: at the accent's own 264 the selection band on the black page
+      # came within 0.047 of this line (floor 0.05).
+      hue = 250;
     };
     # Content hues — the syntax palette. Content may spend the hues the chrome
     # reserves; see the `syntax` block of `colors.nix`.

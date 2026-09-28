@@ -1389,6 +1389,38 @@ impl Board {
         out
     }
 
+    /// An `Alt` or a `Ctrl` TAPPED ALONE — latched, with no typing key since
+    /// and nothing else in effect — let go at once: the modifier, and the
+    /// key-up that goes out for it.
+    ///
+    /// # Why, and only when the footer asks
+    ///
+    /// At the leader's root a tap of `Alt` or `Ctrl` chooses the leader's set
+    /// (`crate::leader::Tap`), and this keyboard cannot tap: a tap LATCHES,
+    /// the key-up waits for the next key typed, and by then that key has made
+    /// it a chord — `LEADER M-s is not bound`. The footer asks this where the
+    /// tap means a set, takes the set itself, and sends the key-up. Everywhere
+    /// else the latch is what it always was: `Ctrl` for the next key.
+    pub fn spend_a_lone_tap(&mut self) -> Option<(Modifier, Vec<Out>)> {
+        // NO FINGER ON ANY KEY: a key still down is a chord under way.
+        if !self.down.is_empty() {
+            return None;
+        }
+        let lone = [Modifier::Alt, Modifier::Ctrl]
+            .into_iter()
+            .find(|m| self.mods.hold(*m) == Hold::Latched)?;
+        // AND NOTHING ELSE IN EFFECT: two modifiers are a chord.
+        if Modifier::ALL
+            .into_iter()
+            .any(|m| m != lone && self.mods.active(m))
+        {
+            return None;
+        }
+        let before = self.mods.active_set();
+        self.mods.holds[lone.index()] = Hold::Off;
+        Some((lone, self.changed_mods(before)))
+    }
+
     fn changed_mods(&self, before: [bool; 5]) -> Vec<Out> {
         Modifier::ALL
             .into_iter()
@@ -1604,6 +1636,55 @@ mod tests {
                 Out::Key(29, false),
             ]
         );
+    }
+
+    /// FAILS IF: an `Alt` or a `Ctrl` tapped alone is not given up at once
+    /// with its key-up when the footer asks — the leader's set could not be
+    /// chosen from this keyboard — or anything else is: a latch already
+    /// spent on a key, a lock, `Shift`, two modifiers, or a finger still on
+    /// the modifier.
+    #[test]
+    fn a_lone_alt_or_ctrl_is_given_up_with_its_key_up() {
+        for (m, code) in [(Modifier::Alt, 56), (Modifier::Ctrl, 29)] {
+            let mut b = board("us");
+            let mut out = b.press(Finger::Touch(1), Key::Mod(m));
+            out.extend(b.release(Finger::Touch(1)));
+            assert_eq!(out, vec![Out::Key(code, true)], "latched, still down");
+            assert_eq!(
+                b.spend_a_lone_tap(),
+                Some((m, vec![Out::Key(code, false)])),
+                "{m:?}"
+            );
+            assert!(!b.mods.active(m), "{m:?} is off afterwards");
+            assert_eq!(b.spend_a_lone_tap(), None, "and there is none left");
+        }
+        // STILL UNDER THE FINGER: not a tap yet.
+        let mut b = board("us");
+        b.press(Finger::Touch(1), Key::Mod(Modifier::Alt));
+        assert_eq!(b.spend_a_lone_tap(), None);
+        // A LATCH SPENT ON A KEY is gone already.
+        let mut b = board("us");
+        b.press(Finger::Touch(1), Key::Mod(Modifier::Ctrl));
+        b.release(Finger::Touch(1));
+        b.press(Finger::Touch(2), Key::Types(31));
+        b.release(Finger::Touch(2));
+        assert_eq!(b.spend_a_lone_tap(), None);
+        // A LOCK, two taps, is the person's on purpose.
+        let mut b = board("us");
+        for _ in 0..2 {
+            b.press(Finger::Touch(1), Key::Mod(Modifier::Alt));
+            b.release(Finger::Touch(1));
+        }
+        assert_eq!(b.mods.hold(Modifier::Alt), Hold::Locked);
+        assert_eq!(b.spend_a_lone_tap(), None);
+        // `SHIFT` CHOOSES NO SET, and two modifiers are a chord.
+        let mut b = board("us");
+        b.press(Finger::Touch(1), Key::Mod(Modifier::Shift));
+        b.release(Finger::Touch(1));
+        assert_eq!(b.spend_a_lone_tap(), None);
+        b.press(Finger::Touch(1), Key::Mod(Modifier::Alt));
+        b.release(Finger::Touch(1));
+        assert_eq!(b.spend_a_lone_tap(), None, "Shift and Alt latched");
     }
 
     #[test]

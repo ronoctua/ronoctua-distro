@@ -1116,7 +1116,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
             // `app_id` is the descriptor's and a door names its `app_id` as a
             // `&'static str`. The process hosts one buffer and exits with it.
             app_id: Box::leak(format!("br.ronoctua.{}", d.mode).into_boxed_str()),
-            theme_seen: tokens::theme::current().position(),
+            theme_seen: tokens::theme::palette(),
             many_pointers: false,
             mods: Modifiers::default(),
             width: 0,
@@ -1650,7 +1650,7 @@ impl Host {
             let side = (f32::from(*columns) * cell_px)
                 .min(f32::from(*lines) * line_height)
                 .max(1.0) as u32;
-            let key = svg_key(side, tokens::theme::current().position(), token, svg);
+            let key = svg_key(side, tokens::theme::palette(), token, svg);
             if !self.rasterized.contains_key(&key) {
                 // THE SIDE IN PIXELS comes from the rectangle of CELLS the buffer
                 // asked for — it does not know pixels.
@@ -1708,7 +1708,7 @@ impl Host {
         // A THEME CHOSEN SINCE drops the old theme's CPU copies. The key
         // already tells the two apart (`svg_key`), so this is memory and not
         // correctness.
-        let theme = tokens::theme::current().position();
+        let theme = tokens::theme::palette();
         if theme != self.theme_seen {
             self.theme_seen = theme;
             self.rasterized.clear();
